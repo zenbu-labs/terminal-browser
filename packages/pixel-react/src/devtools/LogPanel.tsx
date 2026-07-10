@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 
 import { Box, Input, Text } from "../components";
 import type { NodeHandle } from "../components";
-import type { LogRow as LogRowData, LogStore } from "./store";
+import { consoleLogs, engineLogs } from "./stores";
+import type { LogRow as LogRowData } from "./store";
 import { useStore } from "./store";
 import { MONO, theme } from "./theme";
 import { Button, Chip, Divider, Empty, Toolbar } from "./ui";
@@ -19,8 +20,14 @@ const TEXT_COLORS: Record<string, string> = {
   error: theme.danger,
 };
 
-function LogLine(props: { row: LogRowData; showTarget: boolean; rem: number }) {
-  const { row, showTarget, rem } = props;
+interface SourcedRow {
+  row: LogRowData;
+  source: "program" | "engine";
+}
+
+function LogLine(props: { entry: SourcedRow; showTarget: boolean; rem: number }) {
+  const { entry, showTarget, rem } = props;
+  const { row } = entry;
   return (
     <Box
       style={{
@@ -40,7 +47,9 @@ function LogLine(props: { row: LogRowData; showTarget: boolean; rem: number }) {
         </Box>
       )}
       <Box style={{ flexGrow: 1, flexBasis: 0, overflow: "hidden" }}>
-        <Text style={{ color: TEXT_COLORS[row.level] ?? theme.text, fontSize: rem * 0.74, font: MONO }}>
+        <Text
+          style={{ color: TEXT_COLORS[row.level] ?? theme.text, fontSize: rem * 0.74, font: MONO }}
+        >
           {row.text}
         </Text>
       </Box>
@@ -62,16 +71,31 @@ function LogLine(props: { row: LogRowData; showTarget: boolean; rem: number }) {
   );
 }
 
+const SOURCES = ["program", "engine", "both"] as const;
 const LEVEL_FILTERS = ["all", "info", "warn", "error"] as const;
 
-export function LogPanel(props: {
-  logs: LogStore;
-  rem: number;
-  showTarget?: boolean;
-  emptyText: string;
-}) {
-  const { logs, rem, showTarget = false, emptyText } = props;
-  const buffer = useStore(logs.store);
+const EMPTY_TEXT: Record<(typeof SOURCES)[number], string> = {
+  program: "Program output lands here — console.log, stdout and stderr.",
+  engine: "Engine logs appear here.",
+  both: "Program and engine logs, interleaved by time.",
+};
+
+/**
+ * A row's target label only appears when it says something the current view
+ * doesn't already imply: stdout/stderr for program logs, subsystems like
+ * profiler/inspect for engine logs, and the source itself in the merged view.
+ */
+function targetVisible(entry: SourcedRow, source: (typeof SOURCES)[number]): boolean {
+  if (entry.source === "program") return entry.row.target !== "console";
+  if (source === "both") return true;
+  return entry.row.target !== "engine";
+}
+
+export function LogPanel(props: { rem: number }) {
+  const { rem } = props;
+  const programBuffer = useStore(consoleLogs.store);
+  const engineBuffer = useStore(engineLogs.store);
+  const [source, setSource] = useState<(typeof SOURCES)[number]>("program");
   const [filter, setFilter] = useState("");
   const [level, setLevel] = useState<(typeof LEVEL_FILTERS)[number]>("all");
   const follow = useRef(true);
@@ -79,10 +103,22 @@ export function LogPanel(props: {
 
   useEffect(() => {
     if (follow.current) list.current?.scrollTo(1e9, false);
-  }, [buffer.version]);
+  }, [programBuffer.version, engineBuffer.version, source]);
+
+  let entries: SourcedRow[];
+  if (source === "program") {
+    entries = programBuffer.rows.map((row) => ({ row, source: "program" as const }));
+  } else if (source === "engine") {
+    entries = engineBuffer.rows.map((row) => ({ row, source: "engine" as const }));
+  } else {
+    entries = [
+      ...programBuffer.rows.map((row) => ({ row, source: "program" as const })),
+      ...engineBuffer.rows.map((row) => ({ row, source: "engine" as const })),
+    ].sort((a, b) => a.row.epochMs - b.row.epochMs);
+  }
 
   const query = filter.trim().toLowerCase();
-  const rows = buffer.rows.filter((row) => {
+  const rows = entries.filter(({ row }) => {
     if (level === "warn" && row.level !== "warn" && row.level !== "error") return false;
     if (level === "error" && row.level !== "error") return false;
     if (level === "info" && row.level === "debug") return false;
@@ -90,9 +126,42 @@ export function LogPanel(props: {
     return true;
   });
 
+  const clear = () => {
+    if (source !== "engine") consoleLogs.clear();
+    if (source !== "program") engineLogs.clear();
+  };
+
   return (
     <Box style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, overflow: "hidden" }}>
       <Toolbar rem={rem}>
+        {SOURCES.map((entry) => (
+          <Chip
+            key={entry}
+            rem={rem}
+            label={entry}
+            active={source === entry}
+            onClick={() => setSource(entry)}
+          />
+        ))}
+        <Box style={{ flexGrow: 1 }} />
+        {LEVEL_FILTERS.map((entry) => (
+          <Chip
+            key={entry}
+            rem={rem}
+            label={entry}
+            active={level === entry}
+            onClick={() => setLevel(entry)}
+          />
+        ))}
+        <Button rem={rem} label="Clear" onClick={clear} />
+      </Toolbar>
+      <Box
+        style={{
+          background: theme.panel,
+          padding: { left: rem * 0.35, right: rem * 0.35, bottom: rem * 0.35 },
+          flexShrink: 0,
+        }}
+      >
         <Box
           style={{
             background: theme.bg,
@@ -120,20 +189,10 @@ export function LogPanel(props: {
             caretColor={theme.accent}
           />
         </Box>
-        {LEVEL_FILTERS.map((entry) => (
-          <Chip
-            key={entry}
-            rem={rem}
-            label={entry}
-            active={level === entry}
-            onClick={() => setLevel(entry)}
-          />
-        ))}
-        <Button rem={rem} label="Clear" onClick={() => logs.clear()} />
-      </Toolbar>
+      </Box>
       <Divider />
       {rows.length === 0 ? (
-        <Empty rem={rem} text={buffer.rows.length === 0 ? emptyText : "No matches."} />
+        <Empty rem={rem} text={entries.length === 0 ? EMPTY_TEXT[source] : "No matches."} />
       ) : (
         <Box
           ref={list}
@@ -142,8 +201,13 @@ export function LogPanel(props: {
             follow.current = e.offset >= e.max - 2;
           }}
         >
-          {rows.slice(-500).map((row) => (
-            <LogLine key={row.id} row={row} showTarget={showTarget} rem={rem} />
+          {rows.slice(-500).map((entry) => (
+            <LogLine
+              key={`${entry.source}-${entry.row.id}`}
+              entry={entry}
+              showTarget={targetVisible(entry, source)}
+              rem={rem}
+            />
           ))}
         </Box>
       )}

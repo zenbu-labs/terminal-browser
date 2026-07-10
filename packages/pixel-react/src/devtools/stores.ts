@@ -103,7 +103,7 @@ export function recordSpan(span: TimeSpan) {
 
 export interface DevtoolsState {
   open: boolean;
-  tab: "elements" | "console" | "engine" | "profiler";
+  tab: "elements" | "console" | "profiler";
   width: number;
   height: number;
   basePx: number;

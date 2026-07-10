@@ -6,9 +6,7 @@ import { ElementsPanel } from "./Elements";
 import { LogPanel } from "./LogPanel";
 import { profilerHandleKey, ProfilerPanel } from "./Profiler";
 import {
-  consoleLogs,
   devtoolsStore,
-  engineLogs,
   inspectorStore,
   layoutStore,
   profilerStore,
@@ -19,7 +17,6 @@ import { theme } from "./theme";
 const TABS = [
   { id: "elements", label: "Elements" },
   { id: "console", label: "Console" },
-  { id: "engine", label: "Engine" },
   { id: "profiler", label: "Profiler" },
 ] as const;
 
@@ -143,21 +140,7 @@ export function DevtoolsApp() {
     >
       <TabBar tab={state.tab} rem={rem} />
       {state.tab === "elements" && <ElementsPanel rem={rem} />}
-      {state.tab === "console" && (
-        <LogPanel
-          logs={consoleLogs}
-          rem={rem}
-          emptyText="Program output lands here — console.log, stdout and stderr."
-        />
-      )}
-      {state.tab === "engine" && (
-        <LogPanel
-          logs={engineLogs}
-          rem={rem}
-          showTarget
-          emptyText="Engine logs appear here."
-        />
-      )}
+      {state.tab === "console" && <LogPanel rem={rem} />}
       {state.tab === "profiler" && <ProfilerPanel rem={rem} />}
       <StatusBar rem={rem} />
     </Box>
