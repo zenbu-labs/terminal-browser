@@ -105,7 +105,16 @@ export function LogPanel(props: {
           }}
         >
           <Input
-            style={{ fontSize: rem * 0.72, color: theme.text, font: MONO, wrap: false }}
+            style={{
+              // Fill the box: an empty input measures zero wide and would
+              // otherwise be impossible to click.
+              flexGrow: 1,
+              flexBasis: 0,
+              fontSize: rem * 0.72,
+              color: theme.text,
+              font: MONO,
+              wrap: false,
+            }}
             defaultValue=""
             onChange={setFilter}
             caretColor={theme.accent}

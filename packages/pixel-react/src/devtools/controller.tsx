@@ -207,11 +207,11 @@ export function onEngineProfile(data: EngineProfileEvent) {
     at: data.epochMs + c.at,
     value: c.value,
   }));
-  const marks: TimeSpan[] = (data.marks ?? []).map((m, i) => ({
+  const marks: TimeSpan[] = (data.marks ?? []).map((m) => ({
     name: m.view === DEVTOOLS_VIEW ? `[devtools] ${m.label}` : m.label,
     start: data.epochMs + m.start,
     dur: m.dur,
-    depth: i % 2,
+    depth: 0,
     lane: "interaction",
   }));
   const session: ProfileSession = { spans, frames, start, end, counters, marks };

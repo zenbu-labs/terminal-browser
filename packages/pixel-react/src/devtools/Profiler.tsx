@@ -147,14 +147,117 @@ const LANES: Array<{ label: string; match: (span: TimeSpan) => boolean }> = [
 
 function laneRows(session: ProfileSession): Array<{ label: string; spans: TimeSpan[] }> {
   const rows: Array<{ label: string; spans: TimeSpan[] }> = [];
-  if (session.marks.length > 0) {
-    rows.push({ label: "Interactions", spans: session.marks });
-  }
   for (const lane of LANES) {
     const spans = session.spans.filter(lane.match);
     if (spans.length > 0) rows.push({ label: lane.label, spans });
   }
   return rows;
+}
+
+function InteractionsLane(props: {
+  marks: TimeSpan[];
+  viewport: Viewport;
+  width: number;
+  rem: number;
+  selected: TimeSpan | null;
+}) {
+  const { marks, viewport, width, rem, selected } = props;
+  if (marks.length === 0) return null;
+  const rowH = rem * 1.2;
+  const scale = width / (viewport.t1 - viewport.t0);
+  const minW = rem * 0.6;
+  interface Placed {
+    mark: TimeSpan;
+    x: number;
+    w: number;
+    row: number;
+    labelW: number;
+  }
+  const placed: Placed[] = [];
+  // One row unless a pill would overlap its predecessor at this zoom;
+  // then it drops to the second row, Chrome-style.
+  const rowEnds = [-Infinity, -Infinity];
+  for (const mark of marks) {
+    const rawX = (mark.start - viewport.t0) * scale;
+    const w = Math.max(mark.dur * scale, minW);
+    if (rawX + w < 0 || rawX > width) continue;
+    const x = Math.max(rawX, 0);
+    const row = x >= rowEnds[0] + 2 ? 0 : x >= rowEnds[1] + 2 ? 1 : 0;
+    rowEnds[row] = x + w;
+    placed.push({ mark, x, w, row, labelW: 0 });
+    if (placed.length >= 300) break;
+  }
+  // Show the label beside the pill when it fits before the next pill
+  // in the same row.
+  const estCharW = rem * 0.42;
+  for (let i = 0; i < placed.length; i++) {
+    const entry = placed[i];
+    let next = Infinity;
+    for (let j = i + 1; j < placed.length; j++) {
+      if (placed[j].row === entry.row) {
+        next = placed[j].x;
+        break;
+      }
+    }
+    const room = Math.min(next, width) - (entry.x + entry.w) - rem * 0.4;
+    const need = entry.mark.name.length * estCharW;
+    entry.labelW = room > need ? need + rem * 0.3 : 0;
+  }
+  const rows = placed.reduce((max, p) => Math.max(max, p.row + 1), 1);
+  return (
+    <Box style={{ flexDirection: "column", flexShrink: 0 }}>
+      <Box style={{ padding: { left: rem * 0.5, top: rem * 0.25, bottom: rem * 0.1 } }}>
+        <Text style={{ color: theme.faint, fontSize: rem * 0.62, wrap: false }}>
+          Interactions
+        </Text>
+      </Box>
+      <Box style={{ height: rows * rowH + 2, overflow: "hidden" }}>
+        {placed.map((entry, i) => {
+          const fromDevtools = entry.mark.name.startsWith("[devtools]");
+          const isSelected = selected === entry.mark;
+          return (
+            <React.Fragment key={i}>
+              <Box
+                style={{
+                  position: "absolute",
+                  inset: { left: entry.x, top: entry.row * rowH + 1 },
+                  width: entry.w,
+                  height: rowH - 3,
+                  background: fromDevtools ? theme.faint : theme.warn,
+                  cornerRadius: 3,
+                  border: isSelected ? { width: 1, color: "#ffffff" } : undefined,
+                  hoverBackground: fromDevtools ? theme.dim : "#f0d090",
+                }}
+                onClick={() => selectedSpanStore.set(entry.mark)}
+              />
+              {entry.labelW > 0 && (
+                <Box
+                  style={{
+                    position: "absolute",
+                    inset: { left: entry.x + entry.w + rem * 0.25, top: entry.row * rowH + 1 },
+                    width: entry.labelW,
+                    height: rowH - 3,
+                    overflow: "hidden",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: fromDevtools ? theme.faint : theme.warn,
+                      fontSize: rem * 0.64,
+                      font: MONO,
+                      wrap: false,
+                    }}
+                  >
+                    {entry.mark.name}
+                  </Text>
+                </Box>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </Box>
+    </Box>
+  );
 }
 
 function Lane(props: {
@@ -436,6 +539,13 @@ export function ProfilerPanel(props: { rem: number }) {
           <Box
             style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, overflow: "hidden" }}
           >
+            <InteractionsLane
+              marks={session.marks}
+              viewport={viewport}
+              width={chartWidth}
+              rem={rem}
+              selected={selected}
+            />
             {laneRows(session).map((lane) => (
               <Lane
                 key={lane.label}
