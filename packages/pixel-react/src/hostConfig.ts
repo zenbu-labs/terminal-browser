@@ -4,7 +4,8 @@ import { DefaultEventPriority } from "react-reconciler/constants";
 import { createNativeEngine, NativeEngine } from "./native";
 import { parseColor, serializeStyle, Style } from "./styles";
 
-export const CONTAINER_ID = 0;
+export const APP_VIEW = 0;
+export const DEVTOOLS_VIEW = 1;
 
 export interface ClickEvent {
   x: number;
@@ -44,42 +45,66 @@ export interface InputProps {
   onSubmit?: (text: string) => void;
 }
 
-type AnyProps = BoxProps & TextProps & InputProps;
+export type AnyProps = BoxProps & TextProps & InputProps;
 
 export interface Instance {
   id: number;
+  view: number;
   type: string;
   props: AnyProps;
+  parent: Instance | Container | null;
   children: Instance[];
   mounted: boolean;
   hidden: boolean;
 }
 
-interface Container {
-  id: typeof CONTAINER_ID;
+export interface Container {
+  view: number;
+  children: Instance[];
 }
 
 type Op = Record<string, unknown>;
 
-class Bridge {
+export interface FlushSample {
+  seq: number;
+  view: number;
+  ops: number;
+  start: number;
+  dur: number;
+}
+
+export class Bridge {
   engine: NativeEngine = createNativeEngine();
-  ops: Op[] = [];
-  propsById = new Map<number, AnyProps>();
+  propsById: Array<Map<number, AnyProps>> = [new Map(), new Map()];
+  containers: Array<Container | null> = [null, null];
+  onFlush: ((sample: FlushSample) => void) | null = null;
+  onTreeMutation: ((view: number) => void) | null = null;
+  private queues: Op[][] = [[], []];
   private nextId = 1;
+  private seq = 0;
 
   allocId(): number {
     return this.nextId++;
   }
 
-  push(op: Op) {
-    this.ops.push(op);
+  push(view: number, op: Op) {
+    this.queues[view].push(op);
   }
 
   flush() {
-    if (this.ops.length === 0) return;
-    const batch = this.ops;
-    this.ops = [];
-    this.engine.applyOps(JSON.stringify(batch));
+    for (let view = 0; view < this.queues.length; view++) {
+      const ops = this.queues[view];
+      if (ops.length === 0) continue;
+      this.queues[view] = [];
+      const seq = ++this.seq;
+      const payload = JSON.stringify({ view, seq, ops });
+      const start = performance.timeOrigin + performance.now();
+      this.engine.applyOps(payload);
+      if (this.onFlush) {
+        const dur = performance.timeOrigin + performance.now() - start;
+        this.onFlush({ seq, view, ops: ops.length, start, dur });
+      }
+    }
   }
 }
 
@@ -129,29 +154,67 @@ function serializeProps(
   return base;
 }
 
+function mutated(view: number) {
+  getBridge().onTreeMutation?.(view);
+}
+
 function materialize(b: Bridge, instance: Instance) {
   if (instance.mounted) return;
   instance.mounted = true;
-  b.push({
+  b.push(instance.view, {
     op: "create",
     id: instance.id,
     props: serializeProps(instance.type, instance.props, instance.hidden),
   });
   for (const child of instance.children) {
     materialize(b, child);
-    b.push({ op: "insertBefore", parent: instance.id, child: child.id, before: null });
+    b.push(instance.view, {
+      op: "insertBefore",
+      parent: instance.id,
+      child: child.id,
+      before: null,
+    });
   }
 }
 
-function insert(parent: number, child: Instance, before: Instance | null) {
-  const b = getBridge();
-  materialize(b, child);
-  b.push({ op: "insertBefore", parent, child: child.id, before: before?.id ?? null });
+function detachFromParent(child: Instance) {
+  const parent = child.parent;
+  if (!parent) return;
+  const index = parent.children.indexOf(child);
+  if (index !== -1) parent.children.splice(index, 1);
+  child.parent = null;
 }
 
-function remove(_parent: number, child: Instance) {
-  getBridge().push({ op: "remove", id: child.id });
+function insert(
+  parent: Instance | Container,
+  parentId: number,
+  child: Instance,
+  before: Instance | null
+) {
+  const b = getBridge();
+  materialize(b, child);
+  detachFromParent(child);
+  const siblings = parent.children;
+  const at = before ? siblings.indexOf(before) : -1;
+  if (at === -1) siblings.push(child);
+  else siblings.splice(at, 0, child);
+  child.parent = parent;
+  b.push(child.view, {
+    op: "insertBefore",
+    parent: parentId,
+    child: child.id,
+    before: before?.id ?? null,
+  });
+  mutated(child.view);
 }
+
+function remove(child: Instance) {
+  detachFromParent(child);
+  getBridge().push(child.view, { op: "remove", id: child.id });
+  mutated(child.view);
+}
+
+const CONTAINER_NODE_ID = 0;
 
 const hostConfig = {
   supportsMutation: true,
@@ -160,17 +223,19 @@ const hostConfig = {
   isPrimaryRenderer: true,
   noTimeout: -1 as const,
 
-  createInstance(type: string, props: AnyProps): Instance {
+  createInstance(type: string, props: AnyProps, rootContainer: Container): Instance {
     const b = getBridge();
     const instance: Instance = {
       id: b.allocId(),
+      view: rootContainer.view,
       type,
       props,
+      parent: null,
       children: [],
       mounted: false,
       hidden: false,
     };
-    b.propsById.set(instance.id, props);
+    b.propsById[instance.view].set(instance.id, props);
     return instance;
   },
 
@@ -184,6 +249,7 @@ const hostConfig = {
 
   appendInitialChild(parent: Instance, child: Instance) {
     parent.children.push(child);
+    child.parent = parent;
   },
 
   finalizeInitialChildren(): boolean {
@@ -208,66 +274,76 @@ const hostConfig = {
     const b = getBridge();
     const prevProps = instance.props;
     instance.props = newProps;
-    b.propsById.set(instance.id, newProps);
-    b.push({
+    b.propsById[instance.view].set(instance.id, newProps);
+    b.push(instance.view, {
       op: "update",
       id: instance.id,
-      props: serializeProps(instance.type, newProps, instance.hidden, oldProps ?? prevProps),
+      props: serializeProps(
+        instance.type,
+        newProps,
+        instance.hidden,
+        oldProps ?? prevProps
+      ),
     });
+    mutated(instance.view);
   },
 
   appendChild(parent: Instance, child: Instance) {
-    insert(parent.id, child, null);
+    insert(parent, parent.id, child, null);
   },
 
-  appendChildToContainer(_container: Container, child: Instance) {
-    insert(CONTAINER_ID, child, null);
+  appendChildToContainer(container: Container, child: Instance) {
+    insert(container, CONTAINER_NODE_ID, child, null);
   },
 
   insertBefore(parent: Instance, child: Instance, before: Instance) {
-    insert(parent.id, child, before);
+    insert(parent, parent.id, child, before);
   },
 
-  insertInContainerBefore(_container: Container, child: Instance, before: Instance) {
-    insert(CONTAINER_ID, child, before);
+  insertInContainerBefore(container: Container, child: Instance, before: Instance) {
+    insert(container, CONTAINER_NODE_ID, child, before);
   },
 
-  removeChild(parent: Instance, child: Instance) {
-    remove(parent.id, child);
+  removeChild(_parent: Instance, child: Instance) {
+    remove(child);
   },
 
   removeChildFromContainer(_container: Container, child: Instance) {
-    remove(CONTAINER_ID, child);
+    remove(child);
   },
 
-  clearContainer() {
-    getBridge().push({ op: "clear", id: CONTAINER_ID });
+  clearContainer(container: Container) {
+    container.children = [];
+    getBridge().push(container.view, { op: "clear", id: CONTAINER_NODE_ID });
+    mutated(container.view);
   },
 
   detachDeletedInstance(instance: Instance) {
     const b = getBridge();
-    b.propsById.delete(instance.id);
-    b.push({ op: "forget", id: instance.id });
+    b.propsById[instance.view].delete(instance.id);
+    b.push(instance.view, { op: "forget", id: instance.id });
   },
 
   hideInstance(instance: Instance) {
     instance.hidden = true;
-    getBridge().push({
+    getBridge().push(instance.view, {
       op: "update",
       id: instance.id,
       props: serializeProps(instance.type, instance.props, true, instance.props),
     });
+    mutated(instance.view);
   },
 
   unhideInstance(instance: Instance, props: AnyProps) {
     const prevProps = instance.props;
     instance.hidden = false;
     instance.props = props;
-    getBridge().push({
+    getBridge().push(instance.view, {
       op: "update",
       id: instance.id,
       props: serializeProps(instance.type, props, false, prevProps),
     });
+    mutated(instance.view);
   },
 
   hideTextInstance() {},
@@ -289,17 +365,17 @@ const hostConfig = {
       id: instance.id,
       focus: () => {
         const b = getBridge();
-        b.push({ op: "focus", id: instance.id });
+        b.push(instance.view, { op: "focus", id: instance.id });
         b.flush();
       },
       blur: () => {
         const b = getBridge();
-        b.push({ op: "focus", id: null });
+        b.push(instance.view, { op: "focus", id: null });
         b.flush();
       },
       scrollTo: (offset: number, smooth = false) => {
         const b = getBridge();
-        b.push({ op: "scrollTo", id: instance.id, offset, smooth });
+        b.push(instance.view, { op: "scrollTo", id: instance.id, offset, smooth });
         b.flush();
       },
     };

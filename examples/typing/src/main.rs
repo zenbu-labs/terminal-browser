@@ -59,7 +59,7 @@ fn main() -> std::io::Result<()> {
         watch_resize: true,
     })?;
     let theme = Theme::from_terminal(engine.colors());
-    engine.set_clear_color(theme.bg);
+    engine.set_clear_color(0, theme.bg);
 
     let mut app = App {
         notes: transcript::demo_notes(),
@@ -87,16 +87,16 @@ fn main() -> std::io::Result<()> {
                 &sample,
                 &engine.fonts()[FONT_UI],
             );
-            engine.tree.reconcile(frame);
+            engine.tree_mut().reconcile(frame);
         }
 
         let events = engine.pump(None)?;
         // The status chips sample engine stats, so rebuilding the UI
         // unconditionally would turn "stats changed" into a render loop.
         let scroll = engine
-            .tree
+            .tree()
             .find(EDITOR)
-            .and_then(|id| engine.tree.scroll_state(id))
+            .and_then(|id| engine.tree().scroll_state(id))
             .map_or(0.0, |s| s.position);
         if scroll != last_scroll {
             last_scroll = scroll;
@@ -108,7 +108,7 @@ fn main() -> std::io::Result<()> {
         let mut queue: VecDeque<EngineEvent> = events.into();
         while let Some(event) = queue.pop_front() {
             match event {
-                EngineEvent::Key(key) => {
+                EngineEvent::Key { event: key, .. } => {
                     let menu_was_open = app.context_menu.take().is_some();
                     if menu_was_open && key.key == Key::Escape {
                         continue;
@@ -132,9 +132,7 @@ fn main() -> std::io::Result<()> {
                         continue;
                     };
                     if menu_was_open {
-                        if let Some((_, action)) =
-                            MENU_ACTIONS.iter().find(|(k, _)| *k == key)
-                        {
+                        if let Some((_, action)) = MENU_ACTIONS.iter().find(|(k, _)| *k == key) {
                             let mut replies = Vec::new();
                             engine.apply_input_action(*action, &mut replies)?;
                             queue.extend(replies);
@@ -151,28 +149,30 @@ fn main() -> std::io::Result<()> {
                         app.active = app.notes.len() - 1;
                     }
                 }
-                EngineEvent::RightClick { x, y } => {
+                EngineEvent::RightClick { x, y, .. } => {
                     app.context_menu = None;
                     let over_editor = engine
-                        .tree
+                        .tree()
                         .find(EDITOR)
-                        .and_then(|id| engine.tree.rect(id))
+                        .and_then(|id| engine.tree().rect(id))
                         .is_some_and(|rect| rect.contains(x, y));
                     if !over_editor {
                         continue;
                     }
-                    if let Some(input) = engine.tree.find(&input_key(app.active))
-                        && let Some(geometry) = engine.tree.input_geometry(input)
-                        && let Some(text) = engine.tree.input_text(input).map(str::to_string)
+                    if let Some(input) = engine.tree().find(&input_key(app.active))
+                        && let Some(geometry) = engine.tree().input_geometry(input)
+                        && let Some(text) = engine.tree().input_text(input).map(str::to_string)
                     {
                         let offset = geometry.offset_at(&text, (x, y), engine.fonts());
                         let in_selection = engine
-                            .tree
+                            .tree()
                             .input(input)
                             .and_then(|i| i.selection())
                             .is_some_and(|s| s.contains(&offset));
                         if !in_selection {
-                            engine.tree.edit_input(input, |i| i.set_cursor(offset, false));
+                            engine
+                                .tree_mut()
+                                .edit_input(input, |i| i.set_cursor(offset, false));
                         }
                     }
                     app.context_menu = Some((x, y));
@@ -187,10 +187,13 @@ fn main() -> std::io::Result<()> {
                         app.notes[index].text = text;
                     }
                 }
-                EngineEvent::Paste(_)
+                EngineEvent::Paste { .. }
                 | EngineEvent::Scroll { .. }
                 | EngineEvent::Submit { .. }
-                | EngineEvent::Resize { .. } => {}
+                | EngineEvent::Resize { .. }
+                | EngineEvent::Inspect { .. }
+                | EngineEvent::Log(_)
+                | EngineEvent::Profile(_) => {}
             }
         }
     }
@@ -198,8 +201,10 @@ fn main() -> std::io::Result<()> {
 }
 
 fn sample(app: &App, engine: &Engine) -> EngineSample {
-    let tree = &engine.tree;
-    let input = tree.find(&input_key(app.active)).and_then(|id| tree.input(id));
+    let tree = engine.tree();
+    let input = tree
+        .find(&input_key(app.active))
+        .and_then(|id| tree.input(id));
     EngineSample {
         recording: engine.profiler_recording(),
         stats: engine.stats(),

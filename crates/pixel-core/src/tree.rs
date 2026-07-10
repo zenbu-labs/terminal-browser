@@ -533,7 +533,9 @@ impl Tree {
     }
 
     pub(crate) fn input_mut(&mut self, id: NodeId) -> Option<&mut TextInput> {
-        self.get_mut(id).and_then(|n| n.input.as_mut()).map(|s| &mut s.input)
+        self.get_mut(id)
+            .and_then(|n| n.input.as_mut())
+            .map(|s| &mut s.input)
     }
 
     pub fn input(&self, id: NodeId) -> Option<&TextInput> {
@@ -561,6 +563,70 @@ impl Tree {
             }
         }
         self.needs_paint = true;
+    }
+
+    pub fn text_of(&self, id: NodeId) -> Option<&str> {
+        self.get(id)?.text.as_deref()
+    }
+
+    pub(crate) fn input_meta(&self, id: NodeId) -> Option<(Resolved, bool)> {
+        let node = self.get(id)?;
+        let submit = node.input.as_ref()?.submit;
+        Some((node.resolved, submit))
+    }
+
+    pub(crate) fn resolved_px(&self, id: NodeId) -> Option<f32> {
+        Some(self.get(id)?.resolved.px)
+    }
+
+    pub(crate) fn bar_opacity(&self, id: NodeId) -> f32 {
+        self.get(id).map_or(0.0, |n| n.bar.opacity)
+    }
+
+    pub(crate) fn bar_state(&self, id: NodeId) -> Option<(f32, f32, Option<Instant>, f32)> {
+        let node = self.get(id)?;
+        Some((
+            node.bar.opacity,
+            node.bar.expand,
+            node.bar.last_move,
+            node.scroll_max,
+        ))
+    }
+
+    pub(crate) fn set_bar_state(
+        &mut self,
+        id: NodeId,
+        opacity: f32,
+        expand: f32,
+        last_move: Option<Instant>,
+    ) {
+        if let Some(node) = self.get_mut(id) {
+            node.bar.opacity = opacity;
+            node.bar.expand = expand;
+            node.bar.last_move = last_move;
+        }
+    }
+
+    pub(crate) fn touch_bar(&mut self, id: NodeId) {
+        if let Some(node) = self.get_mut(id) {
+            node.bar.last_move = Some(Instant::now());
+        }
+    }
+
+    /// Scroll offset ready to emit for a scroll-events node, or None when the
+    /// node opted out or has not moved enough since the last emission.
+    pub(crate) fn take_scroll_emit(&mut self, id: NodeId) -> Option<(Option<String>, f32, f32)> {
+        let node = self.get(id)?;
+        if !node.scroll_events {
+            return None;
+        }
+        let (offset, max) = (node.scroll.position, node.scroll_max);
+        if (offset - node.last_scroll_emit).abs() < 0.5 {
+            return None;
+        }
+        let key = node.key.clone();
+        self.get_mut(id)?.last_scroll_emit = offset;
+        Some((key, offset, max))
     }
 
     pub fn find(&self, key: &str) -> Option<NodeId> {
@@ -711,7 +777,9 @@ impl Tree {
                 let _ = self.taffy.mark_dirty(taffy);
             }
         } else if self.taffy.get_node_context(taffy).is_some() {
-            self.taffy.set_node_context(taffy, None).expect("taffy context");
+            self.taffy
+                .set_node_context(taffy, None)
+                .expect("taffy context");
             let _ = self.taffy.mark_dirty(taffy);
         }
         for child in children {
@@ -722,7 +790,10 @@ impl Tree {
     fn place(&mut self) {
         self.paint_order.clear();
         self.scrollables.clear();
-        let layout = self.taffy.layout(self.node(self.root).taffy).expect("layout");
+        let layout = self
+            .taffy
+            .layout(self.node(self.root).taffy)
+            .expect("layout");
         let window = PxRect {
             x: 0.0,
             y: 0.0,
@@ -750,9 +821,7 @@ impl Tree {
         node.visible = visible;
         let scrolls = node.style.overflow == Overflow::Scroll;
         if scrolls {
-            let content = node
-                .content_height
-                .unwrap_or(layout.content_size.height);
+            let content = node.content_height.unwrap_or(layout.content_size.height);
             node.scroll_max = (content - rect.h).max(0.0);
             let max = node.scroll_max;
             if node.scroll.position > max {
@@ -796,6 +865,15 @@ impl Tree {
 
     pub fn visible_rect(&self, id: NodeId) -> Option<PxRect> {
         Some(self.get(id)?.visible)
+    }
+
+    /// Topmost painted node under the point, clickable or not. This is the
+    /// hit test for inspection, where every node is a candidate.
+    pub fn hit_any(&self, x: f32, y: f32) -> Option<NodeId> {
+        self.paint_order.iter().rev().copied().find(|&id| {
+            self.get(id)
+                .is_some_and(|node| node.visible.w > 0.0 && node.visible.contains(x, y))
+        })
     }
 
     pub fn hit_click(&self, x: f32, y: f32) -> Option<NodeId> {
@@ -861,10 +939,7 @@ impl Tree {
             .iter()
             .rev()
             .copied()
-            .find(|&id| {
-                self.get(id)
-                    .is_some_and(|node| node.visible.contains(x, y))
-            })
+            .find(|&id| self.get(id).is_some_and(|node| node.visible.contains(x, y)))
             .and_then(|id| self.scroll_area(id))
     }
 
@@ -1300,8 +1375,14 @@ mod tests {
             [9, 9, 9, 255],
             "floating node paints over the sibling that fills the window"
         );
-        assert_eq!(tree.key_of(tree.hit_click(35.0, 45.0).unwrap()), Some("float"));
-        assert_eq!(tree.key_of(tree.hit_click(5.0, 5.0).unwrap()), Some("under"));
+        assert_eq!(
+            tree.key_of(tree.hit_click(35.0, 45.0).unwrap()),
+            Some("float")
+        );
+        assert_eq!(
+            tree.key_of(tree.hit_click(5.0, 5.0).unwrap()),
+            Some("under")
+        );
     }
 
     fn editor(initial: &str) -> Vec<Desc> {
@@ -1359,9 +1440,17 @@ mod tests {
         let canvas = painted(&mut tree, (200, 60), None);
         let selected = geometry.caret_rect("hello", 3, &fonts);
         let [r, g, b, _] = pixel(&canvas, selected.x as u32 + 1, selected.y as u32 + 1);
-        assert_eq!([r, g, b], [0, 255, 0], "selection painted behind the glyphs");
+        assert_eq!(
+            [r, g, b],
+            [0, 255, 0],
+            "selection painted behind the glyphs"
+        );
         let [r, g, b, _] = pixel(&canvas, (caret.x + caret.w / 2.0) as u32, center.1);
-        assert_eq!([r, g, b], [0, 255, 0], "no caret while a selection is active");
+        assert_eq!(
+            [r, g, b],
+            [0, 255, 0],
+            "no caret while a selection is active"
+        );
     }
 
     #[test]
@@ -1490,7 +1579,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_drops_nodes_missing_from_the_description()  {
+    fn reconcile_drops_nodes_missing_from_the_description() {
         let label = |key: &str| Desc {
             key: Some(key.into()),
             text: Some(key.into()),
@@ -1662,7 +1751,11 @@ mod tests {
             }],
         );
         let id = tree.find("virtual").unwrap();
-        assert_eq!(tree.scroll_max(id), 600.0, "virtual height wins over measured");
+        assert_eq!(
+            tree.scroll_max(id),
+            600.0,
+            "virtual height wins over measured"
+        );
 
         let rects = tree.scrollbar_rects(id).unwrap();
         let expected_thumb = rects.track.h * 200.0 / 800.0;
@@ -1671,7 +1764,10 @@ mod tests {
             "thumb is viewport/content of the track: {} vs {expected_thumb}",
             rects.thumb.h
         );
-        assert_eq!(rects.thumb.y, rects.track.y, "unscrolled thumb sits at the top");
+        assert_eq!(
+            rects.thumb.y, rects.track.y,
+            "unscrolled thumb sits at the top"
+        );
 
         tree.scroll_state_mut(id).unwrap().position = 600.0;
         let rects = tree.scrollbar_rects(id).unwrap();

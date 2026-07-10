@@ -7,7 +7,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::{
+    ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
+};
 use napi::{JsFunction, Result};
 use napi_derive::napi;
 use pixel_core::{Engine, EngineConfig, TerminalColors, Waker, fontdue};
@@ -137,7 +139,11 @@ impl PixelEngine {
         self.thread = Some(std::thread::spawn(move || {
             let cell = cell;
             let mut engine = cell.0;
-            let mut ids = IdMap::new(engine.tree.root());
+            engine.set_default_menu(true);
+            engine.set_emit_logs(true);
+            let mut ids: Vec<IdMap> = (0..engine.view_count())
+                .map(|view| IdMap::new(engine.view_tree(view).expect("view exists").root()))
+                .collect();
             let exit_error = loop {
                 let events = match engine.pump(None) {
                     Ok(events) => events,
@@ -147,13 +153,21 @@ impl PixelEngine {
                     break None;
                 }
                 while let Ok(cmd) = rx.try_recv() {
-                    if let Err(message) = apply_ops(&mut engine, &mut ids, &cmd) {
+                    let outcome = apply_ops(&mut engine, &mut ids, &cmd);
+                    if let Some(message) = outcome.error {
+                        pixel_core::logging::error("bridge", message.clone());
                         let error = json!({ "type": "error", "message": message });
-                        tsfn.call(Ok(error.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+                        tsfn.call(
+                            Ok(error.to_string()),
+                            ThreadsafeFunctionCallMode::NonBlocking,
+                        );
+                    }
+                    for reply in outcome.replies {
+                        tsfn.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
                 for event in &events {
-                    if let Some(json) = event_json(event, &ids) {
+                    if let Some(json) = event_json(event, &engine, &ids) {
                         tsfn.call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
@@ -161,7 +175,10 @@ impl PixelEngine {
             drop(engine);
             if !stop.load(Ordering::Relaxed) {
                 let exit = json!({ "type": "exit", "error": exit_error });
-                tsfn.call(Ok(exit.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+                tsfn.call(
+                    Ok(exit.to_string()),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                );
             }
         }));
         Ok(())

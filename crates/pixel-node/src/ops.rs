@@ -78,6 +78,31 @@ enum Op {
     SetClearColor {
         color: Color,
     },
+    SetSplit {
+        fraction: Option<f32>,
+    },
+    SetInspectMode {
+        on: bool,
+    },
+    SetDefaultMenu {
+        on: bool,
+    },
+    Highlight {
+        view: usize,
+        id: Option<u32>,
+    },
+    QueryLayout {},
+    ProfileStart {},
+    ProfileStop {},
+}
+
+#[derive(Deserialize)]
+struct Envelope {
+    #[serde(default)]
+    view: usize,
+    #[serde(default)]
+    seq: Option<u64>,
+    ops: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -316,66 +341,170 @@ impl PropsDto {
     }
 }
 
-pub fn apply_ops(engine: &mut Engine, ids: &mut IdMap, json: &str) -> Result<(), String> {
-    let values: Vec<serde_json::Value> = serde_json::from_str(json).map_err(|e| e.to_string())?;
+pub struct OpOutcome {
+    pub replies: Vec<String>,
+    pub error: Option<String>,
+}
+
+pub fn apply_ops(engine: &mut Engine, ids: &mut [IdMap], json: &str) -> OpOutcome {
+    let envelope: Envelope = match serde_json::from_str(json) {
+        Ok(envelope) => envelope,
+        Err(e) => {
+            return OpOutcome {
+                replies: Vec::new(),
+                error: Some(e.to_string()),
+            };
+        }
+    };
+    let view = envelope.view.min(ids.len() - 1);
     let mut errors = Vec::new();
-    for value in values {
-        let op: Op = match serde_json::from_value(value) {
-            Ok(op) => op,
-            Err(e) => {
-                errors.push(e.to_string());
-                continue;
-            }
-        };
-        match op {
-            Op::Create { id, props } => {
-                let node = engine.tree.create(props.into_props(engine.base_px()));
-                ids.insert(id, node);
-            }
-            Op::InsertBefore {
-                parent,
-                child,
-                before,
-            } => {
-                let (Some(parent), Some(child)) = (ids.node(parent), ids.node(child)) else {
+    let mut replies = Vec::new();
+    pixel_core::profiler::span_arg("ops.apply", envelope.seq, || {
+        for value in envelope.ops {
+            let op: Op = match serde_json::from_value(value) {
+                Ok(op) => op,
+                Err(e) => {
+                    errors.push(e.to_string());
                     continue;
-                };
-                let before = before.and_then(|b| ids.node(b));
-                engine.tree.insert_before(parent, child, before);
-            }
-            Op::Remove { id } => {
-                if let Some(node) = ids.node(id) {
-                    engine.tree.remove(node);
                 }
-                ids.forget(id);
+            };
+            apply_op(engine, ids, view, op, &mut replies);
+        }
+    });
+    let error = if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    };
+    OpOutcome { replies, error }
+}
+
+fn apply_op(
+    engine: &mut Engine,
+    ids: &mut [IdMap],
+    view: usize,
+    op: Op,
+    replies: &mut Vec<String>,
+) {
+    let base_px = engine.base_px();
+    let map = &mut ids[view];
+    let Some(tree) = engine.view_tree_mut(view) else {
+        return;
+    };
+    match op {
+        Op::Create { id, props } => {
+            let node = tree.create(props.into_props(base_px));
+            map.insert(id, node);
+        }
+        Op::InsertBefore {
+            parent,
+            child,
+            before,
+        } => {
+            let (Some(parent), Some(child)) = (map.node(parent), map.node(child)) else {
+                return;
+            };
+            let before = before.and_then(|b| map.node(b));
+            tree.insert_before(parent, child, before);
+        }
+        Op::Remove { id } => {
+            if let Some(node) = map.node(id) {
+                tree.remove(node);
             }
-            Op::Forget { id } => ids.forget(id),
-            Op::Update { id, props } => {
-                if let Some(node) = ids.node(id) {
-                    let props = props.into_props(engine.base_px());
-                    engine.tree.update(node, props);
+            map.forget(id);
+        }
+        Op::Forget { id } => map.forget(id),
+        Op::Update { id, props } => {
+            if let Some(node) = map.node(id) {
+                let props = props.into_props(base_px);
+                tree.update(node, props);
+            }
+        }
+        Op::Clear { id } => {
+            if let Some(node) = map.node(id) {
+                tree.remove_children(node);
+            }
+        }
+        Op::Focus { id } => {
+            let node = id.and_then(|id| map.node(id));
+            engine.set_focus(view, node);
+        }
+        Op::ScrollTo { id, offset, smooth } => {
+            if let Some(node) = map.node(id) {
+                engine.scroll_to(view, node, offset, smooth);
+            }
+        }
+        Op::SetClearColor { color } => engine.set_clear_color(view, color),
+        Op::SetSplit { fraction } => engine.set_split(fraction),
+        Op::SetInspectMode { on } => engine.set_inspect_mode(on),
+        Op::SetDefaultMenu { on } => engine.set_default_menu(on),
+        Op::Highlight {
+            view: target_view,
+            id,
+        } => {
+            let target = id.and_then(|id| {
+                ids.get(target_view)
+                    .and_then(|m| m.node(id))
+                    .map(|node| (target_view, node))
+            });
+            engine.set_highlight(target);
+        }
+        Op::QueryLayout {} => {
+            engine.flush_view_layout(view);
+            replies.push(layout_json(engine, &ids[view], view));
+        }
+        Op::ProfileStart {} => engine.profile_start(),
+        Op::ProfileStop {} => engine.profile_stop(),
+    }
+}
+
+fn layout_json(engine: &Engine, ids: &IdMap, view: usize) -> String {
+    use serde_json::json;
+    let mut nodes = Vec::new();
+    if let Some(tree) = engine.view_tree(view) {
+        let mut stack = vec![tree.root()];
+        while let Some(id) = stack.pop() {
+            for &child in tree.children(id) {
+                stack.push(child);
+            }
+            let Some(ext) = ids.ext(id) else {
+                continue;
+            };
+            let Some(rect) = tree.rect(id) else {
+                continue;
+            };
+            let visible = tree.visible_rect(id).unwrap_or(rect);
+            let mut node = json!({
+                "id": ext,
+                "x": rect.x,
+                "y": rect.y,
+                "w": rect.w,
+                "h": rect.h,
+                "vw": visible.w,
+                "vh": visible.h,
+            });
+            if let Some(state) = tree.scroll_state(id) {
+                let max = tree.scroll_max(id);
+                if max > 0.0 {
+                    node["scroll"] = json!(state.position);
+                    node["scrollMax"] = json!(max);
                 }
             }
-            Op::Clear { id } => {
-                if let Some(node) = ids.node(id) {
-                    engine.tree.remove_children(node);
-                }
+            if let Some(text) = tree.text_of(id) {
+                node["text"] = json!(text.chars().take(120).collect::<String>());
             }
-            Op::Focus { id } => {
-                let node = id.and_then(|id| ids.node(id));
-                engine.tree.set_focus(node);
-            }
-            Op::ScrollTo { id, offset, smooth } => {
-                if let Some(node) = ids.node(id) {
-                    engine.scroll_to(node, offset, smooth);
-                }
-            }
-            Op::SetClearColor { color } => engine.set_clear_color(color),
+            nodes.push(node);
         }
     }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
+    let stats = engine.stats();
+    json!({
+        "type": "layout",
+        "view": view,
+        "width": engine.view_size(view).0,
+        "height": engine.view_size(view).1,
+        "split": engine.split(),
+        "stats": { "frameMs": stats.frame_ms, "fps": stats.fps },
+        "nodes": nodes,
+    })
+    .to_string()
 }

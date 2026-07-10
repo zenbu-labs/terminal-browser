@@ -14,7 +14,7 @@ pub struct Desc {
 }
 
 impl Desc {
-    fn props(&self) -> Props {
+    pub(crate) fn props(&self) -> Props {
         Props {
             style: self.style.clone(),
             text: self.text.clone(),
@@ -28,7 +28,8 @@ impl Desc {
     }
 
     fn reusable(&self, tree: &Tree, id: NodeId) -> bool {
-        tree.get(id).is_some_and(|node| node.input.is_some() == self.input.is_some())
+        tree.get(id)
+            .is_some_and(|node| node.input.is_some() == self.input.is_some())
     }
 }
 
