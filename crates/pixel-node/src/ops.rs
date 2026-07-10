@@ -116,6 +116,7 @@ struct PropsDto {
     input: Option<InputDto>,
     content_height: Option<f32>,
     scroll_events: bool,
+    wheel_events: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -337,6 +338,7 @@ impl PropsDto {
             }),
             content_height: self.content_height,
             scroll_events: self.scroll_events,
+            wheel_events: self.wheel_events,
         }
     }
 }

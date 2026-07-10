@@ -17,11 +17,22 @@ export interface ScrollEvent {
   max: number;
 }
 
+export interface WheelEvent {
+  /** Position within the node, in px. */
+  x: number;
+  y: number;
+  deltaX: number;
+  deltaY: number;
+  precise: boolean;
+}
+
 export interface BoxProps {
   style?: Style;
   id?: string;
   onClick?: (event: ClickEvent) => void;
   onScroll?: (event: ScrollEvent) => void;
+  /** Receive raw wheel input instead of engine scrolling. */
+  onWheel?: (event: WheelEvent) => void;
   contentHeight?: number;
   children?: React.ReactNode;
 }
@@ -137,6 +148,7 @@ function serializeProps(
     hidden,
     contentHeight: props.contentHeight,
     scrollEvents: !!props.onScroll,
+    wheelEvents: !!props.onWheel,
   };
   if (type === "text") {
     base.text = textOf(props.children);

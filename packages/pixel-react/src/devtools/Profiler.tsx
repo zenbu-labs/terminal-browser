@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { Box, Text } from "../components";
 import { clearRecording, startRecording, stopRecording } from "./controller";
@@ -144,9 +144,17 @@ function Lane(props: {
   const scale = width / (viewport.t1 - viewport.t0);
   const visible: TimeSpan[] = [];
   let maxDepth = 0;
+  let lastEnd = -Infinity;
   for (const span of spans) {
     if (span.start + span.dur < viewport.t0 || span.start > viewport.t1) continue;
-    if (span.dur * scale < 0.4) continue;
+    // Sub-pixel spans collapse into one marker per pixel column instead of
+    // disappearing, so a zoomed-out chart still shows where work happened.
+    if (span.dur * scale < 0.4 && span.depth === 0) {
+      if ((span.start - lastEnd) * scale < 1.2) continue;
+      lastEnd = span.start + span.dur;
+    } else if (span.dur * scale < 0.4) {
+      continue;
+    }
     visible.push(span);
     if (span.depth > maxDepth) maxDepth = span.depth;
     if (visible.length >= 600) break;
@@ -159,7 +167,7 @@ function Lane(props: {
       <Box style={{ height: (maxDepth + 1) * rowH + 2, overflow: "hidden" }}>
         {visible.map((span, i) => {
           const x = (span.start - viewport.t0) * scale;
-          const w = Math.max(span.dur * scale - 0.5, 1);
+          const w = Math.max(span.dur * scale - 0.5, 1.5);
           const isSelected = selected === span;
           return (
             <Box
@@ -291,10 +299,36 @@ export function ProfilerPanel(props: { rem: number }) {
   const [, setTick] = useState(0);
 
   const session = state.session;
-  if (session && !viewport) {
-    viewportStore.set({ t0: session.start, t1: session.end });
-  }
+  useEffect(() => {
+    if (session && !viewportStore.get()) {
+      viewportStore.set({ t0: session.start, t1: session.end });
+    }
+  }, [session]);
   const chartWidth = Math.max(devtools.width - rem, 40);
+
+  const onChartWheel = (e: { x: number; deltaX: number; deltaY: number; precise: boolean }) => {
+    const current = viewportStore.get();
+    if (!session || !current) return;
+    const span = current.t1 - current.t0;
+    const scale = chartWidth / span;
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      const shift = e.deltaX / scale;
+      viewportStore.set(
+        clampViewport({ t0: current.t0 + shift, t1: current.t1 + shift }, session)
+      );
+      return;
+    }
+    // Scroll up zooms in around the cursor, like a map.
+    const dy = e.precise ? e.deltaY : e.deltaY * 3;
+    const factor = Math.exp(dy * 0.0035);
+    const total = session.end - session.start || 1;
+    const next = Math.min(Math.max(span * factor, 0.02), total * 1.2);
+    const fraction = Math.min(Math.max((e.x - rem * 0.5) / chartWidth, 0), 1);
+    const at = current.t0 + fraction * span;
+    viewportStore.set(
+      clampViewport({ t0: at - fraction * next, t1: at + (1 - fraction) * next }, session)
+    );
+  };
 
   return (
     <Box style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, overflow: "hidden" }}>
@@ -328,7 +362,7 @@ export function ProfilerPanel(props: { rem: number }) {
         {session && <Summary session={session} rem={rem} />}
         <Box style={{ flexGrow: 1 }} />
         <Text style={{ color: theme.faint, fontSize: rem * 0.62, wrap: false }}>
-          w/s zoom · a/d pan · f fit
+          scroll zooms · sideways swipe pans · f fit
         </Text>
       </Toolbar>
       <Divider />
@@ -350,12 +384,13 @@ export function ProfilerPanel(props: { rem: number }) {
             overflow: "hidden",
             padding: { left: rem * 0.5, right: rem * 0.5 },
           }}
+          onWheel={onChartWheel}
         >
           <Overview session={session} width={chartWidth} viewport={viewport} rem={rem} />
           <Divider />
           <Ruler session={session} viewport={viewport} width={chartWidth} rem={rem} />
           <Box
-            style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, overflow: "scroll" }}
+            style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, overflow: "hidden" }}
           >
             {LANES.map((lane) => {
               const spans = session.spans.filter(lane.match);

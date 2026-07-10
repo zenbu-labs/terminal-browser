@@ -38,6 +38,7 @@ export type {
   InputProps,
   ClickEvent,
   ScrollEvent,
+  WheelEvent,
 } from "./hostConfig";
 export type { Color, Edges, ScrollbarStyle, Style } from "./styles";
 export type { EngineInfo, Rgba } from "./native";
@@ -92,6 +93,9 @@ interface EngineEventJson {
   error?: string | null;
   seq?: number;
   epochMs?: number;
+  deltaX?: number;
+  deltaY?: number;
+  precise?: boolean;
   level?: string;
   target?: string;
   stats?: { frameMs: number; fps: number };
@@ -167,6 +171,17 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
       case "scroll": {
         const props = bridge.propsById[view]?.get(event.node!);
         props?.onScroll?.({ offset: event.offset!, max: event.max! });
+        break;
+      }
+      case "wheel": {
+        const props = bridge.propsById[view]?.get(event.node!);
+        props?.onWheel?.({
+          x: event.x!,
+          y: event.y!,
+          deltaX: event.deltaX ?? 0,
+          deltaY: event.deltaY ?? 0,
+          precise: !!event.precise,
+        });
         break;
       }
       case "resize": {

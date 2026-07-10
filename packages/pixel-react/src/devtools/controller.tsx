@@ -187,7 +187,7 @@ export function onEngineProfile(data: EngineProfileEvent) {
     lane: s.view === DEVTOOLS_VIEW ? "devtools-engine" : "engine",
     arg: s.arg ?? undefined,
   }));
-  const spans = [...pendingSpans, ...engineSpans];
+  const spans = [...pendingSpans, ...engineSpans].sort((a, b) => a.start - b.start);
   pendingSpans.length = 0;
   if (spans.length === 0) {
     profilerStore.update((s) => ({ ...s, pendingStop: false, session: null }));

@@ -10,6 +10,7 @@ pub struct Desc {
     pub input: Option<InputProps>,
     pub content_height: Option<f32>,
     pub scroll_events: bool,
+    pub wheel_events: bool,
     pub children: Vec<Desc>,
 }
 
@@ -24,6 +25,7 @@ impl Desc {
             input: self.input.clone(),
             content_height: self.content_height,
             scroll_events: self.scroll_events,
+            wheel_events: self.wheel_events,
         }
     }
 

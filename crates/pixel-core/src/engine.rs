@@ -127,6 +127,18 @@ pub enum EngineEvent {
         view: usize,
         text: String,
     },
+    /// Raw wheel input over a node that opted in via `wheel_events`;
+    /// x/y are node-local, deltas are pixels (positive = down/right).
+    Wheel {
+        view: usize,
+        node: NodeId,
+        key: Option<String>,
+        x: f32,
+        y: f32,
+        delta_x: f32,
+        delta_y: f32,
+        precise: bool,
+    },
     Log(logging::LogEntry),
     Profile(ProfileData),
 }
@@ -495,7 +507,7 @@ impl Engine {
             event = self.term.poll_event(Some(Duration::ZERO))?;
         }
         self.check_resize(&mut out)?;
-        self.drain_native();
+        self.drain_native(&mut out);
         let now = Instant::now();
         let dt = now.duration_since(self.last_step).as_secs_f32().min(0.05);
         self.last_step = now;
@@ -710,6 +722,13 @@ impl Engine {
                 let view = self.view_at(point.0);
                 let local = self.to_local(view, point);
                 self.active_view = view;
+                // Clicking one pane takes keyboard ownership from the other,
+                // like clicking devtools blurs the page in a browser.
+                if let Some((focus_view, _)) = self.focused()
+                    && focus_view != view
+                {
+                    self.views[focus_view].tree.set_focus(None);
+                }
                 if self.inspect_mode && view == 0 {
                     self.finish_inspect(local, out);
                     return Ok(());
@@ -822,26 +841,67 @@ impl Engine {
                     self.forward_mouse(view, id, &translated, out)?;
                 }
             }
+            MouseKind::ScrollLeft | MouseKind::ScrollRight => {
+                let view = self.view_at(point.0);
+                let local = self.to_local(view, point);
+                let delta = if mouse.kind == MouseKind::ScrollLeft {
+                    -(self.cell.0 as f32)
+                } else {
+                    self.cell.0 as f32
+                };
+                self.emit_wheel(view, local, delta, 0.0, false, out);
+            }
             MouseKind::ScrollUp | MouseKind::ScrollDown if !self.native_scroll_active() => {
                 let view = self.view_at(point.0);
                 let local = self.to_local(view, point);
+                let delta = if mouse.kind == MouseKind::ScrollUp {
+                    -(self.cell.1 as f32)
+                } else {
+                    self.cell.1 as f32
+                };
+                if self.emit_wheel(view, local, 0.0, delta, false, out) {
+                    return Ok(());
+                }
                 if let Some(area) = self.views[view].tree.scroll_area_at(local.0, local.1) {
-                    let tick = if mouse.kind == MouseKind::ScrollUp {
-                        -(self.cell.1 as f32)
-                    } else {
-                        self.cell.1 as f32
-                    };
                     let max = area.max_scroll();
                     let node = area.node;
                     let profile = self.profile;
                     if let Some(state) = self.views[view].tree.scroll_state_mut(node) {
-                        state.tick(profile, tick, max);
+                        state.tick(profile, delta, max);
                     }
                 }
             }
             _ => {}
         }
         Ok(())
+    }
+
+    /// Deliver wheel input to a `wheel_events` node under the point, if any.
+    fn emit_wheel(
+        &mut self,
+        view: usize,
+        local: (f32, f32),
+        delta_x: f32,
+        delta_y: f32,
+        precise: bool,
+        out: &mut Vec<EngineEvent>,
+    ) -> bool {
+        let tree = &self.views[view].tree;
+        let Some(node) = tree.hit_wheel(local.0, local.1) else {
+            return false;
+        };
+        let rect = tree.rect(node).unwrap_or(crate::tree::PxRect::ZERO);
+        out.push(EngineEvent::Wheel {
+            view,
+            node,
+            key: tree.key_of(node).map(str::to_string),
+            x: local.0 - rect.x,
+            y: local.1 - rect.y,
+            delta_x,
+            delta_y,
+            precise,
+        });
+        true
     }
 
     fn drag_divider(&mut self, x: f32) {
@@ -1226,7 +1286,7 @@ impl Engine {
         }
     }
 
-    fn drain_native(&mut self) {
+    fn drain_native(&mut self, out: &mut Vec<EngineEvent>) {
         let Some(native) = &mut self.native else {
             return;
         };
@@ -1240,6 +1300,21 @@ impl Engine {
         };
         let view = self.view_at(cursor.0);
         let local = self.to_local(view, cursor);
+        if self.views[view].tree.hit_wheel(local.0, local.1).is_some() {
+            let cell_h = self.cell.1 as f32;
+            let mut delta_y = 0.0;
+            let mut precise = false;
+            for delta in &deltas {
+                if delta.precise {
+                    delta_y -= delta.delta_y * scale;
+                    precise = true;
+                } else {
+                    delta_y -= delta.delta_y * cell_h;
+                }
+            }
+            self.emit_wheel(view, local, 0.0, delta_y, precise, out);
+            return;
+        }
         let Some(area) = self.views[view].tree.scroll_area_at(local.0, local.1) else {
             return;
         };

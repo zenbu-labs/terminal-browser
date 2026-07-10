@@ -127,6 +127,7 @@ pub struct Props {
     pub input: Option<InputProps>,
     pub content_height: Option<f32>,
     pub scroll_events: bool,
+    pub wheel_events: bool,
 }
 
 pub(crate) struct InputState {
@@ -164,6 +165,7 @@ pub(crate) struct RNode {
     pub scroll_max: f32,
     pub content_height: Option<f32>,
     pub scroll_events: bool,
+    pub wheel_events: bool,
     pub last_scroll_emit: f32,
     pub bar: BarState,
     pub resolved: Resolved,
@@ -319,6 +321,7 @@ impl Tree {
             scroll_max: 0.0,
             content_height: props.content_height,
             scroll_events: props.scroll_events,
+            wheel_events: props.wheel_events,
             last_scroll_emit: 0.0,
             bar: BarState::default(),
             resolved: DEFAULT_RESOLVED,
@@ -443,6 +446,7 @@ impl Tree {
         node.hidden = props.hidden;
         node.clickable = props.clickable;
         node.scroll_events = props.scroll_events;
+        node.wheel_events = props.wheel_events;
         if node.content_height != props.content_height {
             node.content_height = props.content_height;
             changed = true;
@@ -865,6 +869,14 @@ impl Tree {
 
     pub fn visible_rect(&self, id: NodeId) -> Option<PxRect> {
         Some(self.get(id)?.visible)
+    }
+
+    /// Topmost wheel-subscribed node under the point.
+    pub fn hit_wheel(&self, x: f32, y: f32) -> Option<NodeId> {
+        self.paint_order.iter().rev().copied().find(|&id| {
+            self.get(id)
+                .is_some_and(|node| node.wheel_events && node.visible.contains(x, y))
+        })
     }
 
     /// Topmost painted node under the point, clickable or not. This is the

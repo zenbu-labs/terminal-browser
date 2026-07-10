@@ -7,11 +7,17 @@ import { useStore } from "./store";
 import { MONO, theme } from "./theme";
 import { Button, Chip, Divider, Empty, Toolbar } from "./ui";
 
-function formatTime(epochMs: number): string {
-  const date = new Date(epochMs);
-  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
-}
+const ROW_TINTS: Record<string, string | undefined> = {
+  warn: "#e5c07b14",
+  error: "#e06c7514",
+};
+
+const TEXT_COLORS: Record<string, string> = {
+  debug: theme.dim,
+  info: theme.text,
+  warn: theme.warn,
+  error: theme.danger,
+};
 
 function LogLine(props: { row: LogRowData; showTarget: boolean; rem: number }) {
   const { row, showTarget, rem } = props;
@@ -19,43 +25,22 @@ function LogLine(props: { row: LogRowData; showTarget: boolean; rem: number }) {
     <Box
       style={{
         flexDirection: "row",
+        alignItems: "start",
         gap: rem * 0.5,
-        padding: { left: rem * 0.5, right: rem * 0.5, top: rem * 0.15, bottom: rem * 0.15 },
+        padding: { left: rem * 0.6, right: rem * 0.6, top: rem * 0.14, bottom: rem * 0.14 },
+        background: ROW_TINTS[row.level],
         hoverBackground: theme.hover,
       }}
     >
-      <Box
-        style={{
-          width: 3,
-          flexShrink: 0,
-          cornerRadius: 1.5,
-          background: row.level === "info" ? theme.border : theme.levels[row.level],
-        }}
-      />
-      <Text
-        style={{ color: theme.faint, fontSize: rem * 0.68, font: MONO, wrap: false, flexShrink: 0 }}
-      >
-        {formatTime(row.epochMs)}
-      </Text>
       {showTarget && (
-        <Box
-          style={{
-            background: theme.chrome,
-            cornerRadius: rem * 0.2,
-            padding: { left: rem * 0.25, right: rem * 0.25 },
-            flexShrink: 0,
-            alignItems: "center",
-          }}
-        >
-          <Text style={{ color: theme.dim, fontSize: rem * 0.62, wrap: false }}>
+        <Box style={{ width: rem * 3.2, flexShrink: 0 }}>
+          <Text style={{ color: theme.faint, fontSize: rem * 0.66, font: MONO, wrap: false }}>
             {row.target}
           </Text>
         </Box>
       )}
       <Box style={{ flexGrow: 1, flexBasis: 0, overflow: "hidden" }}>
-        <Text
-          style={{ color: theme.levels[row.level] ?? theme.text, fontSize: rem * 0.74, font: MONO }}
-        >
+        <Text style={{ color: TEXT_COLORS[row.level] ?? theme.text, fontSize: rem * 0.74, font: MONO }}>
           {row.text}
         </Text>
       </Box>
@@ -66,7 +51,6 @@ function LogLine(props: { row: LogRowData; showTarget: boolean; rem: number }) {
             cornerRadius: rem * 0.5,
             padding: { left: rem * 0.3, right: rem * 0.3 },
             flexShrink: 0,
-            alignItems: "center",
           }}
         >
           <Text style={{ color: theme.accent, fontSize: rem * 0.62, wrap: false }}>

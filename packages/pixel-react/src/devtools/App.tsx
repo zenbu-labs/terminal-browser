@@ -147,7 +147,6 @@ export function DevtoolsApp() {
         <LogPanel
           logs={consoleLogs}
           rem={rem}
-          showTarget
           emptyText="Program output lands here — console.log, stdout and stderr."
         />
       )}

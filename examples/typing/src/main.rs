@@ -192,6 +192,7 @@ fn main() -> std::io::Result<()> {
                 | EngineEvent::Submit { .. }
                 | EngineEvent::Resize { .. }
                 | EngineEvent::Inspect { .. }
+                | EngineEvent::Wheel { .. }
                 | EngineEvent::Log(_)
                 | EngineEvent::Profile(_) => {}
             }
