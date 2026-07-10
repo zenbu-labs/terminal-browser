@@ -97,12 +97,15 @@ enum Op {
 }
 
 #[derive(Deserialize)]
-struct Envelope {
+struct Envelope<'a> {
     #[serde(default)]
     view: usize,
     #[serde(default)]
     seq: Option<u64>,
-    ops: Vec<serde_json::Value>,
+    // Raw slices instead of Value trees: batches can hold tens of
+    // thousands of ops and building Values dominated apply time.
+    #[serde(borrow)]
+    ops: Vec<&'a serde_json::value::RawValue>,
 }
 
 #[derive(Deserialize, Default)]
@@ -362,8 +365,8 @@ pub fn apply_ops(engine: &mut Engine, ids: &mut [IdMap], json: &str) -> OpOutcom
     let mut errors = Vec::new();
     let mut replies = Vec::new();
     pixel_core::profiler::span_arg("ops.apply", envelope.seq, || {
-        for value in envelope.ops {
-            let op: Op = match serde_json::from_value(value) {
+        for raw in envelope.ops {
+            let op: Op = match serde_json::from_str(raw.get()) {
                 Ok(op) => op,
                 Err(e) => {
                     errors.push(e.to_string());

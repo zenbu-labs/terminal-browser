@@ -4,6 +4,7 @@
   "workspaces": [
     "packages/pixel-react",
     "examples/typing-react",
-    "examples/agent"
+    "examples/agent",
+    "examples/devtools-bench"
   ]
 }

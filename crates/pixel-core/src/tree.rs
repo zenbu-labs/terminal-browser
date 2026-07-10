@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use taffy::TaffyTree;
@@ -198,6 +198,7 @@ pub struct Tree {
     root: NodeId,
     pub(crate) taffy: TaffyTree<MeasureCtx>,
     keys: HashMap<String, NodeId>,
+    children_dirty: HashSet<NodeId>,
     paint_order: Vec<NodeId>,
     scrollables: Vec<NodeId>,
     focus: Option<NodeId>,
@@ -224,6 +225,7 @@ impl Tree {
             },
             taffy: TaffyTree::new(),
             keys: HashMap::new(),
+            children_dirty: HashSet::new(),
             paint_order: Vec::new(),
             scrollables: Vec::new(),
             focus: None,
@@ -372,7 +374,7 @@ impl Tree {
         };
         self.node_mut(parent).children.insert(index, child);
         self.node_mut(child).parent = Some(parent);
-        self.sync_taffy_children(parent);
+        self.children_dirty.insert(parent);
         self.needs_layout = true;
     }
 
@@ -386,19 +388,27 @@ impl Tree {
         };
         self.node_mut(parent).children.retain(|&c| c != child);
         self.node_mut(child).parent = None;
-        self.sync_taffy_children(parent);
+        self.children_dirty.insert(parent);
     }
 
-    fn sync_taffy_children(&mut self, parent: NodeId) {
-        let ids: Vec<taffy::NodeId> = self
-            .node(parent)
-            .children
-            .iter()
-            .map(|&c| self.node(c).taffy)
-            .collect();
-        self.taffy
-            .set_children(self.node(parent).taffy, &ids)
-            .expect("taffy children");
+    /// Child moves are batched and pushed to taffy once per layout, so
+    /// appending n children costs O(n) instead of O(n^2) syncs.
+    fn sync_dirty_children(&mut self) {
+        let dirty: Vec<NodeId> = self.children_dirty.drain().collect();
+        for parent in dirty {
+            if self.get(parent).is_none() {
+                continue;
+            }
+            let ids: Vec<taffy::NodeId> = self
+                .node(parent)
+                .children
+                .iter()
+                .map(|&c| self.node(c).taffy)
+                .collect();
+            self.taffy
+                .set_children(self.node(parent).taffy, &ids)
+                .expect("taffy children");
+        }
     }
 
     pub fn remove(&mut self, id: NodeId) {
@@ -681,6 +691,7 @@ impl Tree {
         assert!(!fonts.is_empty());
         self.base_px = base_px;
         if self.needs_layout {
+            crate::profiler::span("tree.sync", || self.sync_dirty_children());
             crate::profiler::span("tree.resolve", || {
                 self.resolve(
                     self.root,
