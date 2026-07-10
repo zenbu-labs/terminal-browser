@@ -4,8 +4,8 @@
 **/*.rs.bk
 # Keep Cargo.lock committed: this repo builds binaries, so reproducible builds win.
 
-# Profiling and coverage output
-/profiles/
+# Profiling and coverage output (engine dumps and devtools exports, any depth)
+profiles/
 *.profraw
 *.profdata
 /coverage/

@@ -108,6 +108,7 @@ interface EngineEventJson {
     view: number;
     arg?: number | null;
   }>;
+  counters?: Array<{ name: string; at: number; value: number }>;
 }
 
 export function createRoot(options: RootOptions = {}): PixelRoot {
@@ -243,7 +244,11 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         break;
       }
       case "profile":
-        onEngineProfile({ epochMs: event.epochMs ?? 0, spans: event.spans ?? [] });
+        onEngineProfile({
+          epochMs: event.epochMs ?? 0,
+          spans: event.spans ?? [],
+          counters: event.counters ?? [],
+        });
         break;
       case "error":
         engineLogs.push("error", "bridge", event.message ?? "unknown bridge error");

@@ -61,11 +61,19 @@ export interface TimeSpan {
   arg?: number;
 }
 
+export interface CounterSample {
+  name: string;
+  /** Wall-clock epoch ms, like TimeSpan.start. */
+  at: number;
+  value: number;
+}
+
 export interface ProfileSession {
   spans: TimeSpan[];
   start: number;
   end: number;
   frames: TimeSpan[];
+  counters: CounterSample[];
 }
 
 export interface ProfilerState {

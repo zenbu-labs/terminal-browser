@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 
 import { Box, Text } from "../components";
 import { clearRecording, startRecording, stopRecording } from "./controller";
+import { exportProfile } from "./exportProfile";
 import { createStore, useStore } from "./store";
 import { devtoolsStore, ProfileSession, profilerStore, TimeSpan } from "./stores";
 import { MONO, theme } from "./theme";
@@ -301,6 +302,7 @@ export function ProfilerPanel(props: { rem: number }) {
   const viewport = useStore(viewportStore);
   const selected = useStore(selectedSpanStore);
   const [, setTick] = useState(0);
+  const [exportedTo, setExportedTo] = useState<string | null>(null);
 
   const session = state.session;
   useEffect(() => {
@@ -360,10 +362,19 @@ export function ProfilerPanel(props: { rem: number }) {
               clearRecording();
               viewportStore.set(null);
               selectedSpanStore.set(null);
+              setExportedTo(null);
             }}
           />
         )}
-        {session && <Summary session={session} rem={rem} />}
+        {session && (
+          <Button rem={rem} label="Export" onClick={() => setExportedTo(exportProfile())} />
+        )}
+        {session && !exportedTo && <Summary session={session} rem={rem} />}
+        {exportedTo && (
+          <Text style={{ color: theme.ok, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+            {exportedTo}
+          </Text>
+        )}
         <Box style={{ flexGrow: 1 }} />
         <Text style={{ color: theme.faint, fontSize: rem * 0.62, wrap: false }}>
           scroll zooms · sideways swipe pans · f fit

@@ -176,6 +176,7 @@ interface EngineProfileEvent {
     view: number;
     arg?: number | null;
   }>;
+  counters?: Array<{ name: string; at: number; value: number }>;
 }
 
 export function onEngineProfile(data: EngineProfileEvent) {
@@ -200,6 +201,11 @@ export function onEngineProfile(data: EngineProfileEvent) {
     end = Math.max(end, span.start + span.dur);
   }
   const frames = engineSpans.filter((s) => s.name === "frame" && s.depth === 0);
-  const session: ProfileSession = { spans, frames, start, end };
+  const counters = (data.counters ?? []).map((c) => ({
+    name: c.name,
+    at: data.epochMs + c.at,
+    value: c.value,
+  }));
+  const session: ProfileSession = { spans, frames, start, end, counters };
   profilerStore.update((s) => ({ ...s, pendingStop: false, session }));
 }
