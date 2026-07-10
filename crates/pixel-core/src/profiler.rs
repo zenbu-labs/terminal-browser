@@ -122,6 +122,34 @@ pub fn count(name: &'static str, value: u64) {
     });
 }
 
+/// Offset since recording start, or None when idle. Pairs with `emit` for
+/// code that aggregates timings itself and reports them afterwards.
+pub fn now_ms() -> Option<f64> {
+    ACTIVE.with(|active| {
+        active
+            .borrow()
+            .as_ref()
+            .map(|r| r.started.elapsed().as_secs_f64() * 1000.0)
+    })
+}
+
+/// Record an already-measured span as a child of the currently open span.
+pub fn emit(name: &'static str, start_ms: f64, dur_ms: f64, arg: Option<u64>) {
+    ACTIVE.with(|active| {
+        if let Some(r) = active.borrow_mut().as_mut() {
+            let (depth, view) = (r.depth, r.view);
+            r.spans.push(SpanRecord {
+                name,
+                start_ms,
+                dur_ms,
+                depth,
+                view,
+                arg,
+            });
+        }
+    });
+}
+
 #[derive(Default)]
 pub struct Profiler;
 

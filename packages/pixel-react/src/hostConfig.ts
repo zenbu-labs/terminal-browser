@@ -67,6 +67,8 @@ export interface Instance {
   children: Instance[];
   mounted: boolean;
   hidden: boolean;
+  /** Serialized form of the last props sent to the engine. */
+  lastSent: string | null;
 }
 
 export interface Container {
@@ -170,13 +172,36 @@ function mutated(view: number) {
   getBridge().onTreeMutation?.(view);
 }
 
+/**
+ * React re-renders hand us fresh props objects even when nothing changed, so
+ * an update op per host element per commit would flood the engine (a 60Hz
+ * animation over a big static list serializes megabytes per second). Compare
+ * the serialized form against what the engine already has and skip no-ops.
+ */
+function pushPropsIfChanged(
+  instance: Instance,
+  serialized: Record<string, unknown>
+): boolean {
+  const json = JSON.stringify(serialized);
+  if (json === instance.lastSent) return false;
+  instance.lastSent = json;
+  getBridge().push(instance.view, {
+    op: "update",
+    id: instance.id,
+    props: serialized,
+  });
+  return true;
+}
+
 function materialize(b: Bridge, instance: Instance) {
   if (instance.mounted) return;
   instance.mounted = true;
+  const serialized = serializeProps(instance.type, instance.props, instance.hidden);
+  instance.lastSent = JSON.stringify(serialized);
   b.push(instance.view, {
     op: "create",
     id: instance.id,
-    props: serializeProps(instance.type, instance.props, instance.hidden),
+    props: serialized,
   });
   for (const child of instance.children) {
     materialize(b, child);
@@ -246,6 +271,7 @@ const hostConfig = {
       children: [],
       mounted: false,
       hidden: false,
+      lastSent: null,
     };
     b.propsById[instance.view].set(instance.id, props);
     return instance;
@@ -287,17 +313,15 @@ const hostConfig = {
     const prevProps = instance.props;
     instance.props = newProps;
     b.propsById[instance.view].set(instance.id, newProps);
-    b.push(instance.view, {
-      op: "update",
-      id: instance.id,
-      props: serializeProps(
-        instance.type,
-        newProps,
-        instance.hidden,
-        oldProps ?? prevProps
-      ),
-    });
-    mutated(instance.view);
+    const serialized = serializeProps(
+      instance.type,
+      newProps,
+      instance.hidden,
+      oldProps ?? prevProps
+    );
+    if (pushPropsIfChanged(instance, serialized)) {
+      mutated(instance.view);
+    }
   },
 
   appendChild(parent: Instance, child: Instance) {
@@ -338,24 +362,20 @@ const hostConfig = {
 
   hideInstance(instance: Instance) {
     instance.hidden = true;
-    getBridge().push(instance.view, {
-      op: "update",
-      id: instance.id,
-      props: serializeProps(instance.type, instance.props, true, instance.props),
-    });
-    mutated(instance.view);
+    const serialized = serializeProps(instance.type, instance.props, true, instance.props);
+    if (pushPropsIfChanged(instance, serialized)) {
+      mutated(instance.view);
+    }
   },
 
   unhideInstance(instance: Instance, props: AnyProps) {
     const prevProps = instance.props;
     instance.hidden = false;
     instance.props = props;
-    getBridge().push(instance.view, {
-      op: "update",
-      id: instance.id,
-      props: serializeProps(instance.type, props, false, prevProps),
-    });
-    mutated(instance.view);
+    const serialized = serializeProps(instance.type, props, false, prevProps);
+    if (pushPropsIfChanged(instance, serialized)) {
+      mutated(instance.view);
+    }
   },
 
   hideTextInstance() {},

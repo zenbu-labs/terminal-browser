@@ -166,8 +166,12 @@ function Lane(props: {
       </Box>
       <Box style={{ height: (maxDepth + 1) * rowH + 2, overflow: "hidden" }}>
         {visible.map((span, i) => {
-          const x = (span.start - viewport.t0) * scale;
-          const w = Math.max(span.dur * scale - 0.5, 1.5);
+          // Clamp to the viewport so labels stay readable when a span
+          // extends past the left edge.
+          const rawX = (span.start - viewport.t0) * scale;
+          const right = rawX + Math.max(span.dur * scale - 0.5, 1.5);
+          const x = Math.max(rawX, 0);
+          const w = Math.max(right - x, 1.5);
           const isSelected = selected === span;
           return (
             <Box
@@ -262,7 +266,7 @@ function SpanDetail(props: { span: TimeSpan | null; session: ProfileSession; rem
           )}
           {span.arg != null && (
             <Text style={{ color: theme.faint, fontSize: rem * 0.66, font: MONO, wrap: false }}>
-              {`batch #${span.arg}`}
+              {span.name.startsWith("paint.") ? `n = ${span.arg}` : `batch #${span.arg}`}
             </Text>
           )}
         </>

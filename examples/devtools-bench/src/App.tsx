@@ -252,8 +252,10 @@ function FlamePanel(props: { spans: FakeSpan[]; end: number; width: number }) {
           </Box>
           <Box style={{ height: 9 * rowH, overflow: "hidden" }}>
             {spans.map((span, i) => {
-              const x = (span.start - viewport.t0) * scale;
-              const w = Math.max(span.dur * scale - 0.5, 1.5);
+              const rawX = (span.start - viewport.t0) * scale;
+              const right = rawX + Math.max(span.dur * scale - 0.5, 1.5);
+              const x = Math.max(rawX, 0);
+              const w = Math.max(right - x, 1.5);
               return (
                 <Box
                   key={i}
