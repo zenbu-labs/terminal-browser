@@ -23,6 +23,17 @@ pub struct CounterRecord {
     pub value: u64,
 }
 
+/// A user interaction (click, key, scroll burst…) noted on the timeline so a
+/// profile can be correlated with what the user was doing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkRecord {
+    pub name: &'static str,
+    pub label: String,
+    pub start_ms: f64,
+    pub dur_ms: f64,
+    pub view: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfileData {
     /// Wall-clock time of recording start; span start_ms offsets are
@@ -30,6 +41,7 @@ pub struct ProfileData {
     pub epoch_ms: f64,
     pub spans: Vec<SpanRecord>,
     pub counters: Vec<CounterRecord>,
+    pub marks: Vec<MarkRecord>,
 }
 
 struct Recording {
@@ -39,6 +51,7 @@ struct Recording {
     view: u32,
     spans: Vec<SpanRecord>,
     counters: Vec<CounterRecord>,
+    marks: Vec<MarkRecord>,
 }
 
 pub fn is_recording() -> bool {
@@ -57,6 +70,7 @@ pub fn start() {
             view: 0,
             spans: Vec::new(),
             counters: Vec::new(),
+            marks: Vec::new(),
         });
     });
 }
@@ -68,6 +82,7 @@ pub fn stop() -> Option<ProfileData> {
             epoch_ms: r.epoch_ms,
             spans: r.spans,
             counters: r.counters,
+            marks: r.marks,
         })
 }
 
@@ -118,6 +133,48 @@ pub fn count(name: &'static str, value: u64) {
         if let Some(r) = active.borrow_mut().as_mut() {
             let at_ms = r.started.elapsed().as_secs_f64() * 1000.0;
             r.counters.push(CounterRecord { name, at_ms, value });
+        }
+    });
+}
+
+pub fn mark(name: &'static str, view: u32, label: String) {
+    ACTIVE.with(|active| {
+        if let Some(r) = active.borrow_mut().as_mut() {
+            let start_ms = r.started.elapsed().as_secs_f64() * 1000.0;
+            r.marks.push(MarkRecord {
+                name,
+                label,
+                start_ms,
+                dur_ms: 0.0,
+                view,
+            });
+        }
+    });
+}
+
+/// Like `mark`, but if the previous mark has the same name and ended less
+/// than `gap_ms` ago, extend it instead — one mark per scroll burst, not per
+/// wheel tick. The label is replaced so callers can keep a running count.
+pub fn mark_or_extend(name: &'static str, view: u32, label: String, gap_ms: f64) {
+    ACTIVE.with(|active| {
+        if let Some(r) = active.borrow_mut().as_mut() {
+            let now_ms = r.started.elapsed().as_secs_f64() * 1000.0;
+            if let Some(last) = r.marks.last_mut()
+                && last.name == name
+                && last.view == view
+                && now_ms - (last.start_ms + last.dur_ms) < gap_ms
+            {
+                last.dur_ms = now_ms - last.start_ms;
+                last.label = label;
+                return;
+            }
+            r.marks.push(MarkRecord {
+                name,
+                label,
+                start_ms: now_ms,
+                dur_ms: 0.0,
+                view,
+            });
         }
     });
 }

@@ -162,11 +162,25 @@ fn profile_json(data: &ProfileData) -> serde_json::Value {
         .iter()
         .map(|c| json!({ "name": c.name, "at": c.at_ms, "value": c.value }))
         .collect();
+    let marks: Vec<serde_json::Value> = data
+        .marks
+        .iter()
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "label": m.label,
+                "start": m.start_ms,
+                "dur": m.dur_ms,
+                "view": m.view,
+            })
+        })
+        .collect();
     json!({
         "type": "profile",
         "epochMs": data.epoch_ms,
         "spans": spans,
         "counters": counters,
+        "marks": marks,
     })
 }
 

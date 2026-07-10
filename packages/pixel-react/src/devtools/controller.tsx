@@ -177,6 +177,7 @@ interface EngineProfileEvent {
     arg?: number | null;
   }>;
   counters?: Array<{ name: string; at: number; value: number }>;
+  marks?: Array<{ name: string; label: string; start: number; dur: number; view: number }>;
 }
 
 export function onEngineProfile(data: EngineProfileEvent) {
@@ -206,6 +207,13 @@ export function onEngineProfile(data: EngineProfileEvent) {
     at: data.epochMs + c.at,
     value: c.value,
   }));
-  const session: ProfileSession = { spans, frames, start, end, counters };
+  const marks: TimeSpan[] = (data.marks ?? []).map((m, i) => ({
+    name: m.view === DEVTOOLS_VIEW ? `[devtools] ${m.label}` : m.label,
+    start: data.epochMs + m.start,
+    dur: m.dur,
+    depth: i % 2,
+    lane: "interaction",
+  }));
+  const session: ProfileSession = { spans, frames, start, end, counters, marks };
   profilerStore.update((s) => ({ ...s, pendingStop: false, session }));
 }

@@ -60,6 +60,13 @@ const GLOSSARY = {
   counters:
     "Point samples: 'bytes' = escape-sequence bytes written per frame; 'paint.nodes' / " +
     "'paint.glyphs' = nodes visited / glyphs drawn per paint.",
+  interactions:
+    "User input during the recording, recorded by the engine: clicks (labelled with the " +
+    "#key of the clickable node hit, or coordinates), right-clicks, keys, paste, scroll " +
+    "bursts (coalesced; 'scroll x12' = 12 wheel ticks, dur spans the burst), divider " +
+    "drags and window resizes. Labels prefixed '[devtools] ' happened in the devtools " +
+    "pane (e.g. starting/stopping the recording), not the app. Correlate an interaction " +
+    "with the spans that follow it to see what work it triggered.",
   example_queries: [
     "jq '.summary.byName' profile.json                                   # where did time go",
     "jq '[.spans[] | select(.name==\"frame\") | .dur] | max' profile.json  # worst frame",
@@ -139,6 +146,11 @@ export function exportProfile(): string | null {
       glossary: GLOSSARY,
     },
     summary: summarize(session),
+    interactions: session.marks.map((mark) => ({
+      label: mark.name,
+      start: round(mark.start - session.start),
+      dur: round(mark.dur),
+    })),
     spans: session.spans.map((span) => exportSpan(span, session.start)),
     counters: session.counters.map((counter) => ({
       name: counter.name,

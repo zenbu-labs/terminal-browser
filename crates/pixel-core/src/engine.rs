@@ -30,6 +30,45 @@ const DIVIDER_BG: Color = [32, 33, 38, 255];
 const DIVIDER_BG_ACTIVE: Color = [58, 96, 168, 255];
 const DIVIDER_GRIP: Color = [118, 122, 132, 255];
 
+fn key_label(key: &KeyEvent) -> String {
+    let mut label = String::from("key ");
+    if key.mods.ctrl {
+        label.push_str("ctrl+");
+    }
+    if key.mods.alt {
+        label.push_str("alt+");
+    }
+    if key.mods.sup {
+        label.push_str("cmd+");
+    }
+    let name = match key.key {
+        crate::terminal::Key::Char(c) => {
+            if key.mods.shift {
+                label.push_str("shift+");
+            }
+            label.push(c);
+            return label;
+        }
+        crate::terminal::Key::Up => "up",
+        crate::terminal::Key::Down => "down",
+        crate::terminal::Key::Left => "left",
+        crate::terminal::Key::Right => "right",
+        crate::terminal::Key::Home => "home",
+        crate::terminal::Key::End => "end",
+        crate::terminal::Key::Enter => "enter",
+        crate::terminal::Key::Backspace => "backspace",
+        crate::terminal::Key::Delete => "delete",
+        crate::terminal::Key::Escape => "escape",
+        crate::terminal::Key::Tab => "tab",
+        crate::terminal::Key::Unknown => "unknown",
+    };
+    if key.mods.shift {
+        label.push_str("shift+");
+    }
+    label.push_str(name);
+    label
+}
+
 fn is_plain_enter(key: &KeyEvent) -> bool {
     key.key == crate::terminal::Key::Enter
         && !key.mods.shift
@@ -214,6 +253,8 @@ pub struct Engine {
     bar_hover: Option<(usize, NodeId)>,
     bar_drag: Option<(usize, NodeId, f32)>,
     reveal: bool,
+    scroll_burst: u32,
+    last_scroll_mark: Option<Instant>,
     pending: Vec<EngineEvent>,
     last_step: Instant,
     last_frame: Instant,
@@ -278,6 +319,8 @@ impl Engine {
             bar_hover: None,
             bar_drag: None,
             reveal: false,
+            scroll_burst: 0,
+            last_scroll_mark: None,
             pending: Vec::new(),
             last_step: Instant::now(),
             last_frame: Instant::now(),
@@ -597,6 +640,9 @@ impl Engine {
                 self.window.0, self.window.1, window.0, window.1
             ),
         );
+        if crate::profiler::is_recording() {
+            crate::profiler::mark("resize", 0, format!("resize {}x{}", window.0, window.1));
+        }
         self.window = window;
         self.cell = cell;
         self.base_px = px_for_cell_height(
@@ -640,6 +686,13 @@ impl Engine {
         match event {
             Event::Key(key) => self.handle_key(key, out)?,
             Event::Paste(text) => {
+                if crate::profiler::is_recording() {
+                    crate::profiler::mark(
+                        "paste",
+                        self.active_view as u32,
+                        format!("paste ({} chars)", text.chars().count()),
+                    );
+                }
                 if let Some((view, focus)) = self.focused() {
                     if let Some(input) = self.views[view].tree.input_mut(focus) {
                         input.insert(&text);
@@ -659,6 +712,9 @@ impl Engine {
     }
 
     fn handle_key(&mut self, key: KeyEvent, out: &mut Vec<EngineEvent>) -> io::Result<()> {
+        if crate::profiler::is_recording() {
+            crate::profiler::mark("key", self.active_view as u32, key_label(&key));
+        }
         if key.key == crate::terminal::Key::Escape {
             if self.menu.is_some() {
                 self.close_menu();
@@ -711,10 +767,14 @@ impl Engine {
         let point = (mouse.x as f32, mouse.y as f32);
         match mouse.kind {
             MouseKind::Down if mouse.button == MouseButton::Left => {
+                self.mark_pointer("click", point);
                 if self.handle_menu_click(point, out)? {
                     return Ok(());
                 }
                 if self.on_divider(point.0) {
+                    if crate::profiler::is_recording() {
+                        crate::profiler::mark("drag", 0, "divider drag".into());
+                    }
                     self.divider_drag = true;
                     self.compose_dirty = true;
                     return Ok(());
@@ -757,6 +817,7 @@ impl Engine {
                 }
             }
             MouseKind::Down if mouse.button == MouseButton::Right => {
+                self.mark_pointer("right-click", point);
                 self.close_menu();
                 if self.on_divider(point.0) {
                     return Ok(());
@@ -853,6 +914,7 @@ impl Engine {
             }
             MouseKind::ScrollUp | MouseKind::ScrollDown if !self.native_scroll_active() => {
                 let view = self.view_at(point.0);
+                self.mark_scroll(view);
                 let local = self.to_local(view, point);
                 let delta = if mouse.kind == MouseKind::ScrollUp {
                     -(self.cell.1 as f32)
@@ -902,6 +964,44 @@ impl Engine {
             precise,
         });
         true
+    }
+
+    /// Note a pointer interaction on the profile timeline, labelled with the
+    /// key of the clickable node under it when there is one.
+    fn mark_pointer(&mut self, name: &'static str, point: (f32, f32)) {
+        if !crate::profiler::is_recording() {
+            return;
+        }
+        let view = self.view_at(point.0);
+        let local = self.to_local(view, point);
+        let target = self.views[view]
+            .tree
+            .hit_click(local.0, local.1)
+            .and_then(|id| self.views[view].tree.key_of(id))
+            .map(str::to_string);
+        let label = match target {
+            Some(key) => format!("{name} #{key}"),
+            None => format!("{name} {},{}", local.0 as i32, local.1 as i32),
+        };
+        crate::profiler::mark(name, view as u32, label);
+    }
+
+    fn mark_scroll(&mut self, view: usize) {
+        if !crate::profiler::is_recording() {
+            return;
+        }
+        let now = Instant::now();
+        let burst = self
+            .last_scroll_mark
+            .is_some_and(|at| now.duration_since(at).as_millis() < 350);
+        self.scroll_burst = if burst { self.scroll_burst + 1 } else { 1 };
+        self.last_scroll_mark = Some(now);
+        crate::profiler::mark_or_extend(
+            "scroll",
+            view as u32,
+            format!("scroll x{}", self.scroll_burst),
+            350.0,
+        );
     }
 
     fn drag_divider(&mut self, x: f32) {
@@ -1299,6 +1399,7 @@ impl Engine {
             return;
         };
         let view = self.view_at(cursor.0);
+        self.mark_scroll(view);
         let local = self.to_local(view, cursor);
         if self.views[view].tree.hit_wheel(local.0, local.1).is_some() {
             let cell_h = self.cell.1 as f32;

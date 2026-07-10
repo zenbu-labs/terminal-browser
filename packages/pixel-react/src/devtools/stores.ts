@@ -56,7 +56,7 @@ export interface TimeSpan {
   start: number;
   dur: number;
   depth: number;
-  lane: "react" | "bridge" | "engine" | "devtools-engine";
+  lane: "react" | "bridge" | "engine" | "devtools-engine" | "interaction";
   self?: number;
   arg?: number;
 }
@@ -74,6 +74,8 @@ export interface ProfileSession {
   end: number;
   frames: TimeSpan[];
   counters: CounterSample[];
+  /** User input during the recording, as lane 'interaction' pseudo-spans. */
+  marks: TimeSpan[];
 }
 
 export interface ProfilerState {

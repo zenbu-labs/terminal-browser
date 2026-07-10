@@ -109,6 +109,7 @@ interface EngineEventJson {
     arg?: number | null;
   }>;
   counters?: Array<{ name: string; at: number; value: number }>;
+  marks?: Array<{ name: string; label: string; start: number; dur: number; view: number }>;
 }
 
 export function createRoot(options: RootOptions = {}): PixelRoot {
@@ -248,6 +249,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           epochMs: event.epochMs ?? 0,
           spans: event.spans ?? [],
           counters: event.counters ?? [],
+          marks: event.marks ?? [],
         });
         break;
       case "error":

@@ -62,6 +62,7 @@ function laneColor(span: TimeSpan): string {
     bridge: theme.flame.bridge,
     engine: theme.flame.engine,
     "devtools-engine": theme.flame.devtools,
+    interaction: [theme.warn, "#d19a66"],
   } as const;
   const palette = palettes[span.lane];
   let hash = 0;
@@ -112,6 +113,18 @@ function Overview(props: {
           />
         );
       })}
+      {session.marks.slice(0, 400).map((mark, i) => (
+        <Box
+          key={`m${i}`}
+          style={{
+            position: "absolute",
+            inset: { left: (mark.start - session.start) * scale, top: 0 },
+            width: 1.5,
+            height: height * 0.45,
+            background: theme.warn,
+          }}
+        />
+      ))}
       <Box
         style={{
           position: "absolute",
@@ -132,6 +145,18 @@ const LANES: Array<{ label: string; match: (span: TimeSpan) => boolean }> = [
   { label: "Engine (devtools)", match: (s) => s.lane === "devtools-engine" },
 ];
 
+function laneRows(session: ProfileSession): Array<{ label: string; spans: TimeSpan[] }> {
+  const rows: Array<{ label: string; spans: TimeSpan[] }> = [];
+  if (session.marks.length > 0) {
+    rows.push({ label: "Interactions", spans: session.marks });
+  }
+  for (const lane of LANES) {
+    const spans = session.spans.filter(lane.match);
+    if (spans.length > 0) rows.push({ label: lane.label, spans });
+  }
+  return rows;
+}
+
 function Lane(props: {
   label: string;
   spans: TimeSpan[];
@@ -148,13 +173,16 @@ function Lane(props: {
   let lastEnd = -Infinity;
   for (const span of spans) {
     if (span.start + span.dur < viewport.t0 || span.start > viewport.t1) continue;
-    // Sub-pixel spans collapse into one marker per pixel column instead of
-    // disappearing, so a zoomed-out chart still shows where work happened.
-    if (span.dur * scale < 0.4 && span.depth === 0) {
-      if ((span.start - lastEnd) * scale < 1.2) continue;
-      lastEnd = span.start + span.dur;
-    } else if (span.dur * scale < 0.4) {
-      continue;
+    // Interactions are sparse and matter at any zoom; never cull them.
+    if (span.lane !== "interaction") {
+      // Sub-pixel spans collapse into one marker per pixel column instead of
+      // disappearing, so a zoomed-out chart still shows where work happened.
+      if (span.dur * scale < 0.4 && span.depth === 0) {
+        if ((span.start - lastEnd) * scale < 1.2) continue;
+        lastEnd = span.start + span.dur;
+      } else if (span.dur * scale < 0.4) {
+        continue;
+      }
     }
     visible.push(span);
     if (span.depth > maxDepth) maxDepth = span.depth;
@@ -170,7 +198,8 @@ function Lane(props: {
           // Clamp to the viewport so labels stay readable when a span
           // extends past the left edge.
           const rawX = (span.start - viewport.t0) * scale;
-          const right = rawX + Math.max(span.dur * scale - 0.5, 1.5);
+          const minW = span.lane === "interaction" ? 3 : 1.5;
+          const right = rawX + Math.max(span.dur * scale - 0.5, minW);
           const x = Math.max(rawX, 0);
           const w = Math.max(right - x, 1.5);
           const isSelected = selected === span;
@@ -407,21 +436,17 @@ export function ProfilerPanel(props: { rem: number }) {
           <Box
             style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, overflow: "hidden" }}
           >
-            {LANES.map((lane) => {
-              const spans = session.spans.filter(lane.match);
-              if (spans.length === 0) return null;
-              return (
-                <Lane
-                  key={lane.label}
-                  label={lane.label}
-                  spans={spans}
-                  viewport={viewport}
-                  width={chartWidth}
-                  rem={rem}
-                  selected={selected}
-                />
-              );
-            })}
+            {laneRows(session).map((lane) => (
+              <Lane
+                key={lane.label}
+                label={lane.label}
+                spans={lane.spans}
+                viewport={viewport}
+                width={chartWidth}
+                rem={rem}
+                selected={selected}
+              />
+            ))}
           </Box>
           <SpanDetail span={selected} session={session} rem={rem} />
         </Box>
