@@ -107,6 +107,8 @@ export interface DevtoolsState {
   width: number;
   height: number;
   basePx: number;
+  /** CPU throttle rate applied to the app's threads; 1 = off. */
+  cpuRate: number;
 }
 
 export const devtoolsStore = createStore<DevtoolsState>({
@@ -115,4 +117,5 @@ export const devtoolsStore = createStore<DevtoolsState>({
   width: 0,
   height: 0,
   basePx: 16,
+  cpuRate: 1,
 });

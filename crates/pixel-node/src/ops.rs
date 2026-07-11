@@ -94,6 +94,9 @@ enum Op {
     QueryLayout {},
     ProfileStart {},
     ProfileStop {},
+    SetCpuThrottle {
+        rate: f32,
+    },
 }
 
 #[derive(Deserialize)]
@@ -460,6 +463,7 @@ fn apply_op(
         }
         Op::ProfileStart {} => engine.profile_start(),
         Op::ProfileStop {} => engine.profile_stop(),
+        Op::SetCpuThrottle { rate } => engine.set_cpu_throttle(rate),
     }
 }
 

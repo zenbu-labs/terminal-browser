@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { engineLogs } from "./stores";
+import { devtoolsStore, engineLogs } from "./stores";
 import { profilerStore, ProfileSession, TimeSpan } from "./stores";
 
 const GLOSSARY = {
@@ -60,6 +60,10 @@ const GLOSSARY = {
   counters:
     "Point samples: 'bytes' = escape-sequence bytes written per frame; 'paint.nodes' / " +
     "'paint.glyphs' = nodes visited / glyphs drawn per paint.",
+  cpuThrottle_note:
+    "meta.cpuThrottle > 1 means the engine and JS threads were duty-cycle suspended to " +
+    "simulate a CPU that many times slower; durations are inflated accordingly. Throttle " +
+    "changes mid-recording appear as 'cpu throttle Nx' interactions.",
   interactions:
     "User input during the recording, recorded by the engine: clicks (labelled with the " +
     "#key of the clickable node hit, or coordinates), right-clicks, keys, paste, scroll " +
@@ -143,6 +147,7 @@ export function exportProfile(): string | null {
       generator: "pixel-react devtools profiler",
       exportedAt: new Date().toISOString(),
       startEpochMs: round(session.start),
+      cpuThrottle: devtoolsStore.get().cpuRate,
       glossary: GLOSSARY,
     },
     summary: summarize(session),

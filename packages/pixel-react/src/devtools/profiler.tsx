@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 
 import { Box, Text } from "../components";
-import { clearRecording, startRecording, stopRecording } from "./controller";
+import { clearRecording, setCpuThrottle, startRecording, stopRecording } from "./controller";
 import { exportProfile } from "./export-profile";
 import { createStore, useStore } from "./store";
 import { devtoolsStore, ProfileSession, profilerStore, TimeSpan } from "./stores";
@@ -501,6 +501,17 @@ export function ProfilerPanel(props: { rem: number }) {
         {session && (
           <Button rem={rem} label="Export" onClick={() => setExportedTo(exportProfile())} />
         )}
+        <Button
+          rem={rem}
+          label={`cpu ${devtools.cpuRate}x`}
+          active={devtools.cpuRate > 1}
+          danger={devtools.cpuRate > 1}
+          onClick={() => {
+            const rates = [1, 4, 10];
+            const next = rates[(rates.indexOf(devtools.cpuRate) + 1) % rates.length];
+            setCpuThrottle(next);
+          }}
+        />
         {session && !exportedTo && <Summary session={session} rem={rem} />}
         {exportedTo && (
           <Text style={{ color: theme.ok, fontSize: rem * 0.66, font: MONO, wrap: false }}>

@@ -94,6 +94,7 @@ function StatusBar(props: { rem: number }) {
   const { rem } = props;
   const layout = useStore(layoutStore);
   const profiler = useStore(profilerStore);
+  const devtools = useStore(devtoolsStore);
   return (
     <Box
       style={{
@@ -108,11 +109,18 @@ function StatusBar(props: { rem: number }) {
       <Text style={{ color: theme.faint, fontSize: rem * 0.64, wrap: false }}>
         {`${layout.stats.fps.toFixed(0)} fps · ${layout.stats.frameMs.toFixed(1)} ms/frame · ${layout.rects.size} nodes`}
       </Text>
-      {profiler.recording && (
-        <Text style={{ color: theme.danger, fontSize: rem * 0.64, wrap: false }}>
-          recording
-        </Text>
-      )}
+      <Box style={{ flexDirection: "row", gap: rem * 0.6 }}>
+        {devtools.cpuRate > 1 && (
+          <Text style={{ color: theme.warn, fontSize: rem * 0.64, wrap: false }}>
+            {`cpu ${devtools.cpuRate}x`}
+          </Text>
+        )}
+        {profiler.recording && (
+          <Text style={{ color: theme.danger, fontSize: rem * 0.64, wrap: false }}>
+            recording
+          </Text>
+        )}
+      </Box>
     </Box>
   );
 }

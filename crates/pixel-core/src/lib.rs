@@ -12,6 +12,7 @@ mod scroll;
 mod style;
 mod terminal;
 mod text_input;
+mod throttle;
 mod tree;
 mod wrap;
 
@@ -38,6 +39,7 @@ pub use text_input::{
     Granularity, InputAction, InputGeometry, InputReply, TextInput, line_height, offset_to_point,
     point_to_offset,
 };
+pub use throttle::CpuThrottle;
 pub use tree::{HitTarget, InputProps, NodeId, Props, PxRect, ScrollArea, ScrollbarRects, Tree};
 pub use wrap::{line_of_offset, wrap_lines};
 

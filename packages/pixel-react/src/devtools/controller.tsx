@@ -139,6 +139,11 @@ export function toggleExpanded(id: number) {
   });
 }
 
+export function setCpuThrottle(rate: number) {
+  devtoolsStore.update((s) => ({ ...s, cpuRate: rate }));
+  engineOp({ op: "setCpuThrottle", rate });
+}
+
 export function requestLayout() {
   const b = getBridge();
   b.push(APP_VIEW, { op: "queryLayout" });

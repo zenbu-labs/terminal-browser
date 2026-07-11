@@ -15,6 +15,7 @@ use crate::terminal::{
     Event, KeyEvent, Mouse, MouseButton, MouseKind, Terminal, TerminalColors, Waker,
 };
 use crate::text_input::{InputAction, InputReply};
+use crate::throttle::CpuThrottle;
 use crate::tree::{HitTarget, NodeId, Tree};
 
 const FALLBACK_CELL: (u32, u32) = (16, 32);
@@ -253,6 +254,8 @@ pub struct Engine {
     bar_hover: Option<(usize, NodeId)>,
     bar_drag: Option<(usize, NodeId, f32)>,
     reveal: bool,
+    cpu_throttle: CpuThrottle,
+    throttle_registered: bool,
     scroll_burst: u32,
     last_scroll_mark: Option<Instant>,
     pending: Vec<EngineEvent>,
@@ -319,6 +322,8 @@ impl Engine {
             bar_hover: None,
             bar_drag: None,
             reveal: false,
+            cpu_throttle: CpuThrottle::new(),
+            throttle_registered: false,
             scroll_burst: 0,
             last_scroll_mark: None,
             pending: Vec::new(),
@@ -487,6 +492,23 @@ impl Engine {
         }
     }
 
+    pub fn cpu_throttle(&self) -> &CpuThrottle {
+        &self.cpu_throttle
+    }
+
+    pub fn set_cpu_throttle(&mut self, rate: f32) {
+        if !CpuThrottle::supported() && rate > 1.0 {
+            logging::warn("engine", "cpu throttle is only supported on macOS");
+            return;
+        }
+        self.cpu_throttle.set_rate(rate);
+        let applied = self.cpu_throttle.rate();
+        logging::info("engine", format!("cpu throttle {applied}x"));
+        if crate::profiler::is_recording() {
+            crate::profiler::mark("throttle", 0, format!("cpu throttle {applied}x"));
+        }
+    }
+
     pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
         self.term.set_clipboard(text)
     }
@@ -535,6 +557,10 @@ impl Engine {
     }
 
     pub fn pump(&mut self, wait: Option<Duration>) -> io::Result<Vec<EngineEvent>> {
+        if !self.throttle_registered {
+            self.throttle_registered = true;
+            self.cpu_throttle.register_current_thread();
+        }
         let mut out = Vec::new();
         out.append(&mut self.pending);
         self.check_resize(&mut out)?;
