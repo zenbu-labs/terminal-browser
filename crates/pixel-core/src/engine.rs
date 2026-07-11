@@ -228,6 +228,7 @@ pub struct Engine {
     profiler: Profiler,
     window: (u32, u32),
     cell: (u32, u32),
+    grid: (u32, u32),
     base_px: f32,
     colors: TerminalColors,
     cursor: Option<(f32, f32)>,
@@ -296,6 +297,7 @@ impl Engine {
             profiler: Profiler::new(),
             window,
             cell,
+            grid: (0, 0),
             base_px,
             colors,
             cursor: None,
@@ -444,7 +446,7 @@ impl Engine {
             },
         );
         self.split = split;
-        self.apply_pane_layout();
+        self.apply_pane_layout(false);
     }
 
     pub fn set_scroll_profile(&mut self, profile: &'static dyn ScrollProfile) {
@@ -622,7 +624,7 @@ impl Engine {
         Some(x.clamp(MIN_PANE, w - MIN_PANE - DIVIDER_W))
     }
 
-    fn apply_pane_layout(&mut self) {
+    fn apply_pane_layout(&mut self, force: bool) {
         let (w, h) = self.window;
         let panes: [(u32, u32); 2] = match self.divider_x() {
             Some(dx) => [(0, dx), (dx + DIVIDER_W, w.saturating_sub(dx + DIVIDER_W))],
@@ -632,7 +634,7 @@ impl Engine {
         for (i, (origin, width)) in panes.iter().enumerate() {
             let view = &mut self.views[i];
             let size = (*width, h);
-            let changed = view.size != size || view.origin_x != *origin;
+            let changed = force || view.size != size || view.origin_x != *origin;
             view.origin_x = *origin;
             view.size = size;
             if !changed || i >= active {
@@ -654,29 +656,67 @@ impl Engine {
         if ws.cols == 0 && ws.width_px == 0 {
             return Ok(());
         }
-        let cell = ws.cell_size().unwrap_or(self.cell);
-        let window = window_from(&ws, cell);
-        if window == self.window {
+        self.apply_window(&ws)?;
+        out.append(&mut self.pending);
+        Ok(())
+    }
+
+    /// React to a new terminal geometry from any source (TIOCGWINSZ polling,
+    /// SIGWINCH requery, or a mode 2048 in-band report). A font-size change
+    /// keeps the window pixels but moves the cell size, so both gate a
+    /// relayout; base_px changes force one even when pane sizes are identical.
+    fn apply_window(&mut self, ws: &crate::terminal::WindowSize) -> io::Result<()> {
+        let grid = (ws.cols, ws.rows);
+        let cell = match ws.cell_size() {
+            Some(cell) => cell,
+            None => {
+                // No pixel info: if the grid changed the cached cell size is
+                // suspect (font zoom), so re-query it once.
+                if grid != self.grid && self.grid != (0, 0) {
+                    self.term.forget_cell_size();
+                }
+                self.term.cell_size()?.unwrap_or(self.cell)
+            }
+        };
+        self.grid = grid;
+        let window = window_from(ws, cell);
+        if window == self.window && cell == self.cell {
             return Ok(());
         }
-        logging::info(
-            "engine",
-            format!(
-                "resize {}x{} -> {}x{}",
-                self.window.0, self.window.1, window.0, window.1
-            ),
-        );
-        if crate::profiler::is_recording() {
-            crate::profiler::mark("resize", 0, format!("resize {}x{}", window.0, window.1));
-        }
-        self.window = window;
-        self.cell = cell;
-        self.base_px = px_for_cell_height(
+        let base_px = px_for_cell_height(
             &self.fonts[self.cell_metrics_font.min(self.fonts.len() - 1)],
             cell.1 as f32,
         );
-        self.apply_pane_layout();
-        out.append(&mut self.pending);
+        logging::info(
+            "engine",
+            format!(
+                "resize {}x{} cell {}x{} base {:.1}px -> {}x{} cell {}x{} base {base_px:.1}px",
+                self.window.0,
+                self.window.1,
+                self.cell.0,
+                self.cell.1,
+                self.base_px,
+                window.0,
+                window.1,
+                cell.0,
+                cell.1,
+            ),
+        );
+        if crate::profiler::is_recording() {
+            crate::profiler::mark(
+                "resize",
+                0,
+                format!(
+                    "resize {}x{} cell {}x{}",
+                    window.0, window.1, cell.0, cell.1
+                ),
+            );
+        }
+        let base_changed = (base_px - self.base_px).abs() > 0.01;
+        self.window = window;
+        self.cell = cell;
+        self.base_px = base_px;
+        self.apply_pane_layout(base_changed);
         Ok(())
     }
 
@@ -732,6 +772,7 @@ impl Engine {
                 }
             }
             Event::Focus(focused) => self.term_focused = focused,
+            Event::WindowSize(ws) => self.apply_window(&ws)?,
             Event::Mouse(mouse) => self.handle_mouse(mouse, out)?,
         }
         Ok(())
@@ -1035,7 +1076,7 @@ impl Engine {
         let f = (x / w).clamp(0.15, 0.85);
         if self.split != Some(f) {
             self.split = Some(f);
-            self.apply_pane_layout();
+            self.apply_pane_layout(false);
         }
     }
 

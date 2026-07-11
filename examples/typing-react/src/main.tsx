@@ -9,6 +9,15 @@ const root = createRoot({
       process.exit(0);
     }
   },
+  onResize() {
+    render();
+  },
 });
 
-root.render(<App info={root.info} />);
+function render() {
+  // Fresh object so a resize (or font zoom, which changes basePx) re-renders
+  // with the new metrics.
+  root.render(<App info={{ ...root.info }} />);
+}
+
+render();

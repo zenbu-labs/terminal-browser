@@ -24,6 +24,13 @@ const root = createRoot({
     if (event.mods.ctrl && event.key === "p") session.cycleMode();
     if (event.mods.ctrl && event.key === "t") session.cycleThinking();
   },
+  onResize() {
+    render();
+  },
 });
 
-root.render(<App info={root.info} />);
+function render() {
+  root.render(<App info={{ ...root.info }} />);
+}
+
+render();
