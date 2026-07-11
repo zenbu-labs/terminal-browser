@@ -7,10 +7,10 @@ import {
   DEVTOOLS_VIEW,
   getBridge,
   reconciler,
-} from "./hostConfig";
+} from "./host-config";
 import type { EngineInfo } from "./native";
-import { handleDevtoolsKey } from "./devtools/App";
-import { installConsoleCapture } from "./devtools/consoleCapture";
+import { handleDevtoolsKey } from "./devtools/app";
+import { installConsoleCapture } from "./devtools/console-capture";
 import {
   closeDevtools,
   onEngineProfile,
@@ -19,7 +19,7 @@ import {
   toggleDevtools,
   unmountDevtools,
 } from "./devtools/controller";
-import { installFiberHook } from "./devtools/fiberHook";
+import { installFiberHook } from "./devtools/fiber-hook";
 import {
   devtoolsStore,
   engineLogs,
@@ -39,7 +39,7 @@ export type {
   ClickEvent,
   ScrollEvent,
   WheelEvent,
-} from "./hostConfig";
+} from "./host-config";
 export type { Color, Edges, ScrollbarStyle, Style } from "./styles";
 export type { EngineInfo, Rgba } from "./native";
 export { openDevtools, closeDevtools, toggleDevtools };

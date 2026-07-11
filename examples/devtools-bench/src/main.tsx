@@ -1,7 +1,7 @@
 import React from "react";
 import { createRoot } from "pixel-react";
 
-import { App } from "./App";
+import { App } from "./app";
 
 const root = createRoot({
   onKey(event) {

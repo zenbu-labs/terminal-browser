@@ -2,9 +2,9 @@ import React, { useEffect } from "react";
 
 import { Box, Text } from "../components";
 import { closeDevtools, requestLayout, setPicking } from "./controller";
-import { ElementsPanel } from "./Elements";
-import { LogPanel } from "./LogPanel";
-import { profilerHandleKey, ProfilerPanel } from "./Profiler";
+import { ElementsPanel } from "./elements";
+import { LogPanel } from "./log-panel";
+import { profilerHandleKey, ProfilerPanel } from "./profiler";
 import {
   devtoolsStore,
   inspectorStore,

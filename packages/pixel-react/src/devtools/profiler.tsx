@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 
 import { Box, Text } from "../components";
 import { clearRecording, startRecording, stopRecording } from "./controller";
-import { exportProfile } from "./exportProfile";
+import { exportProfile } from "./export-profile";
 import { createStore, useStore } from "./store";
 import { devtoolsStore, ProfileSession, profilerStore, TimeSpan } from "./stores";
 import { MONO, theme } from "./theme";

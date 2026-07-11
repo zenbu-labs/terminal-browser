@@ -1,6 +1,6 @@
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 
-import type { BoxProps, InputProps, TextProps } from "./hostConfig";
+import type { BoxProps, InputProps, TextProps } from "./host-config";
 
 export interface NodeHandle {
   id: number;

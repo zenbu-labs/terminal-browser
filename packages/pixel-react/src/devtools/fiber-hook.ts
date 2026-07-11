@@ -1,4 +1,4 @@
-import type { Container } from "../hostConfig";
+import type { Container } from "../host-config";
 import { profilerStore, recordSpan } from "./stores";
 
 /**

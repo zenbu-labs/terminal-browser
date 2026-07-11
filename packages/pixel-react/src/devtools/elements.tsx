@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo } from "react";
 
 import { Box, Text } from "../components";
-import { APP_VIEW, getBridge, Instance } from "../hostConfig";
+import { APP_VIEW, getBridge, Instance } from "../host-config";
 import { findInstance, selectNode, setPicking, toggleExpanded } from "./controller";
 import { inspectorStore, LayoutRect, layoutStore } from "./stores";
 import { useStore } from "./store";

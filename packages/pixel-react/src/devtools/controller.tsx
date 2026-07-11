@@ -8,8 +8,8 @@ import {
   getBridge,
   Instance,
   reconciler,
-} from "../hostConfig";
-import { DevtoolsApp } from "./App";
+} from "../host-config";
+import { DevtoolsApp } from "./app";
 import {
   devtoolsStore,
   inspectorStore,

@@ -1,6 +1,6 @@
 import { createRoot } from "pixel-react";
 
-import { App } from "./App";
+import { App } from "./app";
 import { store } from "./session";
 
 const root = createRoot({
