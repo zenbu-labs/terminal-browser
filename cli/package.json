@@ -1,0 +1,19 @@
+{
+  "name": "pixel-cli",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "pixel": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pixel-terminals": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
