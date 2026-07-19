@@ -1,5 +1,8 @@
 {
   "name": "terminal-graphics-engine",
   "private": true,
+  "scripts": {
+    "browser": "pnpm --filter pixel-browser start"
+  },
   "packageManager": "pnpm@10.13.1"
 }

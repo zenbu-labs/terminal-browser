@@ -1,0 +1,23 @@
+{
+  "name": "pixel-browser",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:engine": "pnpm --filter pixel-react build",
+    "start": "pnpm build:engine && pnpm build && mkdir -p \"$HOME/.pixel-browser/logs\" && exec electron dist/main.js 2>>\"$HOME/.pixel-browser/logs/stderr.log\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pixel-react": "workspace:*",
+    "pixel-terminals": "workspace:*",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "electron": "43.1.1",
+    "typescript": "^5.5.0"
+  }
+}

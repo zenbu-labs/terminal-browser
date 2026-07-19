@@ -40,3 +40,7 @@ engine/packages/pixel-react/dist/
 engine/packages/pixel-react/native/
 agent/app/dist/
 agent/app/.data/
+browser/dist/
+cli/dist/
+terminals/dist/
+.claude/worktrees/
