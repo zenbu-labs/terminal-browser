@@ -9,6 +9,7 @@ use taffy::prelude::TaffyMaxContent as _;
 use layout::{MeasureCtx, to_taffy};
 
 use crate::image_cache::ImageStatus;
+use crate::scene::{Camera, Shape, ShapeProps};
 use crate::scroll::ScrollState;
 use crate::scrollbar::{self, BarState, ScrollbarRects};
 use crate::selection::{DocLayout, DocSelection, DocSelectionState};
@@ -126,6 +127,20 @@ pub struct InputProps {
     pub selection_color: Color,
     pub auto_focus: bool,
     pub submit: bool,
+    // Set to make Tab indent (and shift-Tab dedent) with this text.
+    pub tab: Option<String>,
+    // Enter copies the current line's leading whitespace onto the new line.
+    pub auto_indent: bool,
+    // Wrap-aware line numbers painted in the node's left padding.
+    pub gutter: Option<Gutter>,
+    // Fills the caret's logical line across the node's full width.
+    pub active_line: Option<Color>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gutter {
+    pub color: Color,
+    pub active_color: Color,
 }
 
 impl Default for InputProps {
@@ -138,6 +153,10 @@ impl Default for InputProps {
             selection_color: [90, 90, 140, 255],
             auto_focus: false,
             submit: false,
+            tab: None,
+            auto_indent: false,
+            gutter: None,
+            active_line: None,
         }
     }
 }
@@ -181,6 +200,9 @@ pub struct Props {
     pub hidden: bool,
     pub input: Option<InputProps>,
     pub image: Option<ImageProps>,
+    // Paints the client-streamed pixel buffer with this id (see surfaces.rs)
+    // scaled into the node's rect.
+    pub surface: Option<u32>,
     pub slot: Option<SlotKind>,
     // Anchors this node inline in its input parent's text at the mark with
     // this id; it is laid out by text flow, not flex.
@@ -189,12 +211,19 @@ pub struct Props {
     // as (id, offset). Inputs get theirs from InputProps instead.
     pub marks: Vec<(u64, usize)>,
     pub content_height: Option<f32>,
+    // Present when this node is a scene: a camera onto an infinite 2D world.
+    // Shape children are placed and painted through it instead of flex layout.
+    pub scene: Option<Camera>,
+    // World-space geometry; only meaningful under a scene parent.
+    pub shape: Option<ShapeProps>,
     pub scroll_events: bool,
     pub wheel_events: bool,
+    pub pointer_events: bool,
     pub hover_events: bool,
     pub outside_click_events: bool,
     pub drag_events: bool,
     pub selection_events: bool,
+    pub move_events: bool,
     pub spans: Vec<TextSpan>,
 }
 
@@ -203,6 +232,8 @@ pub(crate) struct InputState {
     pub caret_color: Color,
     pub selection_color: Color,
     pub submit: bool,
+    pub gutter: Option<Gutter>,
+    pub active_line: Option<Color>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -225,6 +256,7 @@ pub(crate) struct RNode {
     pub hidden: bool,
     pub input: Option<InputState>,
     pub image: Option<ImageProps>,
+    pub surface: Option<u32>,
     pub slot: Option<SlotKind>,
     pub slot_visible: bool,
     pub mark: Option<u64>,
@@ -236,12 +268,16 @@ pub(crate) struct RNode {
     pub scroll: ScrollState,
     pub scroll_max: f32,
     pub content_height: Option<f32>,
+    pub scene: Option<Camera>,
+    pub shape: Option<ShapeProps>,
     pub scroll_events: bool,
     pub wheel_events: bool,
+    pub pointer_events: bool,
     pub hover_events: bool,
     pub outside_click_events: bool,
     pub drag_events: bool,
     pub selection_events: bool,
+    pub move_events: bool,
     pub spans: Vec<TextSpan>,
     pub last_scroll_emit: f32,
     pub bar: BarState,
@@ -404,13 +440,20 @@ impl Tree {
             key: props.key.clone(),
             clickable: props.clickable,
             hidden: props.hidden,
-            input: props.input.as_ref().map(|p| InputState {
-                input: TextInput::with_marks(p.initial.clone(), &p.marks),
-                caret_color: p.caret_color,
-                selection_color: p.selection_color,
-                submit: p.submit,
+            input: props.input.as_ref().map(|p| {
+                let mut input = TextInput::with_marks(p.initial.clone(), &p.marks);
+                input.set_editing(p.tab.clone(), p.auto_indent);
+                InputState {
+                    input,
+                    caret_color: p.caret_color,
+                    selection_color: p.selection_color,
+                    submit: p.submit,
+                    gutter: p.gutter,
+                    active_line: p.active_line,
+                }
             }),
             image: props.image,
+            surface: props.surface,
             slot: props.slot,
             slot_visible: false,
             mark: props.mark,
@@ -422,12 +465,16 @@ impl Tree {
             scroll: ScrollState::default(),
             scroll_max: 0.0,
             content_height: props.content_height,
+            scene: props.scene,
+            shape: props.shape,
             scroll_events: props.scroll_events,
             wheel_events: props.wheel_events,
+            pointer_events: props.pointer_events,
             hover_events: props.hover_events,
             outside_click_events: props.outside_click_events,
             drag_events: props.drag_events,
             selection_events: props.selection_events,
+            move_events: props.move_events,
             spans: props.spans,
             last_scroll_emit: 0.0,
             bar: BarState::default(),
@@ -508,7 +555,7 @@ impl Tree {
                 .iter()
                 .filter(|&&c| {
                     let node = self.node(c);
-                    node.slot.is_none() && node.mark.is_none()
+                    node.slot.is_none() && node.mark.is_none() && node.shape.is_none()
                 })
                 .map(|&c| self.node(c).taffy)
                 .collect();
@@ -565,10 +612,23 @@ impl Tree {
         node.clickable = props.clickable;
         node.scroll_events = props.scroll_events;
         node.wheel_events = props.wheel_events;
+        node.pointer_events = props.pointer_events;
         node.hover_events = props.hover_events;
         node.outside_click_events = props.outside_click_events;
         node.drag_events = props.drag_events;
         node.selection_events = props.selection_events;
+        node.move_events = props.move_events;
+        let mut place_changed = false;
+        if node.scene != props.scene {
+            node.scene = props.scene;
+            changed = true;
+            place_changed = true;
+        }
+        if node.shape != props.shape {
+            node.shape = props.shape;
+            changed = true;
+            place_changed = true;
+        }
         if node.spans != props.spans {
             node.spans = props.spans;
             changed = true;
@@ -578,6 +638,10 @@ impl Tree {
             node.image = props.image;
             changed = true;
             image_changed = true;
+        }
+        if node.surface != props.surface {
+            node.surface = props.surface;
+            changed = true;
         }
         let slot_changed = node.slot != props.slot;
         if slot_changed {
@@ -592,6 +656,9 @@ impl Tree {
         if node.content_height != props.content_height {
             node.content_height = props.content_height;
             changed = true;
+            place_changed = true;
+        }
+        if place_changed {
             self.needs_place = true;
         }
         if image_changed {
@@ -608,10 +675,15 @@ impl Tree {
         match (&mut node.input, props.input) {
             (Some(state), Some(p)) => {
                 changed |= state.caret_color != p.caret_color
-                    || state.selection_color != p.selection_color;
+                    || state.selection_color != p.selection_color
+                    || state.gutter != p.gutter
+                    || state.active_line != p.active_line;
                 state.caret_color = p.caret_color;
                 state.selection_color = p.selection_color;
                 state.submit = p.submit;
+                state.gutter = p.gutter;
+                state.active_line = p.active_line;
+                state.input.set_editing(p.tab, p.auto_indent);
             }
             (state @ Some(_), None) => {
                 *state = None;
@@ -619,11 +691,15 @@ impl Tree {
                 changed = true;
             }
             (state @ None, Some(p)) => {
+                let mut input = TextInput::with_marks(p.initial.clone(), &p.marks);
+                input.set_editing(p.tab.clone(), p.auto_indent);
                 *state = Some(InputState {
-                    input: TextInput::with_marks(p.initial.clone(), &p.marks),
+                    input,
                     caret_color: p.caret_color,
                     selection_color: p.selection_color,
                     submit: p.submit,
+                    gutter: p.gutter,
+                    active_line: p.active_line,
                 });
                 node.text = Some(p.initial);
                 changed = true;
@@ -831,6 +907,13 @@ impl Tree {
         self.needs_layout || self.needs_place || self.needs_paint
     }
 
+    pub fn uses_surface(&self, surface: u32) -> bool {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .any(|node| node.surface == Some(surface))
+    }
+
     pub(crate) fn mark_paint(&mut self) {
         self.needs_paint = true;
     }
@@ -915,7 +998,7 @@ impl Tree {
         let node_text = node.text.clone();
         let non_flow_only = children.iter().all(|&c| {
             let child = self.node(c);
-            child.slot.is_some() || child.mark.is_some()
+            child.slot.is_some() || child.mark.is_some() || child.shape.is_some()
         });
         let text = if image.is_none() && non_flow_only {
             node_text
@@ -1133,7 +1216,15 @@ impl Tree {
             clip
         };
         let image_src = node.image.clone();
+        let scene = node.scene;
         for child in node.children.clone() {
+            if self.node(child).shape.is_some() {
+                match scene {
+                    Some(camera) => self.place_shape(child, rect, camera, visible, fonts),
+                    None => self.zero_rects(child),
+                }
+                continue;
+            }
             if let Some(mark_id) = self.node(child).mark {
                 match self.mark_child_origin(id, child, mark_id, fonts) {
                     Some(at) => {
@@ -1199,6 +1290,77 @@ impl Tree {
         ))
     }
 
+    fn place_shape(
+        &mut self,
+        id: NodeId,
+        scene_rect: PxRect,
+        camera: Camera,
+        clip: PxRect,
+        fonts: &[fontdue::Font],
+    ) {
+        let node = self.node(id);
+        if node.hidden {
+            self.zero_rects(id);
+            return;
+        }
+        let Some(props) = &node.shape else {
+            self.zero_rects(id);
+            return;
+        };
+        let world = props.world_bounds().or_else(|| {
+            let Shape::Text { x, y } = props.shape else {
+                return None;
+            };
+            let text = node.text.as_deref().unwrap_or("");
+            let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
+            let px = node.resolved.px;
+            let line_h = font.horizontal_line_metrics(px).map_or(px, |m| m.new_line_size);
+            let lines: Vec<&str> = text.split('\n').collect();
+            let widest = lines
+                .iter()
+                .map(|line| crate::canvas::measure_text(font, line, px))
+                .fold(0.0f32, f32::max);
+            Some(PxRect {
+                x,
+                y,
+                w: widest,
+                h: line_h * lines.len() as f32,
+            })
+        });
+        let Some(world) = world else {
+            self.zero_rects(id);
+            return;
+        };
+        let abs = camera.rect_to_screen((scene_rect.x, scene_rect.y), world);
+        let node = self.node_mut(id);
+        node.abs = abs;
+        node.visible = abs.intersect(clip);
+        self.node_mut(id).order = self.paint_order.len() as u32;
+        self.paint_order.push(id);
+        for child in self.node(id).children.clone() {
+            self.zero_rects(child);
+        }
+    }
+
+    // Grows an in-progress pen stroke without a full props update.
+    pub fn append_shape_points(&mut self, id: NodeId, points: &[f32]) {
+        let Some(node) = self.get_mut(id) else {
+            return;
+        };
+        let Some(ShapeProps {
+            shape: Shape::Polyline {
+                points: existing, ..
+            },
+            ..
+        }) = &mut node.shape
+        else {
+            return;
+        };
+        existing.extend_from_slice(points);
+        self.needs_place = true;
+        self.needs_paint = true;
+    }
+
     fn zero_rects(&mut self, id: NodeId) {
         let node = self.node_mut(id);
         node.abs = PxRect::ZERO;
@@ -1223,10 +1385,41 @@ impl Tree {
         })
     }
 
+    // A pointer subscriber loses the point when a clickable or input is
+    // painted above it — e.g. modal buttons floating over a browser surface.
+    pub fn hit_pointer(&self, x: f32, y: f32) -> Option<NodeId> {
+        for &id in self.paint_order.iter().rev() {
+            let Some(node) = self.get(id) else {
+                continue;
+            };
+            if !node.visible.contains(x, y) {
+                continue;
+            }
+            if node.pointer_events {
+                return Some(id);
+            }
+            if node.clickable || node.input.is_some() {
+                return None;
+            }
+        }
+        None
+    }
+
     pub fn hit_drag(&self, x: f32, y: f32) -> Option<NodeId> {
         self.paint_order.iter().rev().copied().find(|&id| {
             self.get(id)
                 .is_some_and(|node| node.drag_events && node.visible.contains(x, y))
+        })
+    }
+
+    pub fn paint_order_of(&self, id: NodeId) -> Option<u32> {
+        Some(self.get(id)?.order)
+    }
+
+    pub fn hit_move(&self, x: f32, y: f32) -> Option<NodeId> {
+        self.paint_order.iter().rev().copied().find(|&id| {
+            self.get(id)
+                .is_some_and(|node| node.move_events && node.visible.contains(x, y))
         })
     }
 
@@ -1323,6 +1516,7 @@ impl Tree {
                 .iter()
                 .all(|&c| self.get(c).is_some_and(|n| n.mark.is_some() || n.slot.is_some()))
             && node.input.is_none()
+            && node.shape.is_none()
             && !node.hidden
             && node.resolved.selectable
     }

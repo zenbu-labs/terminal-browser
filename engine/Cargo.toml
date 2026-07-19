@@ -16,7 +16,7 @@ fontdue = "0.9"
 miniz_oxide = "0.8"
 taffy = "0.10"
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico"] }
 arboard = "3.6"
 
 [workspace.lints.rust]
@@ -36,6 +36,9 @@ opt-level = 2
 # The engine's per-pixel loops are the frame budget; apps iterate at opt 0
 # while the engine compiles optimized.
 [profile.dev.package.pixel-core]
+opt-level = 2
+
+[profile.dev.package.pixel-node]
 opt-level = 2
 
 [profile.dev]

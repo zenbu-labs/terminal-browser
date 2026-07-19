@@ -10,10 +10,12 @@ mod menu;
 mod native;
 mod paint;
 pub mod profiler;
+mod scene;
 mod scroll;
 mod scrollbar;
 mod selection;
 mod style;
+mod surfaces;
 mod terminal;
 mod text_input;
 mod throttle;
@@ -33,6 +35,7 @@ pub use menu::{CONTEXT_MENU_KEY, MenuEntry, MenuItem, MenuStyle, context_menu};
 pub use native::{NativeDelta, NativeScroll};
 pub use paint::paint;
 pub use profiler::{CounterRecord, ProfileData, Profiler, SpanRecord};
+pub use scene::{Camera, LineCap, LineJoin, PathCmd, Shape, ShapeProps, ShapeStroke, parse_path_data};
 pub use scroll::profiles::{Glide, Smooth, Tui};
 pub use scroll::{ScrollProfile, ScrollState};
 pub use scrollbar::ScrollbarRects;
@@ -42,7 +45,7 @@ pub use style::{
     Overflow, Position, ScrollbarStyle, SelectionMode, Style,
 };
 pub use terminal::{
-    Event, Key, KeyEvent, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors, Waker,
+    Event, Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors, Waker,
     WindowSize,
 };
 pub use text_input::{
@@ -51,8 +54,8 @@ pub use text_input::{
 };
 pub use throttle::CpuThrottle;
 pub use tree::{
-    BoxMetrics, HitTarget, ImageProps, InputProps, NodeId, Props, PxRect, ScrollArea, SlotKind,
-    TextSpan, Tree,
+    BoxMetrics, Gutter, HitTarget, ImageProps, InputProps, NodeId, Props, PxRect, ScrollArea,
+    SlotKind, TextSpan, Tree,
 };
 pub use wrap::{line_of_offset, wrap_lines};
 

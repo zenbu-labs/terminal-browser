@@ -164,6 +164,8 @@ pub struct TextInput {
     clicks: ClickTracker,
     selecting: bool,
     marks: Vec<Mark>,
+    tab_text: Option<String>,
+    auto_indent: bool,
 }
 
 impl TextInput {
@@ -636,6 +638,103 @@ impl TextInput {
         }
     }
 
+    pub fn set_editing(&mut self, tab_text: Option<String>, auto_indent: bool) {
+        self.tab_text = tab_text;
+        self.auto_indent = auto_indent;
+    }
+
+    fn insert_newline(&mut self) {
+        if !self.auto_indent {
+            self.insert("\n");
+            return;
+        }
+        let at = self.selection().map_or(self.cursor, |r| r.start);
+        let start = line_start(&self.text, at);
+        let indent: String = self.text[start..at]
+            .chars()
+            .take_while(|&c| c == ' ' || c == '\t')
+            .collect();
+        let mut inserted = String::with_capacity(1 + indent.len());
+        inserted.push('\n');
+        inserted.push_str(&indent);
+        self.insert(&inserted);
+    }
+
+    // The whole lines covered by the selection (or the caret's line), without
+    // the last line when the selection stops exactly at its start.
+    fn block_lines(&self) -> Range<usize> {
+        let range = self.selection().unwrap_or(self.cursor..self.cursor);
+        let start = line_start(&self.text, range.start);
+        let last = if range.end > range.start && self.text[..range.end].ends_with('\n') {
+            range.end - 1
+        } else {
+            range.end
+        };
+        start..line_end(&self.text, last.max(range.start))
+    }
+
+    fn indent_block(&mut self, tab: &str) -> bool {
+        let range = self.selection().unwrap_or(self.cursor..self.cursor);
+        if !self.text[range].contains('\n') {
+            self.insert(tab);
+            return true;
+        }
+        let block = self.block_lines();
+        let mut out = String::with_capacity(self.text[block.clone()].len() + tab.len() * 8);
+        for (i, line) in self.text[block.clone()].split('\n').enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            if !line.is_empty() {
+                out.push_str(tab);
+            }
+            out.push_str(line);
+        }
+        self.splice(block.clone(), &out, EditKind::Other);
+        self.anchor = Some(block.start);
+        self.sealed = true;
+        true
+    }
+
+    fn dedent_block(&mut self, tab: &str) -> bool {
+        let had_selection = self.selection().is_some();
+        let cursor_before = self.cursor;
+        let block = self.block_lines();
+        let mut out = String::with_capacity(self.text[block.clone()].len());
+        let mut first_removed = 0;
+        for (i, line) in self.text[block.clone()].split('\n').enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            let trimmed = if let Some(rest) = line.strip_prefix(tab) {
+                rest
+            } else if let Some(rest) = line.strip_prefix('\t') {
+                rest
+            } else {
+                let spaces = line.len() - line.trim_start_matches(' ').len();
+                &line[spaces.min(tab.len())..]
+            };
+            if i == 0 {
+                first_removed = line.len() - trimmed.len();
+            }
+            out.push_str(trimmed);
+        }
+        if out.len() == block.len() {
+            return false;
+        }
+        self.splice(block.clone(), &out, EditKind::Other);
+        if had_selection {
+            self.anchor = Some(block.start);
+        } else {
+            self.cursor = cursor_before
+                .saturating_sub(first_removed)
+                .max(block.start)
+                .min(self.text.len());
+        }
+        self.sealed = true;
+        true
+    }
+
     pub fn replace_all(&mut self, text: &str) {
         if self.text == text {
             return;
@@ -691,6 +790,7 @@ impl TextInput {
     ) -> InputReply {
         use Granularity::{Char, Line, Word};
         let m = key.mods;
+        let associated = key.text.as_deref();
         let combo = m.ctrl || m.sup;
         let horizontal = if m.alt {
             Word
@@ -751,9 +851,24 @@ impl TextInput {
                 InputReply::Edited
             }
             Key::Enter => {
-                self.insert("\n");
+                self.insert_newline();
                 InputReply::Edited
             }
+            Key::Tab if !m.ctrl && !m.sup && !m.alt => match self.tab_text.clone() {
+                Some(tab) if !tab.is_empty() => {
+                    let edited = if m.shift {
+                        self.dedent_block(&tab)
+                    } else {
+                        self.indent_block(&tab)
+                    };
+                    if edited {
+                        InputReply::Edited
+                    } else {
+                        InputReply::None
+                    }
+                }
+                _ => InputReply::None,
+            },
             Key::Escape => {
                 if self.collapse() {
                     InputReply::Selected
@@ -804,7 +919,14 @@ impl TextInput {
                 InputReply::Edited
             }
             Key::Char(c) if !m.ctrl && !m.sup && !m.alt && !c.is_control() => {
-                self.insert(c.encode_utf8(&mut [0u8; 4]));
+                match associated {
+                    Some(text) => self.insert(text),
+                    None => self.insert(c.encode_utf8(&mut [0u8; 4])),
+                }
+                InputReply::Edited
+            }
+            Key::Unknown if !m.ctrl && !m.sup && !m.alt && associated.is_some() => {
+                self.insert(associated.unwrap());
                 InputReply::Edited
             }
             _ => InputReply::None,
@@ -1334,10 +1456,105 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tab_inserts_and_indents_multiline_selections() {
+        let f = font();
+        let mut i = input("one\ntwo\nthree", 0);
+        i.set_editing(Some("  ".into()), false);
+        assert_eq!(
+            i.handle_key(key(Key::Tab, Mods::default()), &f, 16.0, None),
+            InputReply::Edited
+        );
+        assert_eq!(i.text(), "  one\ntwo\nthree", "caret tab inserts");
+        assert_eq!(i.cursor(), 2);
+
+        i.set_cursor(2, false);
+        i.set_cursor(8, true);
+        i.handle_key(key(Key::Tab, Mods::default()), &f, 16.0, None);
+        assert_eq!(i.text(), "    one\n  two\nthree", "selection indents lines");
+        assert_eq!(i.selected_text(), Some("    one\n  two"));
+        assert!(i.undo());
+        assert_eq!(i.text(), "  one\ntwo\nthree", "indent is one undo step");
+    }
+
+    #[test]
+    fn shift_tab_dedents_and_reports_noop() {
+        const SHIFT: Mods = Mods {
+            shift: true,
+            alt: false,
+            ctrl: false,
+            sup: false,
+        };
+        let f = font();
+        let mut i = input("    one\n\ttwo\n three\nfour", 0);
+        i.set_editing(Some("  ".into()), false);
+        i.select_all();
+        assert_eq!(
+            i.handle_key(key(Key::Tab, SHIFT), &f, 16.0, None),
+            InputReply::Edited
+        );
+        assert_eq!(i.text(), "  one\ntwo\nthree\nfour");
+        i.collapse();
+        i.set_cursor(0, false);
+        i.handle_key(key(Key::Tab, SHIFT), &f, 16.0, None);
+        i.handle_key(key(Key::Tab, SHIFT), &f, 16.0, None);
+        assert_eq!(i.text(), "one\ntwo\nthree\nfour");
+        assert_eq!(
+            i.handle_key(key(Key::Tab, SHIFT), &f, 16.0, None),
+            InputReply::None,
+            "nothing left to dedent"
+        );
+    }
+
+    #[test]
+    fn dedent_keeps_the_caret_on_its_column() {
+        let f = font();
+        let mut i = input("  hello", 5);
+        i.set_editing(Some("  ".into()), false);
+        const SHIFT: Mods = Mods {
+            shift: true,
+            alt: false,
+            ctrl: false,
+            sup: false,
+        };
+        i.handle_key(key(Key::Tab, SHIFT), &f, 16.0, None);
+        assert_eq!(i.text(), "hello");
+        assert_eq!(i.cursor(), 3, "caret shifts left with the line");
+    }
+
+    #[test]
+    fn tab_without_tab_text_is_ignored() {
+        let f = font();
+        let mut i = input("abc", 1);
+        assert_eq!(
+            i.handle_key(key(Key::Tab, Mods::default()), &f, 16.0, None),
+            InputReply::None
+        );
+        assert_eq!(i.text(), "abc");
+    }
+
+    #[test]
+    fn enter_copies_leading_whitespace_when_auto_indent_is_on() {
+        let f = font();
+        let mut i = input("  foo", 5);
+        i.set_editing(None, true);
+        i.handle_key(key(Key::Enter, Mods::default()), &f, 16.0, None);
+        assert_eq!(i.text(), "  foo\n  ");
+        assert_eq!(i.cursor(), 8);
+        let mut plain = input("  foo", 5);
+        plain.handle_key(key(Key::Enter, Mods::default()), &f, 16.0, None);
+        assert_eq!(plain.text(), "  foo\n", "off by default");
+    }
+
     use crate::terminal::Mods;
 
     fn key(k: Key, mods: Mods) -> KeyEvent {
-        KeyEvent { key: k, mods }
+        KeyEvent {
+            key: k,
+            mods,
+            kind: crate::terminal::KeyKind::Press,
+            text: None,
+        }
     }
 
     const CTRL: Mods = Mods {
@@ -1411,6 +1628,7 @@ mod tests {
             Mouse {
                 kind,
                 button,
+                mods: Mods::default(),
                 x: (10.0 + x + 0.5) as u32,
                 y: (5.0 + y + 1.0) as u32,
             }

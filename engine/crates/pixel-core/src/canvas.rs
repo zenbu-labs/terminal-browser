@@ -8,6 +8,28 @@ std::thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+// Horizontal span to skip on a row so a blit stays inside rounded corners.
+// radius order matches css: [top-left, top-right, bottom-right, bottom-left].
+fn corner_insets(radius: [f32; 4], row: i64, height: i64) -> (i64, i64) {
+    if radius == [0.0; 4] {
+        return (0, 0);
+    }
+    let dy_top = row as f32 + 0.5;
+    let dy_bottom = (height - 1 - row) as f32 + 0.5;
+    let inset = |r: f32, dy: f32| -> i64 {
+        if r <= 0.0 || dy >= r {
+            0
+        } else {
+            let reach = r - dy;
+            (r - (r * r - reach * reach).sqrt()).ceil() as i64
+        }
+    };
+    (
+        inset(radius[0], dy_top).max(inset(radius[3], dy_bottom)),
+        inset(radius[1], dy_top).max(inset(radius[2], dy_bottom)),
+    )
+}
+
 pub struct Canvas {
     pub width: u32,
     pub height: u32,
@@ -278,6 +300,18 @@ impl Canvas {
         }
     }
     pub fn blit_image(&mut self, x: f32, y: f32, image: tiny_skia::PixmapRef<'_>) {
+        self.blit_image_rounded(x, y, image, [0.0; 4]);
+    }
+
+    // Rounding costs one sqrt per corner row and nothing at radius zero: rows
+    // just copy a shorter span near the corners, pixels are never transformed.
+    pub fn blit_image_rounded(
+        &mut self,
+        x: f32,
+        y: f32,
+        image: tiny_skia::PixmapRef<'_>,
+        radius: [f32; 4],
+    ) {
         let (cx1, cy1, cx2, cy2) = self.clip_bounds();
         let x0 = x.round() as i64;
         let y0 = y.round() as i64;
@@ -290,12 +324,19 @@ impl Canvas {
         }
         let src = image.data();
         let src_stride = image.width() as usize * 4;
-        let col0 = (x1 - x0) as usize * 4;
-        let col1 = (x2 - x0) as usize * 4;
+        let height = i64::from(image.height());
         for row in y1..y2 {
+            let (inset_l, inset_r) = corner_insets(radius, row - y0, height);
+            let rx1 = x1.max(x0 + inset_l);
+            let rx2 = x2.min(x0 + i64::from(image.width()) - inset_r);
+            if rx2 <= rx1 {
+                continue;
+            }
+            let col0 = (rx1 - x0) as usize * 4;
+            let col1 = (rx2 - x0) as usize * 4;
             let src_off = (row - y0) as usize * src_stride;
             let src_row = &src[src_off + col0..src_off + col1];
-            let dst_off = ((row as u32 * self.width + x1 as u32) * 4) as usize;
+            let dst_off = ((row as u32 * self.width + rx1 as u32) * 4) as usize;
             let dst_row = &mut self.pixels[dst_off..dst_off + src_row.len()];
             for (dst, s) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
                 match s[3] {
@@ -312,12 +353,169 @@ impl Canvas {
         }
     }
 
+    // Blits straight-alpha RGBA pixels into the destination rect, scaling
+    // bilinearly when the sizes differ (e.g. a surface rendered at a reduced
+    // resolution shown full size). Corner radii clip by shrinking row spans.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blit_scaled_rgba(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        src: &[u8],
+        src_w: u32,
+        src_h: u32,
+    ) {
+        self.blit_scaled_rgba_rounded(x, y, w, h, src, src_w, src_h, [0.0; 4]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn blit_scaled_rgba_rounded(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        src: &[u8],
+        src_w: u32,
+        src_h: u32,
+        radius: [f32; 4],
+    ) {
+        if src_w == 0 || src_h == 0 || src.len() < src_w as usize * src_h as usize * 4 {
+            return;
+        }
+        let dst_w = w.round().max(0.0) as u32;
+        let dst_h = h.round().max(0.0) as u32;
+        if dst_w == 0 || dst_h == 0 {
+            return;
+        }
+        if (dst_w, dst_h) == (src_w, src_h) {
+            if let Some(image) = tiny_skia::PixmapRef::from_bytes(src, src_w, src_h) {
+                self.blit_image_rounded(x, y, image, radius);
+            }
+            return;
+        }
+        let (cx1, cy1, cx2, cy2) = self.clip_bounds();
+        let x0 = x.round() as i64;
+        let y0 = y.round() as i64;
+        let x1 = x0.max(cx1 as i64);
+        let y1 = y0.max(cy1 as i64);
+        let x2 = (x0 + i64::from(dst_w)).min(cx2 as i64);
+        let y2 = (y0 + i64::from(dst_h)).min(cy2 as i64);
+        if x2 <= x1 || y2 <= y1 {
+            return;
+        }
+        let scale_x = src_w as f32 / dst_w as f32;
+        let scale_y = src_h as f32 / dst_h as f32;
+        let src_stride = src_w as usize * 4;
+        let sample_axis = |i: i64, origin: i64, scale: f32, max: u32| {
+            let center = ((i - origin) as f32 + 0.5) * scale - 0.5;
+            let clamped = center.clamp(0.0, (max - 1) as f32);
+            let lo = clamped.floor() as usize;
+            (lo, (lo + 1).min(max as usize - 1), clamped - lo as f32)
+        };
+        // the x sample coordinates are identical for every row: build them once
+        // instead of per pixel (this loop runs on multi-megapixel surfaces)
+        let columns: Vec<(usize, usize, f32)> = (x1..x2)
+            .map(|col| sample_axis(col, x0, scale_x, src_w))
+            .collect();
+        let stride = self.width as usize * 4;
+        let region = &mut self.pixels[y1 as usize * stride..y2 as usize * stride];
+        let paint_row = |row: i64, row_pixels: &mut [u8]| {
+            let (inset_l, inset_r) = corner_insets(radius, row - y0, i64::from(dst_h));
+            let rx1 = x1.max(x0 + inset_l);
+            let rx2 = x2.min(x0 + i64::from(dst_w) - inset_r);
+            if rx2 <= rx1 {
+                return;
+            }
+            let (sy0, sy1, fy) = sample_axis(row, y0, scale_y, src_h);
+            let dst_row =
+                &mut row_pixels[rx1 as usize * 4..rx1 as usize * 4 + ((rx2 - rx1) as usize) * 4];
+            let cols = &columns[(rx1 - x1) as usize..(rx2 - x1) as usize];
+            for (&(sx0, sx1, fx), dst) in cols.iter().zip(dst_row.chunks_exact_mut(4)) {
+                let texel = |sy: usize, sx: usize| &src[sy * src_stride + sx * 4..][..4];
+                let (tl, tr) = (texel(sy0, sx0), texel(sy0, sx1));
+                let (bl, br) = (texel(sy1, sx0), texel(sy1, sx1));
+                let mut sample = [0u8; 4];
+                for c in 0..4 {
+                    let top = tl[c] as f32 + (tr[c] as f32 - tl[c] as f32) * fx;
+                    let bottom = bl[c] as f32 + (br[c] as f32 - bl[c] as f32) * fx;
+                    sample[c] = (top + (bottom - top) * fy).round() as u8;
+                }
+                match sample[3] {
+                    255 => dst.copy_from_slice(&sample),
+                    0 => {}
+                    sa => {
+                        let inv = 255 - u32::from(sa);
+                        for (d, &sv) in dst.iter_mut().zip(&sample) {
+                            *d = (u32::from(sv) + (u32::from(*d) * inv + 127) / 255).min(255) as u8;
+                        }
+                    }
+                }
+            }
+        };
+        let rows = y2 - y1;
+        let area = rows * (x2 - x1);
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get().min(8))
+            .unwrap_or(1);
+        if area < 262_144 || threads < 2 {
+            for (i, row_pixels) in region.chunks_exact_mut(stride).enumerate() {
+                paint_row(y1 + i as i64, row_pixels);
+            }
+            return;
+        }
+        // rows are disjoint slices of the canvas, so bands can paint in parallel
+        let band_rows = (rows as usize).div_ceil(threads);
+        std::thread::scope(|scope| {
+            for (band, band_pixels) in region.chunks_mut(band_rows * stride).enumerate() {
+                let paint_row = &paint_row;
+                scope.spawn(move || {
+                    let first = y1 + (band * band_rows) as i64;
+                    for (i, row_pixels) in band_pixels.chunks_exact_mut(stride).enumerate() {
+                        paint_row(first + i as i64, row_pixels);
+                    }
+                });
+            }
+        });
+    }
+
+    pub(crate) fn fill_path(&mut self, path: &tiny_skia::Path, color: [u8; 4]) {
+        self.paint_path(path, color, None);
+    }
+
+    pub(crate) fn stroke_path(
+        &mut self,
+        path: &tiny_skia::Path,
+        color: [u8; 4],
+        stroke: tiny_skia::Stroke,
+    ) {
+        self.paint_path_stroked(path, color, Some(stroke));
+    }
+
     fn paint_path(&mut self, path: &tiny_skia::Path, color: [u8; 4], stroke_width: Option<f32>) {
+        self.paint_path_stroked(
+            path,
+            color,
+            stroke_width.map(|width| tiny_skia::Stroke {
+                width,
+                ..tiny_skia::Stroke::default()
+            }),
+        );
+    }
+
+    fn paint_path_stroked(
+        &mut self,
+        path: &tiny_skia::Path,
+        color: [u8; 4],
+        stroke: Option<tiny_skia::Stroke>,
+    ) {
         let (cx1, cy1, cx2, cy2) = self.clip_bounds();
         if cx1 == cx2 || cy1 == cy2 {
             return;
         }
-        let pad = stroke_width.unwrap_or(0.0) / 2.0 + 1.0;
+        let pad = stroke.as_ref().map_or(0.0, |s| s.width) / 2.0 + 1.0;
         let bounds = path.bounds();
         let inside = self.clip_stack.is_empty()
             || (bounds.left() - pad >= cx1 as f32
@@ -338,7 +536,7 @@ impl Canvas {
         let mut paint = tiny_skia::Paint::default();
         paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
         paint.anti_alias = true;
-        match stroke_width {
+        match stroke {
             None => pixmap.fill_path(
                 path,
                 &paint,
@@ -346,13 +544,10 @@ impl Canvas {
                 tiny_skia::Transform::identity(),
                 mask,
             ),
-            Some(width) => pixmap.stroke_path(
+            Some(stroke) => pixmap.stroke_path(
                 path,
                 &paint,
-                &tiny_skia::Stroke {
-                    width,
-                    ..tiny_skia::Stroke::default()
-                },
+                &stroke,
                 tiny_skia::Transform::identity(),
                 mask,
             ),

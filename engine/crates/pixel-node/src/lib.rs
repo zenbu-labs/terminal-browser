@@ -1,9 +1,12 @@
 mod diff;
 mod events;
 mod highlight;
+#[cfg(target_os = "macos")]
+mod iosurface;
 mod markdown;
 mod mend;
 mod ops;
+mod surface;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +24,7 @@ use serde_json::json;
 
 use crate::events::event_json;
 use crate::ops::{IdMap, apply_ops};
+use crate::surface::{SurfaceCommand, SurfaceMailbox, SurfaceSubmission};
 
 static UI_FONT_BYTES: &[u8] = include_bytes!("../../../examples/typing/assets/InterVariable.ttf");
 static MONO_FONT_BYTES: &[u8] =
@@ -70,6 +74,7 @@ pub struct PixelEngine {
     tx: Sender<String>,
     rx: Option<Receiver<String>>,
     waker: Waker,
+    surfaces: Arc<SurfaceMailbox>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -77,8 +82,7 @@ pub struct PixelEngine {
 #[napi]
 impl PixelEngine {
     #[napi(constructor)]
-    pub fn new() -> Result<Self> {
-        
+    pub fn new(tty: Option<String>) -> Result<Self> {
         let fonts = vec![
             load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES),
             load_font(SYSTEM_MONO_FONTS, MONO_FONT_BYTES),
@@ -87,6 +91,7 @@ impl PixelEngine {
             fonts,
             cell_metrics_font: 1,
             watch_resize: false,
+            tty,
         })
         .map_err(err)?;
         let waker = engine.waker().map_err(err)?;
@@ -109,6 +114,7 @@ impl PixelEngine {
             tx,
             rx: Some(rx),
             waker,
+            surfaces: Arc::new(SurfaceMailbox::default()),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
         })
@@ -130,6 +136,76 @@ impl PixelEngine {
     }
 
     #[napi]
+    pub fn update_surface(
+        &self,
+        id: u32,
+        bgra: Buffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let stride = width
+            .checked_mul(4)
+            .map(|bytes| bytes as usize)
+            .ok_or_else(|| Error::from_reason("surface dimensions overflow"))?;
+        self.surfaces
+            .submit(SurfaceSubmission {
+                id,
+                bgra: bgra.as_ref(),
+                width,
+                height,
+                stride,
+            })
+            .map_err(Error::from_reason)?;
+        self.waker.wake();
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[napi]
+    pub fn update_surface_texture(&self, id: u32, handle: Buffer) -> Result<()> {
+        let surface = iosurface::LockedSurface::from_handle(handle.as_ref())
+            .map_err(Error::from_reason)?;
+        self.surfaces
+            .submit(SurfaceSubmission {
+                id,
+                bgra: surface.pixels(),
+                width: surface.width,
+                height: surface.height,
+                stride: surface.stride,
+            })
+            .map_err(Error::from_reason)?;
+        self.waker.wake();
+        Ok(())
+    }
+
+    #[napi]
+    pub fn remove_surface(&self, id: u32) {
+        self.surfaces.remove(id);
+        self.waker.wake();
+    }
+
+    #[napi]
+    pub fn surface_stats(&self) -> String {
+        let (submitted, coalesced, presented, bytes) = self.surfaces.stats();
+        json!({
+            "submitted": submitted,
+            "coalesced": coalesced,
+            "presented": presented,
+            "bytes": bytes,
+        })
+        .to_string()
+    }
+
+    #[napi]
+    pub fn set_key_event_types(&mut self, enabled: bool) -> Result<()> {
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or_else(|| Error::from_reason("key reporting must be configured before start"))?;
+        engine.set_key_event_types(enabled).map_err(err)
+    }
+
+    #[napi]
     pub fn start(&mut self, callback: JsFunction) -> Result<()> {
         let dispatch_to_node: ThreadsafeFunction<String> = callback
             .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
@@ -144,6 +220,7 @@ impl PixelEngine {
             .take()
             .ok_or_else(|| Error::from_reason("engine already started"))?;
         let stop = self.stop.clone();
+        let surfaces = self.surfaces.clone();
         let cell = SendEngine(engine);
         self.thread = Some(std::thread::spawn(move || {
             let cell = cell;
@@ -174,6 +251,33 @@ impl PixelEngine {
                     for reply in outcome.replies {
                         dispatch_to_node.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
                     }
+                }
+                let mut surface_error = None;
+                for command in surfaces.take() {
+                    match command {
+                        SurfaceCommand::Frame(frame) => {
+                            let result = engine.draw_surface(
+                                frame.id,
+                                frame.width,
+                                frame.height,
+                                &frame.pixels,
+                            );
+                            surfaces.recycle(frame);
+                            if let Err(error) = result {
+                                surface_error = Some(error.to_string());
+                                break;
+                            }
+                        }
+                        SurfaceCommand::Remove(id) => {
+                            if let Err(error) = engine.delete_surface(id) {
+                                surface_error = Some(error.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+                if surface_error.is_some() {
+                    break surface_error;
                 }
                 for event in &events {
                     if let Some(json) = event_json(event, &engine, &ids) {

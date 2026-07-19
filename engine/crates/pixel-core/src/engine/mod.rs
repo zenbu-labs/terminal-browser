@@ -8,7 +8,7 @@ use compositor::Compositor;
 use crate::canvas::{Canvas, measure_text};
 use crate::logging;
 use crate::menu::{MenuClick, MenuController};
-use crate::native::NativeScroll;
+use crate::native::{NativeDelta, NativeScroll};
 use crate::paint::paint;
 use crate::profiler::{ProfileData, Profiler};
 use crate::scroll::ScrollProfile;
@@ -16,7 +16,8 @@ use crate::scroll::profiles::Smooth;
 use crate::selection::DocSelection;
 use crate::style::{Color, Edges};
 use crate::terminal::{
-    Event, KeyEvent, Mouse, MouseButton, MouseKind, Terminal, TerminalColors, Waker,
+    Event, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors,
+    Waker,
 };
 use crate::text_input::{Granularity, InputAction, InputReply};
 use crate::throttle::CpuThrottle;
@@ -24,6 +25,27 @@ use crate::tree::{HitTarget, NodeId, PxRect, Tree};
 
 const FALLBACK_CELL: (u32, u32) = (16, 32);
 const FRAME_POLL: Duration = Duration::from_millis(6);
+/// how recent pointer activity must be for a focus-in to count as a click
+const FOCUS_CLICK_HOVER_WINDOW: Duration = Duration::from_millis(1000);
+/// how long an unpaired native scroll gesture may wait for its SGR wheel tick
+const NATIVE_PAIR_WINDOW: Duration = Duration::from_millis(250);
+/// how recent pointer activity must be for a pinch to count as ours
+const PINCH_HOVER_WINDOW: Duration = Duration::from_millis(2000);
+
+#[derive(Clone, Copy, PartialEq)]
+enum NativeGesture {
+    Idle,
+    /// deltas buffering while the terminal has yet to confirm hover
+    Undecided { since: Instant },
+    Paired,
+    Dropped,
+}
+/// how long after focus-in to wait for the host to forward a real click
+const FOCUS_CLICK_GRACE: Duration = Duration::from_millis(75);
+// Maps NSEvent.magnification to wheel deltaY so a full pinch (~±1.5 summed)
+// lands near the deltas a fast ctrl+scroll would produce.
+// so an app computing zoom' = zoom * (1 - deltaY/100) applies pinch as 1 + magnification
+const PINCH_WHEEL_SCALE: f32 = 100.0;
 
 /**
  * meh this is not great, the mime type we prefer in the clipboard
@@ -150,6 +172,22 @@ fn key_label(key: &KeyEvent) -> String {
         crate::terminal::Key::Right => "right",
         crate::terminal::Key::Home => "home",
         crate::terminal::Key::End => "end",
+        crate::terminal::Key::Insert => "insert",
+        crate::terminal::Key::PageUp => "pageup",
+        crate::terminal::Key::PageDown => "pagedown",
+        crate::terminal::Key::Function(number) => {
+            label.push('f');
+            label.push_str(&number.to_string());
+            return label;
+        }
+        crate::terminal::Key::LeftShift => "leftshift",
+        crate::terminal::Key::LeftControl => "leftcontrol",
+        crate::terminal::Key::LeftAlt => "leftalt",
+        crate::terminal::Key::LeftSuper => "leftsuper",
+        crate::terminal::Key::RightShift => "rightshift",
+        crate::terminal::Key::RightControl => "rightcontrol",
+        crate::terminal::Key::RightAlt => "rightalt",
+        crate::terminal::Key::RightSuper => "rightsuper",
         crate::terminal::Key::Enter => "enter",
         crate::terminal::Key::Backspace => "backspace",
         crate::terminal::Key::Delete => "delete",
@@ -185,6 +223,18 @@ fn capture_matches(name: &str, key: &KeyEvent) -> bool {
         Key::Right => name == "right",
         Key::Home => name == "home",
         Key::End => name == "end",
+        Key::Insert => name == "insert",
+        Key::PageUp => name == "pageup",
+        Key::PageDown => name == "pagedown",
+        Key::Function(number) => name == format!("f{number}"),
+        Key::LeftShift => name == "leftshift",
+        Key::LeftControl => name == "leftcontrol",
+        Key::LeftAlt => name == "leftalt",
+        Key::LeftSuper => name == "leftsuper",
+        Key::RightShift => name == "rightshift",
+        Key::RightControl => name == "rightcontrol",
+        Key::RightAlt => name == "rightalt",
+        Key::RightSuper => name == "rightsuper",
         Key::Enter => name == "enter",
         Key::Backspace => name == "backspace",
         Key::Delete => name == "delete",
@@ -217,6 +267,8 @@ pub struct EngineConfig {
     pub fonts: Vec<fontdue::Font>,
     pub cell_metrics_font: usize,
     pub watch_resize: bool,
+    /// drive this tty instead of the process's stdio (daemon panes)
+    pub tty: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -318,6 +370,9 @@ pub enum EngineEvent {
         view: usize,
         text: String,
     },
+    Focus {
+        focused: bool,
+    },
     PasteImage {
         view: usize,
         node: NodeId,
@@ -340,6 +395,24 @@ pub enum EngineEvent {
         delta_x: f32,
         delta_y: f32,
         precise: bool,
+        mods: Mods,
+    },
+    MouseMove {
+        view: usize,
+        node: NodeId,
+        key: Option<String>,
+        x: f32,
+        y: f32,
+    },
+    Pointer {
+        view: usize,
+        node: NodeId,
+        key: Option<String>,
+        kind: MouseKind,
+        button: MouseButton,
+        mods: crate::terminal::Mods,
+        x: f32,
+        y: f32,
     },
     HoverEnter {
         view: usize,
@@ -358,6 +431,7 @@ pub enum EngineEvent {
         phase: DragPhase,
         x: f32,
         y: f32,
+        mods: Mods,
     },
     Selection {
         view: usize,
@@ -408,6 +482,23 @@ pub struct Engine {
     term_focused: bool,
     native: Option<NativeScroll>,
     use_native: bool,
+    // When the helper last delivered a scroll. SGR wheel ticks are only
+    // suppressed while the helper is demonstrably alive, so a broken helper
+    // (permissions, crash) degrades to tick-based scrolling instead of none.
+    last_native_scroll: Option<Instant>,
+    // Native scroll pairing: the helper reports every scroll in the system,
+    // but the terminal routes SGR wheel ticks by hover — so a tick on our tty
+    // proves the gesture is ours. Deltas buffer until the pairing tick
+    // arrives; a gesture that never pairs is someone else's and is dropped.
+    native_gesture: NativeGesture,
+    native_buffer: Vec<(f32, f32)>,
+    native_ready: Vec<(f32, f32)>,
+    pending_zoom: f32,
+    // When the terminal last reported a wheel tick at us. The terminal only
+    // sends these while the pointer is over our pane, so this lets native
+    // deltas through for an unfocused pane without reacting to scrolls that
+    // belong to other panes or apps.
+    last_term_wheel: Option<Instant>,
     profile: &'static dyn ScrollProfile,
     default_menu: bool,
     menu: MenuController,
@@ -419,6 +510,8 @@ pub struct Engine {
     emit_logs: bool,
     log_cursor: u64,
     drag: Option<(usize, DragTarget)>,
+    pointer_capture: Option<(usize, NodeId)>,
+    key_passthrough: bool,
     last_selection: Option<(usize, NodeId, crate::selection::DocPos, crate::selection::DocPos, u32)>,
     bar_hover: Option<(usize, NodeId)>,
     bar_drag: Option<(usize, NodeId, f32)>,
@@ -430,6 +523,11 @@ pub struct Engine {
     last_scroll_mark: Option<Instant>,
     pending_pastes: Vec<(u64, usize, NodeId)>,
     osc_paste: Option<OscPaste>,
+    /// synthetic click scheduled by a focus-in that arrived while the pointer
+    /// was over us: terminals consume the click that focuses an unfocused
+    /// split, so the app would otherwise need a second click
+    focus_click: Option<(Instant, (f32, f32))>,
+    last_pointer_activity: Option<Instant>,
     rich_clipboard: Option<RichClip>,
     rich_token: u64,
     next_pasted_mark: u64,
@@ -442,7 +540,10 @@ pub struct Engine {
 impl Engine {
     pub fn new(config: EngineConfig) -> io::Result<Self> {
         assert!(!config.fonts.is_empty());
-        let mut term = Terminal::new()?;
+        let mut term = match &config.tty {
+            Some(path) => Terminal::open(path)?,
+            None => Terminal::new()?,
+        };
         if config.watch_resize {
             term.watch_resize()?;
         }
@@ -486,6 +587,12 @@ impl Engine {
             term_focused: true,
             native,
             use_native,
+            last_native_scroll: None,
+            native_gesture: NativeGesture::Idle,
+            native_buffer: Vec::new(),
+            native_ready: Vec::new(),
+            pending_zoom: 1.0,
+            last_term_wheel: None,
             profile: &DEFAULT_PROFILE,
             default_menu: false,
             menu: MenuController::default(),
@@ -497,6 +604,8 @@ impl Engine {
             emit_logs: false,
             log_cursor: 0,
             drag: None,
+            pointer_capture: None,
+            key_passthrough: false,
             last_selection: None,
             bar_hover: None,
             bar_drag: None,
@@ -508,6 +617,8 @@ impl Engine {
             last_scroll_mark: None,
             pending_pastes: Vec::new(),
             osc_paste: None,
+            focus_click: None,
+            last_pointer_activity: None,
             rich_clipboard: None,
             rich_token: 0,
             next_pasted_mark: 1 << 48,
@@ -674,7 +785,11 @@ impl Engine {
     }
 
     pub fn native_scroll_active(&self) -> bool {
-        self.use_native && self.native.is_some()
+        self.use_native
+            && self.native.is_some()
+            && self
+                .last_native_scroll
+                .is_some_and(|at| at.elapsed() < Duration::from_millis(1500))
     }
 
     pub fn set_native_scroll(&mut self, enabled: bool) {
@@ -683,6 +798,10 @@ impl Engine {
 
     pub fn waker(&mut self) -> io::Result<Waker> {
         self.term.waker()
+    }
+
+    pub fn set_key_event_types(&mut self, enabled: bool) -> io::Result<()> {
+        self.term.set_key_event_types(enabled)
     }
 
     pub fn profiler_toggle(&mut self) -> io::Result<Option<std::path::PathBuf>> {
@@ -737,6 +856,43 @@ impl Engine {
         self.term.set_clipboard(text)
     }
 
+    pub fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {
+        self.term.set_pointer_shape(shape)
+    }
+
+    pub fn draw_surface(
+        &mut self,
+        surface: u32,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> io::Result<usize> {
+        if width == 0 || height == 0 || rgba.len() != width as usize * height as usize * 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "surface dimensions do not match its pixels",
+            ));
+        }
+        crate::surfaces::set(surface, width, height, rgba);
+        self.mark_surface_views(surface);
+        Ok(rgba.len())
+    }
+
+    pub fn delete_surface(&mut self, surface: u32) -> io::Result<()> {
+        crate::surfaces::remove(surface);
+        self.mark_surface_views(surface);
+        Ok(())
+    }
+
+    fn mark_surface_views(&mut self, surface: u32) {
+        for view in self.comp.active_views() {
+            let tree = &mut self.comp.views[view].tree;
+            if tree.uses_surface(surface) {
+                tree.mark_paint();
+            }
+        }
+    }
+
     pub fn flush_view_layout(&mut self, view: usize) {
         let base_px = self.base_px;
         let fonts = &self.fonts;
@@ -755,6 +911,9 @@ impl Engine {
             }
         }
         self.comp.views[view].tree.set_focus(id);
+        if id.is_some() {
+            self.key_passthrough = false;
+        }
         self.focus_view = view;
     }
 
@@ -793,6 +952,17 @@ impl Engine {
         self.reveal = true;
         let mut events = Vec::new();
         self.push_change(view, id, ChangeSource::Edit, &mut events);
+        self.pending.append(&mut events);
+    }
+
+    pub fn select_all_input(&mut self, view: usize, id: NodeId) {
+        let Some(input) = self.comp.views[view].tree.input_mut(id) else {
+            return;
+        };
+        input.select_all();
+        self.comp.views[view].tree.mark_paint();
+        let mut events = Vec::new();
+        self.push_caret(view, id, &mut events);
         self.pending.append(&mut events);
     }
 
@@ -862,10 +1032,34 @@ impl Engine {
             }
             None => first_wait,
         };
+        let first_wait = match &self.focus_click {
+            Some((deadline, _)) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                Some(first_wait.map_or(remaining, |w| w.min(remaining)))
+            }
+            None => first_wait,
+        };
         let mut event = self.term.poll_event(first_wait)?;
         while let Some(current) = event {
             self.handle_event(current, &mut out)?;
             event = self.term.poll_event(Some(Duration::ZERO))?;
+        }
+        if let Some((deadline, point)) = self.focus_click
+            && Instant::now() >= deadline
+        {
+            self.focus_click = None;
+            for kind in [MouseKind::Down, MouseKind::Up] {
+                self.handle_mouse(
+                    Mouse {
+                        kind,
+                        button: MouseButton::Left,
+                        mods: Mods::default(),
+                        x: point.0 as u32,
+                        y: point.1 as u32,
+                    },
+                    &mut out,
+                )?;
+            }
         }
         self.check_resize(&mut out)?;
         self.drain_native(&mut out);
@@ -1090,6 +1284,12 @@ impl Engine {
                             self.finish_reply(view, focus, InputReply::Edited, ChangeSource::Paste, out)?;
                         }
                     }
+                } else if let Some(image) = crate::clipboard_image::image_path_from_paste(&text) {
+                    // No focused input: hand the image to the app at the view
+                    // root so canvas-style apps can receive pastes.
+                    let view = self.active_view;
+                    let root = self.comp.views[view].tree.root();
+                    self.push_paste_image(view, root, image, out);
                 } else {
                     out.push(EngineEvent::Paste {
                         view: self.active_view,
@@ -1097,7 +1297,26 @@ impl Engine {
                     });
                 }
             }
-            Event::Focus(focused) => self.term_focused = focused,
+            Event::Focus(focused) => {
+                let gained = focused && !self.term_focused;
+                self.term_focused = focused;
+                // clicking an unfocused split focuses it but the terminal
+                // consumes that click (ghostty suppresses the release too), so
+                // a focus-in right after pointer activity means the user
+                // clicked us and lost the click. Schedule a synthetic one; a
+                // real press/release in the grace window cancels it for hosts
+                // that do forward the click.
+                if !focused {
+                    self.focus_click = None;
+                } else if gained
+                    && let Some(at) = self.last_pointer_activity
+                    && at.elapsed() <= FOCUS_CLICK_HOVER_WINDOW
+                    && let Some(point) = self.cursor
+                {
+                    self.focus_click = Some((Instant::now() + FOCUS_CLICK_GRACE, point));
+                }
+                out.push(EngineEvent::Focus { focused });
+            }
             Event::WindowSize(ws) => self.apply_window(&ws)?,
             Event::Mouse(mouse) => self.handle_mouse(mouse, out)?,
             Event::ClipboardData { items, ok } => self.handle_clipboard_data(items, ok),
@@ -1192,6 +1411,20 @@ impl Engine {
         if crate::profiler::is_recording() {
             crate::profiler::mark("key", self.active_view as u32, key_label(&key));
         }
+        if self.key_passthrough {
+            out.push(EngineEvent::Key {
+                view: self.active_view,
+                event: key,
+            });
+            return Ok(());
+        }
+        if key.kind == KeyKind::Release {
+            out.push(EngineEvent::Key {
+                view: self.active_view,
+                event: key,
+            });
+            return Ok(());
+        }
         if key.key == crate::terminal::Key::Escape {
             if self.menu.is_open() {
                 self.close_menu();
@@ -1229,7 +1462,8 @@ impl Engine {
                     .tree
                     .input_mut(focus)
                     .expect("checked above");
-                let typed = matches!(key.key, crate::terminal::Key::Char(_))
+                let typed = (key.text.is_some()
+                    || matches!(key.key, crate::terminal::Key::Char(_)))
                     && !key.mods.ctrl
                     && !key.mods.sup
                     && !key.mods.alt;
@@ -1238,7 +1472,7 @@ impl Engine {
                 } else {
                     ChangeSource::Edit
                 };
-                let reply = input.handle_key(key, font, resolved.px, wrap);
+                let reply = input.handle_key(key.clone(), font, resolved.px, wrap);
 
                 if reply == InputReply::None {
                     if !self.handle_doc_key(&key)? {
@@ -1354,6 +1588,49 @@ impl Engine {
 
     fn handle_mouse(&mut self, mouse: Mouse, out: &mut Vec<EngineEvent>) -> io::Result<()> {
         let point = (mouse.x as f32, mouse.y as f32);
+        self.cursor = Some(point);
+        self.last_pointer_activity = Some(Instant::now());
+        if matches!(mouse.kind, MouseKind::Down | MouseKind::Up) {
+            self.focus_click = None;
+        }
+        if matches!(
+            mouse.kind,
+            MouseKind::ScrollUp
+                | MouseKind::ScrollDown
+                | MouseKind::ScrollLeft
+                | MouseKind::ScrollRight
+        ) {
+            self.last_term_wheel = Some(Instant::now());
+            if mouse.mods == Mods::default() && self.use_native && self.native.is_some() {
+                self.ingest_native();
+                match self.native_gesture {
+                    NativeGesture::Undecided { .. } => {
+                        // the buffered deltas cover the same finger travel as
+                        // this tick, so the tick is signal only — flushing
+                        // them scrolls without losing the gesture start
+                        self.native_gesture = NativeGesture::Paired;
+                        self.native_ready.append(&mut self.native_buffer);
+                        return Ok(());
+                    }
+                    NativeGesture::Paired => return Ok(()),
+                    NativeGesture::Dropped => {
+                        // gesture was slower than the pair window and its
+                        // buffer is gone: let this tick scroll a cell to
+                        // cover it, then ride the native stream
+                        self.native_gesture = NativeGesture::Paired;
+                    }
+                    NativeGesture::Idle => {}
+                }
+            }
+        }
+        if matches!(mouse.kind, MouseKind::Down | MouseKind::Up | MouseKind::Move)
+            && self.forward_pointer(mouse, point, out)
+        {
+            return Ok(());
+        }
+        if mouse.kind == MouseKind::Down {
+            self.key_passthrough = false;
+        }
         match mouse.kind {
             MouseKind::Down if mouse.button == MouseButton::Left => {
                 self.mark_pointer("click", point);
@@ -1395,7 +1672,20 @@ impl Engine {
                 if self.begin_bar_drag(view, local) {
                     return Ok(());
                 }
-                if let Some(id) = self.comp.views[view].tree.hit_drag(local.0, local.1) {
+                // A clickable or input painted above the drag surface wins the
+                // press — e.g. a toolbar floating over a drag-subscribed canvas.
+                let drag_node = self.comp.views[view].tree.hit_drag(local.0, local.1).filter(|&id| {
+                    let tree = &self.comp.views[view].tree;
+                    let drag_order = tree.paint_order_of(id).unwrap_or(0);
+                    let covered = match tree.hit_target(local.0, local.1) {
+                        Some(HitTarget::Input(t)) | Some(HitTarget::Click(t)) => {
+                            tree.paint_order_of(t).unwrap_or(0) > drag_order
+                        }
+                        _ => false,
+                    };
+                    !covered
+                });
+                if let Some(id) = drag_node {
                     self.drag = Some((view, DragTarget::Node(id)));
                     out.push(EngineEvent::Drag {
                         view,
@@ -1404,6 +1694,7 @@ impl Engine {
                         phase: DragPhase::Start,
                         x: local.0,
                         y: local.1,
+                        mods: mouse.mods,
                     });
                     return Ok(());
                 }
@@ -1460,7 +1751,6 @@ impl Engine {
                 });
             }
             MouseKind::Move => {
-                self.cursor = Some(point);
                 if self.comp.divider_drag {
                     let resized = self.comp.drag_divider(point.0);
                     self.push_resizes(resized);
@@ -1502,26 +1792,15 @@ impl Engine {
                     }
                     self.hover = hover;
                 }
-                let hover_target = self.comp.views[view]
-                    .tree
-                    .hit_hover(local.0, local.1)
-                    .map(|id| (view, id));
-                if hover_target != self.hover_target {
-                    if let Some((v, node)) = self.hover_target {
-                        out.push(EngineEvent::HoverLeave {
-                            view: v,
-                            node,
-                            key: self.comp.views[v].tree.key_of(node).map(str::to_string),
-                        });
-                    }
-                    if let Some((v, node)) = hover_target {
-                        out.push(EngineEvent::HoverEnter {
-                            view: v,
-                            node,
-                            key: self.comp.views[v].tree.key_of(node).map(str::to_string),
-                        });
-                    }
-                    self.hover_target = hover_target;
+                self.update_hover_target(view, local, out);
+                if let Some(id) = self.comp.views[view].tree.hit_move(local.0, local.1) {
+                    out.push(EngineEvent::MouseMove {
+                        view,
+                        node: id,
+                        key: self.comp.views[view].tree.key_of(id).map(str::to_string),
+                        x: local.0,
+                        y: local.1,
+                    });
                 }
                 if let Some((view, target)) = self.drag {
                     let local = self.comp.to_local(view, point);
@@ -1556,6 +1835,7 @@ impl Engine {
                                 phase: DragPhase::Move,
                                 x: local.0,
                                 y: local.1,
+                                mods: mouse.mods,
                             });
                         }
                     }
@@ -1585,6 +1865,7 @@ impl Engine {
                                 phase: DragPhase::End,
                                 x: local.0,
                                 y: local.1,
+                                mods: mouse.mods,
                             });
                         }
                     }
@@ -1598,9 +1879,13 @@ impl Engine {
                 } else {
                     self.cell.0 as f32
                 };
-                self.emit_wheel(view, local, delta, 0.0, false, out);
+                self.emit_wheel(view, local, delta, 0.0, false, mouse.mods, out);
             }
-            MouseKind::ScrollUp | MouseKind::ScrollDown if !self.native_scroll_active() => {
+            // Reaching here means the tick was not consumed as pairing
+            // signal: no native gesture (headless, synthetic input) or a
+            // modified scroll (e.g. ctrl+wheel zoom), which always rides the
+            // terminal events — the helper cannot report modifiers.
+            MouseKind::ScrollUp | MouseKind::ScrollDown => {
                 let view = self.comp.view_at(point.0);
                 self.mark_scroll(view);
                 let local = self.comp.to_local(view, point);
@@ -1609,7 +1894,7 @@ impl Engine {
                 } else {
                     self.cell.1 as f32
                 };
-                if self.emit_wheel(view, local, 0.0, delta, false, out) {
+                if self.emit_wheel(view, local, 0.0, delta, false, mouse.mods, out) {
                     return Ok(());
                 }
                 if let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) {
@@ -1626,6 +1911,104 @@ impl Engine {
         Ok(())
     }
 
+    fn update_hover_target(
+        &mut self,
+        view: usize,
+        local: (f32, f32),
+        out: &mut Vec<EngineEvent>,
+    ) {
+        let hover_target = self.comp.views[view]
+            .tree
+            .hit_hover(local.0, local.1)
+            .map(|id| (view, id));
+        if hover_target == self.hover_target {
+            return;
+        }
+        if let Some((v, node)) = self.hover_target {
+            out.push(EngineEvent::HoverLeave {
+                view: v,
+                node,
+                key: self.comp.views[v].tree.key_of(node).map(str::to_string),
+            });
+        }
+        if let Some((v, node)) = hover_target {
+            out.push(EngineEvent::HoverEnter {
+                view: v,
+                node,
+                key: self.comp.views[v].tree.key_of(node).map(str::to_string),
+            });
+        }
+        self.hover_target = hover_target;
+    }
+
+    fn forward_pointer(
+        &mut self,
+        mouse: Mouse,
+        point: (f32, f32),
+        out: &mut Vec<EngineEvent>,
+    ) -> bool {
+        let target = match mouse.kind {
+            MouseKind::Down => {
+                let view = self.comp.view_at(point.0);
+                let local = self.comp.to_local(view, point);
+                let Some(node) = self.comp.views[view].tree.hit_pointer(local.0, local.1) else {
+                    return false;
+                };
+                self.active_view = view;
+                self.set_focus(view, None);
+                self.key_passthrough = true;
+                self.pointer_capture = Some((view, node));
+                (view, node)
+            }
+            MouseKind::Move => match self.pointer_capture {
+                Some(target) => target,
+                None => {
+                    let view = self.comp.view_at(point.0);
+                    let local = self.comp.to_local(view, point);
+                    // pointer nodes swallow moves before the regular hover pass,
+                    // so keep enter/leave tracking alive while over them
+                    self.update_hover_target(view, local, out);
+                    let Some(node) = self.comp.views[view].tree.hit_pointer(local.0, local.1)
+                    else {
+                        return false;
+                    };
+                    (view, node)
+                }
+            },
+            MouseKind::Up => match self.pointer_capture.take() {
+                Some(target) => target,
+                None => {
+                    let view = self.comp.view_at(point.0);
+                    let local = self.comp.to_local(view, point);
+                    let Some(node) = self.comp.views[view].tree.hit_pointer(local.0, local.1)
+                    else {
+                        return false;
+                    };
+                    (view, node)
+                }
+            },
+            _ => return false,
+        };
+        let (view, node) = target;
+        let local = self.comp.to_local(view, point);
+        let rect = self.comp.views[view]
+            .tree
+            .rect(node)
+            .unwrap_or(PxRect::ZERO);
+        out.push(EngineEvent::Pointer {
+            view,
+            node,
+            key: self.comp.views[view].tree.key_of(node).map(str::to_string),
+            kind: mouse.kind,
+            button: mouse.button,
+            mods: mouse.mods,
+            x: local.0 - rect.x,
+            y: local.1 - rect.y,
+        });
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn emit_wheel(
         &mut self,
         view: usize,
@@ -1633,6 +2016,7 @@ impl Engine {
         delta_x: f32,
         delta_y: f32,
         precise: bool,
+        mods: Mods,
         out: &mut Vec<EngineEvent>,
     ) -> bool {
         let tree = &self.comp.views[view].tree;
@@ -1649,6 +2033,7 @@ impl Engine {
             delta_x,
             delta_y,
             precise,
+            mods,
         });
         true
     }
@@ -1845,6 +2230,14 @@ impl Engine {
             width: image.width,
             height: image.height,
         });
+    }
+
+    // Reads any image on the clipboard and replies with a PasteImage event
+    // targeting the view root — for apps that paste without a focused input.
+    pub fn request_clipboard_image(&mut self, view: usize) {
+        let root = self.comp.views[view].tree.root();
+        let seq = crate::image_cache::queue_clipboard_read();
+        self.pending_pastes.push((seq, view, root));
     }
 
     pub fn insert_input_mark(&mut self, view: usize, id: NodeId, mark: u64, offset: Option<usize>) {
@@ -2168,55 +2561,140 @@ impl Engine {
         }
     }
 
-    fn drain_native(&mut self, out: &mut Vec<EngineEvent>) {
+    /// Pull helper events into the gesture state machine: paired gestures
+    /// queue for application, unpaired ones buffer until a wheel tick proves
+    /// the pointer is over this pane (or the pair window expires).
+    fn ingest_native(&mut self) {
         let Some(native) = &mut self.native else {
             return;
         };
         let deltas = native.drain();
         let scale = native.scale;
-        if !self.use_native || !self.term_focused || deltas.is_empty() {
+        if native.dead() {
+            logging::warn("engine", "native scroll helper exited; falling back to wheel ticks");
+            self.native = None;
+            self.native_gesture = NativeGesture::Idle;
+            self.native_buffer.clear();
             return;
         }
-        let Some(cursor) = self.cursor else {
+        if !self.use_native {
             return;
-        };
+        }
+        for delta in deltas {
+            match delta {
+                NativeDelta::Zoom { magnification } => {
+                    self.pending_zoom *= 1.0 + magnification;
+                }
+                NativeDelta::Scroll {
+                    delta_x,
+                    delta_y,
+                    precise,
+                    phase,
+                    ..
+                } => {
+                    // notch wheels carry no sub-cell information; their SGR
+                    // ticks scroll with identical resolution on their own
+                    if !precise {
+                        continue;
+                    }
+                    if phase & crate::native::PHASE_BEGAN != 0 {
+                        self.native_buffer.clear();
+                        self.native_gesture = NativeGesture::Undecided {
+                            since: Instant::now(),
+                        };
+                    }
+                    let px = (delta_x * scale, delta_y * scale);
+                    match self.native_gesture {
+                        NativeGesture::Idle => {
+                            self.native_gesture = NativeGesture::Undecided {
+                                since: Instant::now(),
+                            };
+                            self.native_buffer.push(px);
+                        }
+                        NativeGesture::Undecided { .. } => self.native_buffer.push(px),
+                        NativeGesture::Paired => self.native_ready.push(px),
+                        NativeGesture::Dropped => {}
+                    }
+                }
+            }
+        }
+        if let NativeGesture::Undecided { since } = self.native_gesture
+            && since.elapsed() > NATIVE_PAIR_WINDOW
+        {
+            self.native_gesture = NativeGesture::Dropped;
+            self.native_buffer.clear();
+        }
+    }
+
+    fn drain_native(&mut self, out: &mut Vec<EngineEvent>) {
+        self.ingest_native();
+        let zoom = std::mem::replace(&mut self.pending_zoom, 1.0);
+        let scrolls = std::mem::take(&mut self.native_ready);
+        // Pinch has no terminal-side event to pair with (terminals do not
+        // report it), so it settles for recent pointer activity over this
+        // pane as hover evidence.
+        let pinch_here = self
+            .last_pointer_activity
+            .is_some_and(|at| at.elapsed() < PINCH_HOVER_WINDOW);
+        let magnification = zoom - 1.0;
+        if (magnification == 0.0 || !pinch_here) && scrolls.is_empty() {
+            return;
+        }
+        // Before any mouse motion has been seen, anchor at the window center —
+        // scrolling right after launch must still work.
+        let cursor = self.cursor.unwrap_or((
+            self.comp.window.0 as f32 / 2.0,
+            self.comp.window.1 as f32 / 2.0,
+        ));
         let view = self.comp.view_at(cursor.0);
         self.mark_scroll(view);
         let local = self.comp.to_local(view, cursor);
+        // Pinch arrives as a ctrl+precise wheel — the web convention for
+        // pinch-zoom — so wheel subscribers get zoom-at-cursor for free.
+        if magnification != 0.0 && pinch_here {
+            self.emit_wheel(
+                view,
+                local,
+                0.0,
+                -magnification * PINCH_WHEEL_SCALE,
+                true,
+                Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+                out,
+            );
+        }
+        if scrolls.is_empty() {
+            return;
+        }
+        if self.last_native_scroll.is_none() {
+            logging::info("engine", "native scroll delivering");
+        }
+        self.last_native_scroll = Some(Instant::now());
         if self.comp.views[view].tree.hit_wheel(local.0, local.1).is_some() {
-            let cell_h = self.cell.1 as f32;
+            let mut delta_x = 0.0;
             let mut delta_y = 0.0;
-            let mut precise = false;
-            for delta in &deltas {
-                if delta.precise {
-                    delta_y -= delta.delta_y * scale;
-                    precise = true;
-                } else {
-                    delta_y -= delta.delta_y * cell_h;
-                }
+            for (dx, dy) in &scrolls {
+                delta_x -= dx;
+                delta_y -= dy;
             }
-            self.emit_wheel(view, local, 0.0, delta_y, precise, out);
+            self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out);
             return;
         }
         let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) else {
             return;
         };
         let (node, max) = (area.node, area.max_scroll());
-        let cell_h = self.cell.1 as f32;
-        let profile = self.profile;
         let mut moved = false;
         if let Some(state) = self.comp.views[view].tree.scroll_state_mut(node) {
-            for delta in deltas {
-                if delta.precise {
-                    let next = (state.position - delta.delta_y * scale).clamp(0.0, max);
-                    if next != state.position {
-                        state.position = next;
-                        moved = true;
-                    }
-                    state.set_target(next);
-                } else {
-                    state.tick(profile, -delta.delta_y * cell_h, max);
+            for (_, dy) in scrolls {
+                let next = (state.position - dy).clamp(0.0, max);
+                if next != state.position {
+                    state.position = next;
+                    moved = true;
                 }
+                state.set_target(next);
             }
         }
         if moved {

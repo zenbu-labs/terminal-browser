@@ -16,6 +16,7 @@ struct PaintStats {
     glyphs: f64,
     selection: f64,
     bars: f64,
+    shapes: f64,
     nodes: u64,
     rect_count: u64,
     glyph_count: u64,
@@ -31,6 +32,7 @@ impl PaintStats {
             ("paint.glyphs", self.glyphs, Some(self.glyph_count)),
             ("paint.selection", self.selection, None),
             ("paint.scrollbars", self.bars, None),
+            ("paint.shapes", self.shapes, None),
         ];
         for (name, dur, arg) in buckets {
             if dur <= 0.0 {
@@ -158,6 +160,22 @@ fn paint_node(
             }
         });
     }
+    if let Some(surface) = node.surface {
+        timed(stats.as_mut().map(|s| &mut s.images), || {
+            crate::surfaces::with(surface, |s| {
+                canvas.blit_scaled_rgba_rounded(
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                    &s.pixels,
+                    s.width,
+                    s.height,
+                    node.style.corner_radius,
+                );
+            });
+        });
+    }
     if let Some(image) = &node.image {
         timed(stats.as_mut().map(|s| &mut s.images), || {
             match crate::image_cache::status(&image.src, &image.equal_to) {
@@ -196,7 +214,8 @@ fn paint_node(
         });
     }
 
-    let clips_children = node.style.overflow != Overflow::Visible;
+    // A scene always clips: its world content has no relation to the box's bounds.
+    let clips_children = node.style.overflow != Overflow::Visible || node.scene.is_some();
     if clips_children {
         canvas.push_clip(rect.x, rect.y, rect.w, rect.h);
     }
@@ -235,6 +254,35 @@ fn paint_node(
                 wrap_lines(text, font, px, wrap, marks)
             });
             let line_h = line_metrics.new_line_size;
+            let focused = tree.focus() == Some(id);
+            let caret_line = node.input.as_ref().and_then(|state| {
+                (state.gutter.is_some() || state.active_line.is_some()).then(|| {
+                    let cursor = state.input.cursor();
+                    crate::selection::line_start(text, cursor)
+                        ..crate::selection::line_end(text, cursor)
+                })
+            });
+            if let Some(state) = &node.input
+                && let (Some(active), Some(logical)) = (state.active_line, &caret_line)
+                && focused
+                && state.input.selection().is_none()
+            {
+                timed(stats.as_mut().map(|s| &mut s.rects), || {
+                    for (i, line) in lines.iter().enumerate() {
+                        if line.start > logical.end {
+                            break;
+                        }
+                        if line.start < logical.start {
+                            continue;
+                        }
+                        let top = origin.1 + line_h * i as f32;
+                        if top + line_h < visible.y || top > visible.y + visible.h {
+                            continue;
+                        }
+                        canvas.fill_rounded_rect(rect.x, top, rect.w, line_h, [0.0; 4], active);
+                    }
+                });
+            }
             if node.spans.iter().any(|s| s.background.is_some()) {
                 timed(stats.as_mut().map(|s| &mut s.rects), || {
                     for (i, line) in lines.iter().enumerate() {
@@ -351,6 +399,45 @@ fn paint_node(
                     }
                 }
             });
+            if let Some(state) = &node.input
+                && let Some(gutter) = state.gutter
+            {
+                timed(stats.as_mut().map(|s| &mut s.glyphs), || {
+                    let gutter_right = origin.0 - px * 0.75;
+                    let mut logical = 0usize;
+                    for (i, line) in lines.iter().enumerate() {
+                        let starts_logical = line.start == 0
+                            || text.as_bytes().get(line.start - 1) == Some(&b'\n');
+                        if starts_logical && i > 0 {
+                            logical += 1;
+                        }
+                        if !starts_logical {
+                            continue;
+                        }
+                        let top = origin.1 + line_h * i as f32;
+                        if top + line_h < visible.y {
+                            continue;
+                        }
+                        if top > visible.y + visible.h {
+                            break;
+                        }
+                        let active = focused
+                            && caret_line
+                                .as_ref()
+                                .is_some_and(|r| line.start >= r.start && line.start <= r.end);
+                        let label = (logical + 1).to_string();
+                        let w = measure_text(font, &label, px);
+                        canvas.draw_text(
+                            font,
+                            &label,
+                            (gutter_right - w) as i32,
+                            (top + line_metrics.ascent) as i32,
+                            px,
+                            if active { gutter.active_color } else { gutter.color },
+                        );
+                    }
+                });
+            }
             if let Some(stats) = stats.as_mut() {
                 for (i, line) in lines.iter().enumerate() {
                     let top = origin.1 + line_h * i as f32;
@@ -386,6 +473,14 @@ fn paint_node(
         }) {
             continue;
         }
+        if tree.get(child).is_some_and(|n| n.shape.is_some()) {
+            if let Some(camera) = node.scene {
+                timed(stats.as_mut().map(|s| &mut s.shapes), || {
+                    paint_shape(tree, child, canvas, fonts, camera, rect);
+                });
+            }
+            continue;
+        }
         paint_node(
             tree,
             child,
@@ -405,6 +500,75 @@ fn paint_node(
     }
 }
 
+
+fn paint_shape(
+    tree: &Tree,
+    id: NodeId,
+    canvas: &mut Canvas,
+    fonts: &[fontdue::Font],
+    camera: crate::scene::Camera,
+    scene_rect: PxRect,
+) {
+    let Some(node) = tree.get(id) else {
+        return;
+    };
+    if node.hidden || node.visible.w <= 0.0 || node.visible.h <= 0.0 {
+        return;
+    }
+    let Some(props) = &node.shape else {
+        return;
+    };
+    let origin = (scene_rect.x, scene_rect.y);
+    match &props.shape {
+        crate::scene::Shape::Text { x, y } => {
+            let Some(text) = &node.text else {
+                return;
+            };
+            let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
+            let px = node.resolved.px * camera.zoom;
+            let Some(metrics) = font.horizontal_line_metrics(px) else {
+                return;
+            };
+            let (sx, sy) = camera.to_screen(origin, *x, *y);
+            let color = props.fill.unwrap_or(node.resolved.color);
+            for (i, line) in text.split('\n').enumerate() {
+                let baseline = sy + metrics.new_line_size * i as f32 + metrics.ascent;
+                canvas.draw_text(font, line, sx as i32, baseline as i32, px, color);
+            }
+        }
+        crate::scene::Shape::Image { x, y, w, h } => {
+            let Some(image) = &node.image else {
+                return;
+            };
+            if crate::image_cache::status(&image.src, &image.equal_to) != ImageStatus::Ready {
+                return;
+            }
+            let (sx, sy) = camera.to_screen(origin, *x, *y);
+            crate::image_cache::with_scaled_image(
+                &image.src,
+                (w * camera.zoom).round().max(1.0) as u32,
+                (h * camera.zoom).round().max(1.0) as u32,
+                [0.0; 4],
+                &image.equal_to,
+                |pixmap| canvas.blit_image(sx, sy, pixmap),
+            );
+        }
+        shape => {
+            let Some(path) = crate::scene::build_path(shape) else {
+                return;
+            };
+            let Some(path) = path.transform(camera.transform(origin)) else {
+                return;
+            };
+            if let Some(fill) = props.fill {
+                canvas.fill_path(&path, fill);
+            }
+            if let Some(stroke) = &props.stroke {
+                canvas.stroke_path(&path, stroke.color, crate::scene::skia_stroke(stroke, camera.zoom));
+            }
+        }
+    }
+}
 
 /**
  * i wish we had an internal UI node that represented this

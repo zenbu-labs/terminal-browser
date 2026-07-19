@@ -7,7 +7,7 @@
  * - check where we are persiting images
  * - profit?
  */
-use std::io::{self, Write as _};
+use std::io;
 use std::time::{Duration, Instant};
 
 use rustix::termios::{self, OptionalActions, Termios};
@@ -25,19 +25,35 @@ pub enum Event {
     ClipboardData { items: Vec<(String, Vec<u8>)>, ok: bool },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyEvent {
     pub key: Key,
     pub mods: Mods,
+    pub kind: KeyKind,
+    pub text: Option<String>,
 }
 
 impl KeyEvent {
     fn plain(key: Key) -> Self {
+        let text = match key {
+            Key::Char(c) => Some(c.to_string()),
+            _ => None,
+        };
         Self {
             key,
             mods: Mods::default(),
+            kind: KeyKind::Press,
+            text,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyKind {
+    #[default]
+    Press,
+    Repeat,
+    Release,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,6 +73,18 @@ pub enum Key {
     Right,
     Home,
     End,
+    Insert,
+    PageUp,
+    PageDown,
+    Function(u8),
+    LeftShift,
+    LeftControl,
+    LeftAlt,
+    LeftSuper,
+    RightShift,
+    RightControl,
+    RightAlt,
+    RightSuper,
     Enter,
     Backspace,
     Delete,
@@ -69,6 +97,7 @@ pub enum Key {
 pub struct Mouse {
     pub kind: MouseKind,
     pub button: MouseButton,
+    pub mods: Mods,
     pub x: u32,
     pub y: u32,
 }
@@ -118,9 +147,43 @@ impl WindowSize {
     }
 }
 
+/// electron installs signal handlers without SA_RESTART (crashpad, child
+/// reaping), so any syscall during engine setup can come back EINTR
+fn retry_intr<T>(mut call: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
+    loop {
+        match call() {
+            Err(rustix::io::Errno::INTR) => continue,
+            other => return other,
+        }
+    }
+}
+
+/** The tty the terminal talks to: the process's own stdio, or any tty opened
+ * by path so one process can drive several panes (the browser daemon). */
+enum TtyHandle {
+    Stdio { stdin: io::Stdin, stdout: io::Stdout },
+    File(std::fs::File),
+}
+
+impl TtyHandle {
+    fn read_fd(&self) -> rustix::fd::BorrowedFd<'_> {
+        use rustix::fd::AsFd as _;
+        match self {
+            TtyHandle::Stdio { stdin, .. } => stdin.as_fd(),
+            TtyHandle::File(file) => file.as_fd(),
+        }
+    }
+
+    fn out(&mut self) -> &mut dyn io::Write {
+        match self {
+            TtyHandle::Stdio { stdout, .. } => stdout,
+            TtyHandle::File(file) => file,
+        }
+    }
+}
+
 pub struct Terminal {
-    stdin: io::Stdin,
-    stdout: io::Stdout,
+    io: TtyHandle,
     saved: Termios,
     last_frame_size: Option<(u32, u32)>,
     mouse_pixels: bool,
@@ -134,6 +197,9 @@ pub struct Terminal {
     placeholders: Option<(u32, u32)>,
     wake_rx: Option<rustix::fd::OwnedFd>,
     waker: Option<Waker>,
+    resize_slot: Option<usize>,
+    /// distinguishes shm frame names when several terminals share a process
+    terminal_id: u64,
     // does the terminal support https://sw.kovidgoyal.net/kitty/clipboard/ 
     clipboard_data: bool,
     clip_read: Option<ClipRead>,
@@ -148,14 +214,37 @@ struct ClipRead {
 
 const CLIP_READ_MAX_BYTES: usize = 64 * 1024 * 1024;
 
-static RESIZE_WAKE_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+// one slot per live Terminal so every engine in the process wakes on
+// SIGWINCH; only atomics — the signal handler cannot take locks
+const RESIZE_WAKE_SLOTS: usize = 64;
+static RESIZE_WAKE_FDS: [std::sync::atomic::AtomicI32; RESIZE_WAKE_SLOTS] =
+    [const { std::sync::atomic::AtomicI32::new(-1) }; RESIZE_WAKE_SLOTS];
+
+fn claim_resize_slot(fd: i32) -> Option<usize> {
+    for (i, slot) in RESIZE_WAKE_FDS.iter().enumerate() {
+        if slot
+            .compare_exchange(
+                -1,
+                fd,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            return Some(i);
+        }
+    }
+    None
+}
 
 #[allow(unsafe_code)]
 extern "C" fn sigwinch_handler(_: libc::c_int) {
-    let fd = RESIZE_WAKE_FD.load(std::sync::atomic::Ordering::Relaxed);
-    if fd >= 0 {
-        unsafe {
-            libc::write(fd, [1u8].as_ptr().cast(), 1);
+    for slot in &RESIZE_WAKE_FDS {
+        let fd = slot.load(std::sync::atomic::Ordering::Relaxed);
+        if fd >= 0 {
+            unsafe {
+                libc::write(fd, [1u8].as_ptr().cast(), 1);
+            }
         }
     }
 }
@@ -198,25 +287,40 @@ impl Waker {
 impl Terminal {
     pub fn new() -> io::Result<Self> {
         let tmux = crate::tmux::in_tmux();
+        Self::with_handle(
+            TtyHandle::Stdio {
+                stdin: io::stdin(),
+                stdout: io::stdout(),
+            },
+            tmux,
+        )
+    }
+
+    /// Drive a tty this process doesn't own as stdio (a pane handed to the
+    /// browser daemon by path). tmux passthrough is not probed here: the env
+    /// vars it would need belong to the client process, not this one.
+    pub fn open(tty_path: &str) -> io::Result<Self> {
+        let file = std::fs::File::options().read(true).write(true).open(tty_path)?;
+        Self::with_handle(TtyHandle::File(file), false)
+    }
+
+    fn with_handle(mut io: TtyHandle, tmux: bool) -> io::Result<Self> {
         if tmux {
             crate::tmux::enable_passthrough();
         }
-        let stdin = io::stdin();
-        let saved = termios::tcgetattr(&stdin)?;
+        let saved = retry_intr(|| termios::tcgetattr(&io.read_fd()))?;
         let mut raw = saved.clone();
         raw.make_raw();
-        termios::tcsetattr(&stdin, OptionalActions::Drain, &raw)?;
+        retry_intr(|| termios::tcsetattr(&io.read_fd(), OptionalActions::Drain, &raw))?;
 
-        let mut stdout = io::stdout();
         // would prefer if they weren't magic and linked to some known doc on the internet
-        stdout.write_all(
+        io.out().write_all(
             b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
         )?; // enable many reporting modes so we get info about mouse/keyboard
-        stdout.flush()?;
+        io.out().flush()?;
 
         let mut terminal = Self {
-            stdin,
-            stdout,
+            io,
             saved,
             last_frame_size: None,
             mouse_pixels: false,
@@ -230,10 +334,14 @@ impl Terminal {
             placeholders: None,
             wake_rx: None,
             waker: None,
+            resize_slot: None,
+            terminal_id: NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             clipboard_data: false,
             clip_read: None,
         };
-        terminal.mouse_pixels = !tmux && terminal.probe_mouse_pixels()?;
+        // probed even under a multiplexer: tmux never confirms 1016 (cells),
+        // but hosts that answer the DECRQM relay pane-local pixel positions
+        terminal.mouse_pixels = terminal.probe_mouse_pixels()?;
         terminal.clipboard_data = !tmux && terminal.probe_clipboard_data()?;
         terminal.shm_frames = terminal.probe_shm_frames()?;
         Ok(terminal)
@@ -243,14 +351,21 @@ impl Terminal {
         self.tmux
     }
 
+    pub fn set_key_event_types(&mut self, enabled: bool) -> io::Result<()> {
+        self.io.out().write_all(b"\x1b[<u")?;
+        self.io.out()
+            .write_all(if enabled { b"\x1b[>27u" } else { b"\x1b[>1u" })?;
+        self.io.out().flush()
+    }
+
     fn probe_shm_frames(&mut self) -> io::Result<bool> {
         let name = format!("/px-{}-q", std::process::id());
         if write_shm(&name, &[0, 0, 0, 255]).is_err() {
             return Ok(false);
         }
-        self.stdout
+        self.io.out()
             .write_all(&crate::kitty::kitty_query_shm(SHM_PROBE_ID, &name, self.tmux))?;
-        self.stdout.flush()?;
+        self.io.out().flush()?;
         /**
          * really dislike this
          */
@@ -259,15 +374,12 @@ impl Terminal {
         Ok(reply.unwrap_or(false))
     }
 
-    fn shm_name(seq: u64) -> String {
-        format!("/px-{}-{seq}", std::process::id())
+    fn shm_name(&self, seq: u64) -> String {
+        format!("/px-{}-{}-{seq}", std::process::id(), self.terminal_id)
     }
 
-    // todo: verify this helps
-    /// Alternates between two shm names so the terminal, which reads asynchronously, can
-    /// still read the previous frame while we write the next; unlink clears unread frames.
     fn write_shm_frame(&mut self, data: &[u8]) -> io::Result<String> {
-        let name = Self::shm_name(self.frame_seq % 2);
+        let name = self.shm_name(self.frame_seq % SHM_FRAME_SLOTS);
         self.frame_seq += 1;
         let _ = rustix::shm::unlink(&name);
         write_shm(&name, data)?;
@@ -333,8 +445,8 @@ impl Terminal {
         }
         frame.extend_from_slice(b"\x1b[?2026l");
         crate::profiler::span("term.write", || {
-            self.stdout.write_all(&frame)?;
-            self.stdout.flush()
+            self.io.out().write_all(&frame)?;
+            self.io.out().flush()
         })?;
         Ok(frame.len())
     }
@@ -369,9 +481,15 @@ impl Terminal {
                     RawEvent::Paste(text) => Event::Paste(text),
                     RawEvent::Focus(focused) => Event::Focus(focused),
                     RawEvent::WindowSize(ws) => Event::WindowSize(ws),
-                    RawEvent::Mouse(kind, button, x, y) => {
+                    RawEvent::Mouse(kind, button, mods, x, y) => {
                         let (x, y) = self.mouse_position_px(x, y);
-                        Event::Mouse(Mouse { kind, button, x, y })
+                        Event::Mouse(Mouse {
+                            kind,
+                            button,
+                            mods,
+                            x,
+                            y,
+                        })
                     }
                     RawEvent::Clip(packet) => match self.apply_clip_packet(packet) {
                         Some(event) => event,
@@ -384,7 +502,11 @@ impl Terminal {
                 return Ok(None);
             }
             let mut chunk = [0u8; 256];
-            let n = rustix::io::read(&self.stdin, &mut chunk)?;
+            let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
+                Ok(n) => n,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(e) => return Err(e.into()),
+            };
             if n == 0 {
                 return Err(io::ErrorKind::UnexpectedEof.into());
             }
@@ -411,10 +533,10 @@ impl Terminal {
     pub fn watch_resize(&mut self) -> io::Result<()> {
         use rustix::fd::AsRawFd as _;
         let waker = self.waker()?;
-        RESIZE_WAKE_FD.store(waker.fd.as_raw_fd(), std::sync::atomic::Ordering::Relaxed);
+        self.resize_slot = claim_resize_slot(waker.fd.as_raw_fd());
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = sigwinch_handler as usize;
+            action.sa_sigaction = sigwinch_handler as *const () as usize;
             action.sa_flags = libc::SA_RESTART;
             if libc::sigaction(libc::SIGWINCH, &action, std::ptr::null_mut()) != 0 {
                 return Err(io::Error::last_os_error());
@@ -439,7 +561,8 @@ impl Terminal {
             Err(rustix::io::Errno::INTR) => Ok(0),
             Err(e) => Err(io::Error::from(e)),
         };
-        let stdin_fd = rustix::event::PollFd::new(&self.stdin, rustix::event::PollFlags::IN);
+        let stdin_borrow = self.io.read_fd();
+        let stdin_fd = rustix::event::PollFd::new(&stdin_borrow, rustix::event::PollFlags::IN);
         match &self.wake_rx {
             None => {
                 let mut fds = [stdin_fd];
@@ -473,7 +596,7 @@ impl Terminal {
     }
 
     pub fn size(&self) -> io::Result<WindowSize> {
-        let ws = termios::tcgetwinsize(&self.stdin)?;
+        let ws = retry_intr(|| termios::tcgetwinsize(&self.io.read_fd()))?;
         Ok(WindowSize {
             cols: u32::from(ws.ws_col),
             rows: u32::from(ws.ws_row),
@@ -497,8 +620,8 @@ impl Terminal {
             }
         }
         if !self.cell_query_unsupported {
-            self.stdout.write_all(b"\x1b[16t")?;
-            self.stdout.flush()?;
+            self.io.out().write_all(b"\x1b[16t")?;
+            self.io.out().flush()?;
             if let Some(cell) = self.read_report(300, parse_cell_size_report)? {
                 self.cell = Some(cell);
                 return Ok(self.cell);
@@ -516,8 +639,8 @@ impl Terminal {
         for i in 0..16 {
             query.extend_from_slice(format!("\x1b]4;{i};?\x1b\\").as_bytes());
         }
-        self.stdout.write_all(&query)?;
-        self.stdout.flush()?;
+        self.io.out().write_all(&query)?;
+        self.io.out().flush()?;
 
         let deadline = Instant::now() + Duration::from_millis(300);
         let mut buf = Vec::new();
@@ -539,7 +662,11 @@ impl Terminal {
                 break;
             }
             let mut chunk = [0u8; 256];
-            let n = rustix::io::read(&self.stdin, &mut chunk)?;
+            let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
+                Ok(n) => n,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(e) => return Err(e.into()),
+            };
             if n == 0 {
                 break;
             }
@@ -558,14 +685,14 @@ impl Terminal {
     }
 
     fn probe_mouse_pixels(&mut self) -> io::Result<bool> {
-        self.stdout.write_all(b"\x1b[?1016$p")?;
-        self.stdout.flush()?;
+        self.io.out().write_all(b"\x1b[?1016$p")?;
+        self.io.out().flush()?;
         Ok(self.read_report(150, parse_decrqm_1016)?.unwrap_or(false))
     }
 
     fn probe_clipboard_data(&mut self) -> io::Result<bool> {
-        self.stdout.write_all(b"\x1b[?5522$p")?;
-        self.stdout.flush()?;
+        self.io.out().write_all(b"\x1b[?5522$p")?;
+        self.io.out().flush()?;
         Ok(self.read_report(150, parse_decrqm_5522)?.unwrap_or(false))
     }
 
@@ -585,7 +712,11 @@ impl Terminal {
                 return Ok(None);
             }
             let mut chunk = [0u8; 64];
-            let n = rustix::io::read(&self.stdin, &mut chunk)?;
+            let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
+                Ok(n) => n,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(e) => return Err(e.into()),
+            };
             if n == 0 {
                 return Ok(None);
             }
@@ -596,18 +727,29 @@ impl Terminal {
         }
     }
 
+    /// OSC 22 (kitty pointer-shape protocol; ghostty speaks it too): set the
+    /// mouse pointer to a CSS cursor name while it hovers this window.
+    pub fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {
+        if !shape.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
+            return Ok(());
+        }
+        self.io.out()
+            .write_all(format!("\x1b]22;{shape}\x1b\\").as_bytes())?;
+        self.io.out().flush()
+    }
+
     pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
         use base64::Engine as _;
         let payload = base64::engine::general_purpose::STANDARD.encode(text);
-        self.stdout
+        self.io.out()
             .write_all(format!("\x1b]52;c;{payload}\x1b\\").as_bytes())?;
-        self.stdout.flush()
+        self.io.out().flush()
     }
 
     // this will trigger a prompt or just not work
     pub fn request_clipboard(&mut self) -> io::Result<()> {
-        self.stdout.write_all(b"\x1b]52;c;?\x1b\\")?;
-        self.stdout.flush()
+        self.io.out().write_all(b"\x1b]52;c;?\x1b\\")?;
+        self.io.out().flush()
     }
 
     pub fn clipboard_data_supported(&self) -> bool {
@@ -626,9 +768,9 @@ impl Terminal {
         use base64::Engine as _;
         self.clip_read = None;
         let payload = base64::engine::general_purpose::STANDARD.encode(mimes);
-        self.stdout
+        self.io.out()
             .write_all(format!("\x1b]5522;type=read;{payload}\x1b\\").as_bytes())?;
-        self.stdout.flush()
+        self.io.out().flush()
     }
 
     fn apply_clip_packet(&mut self, packet: ClipPacket) -> Option<Event> {
@@ -670,6 +812,9 @@ impl Terminal {
 }
 
 const SHM_PROBE_ID: u32 = 299;
+const SHM_FRAME_SLOTS: u64 = 8;
+
+static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /**
  * need to think about this case harder 
@@ -718,24 +863,26 @@ fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        for slot in 0..2 {
-            let _ = rustix::shm::unlink(Self::shm_name(slot));
+        if let Some(slot) = self.resize_slot.take() {
+            RESIZE_WAKE_FDS[slot].store(-1, std::sync::atomic::Ordering::Release);
         }
-        let _ = self
-            .stdout
-            .write_all(&crate::kitty::kitty_delete(self.image_id, self.tmux));
-        let _ = self.stdout.write_all(
+        for slot in 0..SHM_FRAME_SLOTS {
+            let _ = rustix::shm::unlink(self.shm_name(slot));
+        }
+        let delete = crate::kitty::kitty_delete(self.image_id, self.tmux);
+        let _ = self.io.out().write_all(&delete);
+        let _ = self.io.out().write_all(
             b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
         );
-        let _ = self.stdout.flush();
-        let _ = termios::tcsetattr(&self.stdin, OptionalActions::Flush, &self.saved);
+        let _ = self.io.out().flush();
+        let _ = retry_intr(|| termios::tcsetattr(&self.io.read_fd(), OptionalActions::Flush, &self.saved));
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum RawEvent {
     Key(KeyEvent),
-    Mouse(MouseKind, MouseButton, u32, u32),
+    Mouse(MouseKind, MouseButton, Mods, u32, u32),
     Paste(String),
     Focus(bool),
     WindowSize(WindowSize),
@@ -833,6 +980,10 @@ fn parse_event(buf: &[u8]) -> Option<(RawEvent, usize)> {
                 b'D' => Key::Left,
                 b'H' => Key::Home,
                 b'F' => Key::End,
+                b'P' => Key::Function(1),
+                b'Q' => Key::Function(2),
+                b'R' => Key::Function(3),
+                b'S' => Key::Function(4),
                 _ => Key::Unknown,
             };
             Some((RawEvent::Key(KeyEvent::plain(key)), 3))
@@ -840,6 +991,7 @@ fn parse_event(buf: &[u8]) -> Option<(RawEvent, usize)> {
         b => {
             let mut event = byte_key_event(b);
             event.mods.alt = true;
+            event.text = None;
             Some((RawEvent::Key(event), 2))
         }
     }
@@ -879,6 +1031,8 @@ fn byte_key_event(b: u8) -> KeyEvent {
                 ctrl: true,
                 ..Mods::default()
             },
+            kind: KeyKind::Press,
+            text: None,
         },
         c @ 0x20..=0x7e => KeyEvent::plain(Key::Char(c as char)),
         _ => KeyEvent::plain(Key::Unknown),
@@ -906,33 +1060,49 @@ fn parse_csi(buf: &[u8]) -> Option<(RawEvent, usize)> {
         if (0x40..=0x7e).contains(&b) {
             break b;
         }
-        if end - 2 > 24 {
+        if end - 2 > 1024 {
             return Some((RawEvent::Key(KeyEvent::plain(Key::Unknown)), end));
         }
     };
     let params = &buf[2..end - 1];
     let mods = decode_mods(param(params, 1).unwrap_or(1));
+    let kind = key_kind(params);
     let event = match terminator {
-        b'A' => RawEvent::Key(KeyEvent { key: Key::Up, mods }),
+        b'A' => RawEvent::Key(KeyEvent {
+            key: Key::Up,
+            mods,
+            kind,
+            text: None,
+        }),
         b'B' => RawEvent::Key(KeyEvent {
             key: Key::Down,
             mods,
+            kind,
+            text: None,
         }),
         b'C' => RawEvent::Key(KeyEvent {
             key: Key::Right,
             mods,
+            kind,
+            text: None,
         }),
         b'D' => RawEvent::Key(KeyEvent {
             key: Key::Left,
             mods,
+            kind,
+            text: None,
         }),
         b'H' => RawEvent::Key(KeyEvent {
             key: Key::Home,
             mods,
+            kind,
+            text: None,
         }),
         b'F' => RawEvent::Key(KeyEvent {
             key: Key::End,
             mods,
+            kind,
+            text: None,
         }),
         b'Z' => RawEvent::Key(KeyEvent {
             key: Key::Tab,
@@ -940,27 +1110,76 @@ fn parse_csi(buf: &[u8]) -> Option<(RawEvent, usize)> {
                 shift: true,
                 ..mods
             },
+            kind,
+            text: None,
+        }),
+        b'P' => RawEvent::Key(KeyEvent {
+            key: Key::Function(1),
+            mods,
+            kind,
+            text: None,
+        }),
+        b'Q' => RawEvent::Key(KeyEvent {
+            key: Key::Function(2),
+            mods,
+            kind,
+            text: None,
+        }),
+        b'R' => RawEvent::Key(KeyEvent {
+            key: Key::Function(3),
+            mods,
+            kind,
+            text: None,
+        }),
+        b'S' => RawEvent::Key(KeyEvent {
+            key: Key::Function(4),
+            mods,
+            kind,
+            text: None,
         }),
         b'u' => RawEvent::Key(parse_kitty_key(params)),
         b'~' => {
             let key = match param(params, 0) {
+                Some(2) => Key::Insert,
                 Some(3) => Key::Delete,
+                Some(5) => Key::PageUp,
+                Some(6) => Key::PageDown,
                 Some(1 | 7) => Key::Home,
                 Some(4 | 8) => Key::End,
+                Some(11) => Key::Function(1),
+                Some(12) => Key::Function(2),
+                Some(13) => Key::Function(3),
+                Some(14) => Key::Function(4),
+                Some(15) => Key::Function(5),
+                Some(17..=21) => Key::Function((param(params, 0).unwrap() - 11) as u8),
+                Some(23 | 24) => Key::Function((param(params, 0).unwrap() - 12) as u8),
                 // todo: needs link
                 // xterm modifyOtherKeys: `CSI 27 ; mods ; codepoint ~`.
                 Some(27) => {
                     let key = param(params, 2).map_or(Key::Unknown, key_from_codepoint);
-                    return Some((RawEvent::Key(KeyEvent { key, mods }), end));
+                    return Some((
+                        RawEvent::Key(KeyEvent {
+                            key,
+                            mods,
+                            kind,
+                            text: None,
+                        }),
+                        end,
+                    ));
                 }
                 _ => Key::Unknown,
             };
-            RawEvent::Key(KeyEvent { key, mods })
+            RawEvent::Key(KeyEvent {
+                key,
+                mods,
+                kind,
+                text: None,
+            })
         }
         b'I' => RawEvent::Focus(true),
         b'O' => RawEvent::Focus(false),
         b'M' | b'm' => match parse_sgr_mouse(params, terminator == b'M') {
-            Some((kind, button, x, y)) => RawEvent::Mouse(kind, button, x, y),
+            Some((kind, button, mods, x, y)) => RawEvent::Mouse(kind, button, mods, x, y),
             None => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
         },
         b't' => match parse_resize_report(params) {
@@ -1004,18 +1223,49 @@ fn parse_kitty_key(params: &[u8]) -> KeyEvent {
         return KeyEvent::plain(Key::Unknown);
     };
     let mods = decode_mods(param(params, 1).unwrap_or(1));
+    let kind = key_kind(params);
     KeyEvent {
         key: key_from_codepoint(code),
         mods,
+        kind,
+        text: associated_text(params),
     }
 }
 
 fn key_from_codepoint(code: u32) -> Key {
     match code {
+        0 => Key::Unknown,
         13 => Key::Enter,
         9 => Key::Tab,
         27 => Key::Escape,
         8 | 127 => Key::Backspace,
+        57364..=57398 => Key::Function((code - 57363) as u8),
+        57399..=57408 => Key::Char(char::from_digit(code - 57399, 10).unwrap()),
+        57409 => Key::Char('.'),
+        57410 => Key::Char('/'),
+        57411 => Key::Char('*'),
+        57412 => Key::Char('-'),
+        57413 => Key::Char('+'),
+        57414 => Key::Enter,
+        57415 => Key::Char('='),
+        57417 => Key::Left,
+        57418 => Key::Right,
+        57419 => Key::Up,
+        57420 => Key::Down,
+        57421 => Key::PageUp,
+        57422 => Key::PageDown,
+        57423 => Key::Home,
+        57424 => Key::End,
+        57425 => Key::Insert,
+        57426 => Key::Delete,
+        57441 => Key::LeftShift,
+        57442 => Key::LeftControl,
+        57443 => Key::LeftAlt,
+        57444 => Key::LeftSuper,
+        57447 => Key::RightShift,
+        57448 => Key::RightControl,
+        57449 => Key::RightAlt,
+        57450 => Key::RightSuper,
         57344..=63743 => Key::Unknown,
         c => char::from_u32(c).map_or(Key::Unknown, Key::Char),
     }
@@ -1064,6 +1314,34 @@ fn param(params: &[u8], index: usize) -> Option<u32> {
     std::str::from_utf8(field).ok()?.parse().ok()
 }
 
+fn subparam(params: &[u8], index: usize, subindex: usize) -> Option<u32> {
+    let field = params.split(|&b| b == b';').nth(index)?;
+    let value = field.split(|&b| b == b':').nth(subindex)?;
+    std::str::from_utf8(value).ok()?.parse().ok()
+}
+
+fn key_kind(params: &[u8]) -> KeyKind {
+    match subparam(params, 1, 1) {
+        Some(2) => KeyKind::Repeat,
+        Some(3) => KeyKind::Release,
+        _ => KeyKind::Press,
+    }
+}
+
+fn associated_text(params: &[u8]) -> Option<String> {
+    let field = params.split(|&b| b == b';').nth(2)?;
+    let mut text = String::new();
+    for code in field.split(|&b| b == b':') {
+        let code = std::str::from_utf8(code).ok()?.parse().ok()?;
+        let character = char::from_u32(code)?;
+        if character.is_control() {
+            return None;
+        }
+        text.push(character);
+    }
+    (!text.is_empty()).then_some(text)
+}
+
 fn consume_string_sequence(buf: &[u8]) -> Option<usize> {
     let mut i = 2;
     loop {
@@ -1081,7 +1359,7 @@ fn consume_string_sequence(buf: &[u8]) -> Option<usize> {
     }
 }
 
-fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<(MouseKind, MouseButton, u32, u32)> {
+fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<(MouseKind, MouseButton, Mods, u32, u32)> {
     let rest = params.strip_prefix(b"<")?;
     let mut fields = rest.split(|&b| b == b';');
     let mut next_int = || -> Option<u32> { std::str::from_utf8(fields.next()?).ok()?.parse().ok() };
@@ -1098,6 +1376,12 @@ fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<(MouseKind, MouseButton
         2 => MouseButton::Right,
         _ => MouseButton::None,
     };
+    let mods = Mods {
+        shift: b & 4 != 0,
+        alt: b & 8 != 0,
+        ctrl: b & 16 != 0,
+        sup: false,
+    };
     let kind = if b & 64 != 0 {
         match b & 3 {
             0 => MouseKind::ScrollUp,
@@ -1112,7 +1396,7 @@ fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<(MouseKind, MouseButton
     } else {
         MouseKind::Up
     };
-    Some((kind, button, x, y))
+    Some((kind, button, mods, x, y))
 }
 
 fn parse_decrqm_1016(buf: &[u8]) -> Option<bool> {
@@ -1242,25 +1526,26 @@ mod tests {
 
     #[test]
     fn parses_sgr_mouse_events() {
+        let plain = Mods::default();
         assert_eq!(
             parse_sgr_mouse(b"<0;100;200", true),
-            Some((MouseKind::Down, MouseButton::Left, 100, 200))
+            Some((MouseKind::Down, MouseButton::Left, plain, 100, 200))
         );
         assert_eq!(
             parse_sgr_mouse(b"<2;5;6", false),
-            Some((MouseKind::Up, MouseButton::Right, 5, 6))
+            Some((MouseKind::Up, MouseButton::Right, plain, 5, 6))
         );
         assert_eq!(
             parse_sgr_mouse(b"<32;9;9", true),
-            Some((MouseKind::Move, MouseButton::Left, 9, 9))
+            Some((MouseKind::Move, MouseButton::Left, plain, 9, 9))
         );
         assert_eq!(
             parse_sgr_mouse(b"<64;1;1", true),
-            Some((MouseKind::ScrollUp, MouseButton::Left, 1, 1))
+            Some((MouseKind::ScrollUp, MouseButton::Left, plain, 1, 1))
         );
         assert_eq!(
             parse_sgr_mouse(b"<65;1;1", true),
-            Some((MouseKind::ScrollDown, MouseButton::Middle, 1, 1))
+            Some((MouseKind::ScrollDown, MouseButton::Middle, plain, 1, 1))
         );
         assert_eq!(
             parse_sgr_mouse(b"<66;1;1", true).unwrap().0,
@@ -1274,12 +1559,28 @@ mod tests {
         assert_eq!(parse_sgr_mouse(b"<0;0;1", true), None);
     }
 
+    #[test]
+    fn sgr_mouse_decodes_modifier_bits() {
+        assert_eq!(parse_sgr_mouse(b"<4;1;1", true).unwrap().2, SHIFT);
+        assert_eq!(parse_sgr_mouse(b"<8;1;1", true).unwrap().2, ALT);
+        assert_eq!(
+            parse_sgr_mouse(b"<80;1;1", true).unwrap(),
+            (MouseKind::ScrollUp, MouseButton::Left, CTRL, 1, 1),
+            "ctrl+wheel keeps the scroll direction"
+        );
+    }
+
     fn key(k: Key) -> RawEvent {
         RawEvent::Key(KeyEvent::plain(k))
     }
 
     fn key_mods(k: Key, mods: Mods) -> RawEvent {
-        RawEvent::Key(KeyEvent { key: k, mods })
+        RawEvent::Key(KeyEvent {
+            key: k,
+            mods,
+            kind: KeyKind::Press,
+            text: None,
+        })
     }
 
     const SHIFT: Mods = Mods {
@@ -1317,14 +1618,14 @@ mod tests {
         assert_eq!(
             parse_event(b"\x1b[<65;10;20Mxyz"),
             Some((
-                RawEvent::Mouse(MouseKind::ScrollDown, MouseButton::Middle, 10, 20),
+                RawEvent::Mouse(MouseKind::ScrollDown, MouseButton::Middle, Mods::default(), 10, 20),
                 12
             ))
         );
         assert_eq!(parse_event(b"\x1b[Aq"), Some((key(Key::Up), 3)));
         assert_eq!(parse_event(b"\x1b[I"), Some((RawEvent::Focus(true), 3)));
         assert_eq!(parse_event(b"\x1b[O"), Some((RawEvent::Focus(false), 3)));
-        assert_eq!(parse_event(b"\x1bOP"), Some((key(Key::Unknown), 3)));
+        assert_eq!(parse_event(b"\x1bOP"), Some((key(Key::Function(1)), 3)));
         assert_eq!(parse_event(b"\x1bOA"), Some((key(Key::Up), 3)));
     }
 
@@ -1389,6 +1690,46 @@ mod tests {
             "sub-parameters (shifted key) are ignored"
         );
         assert_eq!(parse_event(b"\x1b[57428;1u"), Some((key(Key::Unknown), 10)));
+    }
+
+    #[test]
+    fn parses_kitty_repeat_and_release_events() {
+        let (repeat, _) = parse_event(b"\x1b[97;1:2u").unwrap();
+        let (release, _) = parse_event(b"\x1b[97;1:3u").unwrap();
+        assert!(matches!(repeat, RawEvent::Key(KeyEvent { kind: KeyKind::Repeat, .. })));
+        assert!(matches!(release, RawEvent::Key(KeyEvent { kind: KeyKind::Release, .. })));
+    }
+
+    #[test]
+    fn parses_kitty_associated_text_and_function_keys() {
+        let (event, _) = parse_event(b"\x1b[97;2;65u").unwrap();
+        assert!(matches!(
+            event,
+            RawEvent::Key(KeyEvent {
+                key: Key::Char('a'),
+                text: Some(text),
+                ..
+            }) if text == "A"
+        ));
+        let (event, _) = parse_event(b"\x1b[0;;229u").unwrap();
+        assert!(matches!(
+            event,
+            RawEvent::Key(KeyEvent {
+                key: Key::Unknown,
+                text: Some(text),
+                ..
+            }) if text == "å"
+        ));
+        assert_eq!(parse_event(b"\x1b[5~"), Some((key(Key::PageUp), 4)));
+        assert_eq!(parse_event(b"\x1b[24~"), Some((key(Key::Function(12)), 5)));
+        assert_eq!(parse_event(b"\x1bOP"), Some((key(Key::Function(1)), 3)));
+        assert_eq!(parse_event(b"\x1b[57444;9u"), Some((key_mods(Key::LeftSuper, SUPER), 10)));
+    }
+
+    #[test]
+    fn parses_mouse_modifiers() {
+        let (_, _, mods, _, _) = parse_sgr_mouse(b"<28;1;1", true).unwrap();
+        assert!(mods.shift && mods.alt && mods.ctrl && !mods.sup);
     }
 
     #[test]
@@ -1562,5 +1903,95 @@ mod tests {
         }
         assert_eq!(read.items.len(), 1);
         assert_eq!(read.items[0].1, b"first-second");
+    }
+}
+
+#[cfg(test)]
+mod tty_tests {
+    use super::*;
+
+    /// Returns (master, initial slave fd, slave path). The slave fd stays
+    /// open so reads on the master never hit EOF between Terminal lifetimes.
+    fn open_pty() -> (std::fs::File, std::fs::File, String) {
+        let mut master: libc::c_int = 0;
+        let mut slave: libc::c_int = 0;
+        let mut name = [0u8; 128];
+        #[allow(unsafe_code)]
+        let ok = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                name.as_mut_ptr().cast(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(ok, 0, "openpty failed");
+        let end = name.iter().position(|&b| b == 0).unwrap();
+        let path = String::from_utf8(name[..end].to_vec()).unwrap();
+        #[allow(unsafe_code)]
+        let (master, slave) = unsafe {
+            use std::os::unix::io::FromRawFd as _;
+            (
+                std::fs::File::from_raw_fd(master),
+                std::fs::File::from_raw_fd(slave),
+            )
+        };
+        (master, slave, path)
+    }
+
+    /// Terminal teardown drains the tty output queue (tcsetattr TCSAFLUSH),
+    /// which only empties when the master side reads — a real terminal always
+    /// does, the test must too or Drop blocks forever.
+    fn drain(master: &std::fs::File) -> std::thread::JoinHandle<Vec<u8>> {
+        let mut master = master.try_clone().unwrap();
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut sink = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = master.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                sink.extend_from_slice(&buf[..n]);
+            }
+            sink
+        })
+    }
+
+    #[test]
+    fn two_terminals_share_a_process() {
+        let (mut master_a, _slave_a, path_a) = open_pty();
+        let (master_b, _slave_b, path_b) = open_pty();
+        let _drain_a = drain(&master_a);
+        let _drain_b = drain(&master_b);
+        let mut a = Terminal::open(&path_a).unwrap();
+        let mut b = Terminal::open(&path_b).unwrap();
+
+        assert_ne!(a.terminal_id, b.terminal_id);
+        assert_ne!(a.shm_name(0), b.shm_name(0));
+
+        use std::io::Write as _;
+        master_a.write_all(b"\x1b[97;;97u").unwrap();
+        let got = a.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(
+            matches!(got, Some(Event::Key(_))),
+            "terminal A should see its own input: {got:?}"
+        );
+        let other = b.poll_event(Some(Duration::from_millis(50))).unwrap();
+        assert!(other.is_none(), "terminal B must not see A's input: {other:?}");
+
+        a.watch_resize().unwrap();
+        b.watch_resize().unwrap();
+        assert_ne!(a.resize_slot, b.resize_slot);
+        assert!(a.resize_slot.is_some() && b.resize_slot.is_some());
+
+        let slot_a = a.resize_slot.unwrap();
+        drop(a);
+        assert_eq!(
+            RESIZE_WAKE_FDS[slot_a].load(std::sync::atomic::Ordering::Relaxed),
+            -1,
+            "dropping a terminal must release its resize slot"
+        );
     }
 }

@@ -3,6 +3,7 @@ import { ConcurrentRoot } from "react-reconciler/constants";
 
 import {
   APP_VIEW,
+  Bridge,
   ChangeSource,
   Container,
   DEVTOOLS_VIEW,
@@ -10,14 +11,17 @@ import {
   MarkRef,
   reconciler,
 } from "./reconciler-config";
-import type { SelectionPart } from "./reconciler-config";
+import type { PastedImage, SelectionPart } from "./reconciler-config";
 import type { EngineInfo } from "./native";
+import { Surface } from "./surface";
 import { handleDevtoolsKey } from "./devtools/app";
 import { installConsoleCapture } from "./devtools/console-capture";
 import {
   closeDevtools,
+  engineOp,
   onEngineProfile,
   openDevtools,
+  requestLayout,
   selectNode,
   toggleDevtools,
   unmountDevtools,
@@ -34,12 +38,28 @@ import {
 } from "./devtools/stores";
 import type { LogLevel } from "./devtools/store";
 
-export { Box, Text, Input, Image, MarkedText } from "./components";
+export {
+  Box,
+  Text,
+  Input,
+  Image,
+  MarkedText,
+  Scene,
+  Rect,
+  Ellipse,
+  Polyline,
+  Path,
+  SceneText,
+  SceneImage,
+} from "./components";
 export type { NodeHandle } from "./components";
+export { layoutStore, profilerStore } from "./devtools/stores";
+export type { LayoutSnapshot, ProfileSession } from "./devtools/stores";
 export type {
   BoxProps,
   TextProps,
   TextSpan,
+  InputGutter,
   InputProps,
   MarkRef,
   PastedImage,
@@ -52,9 +72,21 @@ export type {
   ClickEvent,
   ContainerSelection,
   DragEvent,
+  EventMods,
+  MouseMoveEvent,
   ScrollEvent,
   SelectionPart,
   WheelEvent,
+  PointerEvent,
+  Camera,
+  SceneProps,
+  ShapeStroke,
+  RectProps,
+  EllipseProps,
+  PolylineProps,
+  PathProps,
+  SceneTextProps,
+  SceneImageProps,
 } from "./reconciler-config";
 export type { Color, Edges, InsetEdges, InsetValue, ScrollbarStyle, Style } from "./styles";
 export type {
@@ -69,9 +101,11 @@ export type {
   Rgba,
 } from "./native";
 export { HIGHLIGHT_CAPTURES, diff, highlight, parseMarkdown } from "./native";
+export { Surface } from "./surface";
+export type { SurfaceFrame } from "./surface";
 export { Markdown } from "./markdown";
 export type { MarkdownProps, MarkdownTheme } from "./markdown";
-export { openDevtools, closeDevtools, toggleDevtools };
+export { openDevtools, closeDevtools, toggleDevtools, requestLayout, engineOp };
 
 /**
  * 
@@ -84,6 +118,23 @@ export function setKeyCapture(keys: string[]): void {
   bridge.flush();
 }
 
+/** OSC 22 (kitty pointer-shape protocol): set the terminal's mouse pointer to
+ * a CSS cursor shape name ("default", "pointer", "text", …) while it hovers
+ * this window. Terminals without support ignore it. */
+export function setPointerShape(shape: string): void {
+  const bridge = getBridge();
+  bridge.push(APP_VIEW, { op: "setPointerShape", shape });
+  bridge.flush();
+}
+
+/** Reads any image on the clipboard; it arrives at RootOptions.onPasteImage.
+ * For apps that paste images without a focused <Input> (e.g. onKey cmd+v). */
+export function requestClipboardImage(): void {
+  const bridge = getBridge();
+  bridge.push(APP_VIEW, { op: "requestClipboardImage" });
+  bridge.flush();
+}
+
 export interface KeyMods {
   shift: boolean;
   alt: boolean;
@@ -93,6 +144,8 @@ export interface KeyMods {
 
 export interface EngineKeyEvent {
   key: string;
+  kind: "press" | "repeat" | "release";
+  text?: string;
   mods: KeyMods;
 }
 
@@ -100,18 +153,43 @@ export interface RootOptions {
   onKey?: (event: EngineKeyEvent) => void;
   onRightClick?: (event: { x: number; y: number }) => void;
   onPaste?: (text: string) => void;
+  onFocus?: (focused: boolean) => void;
+  /** image pastes that arrive with no focused input, or via requestClipboardImage() */
+  onPasteImage?: (image: PastedImage) => void;
   onEngineExit?: (error: string | null) => void;
   onResize?: (size: { width: number; height: number; basePx: number }) => void;
+  keyEventTypes?: boolean;
   devtools?: boolean;
+  /** drive this tty instead of the process's stdio; each createRoot call
+   * with a tty gets its own engine, so one process can host many panes */
+  tty?: string;
 }
 
 export interface PixelRoot {
   info: EngineInfo;
+  /** whether this platform can present IOSurface frames (Surface.present
+   * with `ioSurface`) — decides Electron's `offscreen.useSharedTexture` */
+  sharedTextures: boolean;
   render(element: ReactNode): void;
   registerFont(path: string): Promise<number>;
+  createSurface(): Surface;
+  surfaceStats(): SurfaceStats;
   stop(): void;
   openDevtools(): void;
   closeDevtools(): void;
+  /** re-check the tty size now — daemon roots never see SIGWINCH or
+   * process.stdout resize events, the client tells them instead */
+  nudgeResize(): void;
+  setPointerShape(shape: string): void;
+  setKeyCapture(keys: string[]): void;
+  requestClipboardImage(): void;
+}
+
+export interface SurfaceStats {
+  submitted: number;
+  coalesced: number;
+  presented: number;
+  bytes: number;
 }
 
 /**
@@ -146,7 +224,10 @@ interface EngineEventJson {
   deltaX?: number;
   deltaY?: number;
   precise?: boolean;
+  focused?: boolean;
   phase?: string;
+  kind?: string;
+  button?: string;
   w?: number;
   h?: number;
   parts?: unknown[];
@@ -173,9 +254,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     installConsoleCapture();
     installFiberHook();
   }
-  const bridge = getBridge();
+  const bridge = options.tty ? new Bridge(options.tty) : getBridge();
   const info = JSON.parse(bridge.engine.info()) as EngineInfo;
-  const container: Container = { view: APP_VIEW, children: [] };
+  bridge.engine.setKeyEventTypes(!!options.keyEventTypes);
+  const container: Container = { bridge, view: APP_VIEW, children: [] };
   bridge.containers[APP_VIEW] = container;
   const root = reconciler.createContainer(
     container,
@@ -266,12 +348,17 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         break;
       }
       case "pasteImage": {
-        const props = bridge.propsById[view]?.get(event.node!);
-        props?.onPasteImage?.({
+        const image = {
           path: event.path!,
           width: event.width!,
           height: event.height!,
-        });
+        };
+        const props = bridge.propsById[view]?.get(event.node!);
+        if (props?.onPasteImage) {
+          props.onPasteImage(image);
+        } else if (view === APP_VIEW) {
+          options.onPasteImage?.(image);
+        }
         break;
       }
       case "scroll": {
@@ -297,6 +384,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           phase: event.phase as "start" | "move" | "end",
           x: event.x!,
           y: event.y!,
+          mods: event.mods ?? { shift: false, alt: false, ctrl: false, super: false },
         });
         break;
       }
@@ -318,7 +406,24 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           deltaX: event.deltaX ?? 0,
           deltaY: event.deltaY ?? 0,
           precise: !!event.precise,
+          mods: event.mods ?? { shift: false, alt: false, ctrl: false, super: false },
         });
+        break;
+      }
+      case "pointer": {
+        const props = bridge.propsById[view]?.get(event.node!);
+        props?.onPointer?.({
+          kind: event.kind as "down" | "up" | "move",
+          button: event.button as "left" | "middle" | "right" | "none",
+          mods: event.mods!,
+          x: event.x!,
+          y: event.y!,
+        });
+        break;
+      }
+      case "mouseMove": {
+        const props = bridge.propsById[view]?.get(event.node!);
+        props?.onMouseMove?.({ x: event.x!, y: event.y! });
         break;
       }
       case "resize": {
@@ -344,7 +449,12 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           /**
            * wait i dont get whats going on here when is onchange called?  f
            */
-          options.onKey?.({ key: event.key!, mods: event.mods! });
+          options.onKey?.({
+            key: event.key!,
+            kind: event.kind as "press" | "repeat" | "release",
+            text: event.text,
+            mods: event.mods!,
+          });
         }
         break;
       }
@@ -355,6 +465,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         break;
       case "paste":
         if (view === APP_VIEW) options.onPaste?.(event.text!);
+        break;
+      case "focus":
+        options.onFocus?.(!!event.focused);
         break;
       case "inspect":
         if (devtoolsEnabled && view === APP_VIEW && event.node != null) {
@@ -446,7 +559,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   }
 
   const forwardResize = () => bridge.engine.applyOps(JSON.stringify({ view: 0, ops: [] }));
-  process.stdout.on("resize", forwardResize);
+  if (!options.tty) process.stdout.on("resize", forwardResize);
 
   const restore = () => bridge.engine.stop();
   process.on("exit", restore);
@@ -469,8 +582,11 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     });
   };
 
+  let nextSurfaceId = 1;
+
   return {
     info,
+    sharedTextures: typeof bridge.engine.updateSurfaceTexture === "function",
     render(element: ReactNode) {
       const wrapped = devtoolsEnabled
         ? createElement(ReactProfiler, { id: "pixel-app", onRender: onAppRender }, element)
@@ -491,13 +607,19 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         bridge.flush();
       });
     },
+    createSurface() {
+      return new Surface(bridge.engine, nextSurfaceId++);
+    },
+    surfaceStats() {
+      return JSON.parse(bridge.engine.surfaceStats()) as SurfaceStats;
+    },
     stop() {
       reconciler.flushSync(() => {
         reconciler.updateContainer(null, root, null, null);
       });
       unmountDevtools();
       bridge.engine.stop();
-      process.stdout.off("resize", forwardResize);
+      if (!options.tty) process.stdout.off("resize", forwardResize);
       process.off("exit", restore);
     },
     openDevtools() {
@@ -505,6 +627,21 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     closeDevtools() {
       closeDevtools();
+    },
+    nudgeResize() {
+      forwardResize();
+    },
+    setPointerShape(shape: string) {
+      bridge.push(APP_VIEW, { op: "setPointerShape", shape });
+      bridge.flush();
+    },
+    setKeyCapture(keys: string[]) {
+      bridge.push(APP_VIEW, { op: "setKeyCapture", keys });
+      bridge.flush();
+    },
+    requestClipboardImage() {
+      bridge.push(APP_VIEW, { op: "requestClipboardImage" });
+      bridge.flush();
     },
   };
 }

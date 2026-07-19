@@ -33,7 +33,7 @@ export function engineOp(op: Record<string, unknown>) {
 function mountDevtools() {
   if (devtoolsRoot) return;
   const b = getBridge();
-  const container: Container = { view: DEVTOOLS_VIEW, children: [] };
+  const container: Container = { bridge: b, view: DEVTOOLS_VIEW, children: [] };
   b.containers[DEVTOOLS_VIEW] = container;
   devtoolsRoot = reconciler.createContainer(
     container,

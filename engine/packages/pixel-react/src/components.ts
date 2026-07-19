@@ -12,10 +12,17 @@ import {
 
 import type {
   BoxProps,
+  EllipseProps,
   ImageProps,
   InputProps,
   MarkedTextProps,
   MarkRef,
+  PathProps,
+  PolylineProps,
+  RectProps,
+  SceneImageProps,
+  SceneProps,
+  SceneTextProps,
   TextProps,
 } from "./reconciler-config";
 
@@ -26,14 +33,26 @@ export interface NodeHandle {
   scrollTo(offset: number, smooth?: boolean): void;
   scrollIntoView(smooth?: boolean): void;
   splice(start: number, end: number, text: string): void;
+  selectAll(): void;
   addMark(mark: number, offset?: number): void;
   removeMark(mark: number): void;
+  /** Extends a <Polyline> with flat [x, y, ...] world points, bypassing React —
+   * for the hot path of an in-progress pen stroke. The owner must fold the
+   * points into its `points` prop before the next commit or they are lost. */
+  appendPoints(points: number[]): void;
 }
 
 type Host<P> = ForwardRefExoticComponent<P & RefAttributes<NodeHandle>>;
 
 export const Box = "box" as unknown as Host<BoxProps>;
 export const Text = "text" as unknown as Host<TextProps>;
+export const Scene = "scene" as unknown as Host<SceneProps>;
+export const Rect = "shape-rect" as unknown as Host<RectProps>;
+export const Ellipse = "shape-ellipse" as unknown as Host<EllipseProps>;
+export const Polyline = "shape-polyline" as unknown as Host<PolylineProps>;
+export const Path = "shape-path" as unknown as Host<PathProps>;
+export const SceneText = "shape-text" as unknown as Host<SceneTextProps>;
+export const SceneImage = "shape-image" as unknown as Host<SceneImageProps>;
 
 function markWidgets(
   marks: readonly MarkRef[],

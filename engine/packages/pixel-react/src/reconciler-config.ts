@@ -3,6 +3,7 @@ import { DefaultEventPriority } from "react-reconciler/constants";
 
 import { createNativeEngine, NativeEngine } from "./native";
 import { Color, parseColor, serializeStyle, Style } from "./styles";
+import { Surface, surfaceId } from "./surface";
 
 export const APP_VIEW = 0;
 export const DEVTOOLS_VIEW = 1;
@@ -19,16 +20,44 @@ export interface ScrollEvent {
   max: number;
 }
 
+export interface EventMods {
+  shift: boolean;
+  alt: boolean;
+  ctrl: boolean;
+  super: boolean;
+}
+
 export interface WheelEvent {
   x: number;
   y: number;
   deltaX: number;
   deltaY: number;
   precise: boolean;
+  mods: EventMods;
+}
+
+export interface PointerEvent {
+  kind: "down" | "up" | "move";
+  button: "left" | "middle" | "right" | "none";
+  mods: {
+    shift: boolean;
+    alt: boolean;
+    ctrl: boolean;
+    super: boolean;
+  };
+  x: number;
+  y: number;
 }
 
 export interface DragEvent {
   phase: "start" | "move" | "end";
+  x: number;
+  y: number;
+  mods: EventMods;
+}
+
+/** Mouse movement over a subscribed node, buttons up or down. View-local pixels. */
+export interface MouseMoveEvent {
   x: number;
   y: number;
 }
@@ -58,15 +87,96 @@ export interface BoxProps {
   onClickOutside?: (event: ClickEvent) => void;
   onScroll?: (event: ScrollEvent) => void;
   onWheel?: (event: WheelEvent) => void;
+  onPointer?: (event: PointerEvent) => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
+  onMouseMove?: (event: MouseMoveEvent) => void;
   /** Left-button drag on this node: start on press, move while held, end on release.
    * Coordinates are view-local pixels. A dragging node opts out of click and text selection. */
   onDrag?: (event: DragEvent) => void;
   /** document-selection changes whose scope is this scrollable container */
   onSelection?: (selection: ContainerSelection) => void;
   contentHeight?: number;
+  /** paints the latest frame presented to this surface (see
+   * PixelRoot.createSurface) scaled into this node's rect */
+  surface?: Surface;
   children?: React.ReactNode;
+}
+
+/** World point at the scene's top-left corner plus scale:
+ * screen = sceneOrigin + (world - camera) * zoom. */
+export interface Camera {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/** A flex box whose shape children live in an infinite 2D world seen through
+ * `camera`. Non-shape children lay out normally (e.g. overlay toolbars). */
+export interface SceneProps extends BoxProps {
+  camera?: Camera;
+}
+
+export interface ShapeStroke {
+  width: number;
+  color: Color;
+  cap?: "butt" | "round" | "square";
+  join?: "miter" | "round" | "bevel";
+}
+
+interface ShapeCommon {
+  id?: string;
+  hidden?: boolean;
+  fill?: Color;
+  stroke?: ShapeStroke;
+  onClick?: (event: ClickEvent) => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  /** Left-button drag on this shape, in view-local pixels. */
+  onDrag?: (event: DragEvent) => void;
+}
+
+export interface RectProps extends ShapeCommon {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  cornerRadius?: number;
+}
+
+export interface EllipseProps extends ShapeCommon {
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+}
+
+export interface PolylineProps extends ShapeCommon {
+  /** flat [x0, y0, x1, y1, ...] */
+  points: number[];
+}
+
+export interface PathProps extends ShapeCommon {
+  /** absolute-coordinate SVG path data: M, L, Q, C, Z */
+  d: string;
+}
+
+export interface SceneTextProps extends Omit<ShapeCommon, "stroke"> {
+  x: number;
+  y: number;
+  text: string;
+  fontSize?: number;
+  font?: number;
+  color?: Color;
+}
+
+export interface SceneImageProps extends Omit<ShapeCommon, "fill" | "stroke"> {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  src: string;
+  advanced?: ImageAdvancedProps;
 }
 
 export interface TextSpan {
@@ -121,6 +231,11 @@ export interface ChangeInfo extends CaretInfo {
   marks: MarkRef[];
 }
 
+export interface InputGutter {
+  color: Color;
+  activeColor: Color;
+}
+
 export interface InputProps {
   style?: Style;
   id?: string;
@@ -132,6 +247,16 @@ export interface InputProps {
   caretColor?: Style["color"];
   selectionColor?: Style["color"];
   autoFocus?: boolean;
+  /** per-range styling over the input's text, e.g. syntax highlighting */
+  spans?: TextSpan[];
+  /** when set, Tab indents with this text and shift-Tab dedents */
+  tabText?: string;
+  /** Enter carries the current line's leading whitespace onto the new line */
+  autoIndent?: boolean;
+  /** wrap-aware line numbers painted right-aligned in the left padding */
+  gutter?: InputGutter;
+  /** fills the caret's logical line across the node's full width */
+  activeLine?: Color;
   onChange?: (text: string, change: ChangeInfo) => void;
   onCaret?: (caret: CaretInfo) => void;
   onSubmit?: (text: string, marks: MarkRef[]) => void;
@@ -166,13 +291,23 @@ export type AnyProps = BoxProps &
   TextProps &
   InputProps &
   Partial<ImageProps> &
-  Partial<Omit<MarkedTextProps, "style" | "id" | "onClick">> & {
+  Partial<Omit<MarkedTextProps, "style" | "id" | "onClick">> &
+  Partial<SceneProps> &
+  Partial<
+    Omit<RectProps, "color"> &
+      EllipseProps &
+      PolylineProps &
+      PathProps &
+      SceneTextProps &
+      SceneImageProps
+  > & {
     slot?: "placeholder" | "error";
     mark?: number;
   };
 
 export interface Instance {
   id: number;
+  bridge: Bridge;
   view: number;
   type: string;
   props: AnyProps;
@@ -184,6 +319,7 @@ export interface Instance {
 }
 
 export interface Container {
+  bridge: Bridge;
   view: number;
   children: Instance[];
 }
@@ -199,7 +335,7 @@ export interface FlushSample {
 }
 
 export class Bridge {
-  engine: NativeEngine = createNativeEngine();
+  engine: NativeEngine;
   propsById: Array<Map<number, AnyProps>> = [new Map(), new Map()];
   containers: Array<Container | null> = [null, null];
   onFlush: ((sample: FlushSample) => void) | null = null;
@@ -207,6 +343,11 @@ export class Bridge {
   private queues: Op[][] = [[], []];
   private nextId = 1;
   private seq = 0;
+
+  constructor(tty?: string) {
+    this.engine = createNativeEngine(tty);
+    if (!defaultBridge) defaultBridge = this;
+  }
 
   allocId(): number {
     return this.nextId++;
@@ -234,11 +375,14 @@ export class Bridge {
   }
 }
 
-let bridge: Bridge | null = null;
+let defaultBridge: Bridge | null = null;
 
+/** The first bridge created in this process. Multi-root processes (the
+ * browser daemon) must use per-root/per-instance bridges; this exists for
+ * single-root apps and the devtools overlay. */
 export function getBridge(): Bridge {
-  if (!bridge) bridge = new Bridge();
-  return bridge;
+  if (!defaultBridge) defaultBridge = new Bridge();
+  return defaultBridge;
 }
 
 function textOf(children: React.ReactNode): string {
@@ -260,36 +404,101 @@ function serializeProps(
     style: serializeStyle(props.style ?? {}),
     key: props.id,
     clickable: !!props.onClick,
-    hidden,
+    hidden: hidden || !!props.hidden,
     contentHeight: props.contentHeight,
     scrollEvents: !!props.onScroll,
     wheelEvents: !!props.onWheel,
+    pointerEvents: !!props.onPointer,
     hoverEvents: !!(props.onMouseEnter || props.onMouseLeave),
     outsideClickEvents: !!props.onClickOutside,
     dragEvents: !!props.onDrag,
     selectionEvents: !!props.onSelection,
+    moveEvents: !!props.onMouseMove,
     slot: props.slot,
     mark: props.mark,
+    surface: props.surface ? surfaceId(props.surface) : undefined,
   };
+  if ((type === "text" || type === "input") && props.spans?.length) {
+    base.spans = props.spans.map((s) => ({
+      start: s.start,
+      end: s.end,
+      color: parseColor(s.color),
+      background: s.background && parseColor(s.background),
+      bold: s.bold,
+      italic: s.italic,
+      underline: s.underline,
+      strikethrough: s.strikethrough,
+    }));
+  }
+  if (type === "scene") {
+    const camera = props.camera ?? { x: 0, y: 0, zoom: 1 };
+    base.scene = { camera };
+  } else if (type.startsWith("shape-")) {
+    const stroke = props.stroke && {
+      width: props.stroke.width,
+      color: parseColor(props.stroke.color),
+      cap: props.stroke.cap,
+      join: props.stroke.join,
+    };
+    const fill = props.fill && parseColor(props.fill);
+    switch (type) {
+      case "shape-rect":
+        base.shape = {
+          kind: "rect",
+          x: props.x,
+          y: props.y,
+          w: props.width,
+          h: props.height,
+          cornerRadius: props.cornerRadius,
+          fill,
+          stroke,
+        };
+        break;
+      case "shape-ellipse":
+        base.shape = {
+          kind: "ellipse",
+          cx: props.cx,
+          cy: props.cy,
+          rx: props.rx,
+          ry: props.ry,
+          fill,
+          stroke,
+        };
+        break;
+      case "shape-polyline":
+        base.shape = { kind: "polyline", points: props.points ?? [], fill, stroke };
+        break;
+      case "shape-path":
+        base.shape = { kind: "path", d: props.d ?? "", fill, stroke };
+        break;
+      case "shape-text":
+        base.shape = { kind: "text", x: props.x, y: props.y, fill };
+        base.text = props.text ?? "";
+        base.style = serializeStyle({
+          fontSize: props.fontSize,
+          font: props.font,
+          color: props.color,
+        });
+        break;
+      case "shape-image":
+        base.shape = { kind: "image", x: props.x, y: props.y, w: props.width, h: props.height };
+        base.image = {
+          src: props.src ?? "",
+          confirmedEqualTo: props.advanced?.confirmedEqualTo,
+        };
+        break;
+    }
+  }
   if (type === "text") {
     base.text = textOf(props.children);
-    if (props.spans?.length) {
-      base.spans = props.spans.map((s) => ({
-        start: s.start,
-        end: s.end,
-        color: parseColor(s.color),
-        background: s.background && parseColor(s.background),
-        bold: s.bold,
-        italic: s.italic,
-        underline: s.underline,
-        strikethrough: s.strikethrough,
-      }));
-    }
   } else if (type === "marked-text") {
     base.text = props.text ?? "";
     base.marks = props.marks;
   } else if (type === "image") {
-    base.image = { src: props.src ?? "" };
+    base.image = {
+      src: props.src ?? "",
+      confirmedEqualTo: props.advanced?.confirmedEqualTo,
+    };
   } else if (type === "input") {
     const valueChanged = !prevProps || props.value !== prevProps.value;
     base.input = {
@@ -300,13 +509,20 @@ function serializeProps(
       selectionColor: parseColor(props.selectionColor),
       autoFocus: !!props.autoFocus,
       submit: !!props.onSubmit,
+      tab: props.tabText,
+      autoIndent: !!props.autoIndent,
+      gutter: props.gutter && {
+        color: parseColor(props.gutter.color),
+        activeColor: parseColor(props.gutter.activeColor),
+      },
+      activeLine: parseColor(props.activeLine),
     };
   }
   return base;
 }
 
-function mutated(view: number) {
-  getBridge().onTreeMutation?.(view);
+function mutated(b: Bridge, view: number) {
+  b.onTreeMutation?.(view);
 }
 
 function pushPropsIfChanged(
@@ -316,7 +532,7 @@ function pushPropsIfChanged(
   const json = JSON.stringify(serialized);
   if (json === instance.lastSent) return false;
   instance.lastSent = json;
-  getBridge().push(instance.view, {
+  instance.bridge.push(instance.view, {
     op: "update",
     id: instance.id,
     props: serialized,
@@ -359,7 +575,7 @@ function insert(
   child: Instance,
   before: Instance | null
 ) {
-  const b = getBridge();
+  const b = child.bridge;
   materialize(b, child);
   detachFromParent(child);
   const siblings = parent.children;
@@ -373,13 +589,13 @@ function insert(
     child: child.id,
     before: before?.id ?? null,
   });
-  mutated(child.view);
+  mutated(b, child.view);
 }
 
 function remove(child: Instance) {
   detachFromParent(child);
-  getBridge().push(child.view, { op: "remove", id: child.id });
-  mutated(child.view);
+  child.bridge.push(child.view, { op: "remove", id: child.id });
+  mutated(child.bridge, child.view);
 }
 
 const CONTAINER_NODE_ID = 0;
@@ -392,9 +608,10 @@ const hostConfig = {
   noTimeout: -1 as const,
 
   createInstance(type: string, props: AnyProps, rootContainer: Container): Instance {
-    const b = getBridge();
+    const b = rootContainer.bridge;
     const instance: Instance = {
       id: b.allocId(),
+      bridge: b,
       view: rootContainer.view,
       type,
       props,
@@ -440,7 +657,7 @@ const hostConfig = {
     _type: string,
     oldProps: AnyProps
   ) {
-    const b = getBridge();
+    const b = instance.bridge;
     const prevProps = instance.props;
     instance.props = newProps;
     b.propsById[instance.view].set(instance.id, newProps);
@@ -451,7 +668,7 @@ const hostConfig = {
       oldProps ?? prevProps
     );
     if (pushPropsIfChanged(instance, serialized)) {
-      mutated(instance.view);
+      mutated(instance.bridge, instance.view);
     }
   },
 
@@ -481,12 +698,12 @@ const hostConfig = {
 
   clearContainer(container: Container) {
     container.children = [];
-    getBridge().push(container.view, { op: "clear", id: CONTAINER_NODE_ID });
-    mutated(container.view);
+    container.bridge.push(container.view, { op: "clear", id: CONTAINER_NODE_ID });
+    mutated(container.bridge, container.view);
   },
 
   detachDeletedInstance(instance: Instance) {
-    const b = getBridge();
+    const b = instance.bridge;
     b.propsById[instance.view].delete(instance.id);
     b.push(instance.view, { op: "forget", id: instance.id });
   },
@@ -495,7 +712,7 @@ const hostConfig = {
     instance.hidden = true;
     const serialized = serializeProps(instance.type, instance.props, true, instance.props);
     if (pushPropsIfChanged(instance, serialized)) {
-      mutated(instance.view);
+      mutated(instance.bridge, instance.view);
     }
   },
 
@@ -505,7 +722,7 @@ const hostConfig = {
     instance.props = props;
     const serialized = serializeProps(instance.type, props, false, prevProps);
     if (pushPropsIfChanged(instance, serialized)) {
-      mutated(instance.view);
+      mutated(instance.bridge, instance.view);
     }
   },
 
@@ -529,42 +746,54 @@ const hostConfig = {
       id: instance.id,
       focus: () => {
         if (type !== "input") return;
-        const b = getBridge();
+        const b = instance.bridge;
         b.push(instance.view, { op: "focus", id: instance.id });
         b.flush();
       },
       blur: () => {
         if (type !== "input") return;
-        const b = getBridge();
+        const b = instance.bridge;
         b.push(instance.view, { op: "focus", id: null });
         b.flush();
       },
       scrollTo: (offset: number, smooth = false) => {
-        const b = getBridge();
+        const b = instance.bridge;
         b.push(instance.view, { op: "scrollTo", id: instance.id, offset, smooth });
         b.flush();
       },
       scrollIntoView: (smooth = false) => {
-        const b = getBridge();
+        const b = instance.bridge;
         b.push(instance.view, { op: "scrollIntoView", id: instance.id, smooth });
         b.flush();
       },
       splice: (start: number, end: number, text: string) => {
         if (type !== "input") return;
-        const b = getBridge();
+        const b = instance.bridge;
         b.push(instance.view, { op: "inputSplice", id: instance.id, start, end, text });
+        b.flush();
+      },
+      selectAll: () => {
+        if (type !== "input") return;
+        const b = instance.bridge;
+        b.push(instance.view, { op: "inputSelectAll", id: instance.id });
         b.flush();
       },
       addMark: (mark: number, offset?: number) => {
         if (type !== "input") return;
-        const b = getBridge();
+        const b = instance.bridge;
         b.push(instance.view, { op: "insertMark", id: instance.id, mark, offset });
         b.flush();
       },
       removeMark: (mark: number) => {
         if (type !== "input") return;
-        const b = getBridge();
+        const b = instance.bridge;
         b.push(instance.view, { op: "removeMark", id: instance.id, mark });
+        b.flush();
+      },
+      appendPoints: (points: number[]) => {
+        if (type !== "shape-polyline") return;
+        const b = instance.bridge;
+        b.push(instance.view, { op: "appendPoints", id: instance.id, points });
         b.flush();
       },
     };
@@ -574,8 +803,8 @@ const hostConfig = {
     return null;
   },
 
-  resetAfterCommit() {
-    getBridge().flush();
+  resetAfterCommit(container: Container) {
+    container.bridge.flush();
   },
 
   preparePortalMount() {},

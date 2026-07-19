@@ -1,5 +1,17 @@
-use pixel_core::{Engine, EngineEvent, Key, KeyEvent, MarkRef, NodeId, ProfileData, PxRect};
+use pixel_core::{
+    Engine, EngineEvent, Key, KeyEvent, KeyKind, MarkRef, Mods, MouseButton, MouseKind, NodeId,
+    ProfileData, PxRect,
+};
 use serde_json::json;
+
+fn mods_json(mods: &Mods) -> serde_json::Value {
+    json!({
+        "shift": mods.shift,
+        "alt": mods.alt,
+        "ctrl": mods.ctrl,
+        "super": mods.sup,
+    })
+}
 
 fn caret_json(caret: &PxRect) -> serde_json::Value {
     json!({ "x": caret.x, "y": caret.y, "w": caret.w, "h": caret.h })
@@ -163,6 +175,7 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             delta_x,
             delta_y,
             precise,
+            mods,
         } => json!({
             "type": "wheel",
             "view": view,
@@ -173,12 +186,66 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             "deltaX": delta_x,
             "deltaY": delta_y,
             "precise": precise,
+            "mods": mods_json(mods),
+        }),
+        EngineEvent::MouseMove {
+            view,
+            node,
+            key,
+            x,
+            y,
+        } => json!({
+            "type": "mouseMove",
+            "view": view,
+            "node": ids.get(*view)?.ext(*node)?,
+            "key": key,
+            "x": x,
+            "y": y,
+        }),
+        EngineEvent::Pointer {
+            view,
+            node,
+            key,
+            kind,
+            button,
+            mods,
+            x,
+            y,
+        } => json!({
+            "type": "pointer",
+            "view": view,
+            "node": ids.get(*view)?.ext(*node)?,
+            "key": key,
+            "kind": match kind {
+                MouseKind::Down => "down",
+                MouseKind::Up => "up",
+                MouseKind::Move => "move",
+                _ => return None,
+            },
+            "button": match button {
+                MouseButton::Left => "left",
+                MouseButton::Middle => "middle",
+                MouseButton::Right => "right",
+                MouseButton::None => "none",
+            },
+            "mods": {
+                "shift": mods.shift,
+                "alt": mods.alt,
+                "ctrl": mods.ctrl,
+                "super": mods.sup,
+            },
+            "x": x,
+            "y": y,
         }),
         EngineEvent::Key { view, event } => key_json(*view, event),
         EngineEvent::Paste { view, text } => json!({
             "type": "paste",
             "view": view,
             "text": text,
+        }),
+        EngineEvent::Focus { focused } => json!({
+            "type": "focus",
+            "focused": focused,
         }),
         EngineEvent::PasteImage {
             view,
@@ -215,6 +282,7 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             phase,
             x,
             y,
+            mods,
         } => json!({
             "type": "drag",
             "view": view,
@@ -227,6 +295,7 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             },
             "x": x,
             "y": y,
+            "mods": mods_json(mods),
         }),
         EngineEvent::Selection {
             view,
@@ -338,6 +407,18 @@ fn key_json(view: usize, event: &KeyEvent) -> serde_json::Value {
         Key::Right => "right".into(),
         Key::Home => "home".into(),
         Key::End => "end".into(),
+        Key::Insert => "insert".into(),
+        Key::PageUp => "pageup".into(),
+        Key::PageDown => "pagedown".into(),
+        Key::Function(number) => format!("f{number}"),
+        Key::LeftShift => "leftshift".into(),
+        Key::LeftControl => "leftcontrol".into(),
+        Key::LeftAlt => "leftalt".into(),
+        Key::LeftSuper => "leftsuper".into(),
+        Key::RightShift => "rightshift".into(),
+        Key::RightControl => "rightcontrol".into(),
+        Key::RightAlt => "rightalt".into(),
+        Key::RightSuper => "rightsuper".into(),
         Key::Enter => "enter".into(),
         Key::Backspace => "backspace".into(),
         Key::Delete => "delete".into(),
@@ -349,6 +430,12 @@ fn key_json(view: usize, event: &KeyEvent) -> serde_json::Value {
         "type": "key",
         "view": view,
         "key": key,
+        "text": event.text,
+        "kind": match event.kind {
+            KeyKind::Press => "press",
+            KeyKind::Repeat => "repeat",
+            KeyKind::Release => "release",
+        },
         "mods": {
             "shift": event.mods.shift,
             "alt": event.mods.alt,

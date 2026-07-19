@@ -67,6 +67,35 @@ fn hit_click_prefers_the_topmost_clickable_and_falls_back_to_ancestors() {
 }
 
 #[test]
+fn pointer_hit_prefers_the_topmost_pointer_surface() {
+    let mut tree = Tree::new((200.0, 100.0));
+    let bottom = tree.create(Props {
+        style: Style {
+            width: Dimension::Px(200.0),
+            height: Dimension::Px(100.0),
+            ..Style::default()
+        },
+        pointer_events: true,
+        ..Props::default()
+    });
+    let top = tree.create(Props {
+        style: Style {
+            position: Position::Absolute,
+            width: Dimension::Px(50.0),
+            height: Dimension::Px(50.0),
+            ..Style::default()
+        },
+        pointer_events: true,
+        ..Props::default()
+    });
+    tree.append(tree.root(), bottom);
+    tree.append(tree.root(), top);
+    tree.flush_layout(&[font()], 16.0);
+    assert_eq!(tree.hit_pointer(10.0, 10.0), Some(top));
+    assert_eq!(tree.hit_pointer(100.0, 50.0), Some(bottom));
+}
+
+#[test]
 fn exposes_rects_by_key_and_paints_background() {
     let mut tree = tree_of(
         (100.0, 40.0),

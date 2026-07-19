@@ -1,6 +1,11 @@
 export interface NativeEngine {
   info(): string;
   applyOps(ops: string): void;
+  updateSurface(id: number, bgra: Buffer, width: number, height: number): void;
+  updateSurfaceTexture?(id: number, handle: Buffer): void;
+  removeSurface(id: number): void;
+  surfaceStats(): string;
+  setKeyEventTypes(enabled: boolean): void;
   start(callback: (err: unknown, event: string) => void): void;
   stop(): void;
 }
@@ -86,15 +91,15 @@ export interface DiffRow {
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const binding = require("../native/pixel.node") as {
-  PixelEngine: new () => NativeEngine;
+  PixelEngine: new (tty?: string) => NativeEngine;
   highlight(source: string, language: string): HighlightSpan[];
   highlightCaptures(): string[];
   diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];
   parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[];
 };
 
-export function createNativeEngine(): NativeEngine {
-  return new binding.PixelEngine();
+export function createNativeEngine(tty?: string): NativeEngine {
+  return new binding.PixelEngine(tty);
 }
 
 export function highlight(source: string, language: string): HighlightSpan[] {

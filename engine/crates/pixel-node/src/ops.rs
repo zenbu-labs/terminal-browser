@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use pixel_core::{
-    Align, Border, BorderSide, Color, Dimension, Edges, Engine, FlexDirection, HighlightArea,
-    ImageProps, InputProps, Inset, InsetValue, Justify, NodeId, Overflow, Position, Props,
-    ScrollbarStyle, SelectionMode, SlotKind, Style, TextSpan,
+    Align, Border, BorderSide, Camera, Color, Dimension, Edges, Engine, FlexDirection, Gutter,
+    HighlightArea, ImageProps, InputProps, Inset, InsetValue, Justify, LineCap, LineJoin, NodeId,
+    Overflow, Position, Props, ScrollbarStyle, SelectionMode, Shape, ShapeProps, ShapeStroke,
+    SlotKind, Style, TextSpan, parse_path_data,
 };
 use serde::Deserialize;
 
@@ -119,11 +120,17 @@ enum Op {
     SetKeyCapture {
         keys: Vec<String>,
     },
+    SetPointerShape {
+        shape: String,
+    },
     InputSplice {
         id: u32,
         start: usize,
         end: usize,
         text: String,
+    },
+    InputSelectAll {
+        id: u32,
     },
     InsertMark {
         id: u32,
@@ -139,6 +146,11 @@ enum Op {
         token: u64,
         marks: Vec<RichClipMarkDto>,
     },
+    AppendPoints {
+        id: u32,
+        points: Vec<f32>,
+    },
+    RequestClipboardImage {},
 }
 
 #[derive(Deserialize)]
@@ -190,17 +202,144 @@ struct PropsDto {
     hidden: bool,
     input: Option<InputDto>,
     image: Option<ImageDto>,
+    surface: Option<u32>,
     slot: Option<String>,
     mark: Option<u64>,
     marks: Vec<MarkInitDto>,
     content_height: Option<f32>,
+    scene: Option<SceneDto>,
+    shape: Option<ShapeDto>,
     scroll_events: bool,
     wheel_events: bool,
+    pointer_events: bool,
     hover_events: bool,
     outside_click_events: bool,
     drag_events: bool,
     selection_events: bool,
+    move_events: bool,
     spans: Vec<SpanDto>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SceneDto {
+    camera: CameraDto,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CameraDto {
+    #[serde(default)]
+    x: f32,
+    #[serde(default)]
+    y: f32,
+    #[serde(default = "default_zoom")]
+    zoom: f32,
+}
+
+fn default_zoom() -> f32 {
+    1.0
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StrokeDto {
+    width: f32,
+    color: Color,
+    #[serde(default)]
+    cap: Option<String>,
+    #[serde(default)]
+    join: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum GeometryDto {
+    Rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        #[serde(default)]
+        corner_radius: f32,
+    },
+    Ellipse {
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+    },
+    Polyline {
+        points: Vec<f32>,
+    },
+    Path {
+        d: String,
+    },
+    Text {
+        x: f32,
+        y: f32,
+    },
+    Image {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShapeDto {
+    #[serde(flatten)]
+    geometry: GeometryDto,
+    #[serde(default)]
+    fill: Option<Color>,
+    #[serde(default)]
+    stroke: Option<StrokeDto>,
+}
+
+impl ShapeDto {
+    fn into_props(self) -> ShapeProps {
+        ShapeProps {
+            shape: match self.geometry {
+                GeometryDto::Rect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    corner_radius,
+                } => Shape::Rect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    corner_radius,
+                },
+                GeometryDto::Ellipse { cx, cy, rx, ry } => Shape::Ellipse { cx, cy, rx, ry },
+                GeometryDto::Polyline { points } => Shape::Polyline { points },
+                GeometryDto::Path { d } => Shape::Path {
+                    cmds: parse_path_data(&d),
+                },
+                GeometryDto::Text { x, y } => Shape::Text { x, y },
+                GeometryDto::Image { x, y, w, h } => Shape::Image { x, y, w, h },
+            },
+            fill: self.fill,
+            stroke: self.stroke.map(|s| ShapeStroke {
+                width: s.width,
+                color: s.color,
+                cap: match s.cap.as_deref() {
+                    Some("butt") => LineCap::Butt,
+                    Some("square") => LineCap::Square,
+                    _ => LineCap::Round,
+                },
+                join: match s.join.as_deref() {
+                    Some("miter") => LineJoin::Miter,
+                    Some("bevel") => LineJoin::Bevel,
+                    _ => LineJoin::Round,
+                },
+            }),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -239,6 +378,17 @@ struct InputDto {
     selection_color: Option<Color>,
     auto_focus: bool,
     submit: bool,
+    tab: Option<String>,
+    auto_indent: bool,
+    gutter: Option<GutterDto>,
+    active_line: Option<Color>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GutterDto {
+    color: Color,
+    active_color: Color,
 }
 
 #[derive(Deserialize)]
@@ -536,12 +686,20 @@ impl PropsDto {
                     selection_color: i.selection_color.unwrap_or(defaults.selection_color),
                     auto_focus: i.auto_focus,
                     submit: i.submit,
+                    tab: i.tab,
+                    auto_indent: i.auto_indent,
+                    gutter: i.gutter.map(|g| Gutter {
+                        color: g.color,
+                        active_color: g.active_color,
+                    }),
+                    active_line: i.active_line,
                 }
             }),
             image: self.image.map(|i| ImageProps {
                 src: i.src,
                 equal_to: i.confirmed_equal_to,
             }),
+            surface: self.surface,
             slot: match self.slot.as_deref() {
                 Some("placeholder") => Some(SlotKind::Placeholder),
                 Some("error") => Some(SlotKind::Error),
@@ -550,12 +708,20 @@ impl PropsDto {
             mark: self.mark,
             marks: self.marks.iter().map(|m| (m.id, m.offset)).collect(),
             content_height: self.content_height,
+            scene: self.scene.map(|s| Camera {
+                x: s.camera.x,
+                y: s.camera.y,
+                zoom: s.camera.zoom.max(0.01),
+            }),
+            shape: self.shape.map(ShapeDto::into_props),
             scroll_events: self.scroll_events,
             wheel_events: self.wheel_events,
+            pointer_events: self.pointer_events,
             hover_events: self.hover_events,
             outside_click_events: self.outside_click_events,
             drag_events: self.drag_events,
             selection_events: self.selection_events,
+            move_events: self.move_events,
             spans: self
                 .spans
                 .into_iter()
@@ -580,7 +746,7 @@ pub struct OpOutcome {
 }
 
 pub fn apply_ops(engine: &mut Engine, ids: &mut Vec<IdMap>, json: &str) -> OpOutcome {
-    let envelope: Envelope = match serde_json::from_str(json) {
+    let envelope: Envelope<'_> = match serde_json::from_str(json) {
         Ok(envelope) => envelope,
         Err(e) => {
             return OpOutcome {
@@ -721,6 +887,9 @@ fn apply_op(
         Op::SetCpuThrottle { rate } => engine.set_cpu_throttle(rate),
         Op::RegisterFont { .. } => unreachable!("handled before the per-view bindings"),
         Op::SetKeyCapture { keys } => engine.set_key_capture(keys),
+        Op::SetPointerShape { shape } => {
+            let _ = engine.set_pointer_shape(&shape);
+        }
         /**
          * so ops, but where do they get sent from
          */
@@ -732,6 +901,11 @@ fn apply_op(
         } => {
             if let Some(node) = map.node(id) {
                 engine.splice_input(view, node, start, end, &text);
+            }
+        }
+        Op::InputSelectAll { id } => {
+            if let Some(node) = map.node(id) {
+                engine.select_all_input(view, node);
             }
         }
         Op::InsertMark { id, mark, offset } => {
@@ -750,6 +924,12 @@ fn apply_op(
                 marks.into_iter().map(|m| (m.index, m.data)).collect(),
             );
         }
+        Op::AppendPoints { id, points } => {
+            if let Some(node) = map.node(id) {
+                tree.append_shape_points(node, &points);
+            }
+        }
+        Op::RequestClipboardImage {} => engine.request_clipboard_image(view),
     }
 }
 
