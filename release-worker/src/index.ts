@@ -1,5 +1,3 @@
-import installerTemplate from "../../scripts/install.sh";
-
 interface Env {
   RELEASES: R2Bucket;
   STATS: D1Database;
@@ -31,14 +29,25 @@ async function readManifest(env: Env, key: string): Promise<Manifest | null> {
   return object.json<Manifest>();
 }
 
-function renderInstaller(manifest: Manifest, origin: string): string {
+// The installer lives in R2 next to the tarball rather than inside this bundle:
+// uploading shell text as part of a Worker trips Cloudflare's own WAF, and this
+// way a pinned version serves the installer that shipped with it.
+async function renderInstaller(env: Env, manifest: Manifest, origin: string): Promise<string | null> {
+  const object = await env.RELEASES.get(`${manifest.channel}/${manifest.version}/install.sh`);
+  if (!object) return null;
   const url = `${origin}/dl/${manifest.channel}/${manifest.version}/${manifest.file}`;
-  return installerTemplate
+  return (await object.text())
     .replaceAll("__DOWNLOAD_URL__", url)
     .replaceAll("__VERSION__", manifest.version)
     .replaceAll("__CHANNEL__", manifest.channel)
     .replaceAll("__SHA256__", manifest.sha256)
     .replaceAll("__SIZE__", String(manifest.size));
+}
+
+async function installerResponse(env: Env, manifest: Manifest, origin: string): Promise<Response> {
+  const script = await renderInstaller(env, manifest, origin);
+  if (!script) return new Response("installer missing for this release\n", { status: 500 });
+  return shellResponse(script);
 }
 
 const shellResponse = (body: string) =>
@@ -181,7 +190,7 @@ export default {
       const version = segments[1];
       for (const channel of CHANNELS) {
         const manifest = await readManifest(env, `${channel}/${version}/manifest.json`);
-        if (manifest) return shellResponse(renderInstaller(manifest, origin));
+        if (manifest) return installerResponse(env, manifest, origin);
       }
       return notFound();
     }
@@ -190,7 +199,7 @@ export default {
       const channel: Channel = path === "/dev" ? "dev" : "stable";
       const manifest = await readManifest(env, `${channel}/latest.json`);
       if (!manifest) return new Response("no release published yet\n", { status: 503 });
-      return shellResponse(renderInstaller(manifest, origin));
+      return installerResponse(env, manifest, origin);
     }
 
     return notFound();
