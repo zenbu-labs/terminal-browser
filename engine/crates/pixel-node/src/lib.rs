@@ -66,23 +66,6 @@ fn colors_json(colors: &TerminalColors) -> serde_json::Value {
         "palette": colors.palette,
     })
 }
-// i have no idea what it means for a struct to be napi?
-// also wait how are types genned 
-
-
-/*
-
-okay i went off track
-
-i want to see where the pixel s are coppied
-
-so we know where the surface sare create dat least, theres some create surface call which does...?
-that doesn't not make sense to me
-
-am i retarded
-
-
-*/
 
 #[napi]
 pub struct PixelEngine {
@@ -99,7 +82,7 @@ pub struct PixelEngine {
 #[napi]
 impl PixelEngine {
     #[napi(constructor)]
-    pub fn new(tty: Option<String>) -> Result<Self> {
+    pub fn new(tty: Option<String>, shared_memory_frames: bool) -> Result<Self> {
         let fonts = vec![
             load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES),
             load_font(SYSTEM_MONO_FONTS, MONO_FONT_BYTES),
@@ -109,6 +92,7 @@ impl PixelEngine {
             cell_metrics_font: 1,
             watch_resize: false,
             tty,
+            shared_memory_frames,
         })
         .map_err(err)?;
         let waker = engine.term.waker().map_err(err)?;
@@ -131,7 +115,6 @@ impl PixelEngine {
             tx,
             rx: Some(rx),
             waker,
-            // who even uses you tho
             surfaces: Arc::new(SurfaceMailbox::default()),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
@@ -143,9 +126,6 @@ impl PixelEngine {
         self.info.clone()
     }
 
-    /*
-    this is the function node calls to send data to rust 
-     */
     #[napi]
     pub fn apply_ops(&self, ops: String) -> Result<()> {
         let _ = self.tx.send(ops);
@@ -161,51 +141,17 @@ impl PixelEngine {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        // eh?
         let stride = width
             .checked_mul(4)
             .map(|bytes| bytes as usize)
             .ok_or_else(|| Error::from_reason("surface dimensions overflow"))?;
         self.surfaces
             .submit(SurfaceSubmission {
-                // no that makes no sense we wouldn't be passing pixels
                 id,
                 bgra: bgra.as_ref(),
                 width,
                 height,
                 stride,
-            })
-            .map_err(Error::from_reason)?;
-        self.waker.wake();
-        Ok(())
-    }
-
-/*
-
-hm that's not super clear to me
-
-well whats a surface frame?
-
-well no that makes sense, its not about a tab (is it)
-
-wait yes it is, id expect a surface per tab
-
-i ca look into the tab registry perchance?
-
-
-*/
-    #[cfg(target_os = "macos")]
-    #[napi]
-    pub fn update_surface_texture(&self, id: u32, handle: Buffer) -> Result<()> {
-        let surface = iosurface::LockedSurface::from_handle(handle.as_ref())
-            .map_err(Error::from_reason)?;
-        self.surfaces
-            .submit(SurfaceSubmission {
-                id,
-                bgra: surface.pixels(),
-                width: surface.width,
-                height: surface.height,
-                stride: surface.stride,
             })
             .map_err(Error::from_reason)?;
         self.waker.wake();
@@ -230,9 +176,6 @@ i ca look into the tab registry perchance?
         .to_string()
     }
 
-    /**
-     * wait i dont get how rust works??
-     */
     #[napi]
     pub fn set_key_event_types(&mut self, enabled: bool) -> Result<()> {
         let engine = self
@@ -290,20 +233,6 @@ i ca look into the tab registry perchance?
                     }
                 }
                 let mut surface_error = None;
-                // how is this getting read?
-
-                // how is surfaces getting written to?
-                // probably a submit step kashira?
-                // oh okay u loop over all the surfaces that get submitted by react
-                // which is information about an offscreen browser window
-                // and that tells the engine to draw the surface
-                /*
-                wait this is a little confusing, so this loops over it once at startup? 
-
-                is there a while loop?
-
-                hm, this feels weird its out of the engine ticks
-                 */
                 for command in surfaces.take() {
                     match command {
                         SurfaceCommand::Frame(frame) => {
@@ -320,7 +249,6 @@ i ca look into the tab registry perchance?
                             }
                         }
                         SurfaceCommand::Remove(id) => {
-                            // what does it mean to remove?
                             if let Err(error) = engine.delete_surface(id) {
                                 surface_error = Some(error.to_string());
                                 break;
@@ -358,5 +286,26 @@ i ca look into the tab registry perchance?
             let _ = thread.join();
         }
         self.engine = None;
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[napi]
+impl PixelEngine {
+    #[napi]
+    pub fn update_surface_texture(&self, id: u32, handle: Buffer) -> Result<()> {
+        let surface = iosurface::LockedSurface::from_handle(handle.as_ref())
+            .map_err(Error::from_reason)?;
+        self.surfaces
+            .submit(SurfaceSubmission {
+                id,
+                bgra: surface.pixels(),
+                width: surface.width,
+                height: surface.height,
+                stride: surface.stride,
+            })
+            .map_err(Error::from_reason)?;
+        self.waker.wake();
+        Ok(())
     }
 }

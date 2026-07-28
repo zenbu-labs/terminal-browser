@@ -2,9 +2,20 @@
 set -euo pipefail
 
 BASE_URL="__BASE_URL__"
+TARGET="__TARGET__"
 
-if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
-  echo "pixel currently supports Apple Silicon macOS only" >&2
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) HOST_TARGET="darwin-arm64" ;;
+  Linux-aarch64|Linux-arm64) HOST_TARGET="linux-arm64" ;;
+  Linux-x86_64|Linux-amd64) HOST_TARGET="linux-x64" ;;
+  *)
+    echo "pixel does not support $(uname -s) $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+if [ "$HOST_TARGET" != "$TARGET" ]; then
+  echo "this pixel build targets $TARGET, not $HOST_TARGET" >&2
   exit 1
 fi
 
@@ -12,7 +23,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "downloading pixel..."
-curl -fsSL "$BASE_URL/chunks.txt" -o "$TMP/chunks.txt"
+curl -fsSL --retry 3 "$BASE_URL/chunks.txt" -o "$TMP/chunks.txt"
 SHA="$(head -1 "$TMP/chunks.txt")"
 TARBALL="$TMP/pixel.tar.gz"
 : > "$TARBALL"
@@ -21,10 +32,15 @@ tail -n +2 "$TMP/chunks.txt" | while read -r chunk; do
   echo "  $chunk"
   curl -fsSL --retry 3 "$BASE_URL/$chunk" >> "$TARBALL"
 done
-echo "$SHA  $TARBALL" | shasum -a 256 -c - >/dev/null || {
+if [ "$HOST_TARGET" = "darwin-arm64" ]; then
+  ACTUAL_SHA="$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
+else
+  ACTUAL_SHA="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+fi
+if [ "$ACTUAL_SHA" != "$SHA" ]; then
   echo "download corrupted (checksum mismatch), try again" >&2
   exit 1
-}
+fi
 
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN_HOME="${XDG_BIN_HOME:-$HOME/.local/bin}"
@@ -54,10 +70,9 @@ case ":$PATH:" in
   *":$BIN_HOME:"*) ;;
   *)
     echo
-    echo "add $BIN_HOME to your PATH first:"
-    echo "  echo 'export PATH=\"$BIN_HOME:\$PATH\"' >> ~/.zshrc && exec zsh"
+    echo "add $BIN_HOME to your PATH first (in your shell's rc file):"
+    echo "  export PATH=\"$BIN_HOME:\$PATH\""
     ;;
 esac
 echo
 echo "  pixel open example.com"
-

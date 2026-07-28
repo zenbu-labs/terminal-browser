@@ -8,13 +8,17 @@ KEEP=10
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/dist-release"
 VERSION="$(cat "$OUT/pixel/VERSION")"
+TARGET="$(cat "$OUT/pixel/TARGET")"
 OWNER="$(gh api user --jq .login)"
 
-BUILD_URL="$(gh gist create -d "$DESCRIPTION_PREFIX $VERSION darwin-arm64" -f chunks.txt "$OUT/chunks.txt")"
+BUILD_URL="$(gh gist create -d "$DESCRIPTION_PREFIX $VERSION $TARGET" -f chunks.txt "$OUT/chunks.txt")"
 BUILD_ID="${BUILD_URL##*/}"
 
 installer_for() {
-  sed "s|__BASE_URL__|https://gist.githubusercontent.com/$OWNER/$1/raw|" "$ROOT/scripts/install.sh"
+  sed \
+    -e "s|__BASE_URL__|https://gist.githubusercontent.com/$OWNER/$1/raw|" \
+    -e "s|__TARGET__|$TARGET|" \
+    "$ROOT/scripts/install.sh"
 }
 
 WORK="$(mktemp -d)"

@@ -128,7 +128,6 @@ pub struct WindowSize {
 }
 
 impl WindowSize {
-    // fixme: why is this an option? if this is not an invariant, we should define the terminals this is the case for
     pub fn cell_size(&self) -> Option<(u32, u32)> {
         if self.cols > 0 && self.rows > 0 && self.width_px > 0 && self.height_px > 0 {
             Some((self.width_px / self.cols, self.height_px / self.rows))
@@ -245,7 +244,7 @@ impl Waker {
 }
 
 impl Terminal {
-    pub fn new() -> io::Result<Self> {
+    pub fn new(shared_memory_frames: bool) -> io::Result<Self> {
         let tmux = crate::tmux::in_tmux();
         Self::with_handle(
             TtyHandle::Stdio {
@@ -253,15 +252,20 @@ impl Terminal {
                 stdout: io::stdout(),
             },
             tmux,
+            shared_memory_frames,
         )
     }
 
-    pub fn open(tty_path: &str) -> io::Result<Self> {
+    pub fn open(tty_path: &str, shared_memory_frames: bool) -> io::Result<Self> {
         let file = std::fs::File::options().read(true).write(true).open(tty_path)?;
-        Self::with_handle(TtyHandle::File(file), false)
+        Self::with_handle(TtyHandle::File(file), false, shared_memory_frames)
     }
 
-    fn with_handle(mut io: TtyHandle, tmux: bool) -> io::Result<Self> {
+    fn with_handle(
+        mut io: TtyHandle,
+        tmux: bool,
+        shared_memory_frames: bool,
+    ) -> io::Result<Self> {
         if tmux {
             crate::tmux::enable_passthrough();
         }
@@ -270,7 +274,6 @@ impl Terminal {
         raw.make_raw();
         retry_intr(|| termios::tcsetattr(&io.read_fd(), OptionalActions::Drain, &raw))?;
 
-        // would prefer if they weren't magic and linked to some known doc on the internet
         io.out().write_all(
             b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
         )?; // enable many reporting modes so we get info about mouse/keyboard
@@ -298,7 +301,7 @@ impl Terminal {
         };
         terminal.mouse_pixels = terminal.probe_mouse_pixels()?;
         terminal.clipboard_data = !tmux && terminal.probe_clipboard_data()?;
-        terminal.shm_frames = terminal.probe_shm_frames()?;
+        terminal.shm_frames = shared_memory_frames && terminal.probe_shm_frames()?;
         Ok(terminal)
     }
 
@@ -321,9 +324,6 @@ impl Terminal {
         self.io.out()
             .write_all(&crate::kitty::kitty_query_shm(SHM_PROBE_ID, &name, self.tmux))?;
         self.io.out().flush()?;
-        /**
-         * really dislike this
-         */
         let reply = self.read_report(300, |buf| parse_probe_reply(buf, b"_Gi=299;"))?;
         let _ = rustix::shm::unlink(&name);
         Ok(reply.unwrap_or(false))
@@ -367,11 +367,6 @@ impl Terminal {
             frame.extend_from_slice(b"\x1b[H");
             Placement::Cursor
         };
-        /*
-          we eventualy need to be more principled about
-          being generic over graphcis protocols to support
-          more terminals (even if degraded)
-         */
         if self.shm_frames {
             let name = crate::profiler::span("kitty.shm", || self.write_shm_frame(&canvas.pixels))?;
             frame.extend_from_slice(&crate::kitty::kitty_transmit_shm(
@@ -767,9 +762,6 @@ const SHM_FRAME_SLOTS: u64 = 8;
 
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/**
- * need to think about this case harder 
- */
 fn frame_image_id(tmux: bool) -> u32 {
     if !tmux {
         return 1;
@@ -1255,7 +1247,7 @@ fn decode_mods(param: u32) -> Mods {
         shift: bits & 1 != 0,
         alt: bits & 2 != 0,
         ctrl: bits & 4 != 0,
-        sup: bits & 8 != 0, // interesting
+        sup: bits & 8 != 0,
     }
 }
 
@@ -1916,8 +1908,8 @@ mod tty_tests {
         let (master_b, _slave_b, path_b) = open_pty();
         let _drain_a = drain(&master_a);
         let _drain_b = drain(&master_b);
-        let mut a = Terminal::open(&path_a).unwrap();
-        let mut b = Terminal::open(&path_b).unwrap();
+        let mut a = Terminal::open(&path_a, true).unwrap();
+        let mut b = Terminal::open(&path_b, true).unwrap();
 
         assert_ne!(a.terminal_id, b.terminal_id);
         assert_ne!(a.shm_name(0), b.shm_name(0));

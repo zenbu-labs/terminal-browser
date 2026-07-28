@@ -14,8 +14,6 @@ import type { InstanceRecord } from "./registry";
 const DIST_ROOT = process.env.PIXEL_DIST_ROOT ?? null;
 delete process.env.ELECTRON_RUN_AS_NODE;
 
-
-// slop fixme
 const HELP = `
 Usage: pixel <command> [args]
 
@@ -42,10 +40,6 @@ interface LocatedInstance extends InstanceRecord {
 
 const TITLE_PATTERN = /pixel-browser:([\w-]+)/;
 
-function recordKey(record: InstanceRecord): string {
-  return record.key ?? String(record.pid);
-}
-
 function locate(records: InstanceRecord[], panes: Pane[]): LocatedInstance[] {
   const self = panes.find((pane) => pane.self);
   const byKey = new Map<string, Pane>();
@@ -54,7 +48,7 @@ function locate(records: InstanceRecord[], panes: Pane[]): LocatedInstance[] {
     if (match) byKey.set(match[1], pane);
   }
   return records.map((record) => {
-    const pane = byKey.get(recordKey(record));
+    const pane = byKey.get(record.key);
     return {
       ...record,
       window: pane?.window ?? null,
@@ -118,7 +112,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = path.resolve(__dirname, "..", "..", "browser");
   const electron = DIST_ROOT
-    ? path.join(DIST_ROOT, "electron", "Pixel.app", "Contents", "MacOS", "Pixel")
+    ? process.platform === "darwin"
+      ? path.join(DIST_ROOT, "electron", "Pixel.app", "Contents", "MacOS", "Pixel")
+      : path.join(DIST_ROOT, "electron", "electron")
     : path.join(browserDir, "node_modules", ".bin", "electron");
   const main = path.join(browserDir, "dist", "main.js");
   for (const required of [electron, main]) {
@@ -290,19 +286,30 @@ async function attachHere(argv: string[]): Promise<never> {
 
 async function openHere(argv: string[]): Promise<never> {
   const isolated = takeBoolFlag(argv, "--isolated");
-  if (!isolated) {
-    try {
-      return await attachHere(argv);
-    } catch (error) {
-      process.stderr.write(`pixel: daemon attach failed (${String(error)}); running isolated\n`);
-    }
-  }
+  if (!isolated) return attachHere(argv);
   const { command, cwd } = browserLaunchCommand(argv);
   const child = spawn(command[0], command.slice(1), { cwd, stdio: "inherit" });
   const code: number = await new Promise((resolve) =>
     child.on("exit", (status) => resolve(status ?? 0)),
   );
   process.exit(code);
+}
+
+function isSshSession(): boolean {
+  return !!(
+    process.env.SSH_CONNECTION ||
+    process.env.SSH_CLIENT ||
+    process.env.SSH_TTY
+  );
+}
+
+function openOverSsh(args: string[]): Promise<never> {
+  for (const flag of ["--dir", "--size", "--split"]) {
+    if (args.includes(flag)) {
+      fail(`${flag} is unavailable over SSH because Pixel runs in the current SSH pane`);
+    }
+  }
+  return openHere(args);
 }
 
 function takeDirection(args: string[]): Direction {
@@ -323,24 +330,6 @@ function takeSizeFlag(args: string[]): number | null {
   return size;
 }
 
-let cachedScale: number | null = null;
-
-function displayScale(): number {
-  if (cachedScale !== null) return cachedScale;
-  try {
-    const out = execFileSync(
-      "osascript",
-      ["-l", "JavaScript", "-e", "ObjC.import('AppKit'); $.NSScreen.mainScreen.backingScaleFactor"],
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    ).trim();
-    const scale = Number(out);
-    cachedScale = Number.isFinite(scale) && scale > 0 ? scale : 2;
-  } catch {
-    cachedScale = 2;
-  }
-  return cachedScale;
-}
-
 async function applySplitSize(
   backend: Backend,
   direction: Direction,
@@ -352,14 +341,14 @@ async function applySplitSize(
   if (!viewport?.width || !viewport?.height) return;
   const horizontal = direction === "right" || direction === "left";
   const current = horizontal ? viewport.width : viewport.height;
-  const deltaPoints = ((2 * size - 1) * current) / displayScale();
+  const deltaPoints = ((2 * size - 1) * current) / viewport.scale;
   const grow: Record<Direction, Direction> = {
     right: "left",
     left: "right",
     down: "up",
     up: "down",
   };
-  await backend.resizePane(`pixel-browser:${recordKey(record)}`, grow[direction], deltaPoints);
+  await backend.resizePane(`pixel-browser:${record.key}`, grow[direction], deltaPoints);
 }
 
 async function launchInSplit(
@@ -368,12 +357,12 @@ async function launchInSplit(
   argv: string[],
   size?: number | null,
 ): Promise<InstanceRecord> {
-  const before = new Set((await instances()).map(recordKey));
+  const before = new Set((await instances()).map((record) => record.key));
   const { command, cwd } = clientLaunchCommand(argv);
   await backend.split(direction, command, cwd);
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    const fresh = (await instances()).find((record) => !before.has(recordKey(record)));
+    const fresh = (await instances()).find((record) => !before.has(record.key));
     if (fresh) {
       if (size) await applySplitSize(backend, direction, fresh, size).catch(() => {});
       return fresh;
@@ -416,6 +405,9 @@ async function main() {
   }
   if (command === "open" && takeBoolFlag(args, "--here")) {
     return openHere(args);
+  }
+  if (command === "open" && isSshSession()) {
+    return openOverSsh(args);
   }
   if (command === "open") {
     return openCommand(detectBackend(), args);

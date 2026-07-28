@@ -266,8 +266,8 @@ export class Bridge {
   private nextId = 1;
   private seq = 0;
 
-  constructor(tty?: string) {
-    this.engine = createNativeEngine(tty);
+  constructor(tty: string | undefined, sharedMemoryFrames: boolean) {
+    this.engine = createNativeEngine(tty, sharedMemoryFrames);
     if (!defaultBridge) defaultBridge = this;
   }
 
@@ -299,7 +299,7 @@ export class Bridge {
 let defaultBridge: Bridge | null = null;
 
 export function getBridge(): Bridge {
-  if (!defaultBridge) defaultBridge = new Bridge();
+  if (!defaultBridge) defaultBridge = new Bridge(undefined, true);
   return defaultBridge;
 }
 

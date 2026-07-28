@@ -1,7 +1,7 @@
-import { nativeImage } from "electron";
 import type { BrowserWindow } from "electron";
 import type { Surface } from "pixel-react";
 import { PageInput } from "./input";
+import { Screencast } from "./screencast";
 import { stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
@@ -28,8 +28,9 @@ export class PopupWindow {
   private readonly surface: Surface;
   private readonly onChange: () => void;
   private readonly renderScale: number;
+  private readonly screencast: Screencast;
   private stateValue: PopupState;
-  private visible = true;
+  private visible: boolean;
   private focused = false;
   private cdpAttached = false;
   private destroyed = false;
@@ -42,11 +43,14 @@ export class PopupWindow {
     scale: () => number,
     onChange: () => void,
     onClosed: () => void,
+    visible: boolean,
+    onError: (error: Error) => void,
   ) {
     this.window = window;
     this.surface = surface;
     this.onChange = onChange;
     this.renderScale = renderScale;
+    this.visible = visible;
     this.stateValue = {
       url: window.webContents.getURL(),
       title: "",
@@ -59,6 +63,7 @@ export class PopupWindow {
       scale,
       focus: () => this.focus(),
       cdp: (method, params) => this.cdp(method, params),
+      cdpInput: process.platform === "linux",
     });
     const contents = window.webContents;
     contents.on("page-title-updated", (_event, title) => this.update({ title }));
@@ -77,8 +82,22 @@ export class PopupWindow {
       this.surface.clear();
       onClosed();
     });
-    void this.startStreaming(size, renderScale).catch(() => {});
-    this.focus();
+    this.screencast = new Screencast(surface, visible, {
+      cdp: (method, params) => this.cdp(method, params),
+      metrics: () => ({
+        width: this.stateValue.width,
+        height: this.stateValue.height,
+        deviceScaleFactor: this.renderScale,
+        mobile: false,
+      }),
+      stopped: () => this.destroyed,
+      onError,
+    });
+    this.window.webContents.debugger.on("message", (_event, method, params) => {
+      if (method === "Page.screencastFrame") this.screencast.handleFrame(params);
+    });
+    this.screencast.start();
+    if (visible) this.focus();
   }
 
   get state(): PopupState {
@@ -96,40 +115,8 @@ export class PopupWindow {
   setVisible(visible: boolean) {
     if (this.visible === visible || this.destroyed) return;
     this.visible = visible;
-    void this.cdp(visible ? "Page.startScreencast" : "Page.stopScreencast", {
-      ...(visible ? this.screencastParams() : {}),
-    }).catch(() => {});
-  }
-
-  private screencastParams() {
-    return {
-      format: "png" as const,
-      everyNthFrame: 1,
-      maxWidth: Math.ceil(this.stateValue.width * this.renderScale),
-      maxHeight: Math.ceil(this.stateValue.height * this.renderScale),
-    };
-  }
-
-  private async startStreaming(size: { width: number; height: number }, renderScale: number) {
-    await this.attachCdp();
-    this.window.webContents.debugger.on("message", (_event, method, params) => {
-      if (method !== "Page.screencastFrame") return;
-      const frame = params as { data: string; sessionId: number };
-      void this.cdp("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => {});
-      if (!this.visible || this.destroyed) return;
-      const image = nativeImage.createFromBuffer(Buffer.from(frame.data, "base64"));
-      if (image.isEmpty()) return;
-      const dims = image.getSize();
-      this.surface.present({ bgra: image.toBitmap(), width: dims.width, height: dims.height });
-    });
-    await this.cdp("Page.enable");
-    await this.cdp("Emulation.setDeviceMetricsOverride", {
-      width: size.width,
-      height: size.height,
-      deviceScaleFactor: renderScale,
-      mobile: false,
-    });
-    await this.cdp("Page.startScreencast", this.screencastParams());
+    this.screencast.setVisible(visible);
+    if (visible) this.focus();
   }
 
   private focus() {

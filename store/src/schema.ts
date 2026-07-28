@@ -21,6 +21,7 @@ export const instances = sqliteTable("instances", {
   viewport: text("viewport", { mode: "json" }).$type<{
     width: number;
     height: number;
+    scale: number;
   } | null>(),
   startedAt: integer("started_at").notNull(),
 });

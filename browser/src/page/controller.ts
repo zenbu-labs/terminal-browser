@@ -1,5 +1,4 @@
 import { BrowserWindow, screen } from "electron";
-import type { OffscreenSharedTexture } from "electron";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -20,6 +19,8 @@ import { initialBrowserState } from "./types";
 import type { BrowserState, BrowserSurfaceLayout, DeviceSpec } from "./types";
 import { stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
+import { offscreenOptions, presentPaint } from "./offscreen";
+import { Screencast } from "./screencast";
 
 export class BrowserController {
   private readonly surface: Surface;
@@ -27,6 +28,7 @@ export class BrowserController {
   private readonly devtoolsSurface: Surface;
   private readonly window: BrowserWindow;
   private readonly onState: (state: BrowserState) => void;
+  private readonly onError: (error: Error) => void;
   private readonly renderScale: number;
   private layout: BrowserSurfaceLayout;
   private state: BrowserState;
@@ -40,6 +42,7 @@ export class BrowserController {
   private readonly favicons = new FaviconCache();
   private faviconSeq = 0;
   private cdpAttached = false;
+  private readonly screencast: Screencast | null;
   private emitHandlers = new Map<string, (data: unknown) => void>();
   private device: DeviceSpec | null = null;
   private defaultUserAgent = "";
@@ -69,6 +72,7 @@ export class BrowserController {
     visible: boolean,
     partition: string | null,
     onState: (state: BrowserState) => void,
+    onError: (error: Error) => void,
   ) {
     this.partition = partition;
     this.surface = surface;
@@ -78,6 +82,7 @@ export class BrowserController {
     this.visible = visible;
     this.layout = layout;
     this.onState = onState;
+    this.onError = onError;
     this.renderScale = browserRenderScale(layout);
     this.state = initialBrowserState(initialUrl);
     const size = this.contentSize(layout);
@@ -95,11 +100,7 @@ export class BrowserController {
       resizable: false,
       webPreferences: {
         ...(partition ? { partition } : {}),
-        offscreen: {
-          useSharedTexture: true,
-          sharedTexturePixelFormat: "argb",
-          deviceScaleFactor: this.renderScale,
-        },
+        offscreen: offscreenOptions(this.renderScale),
         sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
@@ -115,26 +116,46 @@ export class BrowserController {
         await this.attachCdp();
         return this.cdp(method, params);
       },
+      cdpInput: process.platform === "linux",
     });
+    this.screencast =
+      process.platform === "linux"
+        ? new Screencast(this.surface, visible, {
+            cdp: async (method, params) => {
+              await this.attachCdp();
+              return this.cdp(method, params);
+            },
+            metrics: () => {
+              const size = this.contentSize(this.layout);
+              return {
+                width: size.width,
+                height: size.height,
+                deviceScaleFactor: this.renderScale,
+                mobile: this.device !== null,
+              };
+            },
+            stopped: () => this.stopped,
+            onError: (error) => this.onError(error),
+          })
+        : null;
     this.window.webContents.setFrameRate(frameRate());
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.defaultUserAgent = this.window.webContents.getUserAgent();
-    this.window.webContents.on("paint", (event) => {
-      const texture = event.texture;
-      if (!texture) return;
-      if (!this.visible) {
-        texture.release();
-        return;
-      }
-      this.submitTexture(texture);
-    });
+    if (process.platform === "darwin") {
+      this.window.webContents.on("paint", (event) => {
+        presentPaint(this.surface, event, this.visible);
+      });
+    }
     this.window.webContents.on("did-start-loading", () => this.updateState({ loading: true }));
-    this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
+    this.window.webContents.on("did-stop-loading", () => {
+      this.updateNavigation(false);
+    });
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
       this.updateNavigation(false, url);
+      if (this.screencast && url !== "about:blank") this.screencast.start();
     });
     this.window.webContents.on("page-favicon-updated", (_event, favicons) => {
       void this.loadFavicon(favicons);
@@ -211,10 +232,13 @@ export class BrowserController {
       return;
     }
     this.layout = layout;
-    // why keep frame?
     if (!options?.keepFrame) this.surface.clear();
-    const size = this.contentSize(layout);
-    this.window.setContentSize(size.width, size.height, false);
+    if (this.screencast) {
+      void this.screencast.reconfigure();
+    } else {
+      const size = this.contentSize(layout);
+      this.window.setContentSize(size.width, size.height, false);
+    }
   }
 
   navigate(value: string) {
@@ -253,13 +277,18 @@ export class BrowserController {
     this.window.webContents.debugger.attach("1.3");
     this.cdpAttached = true;
     this.window.webContents.debugger.on("message", (_event, method, params) => {
-      if (method !== "Runtime.bindingCalled") return;
-      const call = params as { name: string; payload: string };
-      if (call.name !== "__pixelEmit") return;
-      try {
-        const message = JSON.parse(call.payload) as { channel: string; data: unknown };
-        this.emitHandlers.get(message.channel)?.(message.data);
-      } catch {}
+      if (method === "Page.screencastFrame") {
+        this.screencast?.handleFrame(params);
+        return;
+      }
+      if (method === "Runtime.bindingCalled") {
+        const call = params as { name: string; payload: string };
+        if (call.name !== "__pixelEmit") return;
+        try {
+          const message = JSON.parse(call.payload) as { channel: string; data: unknown };
+          this.emitHandlers.get(message.channel)?.(message.data);
+        } catch {}
+      }
     });
     await this.cdp("Runtime.enable");
     await this.cdp("Runtime.addBinding", { name: "__pixelEmit" });
@@ -305,9 +334,6 @@ export class BrowserController {
     this.blurDevtools();
     if (this.contentFocused) return;
     this.window.focus();
-    /**
-     * web contents, oh
-     */
     this.window.webContents.focus();
     this.contentFocused = true;
     void this.setFocusEmulation(true).catch(() => {});
@@ -329,6 +355,7 @@ export class BrowserController {
         this.devtoolsFocused = false;
         this.onDevtoolsChange?.();
       },
+      (error) => this.onError(error),
     );
     devtools.onCursorChange = () => this.onCursorChange?.(devtools.cursorShape);
     devtools.setVisible(this.visible);
@@ -415,11 +442,15 @@ export class BrowserController {
     this.visible = visible;
     this.popup?.setVisible(visible);
     this.devtools?.setVisible(visible);
-    if (visible) {
-      this.window.webContents.setFrameRate(frameRate());
-      this.window.webContents.invalidate();
+    if (this.screencast) {
+      this.screencast.setVisible(visible);
     } else {
-      this.window.webContents.setFrameRate(4);
+      if (visible) {
+        this.window.webContents.setFrameRate(frameRate());
+        this.window.webContents.invalidate();
+      } else {
+        this.window.webContents.setFrameRate(4);
+      }
     }
   }
 
@@ -435,45 +466,31 @@ export class BrowserController {
     if (spec?.userAgent === this.device?.userAgent) return;
     this.device = spec;
     this.surface.clear();
-    const size = this.contentSize(this.layout);
-    this.window.setContentSize(size.width, size.height, false);
     if (spec) {
       this.window.webContents.setUserAgent(spec.userAgent);
-      this.window.webContents.enableDeviceEmulation({
-        screenPosition: "mobile",
-        screenSize: { width: spec.width, height: spec.height },
-        viewSize: { width: spec.width, height: spec.height },
-        viewPosition: { x: 0, y: 0 },
-        deviceScaleFactor: 0,
-        scale: 1,
-      });
     } else {
-      this.window.webContents.disableDeviceEmulation();
       this.window.webContents.setUserAgent(this.defaultUserAgent);
     }
-    this.window.webContents.reload();
-  }
-
-  /**
-   * 
-   * okay we are absolutely getting somewhere
-   * 
-   * for each tab there is a browser window
-   * 
-   * 
-   * and submitting a textsure is just passing the surface handle and then forwarding it to the engine
-   * 
-   * but its not clear to me how the surface is correlated between the UI and the backend logic here
-   * 
-   */
-  private submitTexture(texture: OffscreenSharedTexture) {
-    try {
-      const info = texture.textureInfo;
-      const handle = info.handle.ioSurface;
-      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
-      this.surface.present({ ioSurface: handle });
-    } finally {
-      texture.release();
+    if (this.screencast) {
+      void this.screencast.reconfigure().then(() => {
+        if (!this.stopped) this.window.webContents.reload();
+      });
+    } else {
+      const size = this.contentSize(this.layout);
+      this.window.setContentSize(size.width, size.height, false);
+      if (spec) {
+        this.window.webContents.enableDeviceEmulation({
+          screenPosition: "mobile",
+          screenSize: { width: spec.width, height: spec.height },
+          viewSize: { width: spec.width, height: spec.height },
+          viewPosition: { x: 0, y: 0 },
+          deviceScaleFactor: 0,
+          scale: 1,
+        });
+      } else {
+        this.window.webContents.disableDeviceEmulation();
+      }
+      this.window.webContents.reload();
     }
   }
 
@@ -517,6 +534,8 @@ export class BrowserController {
         if (this.popup === popup) this.popup = null;
         this.onPopupChange?.();
       },
+      this.visible,
+      (error) => this.onError(error),
     );
     this.popup = popup;
     this.onPopupChange?.();
@@ -547,4 +566,3 @@ function browserRenderScale(layout: BrowserSurfaceLayout) {
   const cssPixels = layout.width * layout.height / (layout.scale * layout.scale);
   return Math.max(0.5, Math.min(layout.scale, Math.sqrt(maxPixels / cssPixels)));
 }
-

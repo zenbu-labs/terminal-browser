@@ -149,6 +149,7 @@ export interface RootOptions {
   keyEventTypes?: boolean;
   devtools?: boolean;
   tty?: string;
+  sharedMemoryFrames?: boolean;
 }
 
 export interface PixelRoot {
@@ -161,7 +162,6 @@ export interface PixelRoot {
   stop(): void;
   openDevtools(): void;
   closeDevtools(): void;
-  // nudge resize sounds like a ridiculous api
   nudgeResize(): void;
   setPointerShape(shape: string): void;
   setKeyCapture(keys: string[]): void;
@@ -175,9 +175,6 @@ export interface SurfaceStats {
   bytes: number;
 }
 
-/**
- * this looks like a really sus data type to me (probably should be a discriminated union over type?)
- */
 interface EngineEventJson {
   type: string;
   atMs?: number;
@@ -232,7 +229,10 @@ interface EngineEventJson {
 }
 
 export function createRoot(options: RootOptions = {}): PixelRoot {
-  const bridge = options.tty ? new Bridge(options.tty) : getBridge();
+  const bridge =
+    options.tty || options.sharedMemoryFrames !== undefined
+      ? new Bridge(options.tty, options.sharedMemoryFrames ?? true)
+      : getBridge();
   const devtoolsEnabled = options.devtools !== false && bridge === getBridge();
   if (devtoolsEnabled) {
     installConsoleCapture();
@@ -539,10 +539,6 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     bridge.flush();
   }
 
-  /**
-   * 
-   * fixme: node types?
-   */
   const forwardResize = () => bridge.engine.applyOps(JSON.stringify({ view: 0, ops: [] }));
   if (!options.tty) process.stdout.on("resize", forwardResize);
 

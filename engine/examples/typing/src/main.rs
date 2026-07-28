@@ -41,9 +41,6 @@ const GHOSTTY_KEYBINDS: &[&str] = &[
 
 fn main() -> std::io::Result<()> {
     if std::env::args().any(|arg| arg == "--keys") {
-        /**
-         * what the fuck is the purpose of this??
-         */
         return key_dump();
     }
     if std::env::args().any(|arg| arg == "--setup-ghostty") {
@@ -61,6 +58,7 @@ fn main() -> std::io::Result<()> {
         cell_metrics_font: FONT_MONO,
         watch_resize: true,
         tty: None,
+        shared_memory_frames: true,
     })?;
     let theme = Theme::from_terminal(&engine.colors);
     engine.set_clear_color(0, theme.bg);
@@ -247,7 +245,7 @@ fn sync_scroll_mode(app: &App, engine: &mut Engine) {
 
 fn key_dump() -> std::io::Result<()> {
     use std::io::Write as _;
-    let mut term = Terminal::new()?;
+    let mut term = Terminal::new(true)?;
     let mut out = std::io::stdout();
     write!(out, "key dump — press keys; ctrl-q or ctrl-c quits\r\n")?;
     out.flush()?;

@@ -137,7 +137,6 @@ class Session {
     this.partition = flagValue(ctx.argv, "--partition");
     this.paletteBinding = parseKeyBinding(flagValue(ctx.argv, "--palette-key") ?? "super+p");
     this.findBinding = parseKeyBinding(flagValue(ctx.argv, "--find-key") ?? "super+shift+f");
-    // we should use 2 shortcuts for console, also not sure if console actually works as expected
     this.devtoolsBinding = parseKeyBinding(flagValue(ctx.argv, "--devtools-key") ?? "super+shift+i");
     this.consoleBinding = parseKeyBinding(flagValue(ctx.argv, "--console-key") ?? "super+alt+j");
     this.fallbackState = initialBrowserState(this.initialUrl());
@@ -154,6 +153,7 @@ class Session {
             visible,
             this.partition,
             onState,
+            (error) => this.fail(error),
           ),
         deviceSpec: () => deviceSpec(this.deviceMode),
         onActivated: () => {
@@ -187,6 +187,7 @@ class Session {
     this.displayScale = this.hostDisplayScale();
     this.root = createRoot({
       tty: this.ctx.tty,
+      sharedMemoryFrames: !isSshEnvironment(this.ctx.env),
       keyEventTypes: true,
       onKey: (event) => this.handleKey(event),
       onPaste: (text) => {
@@ -215,7 +216,7 @@ class Session {
         this.shutdown(error ? 1 : 0);
       },
     });
-    if (!this.root.sharedTextures) {
+    if (process.platform === "darwin" && !this.root.sharedTextures) {
       throw new Error("pixel-browser requires the patched Electron with shared texture support");
     }
     this.pageSurface = this.root.createSurface();
@@ -233,7 +234,13 @@ class Session {
       state: () => this.tabs.activeState ?? this.fallbackState,
       openTab: (url) => void this.tabs.create(url ?? DEFAULT_URL),
       viewport: () =>
-        this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
+        this.root
+          ? {
+              width: this.root.info.width,
+              height: this.root.info.height,
+              scale: this.displayScale,
+            }
+          : null,
       tabs: () => this.tabs.registryView(),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
@@ -256,6 +263,12 @@ class Session {
     } catch { }
     this.root?.stop();
     this.ctx.onClose(code);
+  }
+
+  private fail(error: Error) {
+    if (this.shuttingDown) return;
+    process.stderr.write(`${error.stack ?? error.message}\n`);
+    this.shutdown(1);
   }
 
   nudgeResize() {
@@ -415,7 +428,7 @@ class Session {
         this.shutdown();
         return;
       }
-      if (event.kind !== "release" && event.mods.super) {
+      if (event.kind !== "release" && (event.mods.super || event.mods.ctrl)) {
         const direction = zoomDirection(event.key);
         if (direction !== null) {
           this.applyZoom(direction);
@@ -427,7 +440,7 @@ class Session {
       return;
     }
     if (event.kind !== "release") {
-      if (event.mods.ctrl && (event.key === "q" || event.key === "c")) {
+      if (event.mods.ctrl && event.key === "q") {
         this.shutdown();
         return;
       }
@@ -491,7 +504,7 @@ class Session {
         this.openPalette();
         return;
       }
-      if (event.mods.super && event.key === "l") {
+      if ((event.mods.super || event.mods.ctrl) && event.key === "l") {
         this.openUrlEdit();
         return;
       }
@@ -515,7 +528,7 @@ class Session {
         browser?.findNext(!event.mods.shift);
         return;
       }
-      if (event.mods.super && event.key === "r") {
+      if ((event.mods.super || event.mods.ctrl) && event.key === "r") {
         browser?.reload();
         return;
       }
@@ -527,7 +540,7 @@ class Session {
         browser?.forward();
         return;
       }
-      if (event.mods.super) {
+      if (event.mods.super || event.mods.ctrl) {
         const direction = zoomDirection(event.key);
         if (direction !== null) {
           this.applyZoom(direction);
@@ -565,7 +578,6 @@ class Session {
     this.render();
   }
 
-  // fixme: ghostty doesn't support that cursor type, not sure if any terminals do
   private syncCursor() {
     const browser = this.tabs.activeController;
     const shape = this.dividerHover
@@ -996,7 +1008,6 @@ class Session {
       : null;
   }
 
-  // this is scary code, popusp in general
   private popupView(): PopupView | null {
     const popup = this.tabs.activeController?.popup;
     if (!popup || !this.layout || !this.surfaceLayout) return null;
@@ -1027,7 +1038,7 @@ class Session {
       })
       .catch(() => { });
   }
-  // stupid
+
   private hostDisplayScale() {
     const explicit = Number(this.ctx.env.PIXEL_BROWSER_DISPLAY_SCALE);
     if (Number.isFinite(explicit) && explicit > 0) return explicit;
@@ -1053,7 +1064,7 @@ interface PaletteAction {
 }
 
 function isPasteKey(event: EngineKeyEvent): boolean {
-  return event.kind === "press" && event.mods.super && event.key === "v";
+  return event.kind === "press" && (event.mods.super || event.mods.ctrl) && event.key === "v";
 }
 
 function isPlainKey(event: EngineKeyEvent, key: string): boolean {
@@ -1085,4 +1096,8 @@ function terminalBackend(): Backend | null {
   } catch {
     return null;
   }
+}
+
+function isSshEnvironment(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY);
 }

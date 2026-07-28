@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:engine": "pnpm --filter pixel-react build",
+    "install:electron": "node scripts/install-electron.mjs",
+    "postinstall": "pnpm install:electron",
     "start": "pnpm build:engine && pnpm build && LOGS=\"${XDG_STATE_HOME:-$HOME/.local/state}/pixel/logs\" && mkdir -p \"$LOGS\" && exec electron dist/main.js 2>>\"$LOGS/stderr.log\"",
     "typecheck": "tsc --noEmit"
   },

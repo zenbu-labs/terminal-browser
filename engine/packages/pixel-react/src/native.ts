@@ -12,9 +12,6 @@ export interface NativeEngine {
 
 export type Rgba = [number, number, number, number];
 
-/**
- * fixme: this is a very weird name to export
- */
 export interface EngineInfo {
   width: number;
   height: number;
@@ -91,17 +88,18 @@ export interface DiffRow {
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const binding = require("../native/pixel.node") as {
-  PixelEngine: new (tty?: string) => NativeEngine; // we are we callign this native engine wut
+  PixelEngine: new (tty: string | undefined, sharedMemoryFrames: boolean) => NativeEngine;
   highlight(source: string, language: string): HighlightSpan[];
   highlightCaptures(): string[];
   diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];
   parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[];
 };
 
-export function createNativeEngine(tty?: string): NativeEngine {
-  const pixelEngine =  new binding.PixelEngine(tty);
-
-  return pixelEngine
+export function createNativeEngine(
+  tty: string | undefined,
+  sharedMemoryFrames: boolean,
+): NativeEngine {
+  return new binding.PixelEngine(tty, sharedMemoryFrames);
 }
 
 export function highlight(source: string, language: string): HighlightSpan[] {

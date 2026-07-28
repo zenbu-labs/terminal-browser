@@ -7,6 +7,7 @@ export interface InputTarget {
   scale(): number;
   focus(): void;
   cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  cdpInput: boolean;
 }
 
 /** Translates engine pointer/wheel/key events into chromium input events for
@@ -43,6 +44,26 @@ export class PageInput {
     if (event.kind === "up" && button) this.pressed.delete(button);
     const modifiers = this.modifiers(event.mods);
     for (const pressed of this.pressed) modifiers.push(`${pressed}buttondown`);
+    if (this.target.cdpInput) {
+      void this.target.cdp("Input.dispatchMouseEvent", {
+        type:
+          event.kind === "down"
+            ? "mousePressed"
+            : event.kind === "up"
+              ? "mouseReleased"
+              : "mouseMoved",
+        x,
+        y,
+        button: button ?? "none",
+        buttons: cdpButtons(this.pressed),
+        clickCount: event.kind === "move" ? 0 : this.activeClickCount,
+        modifiers: cdpModifiers(event.mods),
+        pointerType: "mouse",
+      });
+      this.lastSentX = x;
+      this.lastSentY = y;
+      return;
+    }
     this.target.contents().sendInputEvent({
       type:
         event.kind === "down"
@@ -69,24 +90,38 @@ export class PageInput {
       return;
     }
     const scale = this.target.scale();
-    this.wheelRemainderX += -event.deltaX / scale;
-    this.wheelRemainderY += -event.deltaY / scale;
+    this.wheelRemainderX += event.deltaX / scale;
+    this.wheelRemainderY += event.deltaY / scale;
     const deltaX = wholeDelta(this.wheelRemainderX);
     const deltaY = wholeDelta(this.wheelRemainderY);
     this.wheelRemainderX -= deltaX;
     this.wheelRemainderY -= deltaY;
     if (deltaX === 0 && deltaY === 0) return;
+    if (this.target.cdpInput) {
+      // the devtools protocol negates wheel deltas internally, so it takes
+      // them with the DOM sign — opposite of sendInputEvent below
+      void this.target.cdp("Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        x: this.lastX,
+        y: this.lastY,
+        deltaX,
+        deltaY,
+        modifiers: cdpModifiers(event.mods),
+        pointerType: "mouse",
+      });
+      return;
+    }
     this.target.contents().sendInputEvent({
       type: "mouseWheel",
       x: this.lastX,
       y: this.lastY,
-      deltaX,
-      deltaY,
+      deltaX: -deltaX,
+      deltaY: -deltaY,
       // chromium exposes wheelTicks*120 to pages as the legacy wheelDelta;
       // js scrollers like monaco read only that, so zero ticks kill their
       // scrolling. real macOS trackpads report one tick per 40 pixels
-      wheelTicksX: event.precise ? deltaX / 40 : Math.sign(deltaX),
-      wheelTicksY: event.precise ? deltaY / 40 : Math.sign(deltaY),
+      wheelTicksX: event.precise ? -deltaX / 40 : Math.sign(-deltaX),
+      wheelTicksY: event.precise ? -deltaY / 40 : Math.sign(-deltaY),
       hasPreciseScrollingDeltas: event.precise,
       canScroll: true,
       // trackpad pinch reaches pages the way chromium delivers it natively:
@@ -105,6 +140,18 @@ export class PageInput {
   private pinch(event: WheelEvent) {
     const pinchScale = 1 - event.deltaY / 100;
     if (pinchScale <= 0) return;
+    if (this.target.cdpInput) {
+      void this.target.cdp("Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        x: this.lastX,
+        y: this.lastY,
+        deltaX: 0,
+        deltaY: -100 * Math.log(pinchScale),
+        modifiers: 2,
+        pointerType: "mouse",
+      });
+      return;
+    }
     this.target.contents().sendInputEvent({
       type: "mouseWheel",
       x: this.lastX,
@@ -196,11 +243,6 @@ export class PageInput {
     }
     this.sentKeys.clear();
   }
-  /**
-   * 
-   * why are we hard coding huerestics for vscode web??
-   * 
-   */
 
   // vs code web never acts on Enter keydowns synthesized by sendInputEvent —
   // its quick-open accept keybinding ignores them (identical DOM events
@@ -285,6 +327,14 @@ function cdpModifiers(mods: { shift: boolean; alt: boolean; ctrl: boolean; super
   );
 }
 
+function cdpButtons(pressed: Set<"left" | "middle" | "right">) {
+  return (
+    (pressed.has("left") ? 1 : 0) |
+    (pressed.has("right") ? 2 : 0) |
+    (pressed.has("middle") ? 4 : 0)
+  );
+}
+
 const EDITING_KEY_INFO: Record<string, { key: string; code: string; keyCode: number }> = {
   backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
   left: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
@@ -306,7 +356,7 @@ const EDITING_KEY_INFO: Record<string, { key: string; code: string; keyCode: num
  * when the combo is not an editing shortcut and should use the normal path */
 function editingCommands(event: EngineKeyEvent): string[] | null {
   const { key, mods } = event;
-  if (mods.ctrl) return controlEditingCommands(event);
+  if (process.platform === "darwin" && mods.ctrl) return controlEditingCommands(event);
   const select = mods.shift ? "AndModifySelection" : "";
   if (key === "backspace") {
     if (mods.super) return ["deleteToBeginningOfLine"];
@@ -332,11 +382,6 @@ function editingCommands(event: EngineKeyEvent): string[] | null {
   return null;
 }
 
-/**
- * 
- * this is extremly odd to me and makes 0 sense and reads as slop
- * 
- */
 // Ghostty's default keybinds rewrite cmd+backspace into ctrl+u, cmd+left/right
 // into ctrl+a/ctrl+e, and option+arrows into esc b/f before the engine sees
 // them, so the mac editing combos arrive here as these control keys (mirrors

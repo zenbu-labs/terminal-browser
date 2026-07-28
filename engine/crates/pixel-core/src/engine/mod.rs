@@ -1,4 +1,3 @@
-// really? i guess that makes sense
 mod clipboard;
 mod compositor;
 mod doc;
@@ -61,6 +60,7 @@ pub struct EngineConfig {
     pub cell_metrics_font: usize,
     pub watch_resize: bool,
     pub tty: Option<String>,
+    pub shared_memory_frames: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -305,8 +305,8 @@ impl Engine {
     pub fn new(config: EngineConfig) -> io::Result<Self> {
         assert!(!config.fonts.is_empty());
         let mut term = match &config.tty {
-            Some(path) => Terminal::open(path)?,
-            None => Terminal::new()?,
+            Some(path) => Terminal::open(path, config.shared_memory_frames)?,
+            None => Terminal::new(config.shared_memory_frames)?,
         };
         if config.watch_resize {
             term.watch_resize()?;

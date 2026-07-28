@@ -15,7 +15,7 @@ export interface ControlHost {
   state(): BrowserState;
   openTab(url?: string): void;
   tabs(): unknown;
-  viewport(): { width: number; height: number } | null;
+  viewport(): { width: number; height: number; scale: number } | null;
 }
 
 interface ControlRequest {

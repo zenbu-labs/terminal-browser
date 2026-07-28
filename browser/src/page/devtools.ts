@@ -1,11 +1,13 @@
 import { BrowserWindow, screen } from "electron";
-import type { OffscreenSharedTexture, WebContents } from "electron";
+import type { WebContents } from "electron";
 import type { Surface } from "pixel-react";
 import type { DevtoolsDock } from "pixel-store";
 import { cursorShapeFor } from "./cursor";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
 import type { BrowserSurfaceLayout } from "./types";
+import { offscreenOptions, presentPaint } from "./offscreen";
+import { Screencast } from "./screencast";
 
 export type DevtoolsAction = "close" | "dock-bottom" | "dock-right";
 
@@ -19,6 +21,7 @@ export class DevtoolsWindow {
   private readonly surface: Surface;
   private readonly window: BrowserWindow;
   private readonly onAction: (action: DevtoolsAction) => void;
+  private readonly screencast: Screencast | null;
   private layout: BrowserSurfaceLayout;
   private dock: DevtoolsDock;
   private visible = true;
@@ -42,6 +45,7 @@ export class DevtoolsWindow {
     renderScale: number,
     onAction: (action: DevtoolsAction) => void,
     onClosed: () => void,
+    onError: (error: Error) => void,
   ) {
     this.pageContents = pageContents;
     this.surface = surface;
@@ -61,11 +65,7 @@ export class DevtoolsWindow {
       fullscreenable: false,
       resizable: false,
       webPreferences: {
-        offscreen: {
-          useSharedTexture: true,
-          sharedTexturePixelFormat: "argb",
-          deviceScaleFactor: renderScale,
-        },
+        offscreen: offscreenOptions(renderScale),
         sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
@@ -78,20 +78,31 @@ export class DevtoolsWindow {
       scale: () => this.layout.scale,
       focus: () => this.focus(),
       cdp: (method, params) => this.cdp(method, params),
+      cdpInput: process.platform === "linux",
     });
+    this.screencast =
+      process.platform === "linux"
+        ? new Screencast(surface, this.visible, {
+            cdp: (method, params) => this.cdp(method, params),
+            metrics: () => ({
+              width: Math.max(1, Math.round(this.layout.width / this.layout.scale)),
+              height: Math.max(1, Math.round(this.layout.height / this.layout.scale)),
+              deviceScaleFactor: renderScale,
+              mobile: false,
+            }),
+            stopped: () => this.destroyed,
+            onError,
+          })
+        : null;
     this.window.webContents.setFrameRate(frameRate());
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
-    this.window.webContents.on("paint", (event) => {
-      const texture = event.texture;
-      if (!texture) return;
-      if (!this.visible) {
-        texture.release();
-        return;
-      }
-      this.submitTexture(texture);
-    });
+    if (process.platform === "darwin") {
+      this.window.webContents.on("paint", (event) => {
+        presentPaint(this.surface, event, this.visible);
+      });
+    }
     this.window.webContents.on("cursor-changed", (_event, type) => {
       const shape = cursorShapeFor(type);
       if (shape === this.cursorShape) return;
@@ -114,6 +125,7 @@ export class DevtoolsWindow {
     });
     pageContents.setDevToolsWebContents(this.window.webContents);
     pageContents.openDevTools({ mode: "detach" }); // not really detached since we are compositing it into one "window"
+    this.screencast?.start();
   }
 
   resize(layout: BrowserSurfaceLayout, options?: { keepFrame?: boolean }) {
@@ -128,11 +140,15 @@ export class DevtoolsWindow {
     }
     this.layout = layout;
     if (!options?.keepFrame) this.surface.clear();
-    this.window.setContentSize(
-      Math.max(1, Math.round(layout.width / layout.scale)),
-      Math.max(1, Math.round(layout.height / layout.scale)),
-      false,
-    );
+    if (this.screencast) {
+      void this.screencast.reconfigure();
+    } else {
+      this.window.setContentSize(
+        Math.max(1, Math.round(layout.width / layout.scale)),
+        Math.max(1, Math.round(layout.height / layout.scale)),
+        false,
+      );
+    }
   }
 
   showPanel(panel: string) {
@@ -178,7 +194,9 @@ export class DevtoolsWindow {
   setVisible(visible: boolean) {
     if (this.visible === visible || this.destroyed) return;
     this.visible = visible;
-    if (visible) {
+    if (this.screencast) {
+      this.screencast.setVisible(visible);
+    } else if (visible) {
       this.window.webContents.setFrameRate(frameRate());
       this.window.webContents.invalidate();
     } else {
@@ -211,17 +229,6 @@ export class DevtoolsWindow {
     this.window.destroy();
   }
 
-  private submitTexture(texture: OffscreenSharedTexture) {
-    try {
-      const info = texture.textureInfo;
-      const handle = info.handle.ioSurface;
-      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
-      this.surface.present({ ioSurface: handle });
-    } finally {
-      texture.release();
-    }
-  }
-
   private async installControls() {
     await this.attachCdp();
     await this.window.webContents.executeJavaScript(controlsScript(this.dock), true);
@@ -232,6 +239,10 @@ export class DevtoolsWindow {
     this.window.webContents.debugger.attach("1.3");
     this.cdpAttached = true;
     this.window.webContents.debugger.on("message", (_event, method, params) => {
+      if (method === "Page.screencastFrame") {
+        this.screencast?.handleFrame(params);
+        return;
+      }
       if (method !== "Runtime.bindingCalled") return;
       const call = params as { name: string; payload: string };
       if (call.name !== "__pixelDevtools") return;
