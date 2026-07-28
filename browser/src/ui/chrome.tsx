@@ -6,8 +6,8 @@ import { DeviceFrame } from "./device-frame";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
 import { PageContextMenu } from "./context-menu";
-import { CloseConfirmCard, NewTabCard, PaletteCard, UrlCard } from "./modals";
-import { FindBar, ZoomHud } from "./overlays";
+import { NewTabCard, PaletteCard, UrlCard } from "./modals";
+import { DownloadHud, FindBar, ZoomHud } from "./overlays";
 import { PopupModal } from "./popup-modal";
 import { TabStrip } from "./tab-strip";
 import { makeTheme } from "./theme";
@@ -16,6 +16,7 @@ import type {
   ChromeActions,
   ChromeLayout,
   DeviceView,
+  DownloadView,
   NewTabView,
   PageMenuView,
   PaletteView,
@@ -34,10 +35,10 @@ export function Chrome({
   device,
   tabs,
   newTab,
-  closeConfirm,
   urlEdit,
   popup,
   zoomHud,
+  download,
   pageMenu,
   dividerEngaged,
   pageSurface,
@@ -54,11 +55,11 @@ export function Chrome({
   device: DeviceView | null;
   tabs: TabRow[];
   newTab: NewTabView | null;
-  closeConfirm: boolean;
   urlEdit: boolean;
   popup: PopupView | null;
   /** zoom factor to flash in a transient bubble after a cmd+/- press */
   zoomHud: number | null;
+  download: DownloadView | null;
   pageMenu: PageMenuView | null;
   dividerEngaged: boolean;
   pageSurface: Surface;
@@ -110,6 +111,7 @@ export function Chrome({
       {zoomHud != null && (
         <ZoomHud factor={zoomHud} layout={layout} theme={theme} findOpen={findOpen} />
       )}
+      {download && <DownloadHud download={download} layout={layout} theme={theme} />}
       {popup && (
         <PopupModal
           view={popup}
@@ -120,7 +122,6 @@ export function Chrome({
         />
       )}
       {newTab && <NewTabCard view={newTab} actions={actions} layout={layout} theme={theme} />}
-      {closeConfirm && <CloseConfirmCard actions={actions} layout={layout} theme={theme} />}
       {urlEdit && <UrlCard state={state} actions={actions} layout={layout} theme={theme} />}
       {palette && <PaletteCard view={palette} actions={actions} layout={layout} theme={theme} />}
     </Box>

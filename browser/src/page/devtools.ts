@@ -1,13 +1,14 @@
 import { BrowserWindow, screen } from "electron";
-import type { WebContents } from "electron";
+import type { OffscreenSharedTexture, WebContents } from "electron";
 import type { Surface } from "pixel-react";
 import type { DevtoolsDock } from "pixel-store";
 import { cursorShapeFor } from "./cursor";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
-import type { BrowserSurfaceLayout } from "./types";
-import { offscreenOptions, presentPaint } from "./offscreen";
+import { offscreenOptions } from "./offscreen";
 import { Screencast } from "./screencast";
+import { cssSize, damageOf, paintedNothing } from "./types";
+import type { BrowserSurfaceLayout } from "./types";
 
 export type DevtoolsAction = "close" | "dock-bottom" | "dock-right";
 
@@ -26,6 +27,7 @@ export class DevtoolsWindow {
   private dock: DevtoolsDock;
   private visible = true;
   private focused = false;
+  private wholeSurfaceNext = true;
   private cdpAttached = false;
   private destroyed = false;
   private pendingPanel: string | null = null;
@@ -53,8 +55,7 @@ export class DevtoolsWindow {
     this.dock = dock;
     this.onAction = onAction;
     this.window = new BrowserWindow({
-      width: Math.max(1, Math.round(layout.width / layout.scale)),
-      height: Math.max(1, Math.round(layout.height / layout.scale)),
+      ...cssSize(layout.width, layout.height, layout.scale),
       useContentSize: true,
       backgroundColor: background,
       show: false,
@@ -85,8 +86,7 @@ export class DevtoolsWindow {
         ? new Screencast(surface, this.visible, {
             cdp: (method, params) => this.cdp(method, params),
             metrics: () => ({
-              width: Math.max(1, Math.round(this.layout.width / this.layout.scale)),
-              height: Math.max(1, Math.round(this.layout.height / this.layout.scale)),
+              ...cssSize(this.layout.width, this.layout.height, this.layout.scale),
               deviceScaleFactor: renderScale,
               mobile: false,
             }),
@@ -100,7 +100,13 @@ export class DevtoolsWindow {
     screen.on("display-metrics-changed", this.onDisplayChange);
     if (process.platform === "darwin") {
       this.window.webContents.on("paint", (event) => {
-        presentPaint(this.surface, event, this.visible);
+        const texture = event.texture;
+        if (!texture) return;
+        if (!this.visible) {
+          texture.release();
+          return;
+        }
+        this.submitTexture(texture);
       });
     }
     this.window.webContents.on("cursor-changed", (_event, type) => {
@@ -143,11 +149,8 @@ export class DevtoolsWindow {
     if (this.screencast) {
       void this.screencast.reconfigure();
     } else {
-      this.window.setContentSize(
-        Math.max(1, Math.round(layout.width / layout.scale)),
-        Math.max(1, Math.round(layout.height / layout.scale)),
-        false,
-      );
+      const size = cssSize(layout.width, layout.height, layout.scale);
+      this.window.setContentSize(size.width, size.height, false);
     }
   }
 
@@ -196,11 +199,15 @@ export class DevtoolsWindow {
     this.visible = visible;
     if (this.screencast) {
       this.screencast.setVisible(visible);
-    } else if (visible) {
-      this.window.webContents.setFrameRate(frameRate());
-      this.window.webContents.invalidate();
     } else {
-      this.window.webContents.setFrameRate(4);
+      if (visible) {
+        // one surface across every tab's inspector, so its pixels belong to whichever one drew last
+        this.wholeSurfaceNext = true;
+        this.window.webContents.setFrameRate(frameRate());
+        this.window.webContents.invalidate();
+      } else {
+        this.window.webContents.setFrameRate(4);
+      }
     }
   }
 
@@ -227,6 +234,20 @@ export class DevtoolsWindow {
     screen.off("display-metrics-changed", this.onDisplayChange);
     if (!this.pageContents.isDestroyed()) this.pageContents.closeDevTools();
     this.window.destroy();
+  }
+
+  private submitTexture(texture: OffscreenSharedTexture) {
+    try {
+      const info = texture.textureInfo;
+      const handle = info.handle.ioSurface;
+      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
+      if (paintedNothing(info) && !this.wholeSurfaceNext) return;
+      const damage = this.wholeSurfaceNext ? undefined : damageOf(info);
+      this.wholeSurfaceNext = false;
+      this.surface.present({ ioSurface: handle, damage });
+    } finally {
+      texture.release();
+    }
   }
 
   private async installControls() {

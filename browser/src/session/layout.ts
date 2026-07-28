@@ -1,6 +1,6 @@
 import type { EngineInfo } from "pixel-react";
 import type { DevtoolsDock } from "pixel-store";
-import type { BrowserSurfaceLayout, DeviceSpec } from "../page/types";
+import { snapToCssGrid, type BrowserSurfaceLayout, type DeviceSpec } from "../page/types";
 import type { ChromeLayout, DeviceView } from "../ui/types";
 
 export type DeviceMode = "desktop" | "phone" | "tablet";
@@ -120,12 +120,15 @@ export function computeLayout(
   if (mode === "desktop") {
     const gap = Math.max(2, Math.round(info.basePx * 0.25));
     const split = splitForDevtools(chrome.page, devtools, gap);
-    chrome.page = split.page;
-    chrome.devtools = split.devtools;
+    chrome.page = { ...split.page, ...snapToCssGrid(split.page.width, split.page.height, scale) };
+    chrome.devtools = split.devtools && {
+      ...split.devtools,
+      ...snapToCssGrid(split.devtools.width, split.devtools.height, scale),
+    };
     return {
       chrome,
-      surface: { ...split.page, scale },
-      devtools: split.devtools ? { ...split.devtools, scale } : null,
+      surface: { ...chrome.page, scale },
+      devtools: chrome.devtools ? { ...chrome.devtools, scale } : null,
       device: null,
     };
   }
@@ -149,8 +152,7 @@ export function computeLayout(
     surface: {
       x: screen.x,
       y: screen.y,
-      width: screenW,
-      height: screenH,
+      ...snapToCssGrid(screenW, screenH, s),
       scale: s,
     },
     devtools: null,

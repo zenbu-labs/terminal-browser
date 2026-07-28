@@ -1,4 +1,5 @@
 import { BrowserWindow, screen } from "electron";
+import type { OffscreenSharedTexture } from "electron";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -14,13 +15,13 @@ import type { DevtoolsDock } from "pixel-store";
 import { FaviconCache } from "./favicon";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
+import { offscreenOptions } from "./offscreen";
 import { PopupWindow } from "./popup";
-import { initialBrowserState } from "./types";
+import { Screencast } from "./screencast";
+import { cssSize, damageOf, initialBrowserState, paintedNothing } from "./types";
 import type { BrowserState, BrowserSurfaceLayout, DeviceSpec } from "./types";
 import { stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
-import { offscreenOptions, presentPaint } from "./offscreen";
-import { Screencast } from "./screencast";
 
 export class BrowserController {
   private readonly surface: Surface;
@@ -36,12 +37,14 @@ export class BrowserController {
   private contentFocused = false;
   private readonly input: PageInput;
   private readonly partition: string | null;
-  private readonly background: string;
+  private readonly cwd: string;
+  private background: string;
   private pendingPopupSize: { width: number; height: number } | null = null;
   private findText = "";
   private readonly favicons = new FaviconCache();
   private faviconSeq = 0;
   private cdpAttached = false;
+  private cachedTargetId: string | null = null;
   private readonly screencast: Screencast | null;
   private emitHandlers = new Map<string, (data: unknown) => void>();
   private device: DeviceSpec | null = null;
@@ -51,6 +54,8 @@ export class BrowserController {
     this.window.webContents.setFrameRate(this.visible ? frameRate() : 4);
   };
   private visible = true;
+  private painted = false;
+  private wholeSurfaceNext = true;
   cursorShape = "default";
   onCursorChange: ((shape: string) => void) | null = null;
   onOpenTab: ((url: string, activate: boolean) => void) | null = null;
@@ -68,6 +73,7 @@ export class BrowserController {
     devtoolsSurface: Surface,
     layout: BrowserSurfaceLayout,
     initialUrl: string,
+    cwd: string,
     background: string,
     visible: boolean,
     partition: string | null,
@@ -75,6 +81,7 @@ export class BrowserController {
     onError: (error: Error) => void,
   ) {
     this.partition = partition;
+    this.cwd = cwd;
     this.surface = surface;
     this.popupSurface = popupSurface;
     this.devtoolsSurface = devtoolsSurface;
@@ -145,13 +152,17 @@ export class BrowserController {
     this.defaultUserAgent = this.window.webContents.getUserAgent();
     if (process.platform === "darwin") {
       this.window.webContents.on("paint", (event) => {
-        presentPaint(this.surface, event, this.visible);
+        const texture = event.texture;
+        if (!texture) return;
+        if (!this.visible) {
+          texture.release();
+          return;
+        }
+        this.submitTexture(texture);
       });
     }
     this.window.webContents.on("did-start-loading", () => this.updateState({ loading: true }));
-    this.window.webContents.on("did-stop-loading", () => {
-      this.updateNavigation(false);
-    });
+    this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
       this.updateNavigation(false, url);
@@ -217,7 +228,8 @@ export class BrowserController {
       return { action: "deny" };
     });
     this.window.webContents.on("did-create-window", (child) => this.adoptPopup(child));
-    void this.window.loadURL(normalizeUrl(initialUrl));
+    if (visible) this.surface.clear();
+    void this.window.loadURL(normalizeUrl(initialUrl, cwd));
     this.onState(this.state);
   }
 
@@ -242,7 +254,7 @@ export class BrowserController {
   }
 
   navigate(value: string) {
-    void this.window.webContents.loadURL(normalizeUrl(value));
+    void this.window.webContents.loadURL(normalizeUrl(value, this.cwd));
   }
 
   back() {
@@ -272,6 +284,35 @@ export class BrowserController {
     return this.window.webContents.getOSProcessId();
   }
 
+  async fingerprint(): Promise<number | null> {
+    if (this.stopped) return null;
+    try {
+      await this.attachCdp();
+      const result = (await this.cdp("Runtime.evaluate", {
+        expression: "performance.timeOrigin",
+        returnByValue: true,
+      })) as { result?: { value?: number } };
+      return typeof result.result?.value === "number" ? result.result.value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async targetId(): Promise<string | null> {
+    if (this.cachedTargetId) return this.cachedTargetId;
+    if (this.stopped) return null;
+    try {
+      await this.attachCdp();
+      const info = (await this.cdp("Target.getTargetInfo")) as {
+        targetInfo?: { targetId?: string };
+      };
+      this.cachedTargetId = info.targetInfo?.targetId ?? null;
+    } catch {
+      this.cachedTargetId = null;
+    }
+    return this.cachedTargetId;
+  }
+
   async attachCdp(): Promise<void> {
     if (this.cdpAttached) return;
     this.window.webContents.debugger.attach("1.3");
@@ -293,6 +334,24 @@ export class BrowserController {
     await this.cdp("Runtime.enable");
     await this.cdp("Runtime.addBinding", { name: "__pixelEmit" });
     await this.cdp("Page.enable");
+    await this.emulateColorScheme();
+  }
+
+  /** Follows the terminal's theme, so a page honouring prefers-color-scheme flips with it. */
+  async setBackground(background: string): Promise<void> {
+    this.background = background;
+    this.window.setBackgroundColor(background);
+    await this.emulateColorScheme();
+  }
+
+  private async emulateColorScheme(): Promise<void> {
+    if (!this.cdpAttached) return;
+    const n = parseInt(this.background.slice(1), 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    const dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+    await this.cdp("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }],
+    });
   }
 
   cdp(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -334,6 +393,9 @@ export class BrowserController {
     this.blurDevtools();
     if (this.contentFocused) return;
     this.window.focus();
+    /**
+     * web contents, oh
+     */
     this.window.webContents.focus();
     this.contentFocused = true;
     void this.setFocusEmulation(true).catch(() => {});
@@ -446,6 +508,8 @@ export class BrowserController {
       this.screencast.setVisible(visible);
     } else {
       if (visible) {
+        if (!this.painted) this.surface.clear();
+        this.wholeSurfaceNext = true;
         this.window.webContents.setFrameRate(frameRate());
         this.window.webContents.invalidate();
       } else {
@@ -456,10 +520,7 @@ export class BrowserController {
 
   private contentSize(layout: BrowserSurfaceLayout) {
     if (this.device) return { width: this.device.width, height: this.device.height };
-    return {
-      width: Math.max(1, Math.round(layout.width / layout.scale)),
-      height: Math.max(1, Math.round(layout.height / layout.scale)),
-    };
+    return cssSize(layout.width, layout.height, layout.scale);
   }
 
   setDevice(spec: DeviceSpec | null) {
@@ -491,6 +552,21 @@ export class BrowserController {
         this.window.webContents.disableDeviceEmulation();
       }
       this.window.webContents.reload();
+    }
+  }
+
+  private submitTexture(texture: OffscreenSharedTexture) {
+    try {
+      const info = texture.textureInfo;
+      const handle = info.handle.ioSurface;
+      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
+      if (paintedNothing(info) && !this.wholeSurfaceNext) return;
+      const damage = this.wholeSurfaceNext ? undefined : damageOf(info);
+      this.wholeSurfaceNext = false;
+      this.surface.present({ ioSurface: handle, damage });
+      this.painted = true;
+    } finally {
+      texture.release();
     }
   }
 
@@ -557,11 +633,11 @@ export class BrowserController {
 }
 
 function browserRenderScale(layout: BrowserSurfaceLayout) {
-  const explicit = Number(process.env.PIXEL_BROWSER_RENDER_SCALE);
+  const explicit = Number(process.env.TERMINAL_BROWSER_RENDER_SCALE);
   if (Number.isFinite(explicit) && explicit > 0) {
     return Math.max(0.5, Math.min(layout.scale, explicit));
   }
-  const maxPixels = Number(process.env.PIXEL_BROWSER_MAX_PIXELS ?? 0);
+  const maxPixels = Number(process.env.TERMINAL_BROWSER_MAX_PIXELS ?? 0);
   if (!Number.isFinite(maxPixels) || maxPixels <= 0) return layout.scale;
   const cssPixels = layout.width * layout.height / (layout.scale * layout.scale);
   return Math.max(0.5, Math.min(layout.scale, Math.sqrt(maxPixels / cssPixels)));

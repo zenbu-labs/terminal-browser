@@ -12,7 +12,7 @@ import {
   reconciler,
 } from "./reconciler-config";
 import type { PasteSource, PastedImage, SelectionPart } from "./reconciler-config";
-import type { EngineInfo } from "./native";
+import type { EngineInfo, TerminalColors } from "./native";
 import { Surface } from "./surface";
 import { handleDevtoolsKey } from "./devtools/app";
 import { installConsoleCapture } from "./devtools/console-capture";
@@ -27,6 +27,8 @@ import {
   unmountDevtools,
 } from "./devtools/controller";
 import { installFiberHook } from "./devtools/fiber-hook";
+import { publishColors } from "./colors";
+import { refreshTheme } from "./devtools/theme";
 import {
   devtoolsStore,
   engineLogs,
@@ -87,8 +89,10 @@ export type {
   MarkdownRow,
   MarkdownSpan,
   Rgba,
+  TerminalColors,
 } from "./native";
 export { HIGHLIGHT_CAPTURES, diff, highlight, parseMarkdown } from "./native";
+export { useTerminalColors } from "./colors";
 export { Surface } from "./surface";
 export type { SurfaceFrame } from "./surface";
 export { Markdown } from "./markdown";
@@ -106,17 +110,13 @@ export function setKeyCapture(keys: string[]): void {
   bridge.flush();
 }
 
-/** OSC 22 (kitty pointer-shape protocol): set the terminal's mouse pointer to
- * a CSS cursor shape name ("default", "pointer", "text", …) while it hovers
- * this window. Terminals without support ignore it. */
+
 export function setPointerShape(shape: string): void {
   const bridge = getBridge();
   bridge.push(APP_VIEW, { op: "setPointerShape", shape });
   bridge.flush();
 }
 
-/** Reads any image on the clipboard; it arrives at RootOptions.onPasteImage.
- * For apps that paste images without a focused <Input> (e.g. onKey cmd+v). */
 export function requestClipboardImage(): void {
   const bridge = getBridge();
   bridge.push(APP_VIEW, { op: "requestClipboardImage" });
@@ -142,14 +142,15 @@ export interface RootOptions {
   onRightClick?: (event: { x: number; y: number }) => void;
   onPaste?: (text: string) => void;
   onFocus?: (focused: boolean) => void;
-  /** image pastes that arrive with no focused input, or via requestClipboardImage() */
   onPasteImage?: (image: PastedImage) => void;
   onEngineExit?: (error: string | null) => void;
   onResize?: (size: { width: number; height: number; basePx: number }) => void;
+  /** the terminal's palette changed — rebuild any theme derived from it */
+  onColors?: (colors: TerminalColors) => void;
   keyEventTypes?: boolean;
   devtools?: boolean;
   tty?: string;
-  sharedMemoryFrames?: boolean;
+  tmux?: boolean;
 }
 
 export interface PixelRoot {
@@ -162,6 +163,7 @@ export interface PixelRoot {
   stop(): void;
   openDevtools(): void;
   closeDevtools(): void;
+  // nudge resize sounds like a ridiculous api
   nudgeResize(): void;
   setPointerShape(shape: string): void;
   setKeyCapture(keys: string[]): void;
@@ -172,9 +174,12 @@ export interface SurfaceStats {
   submitted: number;
   coalesced: number;
   presented: number;
-  bytes: number;
+  rows: number;
 }
 
+/**
+ * this looks like a really sus data type to me (probably should be a discriminated union over type?)
+ */
 interface EngineEventJson {
   type: string;
   atMs?: number;
@@ -190,6 +195,7 @@ interface EngineEventJson {
   width?: number;
   height?: number;
   basePx?: number;
+  colors?: TerminalColors;
   message?: string;
   error?: string | null;
   path?: string;
@@ -228,17 +234,21 @@ interface EngineEventJson {
   marks?: unknown[];
 }
 
+function applyColors(colors: TerminalColors): void {
+  publishColors(colors);
+  refreshTheme(colors);
+  devtoolsStore.update((s) => ({ ...s, background: colors.background }));
+}
+
 export function createRoot(options: RootOptions = {}): PixelRoot {
-  const bridge =
-    options.tty || options.sharedMemoryFrames !== undefined
-      ? new Bridge(options.tty, options.sharedMemoryFrames ?? true)
-      : getBridge();
+  const bridge = options.tty ? new Bridge(options.tty, options.tmux) : getBridge();
   const devtoolsEnabled = options.devtools !== false && bridge === getBridge();
   if (devtoolsEnabled) {
     installConsoleCapture();
     installFiberHook();
   }
   const info = JSON.parse(bridge.engine.info()) as EngineInfo;
+  applyColors(info.colors);
   bridge.engine.setKeyEventTypes(!!options.keyEventTypes);
   const container: Container = { bridge, view: APP_VIEW, children: [] };
   bridge.containers[APP_VIEW] = container;
@@ -408,6 +418,12 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
       case "mouseMove": {
         const props = bridge.propsById[view]?.get(event.node!);
         props?.onMouseMove?.({ x: event.x!, y: event.y! });
+        break;
+      }
+      case "colors": {
+        info.colors = event.colors!;
+        applyColors(info.colors);
+        options.onColors?.(info.colors);
         break;
       }
       case "resize": {

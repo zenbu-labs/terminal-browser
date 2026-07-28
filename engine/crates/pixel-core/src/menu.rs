@@ -47,6 +47,35 @@ pub struct MenuStyle {
     pub border: Color,
 }
 
+impl MenuStyle {
+    pub fn from_terminal(colors: &crate::terminal::TerminalColors) -> Self {
+        let Some(bg) = colors.background else {
+            return Self::default();
+        };
+        let Some(fg) = colors.foreground else {
+            return Self::default();
+        };
+        Self {
+            background: mix(bg, fg, 0.06),
+            foreground: fg,
+            disabled: mix(fg, bg, 0.55),
+            hover: mix(bg, fg, 0.16),
+            shortcut: mix(fg, bg, 0.4),
+            border: mix(bg, fg, 0.22),
+        }
+    }
+}
+
+fn mix(base: Color, toward: Color, t: f32) -> Color {
+    let channel = |b: u8, t2: u8| (b as f32 + (t2 as f32 - b as f32) * t) as u8;
+    [
+        channel(base[0], toward[0]),
+        channel(base[1], toward[1]),
+        channel(base[2], toward[2]),
+        base[3],
+    ]
+}
+
 impl Default for MenuStyle {
     fn default() -> Self {
         Self {
@@ -107,6 +136,7 @@ impl MenuController {
         px: f32,
         font: &fontdue::Font,
         include_inspect: bool,
+        style: &MenuStyle,
     ) -> Option<NodeId> {
         let target = tree.hit_any(at.0, at.1);
         let input_target = match tree.hit_target(at.0, at.1) {
@@ -150,7 +180,7 @@ impl MenuController {
         if entries.is_empty() {
             return input_target;
         }
-        let desc = context_menu(entries, at, size, px, font, &MenuStyle::default());
+        let desc = context_menu(entries, at, size, px, font, style);
         let root = tree.root();
         let menu_root = tree.mount(root, desc);
         self.open = Some(OpenMenu {

@@ -3,6 +3,7 @@ export {
   LOGS_DIR,
   FAVICONS_DIR,
   INSTANCES_DIR,
+  AGENT_SOCKETS_DIR,
   DAEMON_SOCKET,
   DB_FILE,
   ensureDataDir,

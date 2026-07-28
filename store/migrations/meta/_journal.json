@@ -15,6 +15,13 @@
       "when": 1784908203080,
       "tag": "0001_medical_molecule_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785035216272,
+      "tag": "0002_fat_marten_broadcloak",
+      "breakpoints": true
     }
   ]
 }

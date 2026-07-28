@@ -2,7 +2,10 @@
   "name": "terminal-graphics-engine",
   "private": true,
   "scripts": {
-    "browser": "pnpm --filter pixel-browser start"
+    "browser": "pnpm --filter terminal-browser start",
+    "build:dist": "scripts/release.sh \"local-$(git rev-parse --short HEAD)\"",
+    "install:dist": "scripts/install-local.sh",
+    "dist": "pnpm build:dist && pnpm install:dist"
   },
   "packageManager": "pnpm@10.13.1",
   "devDependencies": {

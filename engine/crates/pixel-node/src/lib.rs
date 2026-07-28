@@ -24,7 +24,64 @@ use serde_json::json;
 
 use crate::events::event_json;
 use crate::ops::{IdMap, apply_ops};
-use crate::surface::{SurfaceCommand, SurfaceMailbox, SurfaceSubmission};
+use crate::surface::{SurfaceCommand, SurfaceMailbox, SurfacePixels};
+
+fn draw_frame(
+    engine: &mut Engine,
+    frame: &surface::SurfaceFrame,
+) -> std::result::Result<u32, String> {
+    match &frame.pixels {
+        #[cfg(target_os = "macos")]
+        SurfacePixels::Texture(texture) => {
+            let locked = texture.lock()?;
+            engine
+                .draw_surface(
+                    frame.id,
+                    locked.width,
+                    locked.height,
+                    locked.pixels(),
+                    locked.stride,
+                    frame.damage,
+                )
+                .map(|_| locked.height)
+                .map_err(|error| error.to_string())
+        }
+        SurfacePixels::Owned {
+            bgra,
+            width,
+            height,
+        } => engine
+            .draw_surface(
+                frame.id,
+                *width,
+                *height,
+                bgra,
+                *width as usize * 4,
+                frame.damage,
+            )
+            .map(|_| *height)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+#[napi(object)]
+pub struct DamageRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl DamageRect {
+    fn into_rect(self) -> pixel_core::surfaces::Rect {
+        pixel_core::surfaces::Rect {
+            x: self.x,
+            y: self.y,
+            w: self.width,
+            h: self.height,
+        }
+    }
+}
 
 static UI_FONT_BYTES: &[u8] = include_bytes!("../../../examples/typing/assets/InterVariable.ttf");
 static MONO_FONT_BYTES: &[u8] =
@@ -59,7 +116,7 @@ struct SendEngine(Engine);
 #[allow(unsafe_code)]
 unsafe impl Send for SendEngine {}
 
-fn colors_json(colors: &TerminalColors) -> serde_json::Value {
+pub(crate) fn colors_json(colors: &TerminalColors) -> serde_json::Value {
     json!({
         "foreground": colors.foreground,
         "background": colors.background,
@@ -82,7 +139,7 @@ pub struct PixelEngine {
 #[napi]
 impl PixelEngine {
     #[napi(constructor)]
-    pub fn new(tty: Option<String>, shared_memory_frames: bool) -> Result<Self> {
+    pub fn new(tty: Option<String>, tmux: Option<bool>) -> Result<Self> {
         let fonts = vec![
             load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES),
             load_font(SYSTEM_MONO_FONTS, MONO_FONT_BYTES),
@@ -92,7 +149,7 @@ impl PixelEngine {
             cell_metrics_font: 1,
             watch_resize: false,
             tty,
-            shared_memory_frames,
+            tmux: tmux.unwrap_or(false),
         })
         .map_err(err)?;
         let waker = engine.term.waker().map_err(err)?;
@@ -115,6 +172,7 @@ impl PixelEngine {
             tx,
             rx: Some(rx),
             waker,
+            // who even uses you tho
             surfaces: Arc::new(SurfaceMailbox::default()),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
@@ -126,6 +184,9 @@ impl PixelEngine {
         self.info.clone()
     }
 
+    /*
+    this is the function node calls to send data to rust
+     */
     #[napi]
     pub fn apply_ops(&self, ops: String) -> Result<()> {
         let _ = self.tx.send(ops);
@@ -140,20 +201,31 @@ impl PixelEngine {
         bgra: Buffer,
         width: u32,
         height: u32,
+        damage: Option<DamageRect>,
     ) -> Result<()> {
-        let stride = width
-            .checked_mul(4)
-            .map(|bytes| bytes as usize)
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
             .ok_or_else(|| Error::from_reason("surface dimensions overflow"))?;
-        self.surfaces
-            .submit(SurfaceSubmission {
-                id,
-                bgra: bgra.as_ref(),
+        let source = bgra.as_ref();
+        if expected == 0 || source.len() < expected {
+            return Err(Error::from_reason(format!(
+                "surface buffer has {} bytes, expected {expected}",
+                source.len()
+            )));
+        }
+        let mut owned = self.surfaces.take_spare(id);
+        owned.clear();
+        owned.extend_from_slice(&source[..expected]);
+        self.surfaces.submit(
+            id,
+            SurfacePixels::Owned {
+                bgra: owned,
                 width,
                 height,
-                stride,
-            })
-            .map_err(Error::from_reason)?;
+            },
+            damage.map(DamageRect::into_rect),
+        );
         self.waker.wake();
         Ok(())
     }
@@ -166,16 +238,19 @@ impl PixelEngine {
 
     #[napi]
     pub fn surface_stats(&self) -> String {
-        let (submitted, coalesced, presented, bytes) = self.surfaces.stats();
+        let (submitted, coalesced, presented, rows) = self.surfaces.stats();
         json!({
             "submitted": submitted,
             "coalesced": coalesced,
             "presented": presented,
-            "bytes": bytes,
+            "rows": rows,
         })
         .to_string()
     }
 
+    /**
+     * wait i dont get how rust works??
+     */
     #[napi]
     pub fn set_key_event_types(&mut self, enabled: bool) -> Result<()> {
         let engine = self
@@ -236,16 +311,13 @@ impl PixelEngine {
                 for command in surfaces.take() {
                     match command {
                         SurfaceCommand::Frame(frame) => {
-                            let result = engine.draw_surface(
-                                frame.id,
-                                frame.width,
-                                frame.height,
-                                &frame.pixels,
-                            );
-                            surfaces.recycle(frame);
-                            if let Err(error) = result {
-                                surface_error = Some(error.to_string());
-                                break;
+                            let result = draw_frame(&mut engine, &frame);
+                            match result {
+                                Ok(rows) => surfaces.recycle(frame, rows),
+                                Err(error) => {
+                                    surface_error = Some(error);
+                                    break;
+                                }
                             }
                         }
                         SurfaceCommand::Remove(id) => {
@@ -264,7 +336,6 @@ impl PixelEngine {
                         dispatch_to_node.call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
-
             };
             drop(engine);
             if !stop.load(Ordering::Relaxed) {
@@ -293,18 +364,19 @@ impl PixelEngine {
 #[napi]
 impl PixelEngine {
     #[napi]
-    pub fn update_surface_texture(&self, id: u32, handle: Buffer) -> Result<()> {
-        let surface = iosurface::LockedSurface::from_handle(handle.as_ref())
-            .map_err(Error::from_reason)?;
-        self.surfaces
-            .submit(SurfaceSubmission {
-                id,
-                bgra: surface.pixels(),
-                width: surface.width,
-                height: surface.height,
-                stride: surface.stride,
-            })
-            .map_err(Error::from_reason)?;
+    pub fn update_surface_texture(
+        &self,
+        id: u32,
+        handle: Buffer,
+        damage: Option<DamageRect>,
+    ) -> Result<()> {
+        let surface =
+            iosurface::RetainedSurface::from_handle(handle.as_ref()).map_err(Error::from_reason)?;
+        self.surfaces.submit(
+            id,
+            SurfacePixels::Texture(surface),
+            damage.map(DamageRect::into_rect),
+        );
         self.waker.wake();
         Ok(())
     }

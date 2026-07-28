@@ -17,23 +17,26 @@ impl Engine {
     pub(super) fn handle_mouse(&mut self, mouse: Mouse, out: &mut Vec<EngineEvent>) -> io::Result<()> {
         let point = (mouse.x as f32, mouse.y as f32);
         self.cursor = Some(point);
-        self.last_pointer_activity = Some(Instant::now());
+        let now = Instant::now();
+        self.last_pointer_activity = Some(now);
         if matches!(mouse.kind, MouseKind::Down | MouseKind::Up) {
             self.focus_click = None;
         }
-        if matches!(
+        let scrolling = matches!(
             mouse.kind,
             MouseKind::ScrollUp
                 | MouseKind::ScrollDown
                 | MouseKind::ScrollLeft
                 | MouseKind::ScrollRight
-        ) && mouse.mods == Mods::default()
-            && self.use_native
-            && self.native.is_some()
-        {
+        );
+        if self.use_native && self.native.is_some() {
             self.ingest_native();
-            if self.pairing.on_wheel_tick() {
-                return Ok(());
+            if scrolling && mouse.mods == Mods::default() {
+                if self.pairing.on_wheel_tick(point, now, &mut self.hover_oracle) {
+                    return Ok(());
+                }
+            } else {
+                self.hover_oracle.note_local(point, now);
             }
         }
         if matches!(mouse.kind, MouseKind::Down | MouseKind::Up | MouseKind::Move)
@@ -420,6 +423,7 @@ impl Engine {
 
     fn open_menu(&mut self, view: usize, at: (f32, f32)) {
         let size = self.comp.views[view].size;
+        let style = crate::menu::MenuStyle::from_terminal(&self.colors);
         let focus = self.menu.open(
             &mut self.comp.views[view].tree,
             view,
@@ -428,6 +432,7 @@ impl Engine {
             self.base_px,
             &self.fonts[0],
             view == self.inspect_view,
+            &style,
         );
         if let Some(id) = focus {
             self.set_focus(view, Some(id));

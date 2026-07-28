@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use super::hover::Verdict;
 use super::{Engine, EngineEvent};
 use crate::logging;
 use crate::terminal::Mods;
@@ -158,30 +159,50 @@ impl Engine {
         }
     }
 
+    fn pane_extent(&self) -> ((f32, f32), (f32, f32)) {
+        (
+            (self.comp.window.0 as f32, self.comp.window.1 as f32),
+            (self.cell.0 as f32, self.cell.1 as f32),
+        )
+    }
+
     pub(super) fn ingest_native(&mut self) {
         let Some(native) = &mut self.native else {
             return;
         };
-        let deltas = native.drain();
+        let events = native.drain();
         let scale = native.scale;
         if native.dead() {
             logging::warn("engine", "native scroll helper exited; falling back to wheel ticks");
             self.native = None;
             self.pairing.reset();
+            self.hover_oracle.invalidate();
             return;
         }
         if !self.use_native {
             return;
         }
-        self.pairing.ingest(deltas, scale, Instant::now());
+        let now = Instant::now();
+        let (pane, pad) = self.pane_extent();
+        self.pairing
+            .ingest(events, scale, now, &mut self.hover_oracle, pane, pad);
+        let wants_cursor = self.hover_oracle.wants_cursor(now);
+        if let Some(native) = &mut self.native {
+            native.request_positions(wants_cursor);
+        }
     }
 
     pub(super) fn drain_native(&mut self, out: &mut Vec<EngineEvent>) {
         self.ingest_native();
         let (zoom, scrolls) = self.pairing.take();
-        let pinch_here = self
-            .last_pointer_activity
-            .is_some_and(|at| at.elapsed() < PINCH_HOVER_WINDOW);
+        let (pane, pad) = self.pane_extent();
+        let pinch_here = match self.hover_oracle.verdict(Instant::now(), pane, pad) {
+            Verdict::Deliver => true,
+            Verdict::Discard => false,
+            Verdict::Unknown => self
+                .last_pointer_activity
+                .is_some_and(|at| at.elapsed() < PINCH_HOVER_WINDOW),
+        };
         let magnification = zoom - 1.0;
         if (magnification == 0.0 || !pinch_here) && scrolls.is_empty() {
             return;

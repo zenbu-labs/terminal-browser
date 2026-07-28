@@ -7,13 +7,15 @@ import type { EngineKeyEvent, PixelRoot, Surface } from "pixel-react";
 import { detectBackend } from "pixel-terminals";
 import type { Backend } from "pixel-terminals";
 
+import { configureBrowserSession } from "../page/browser-session";
+import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
 import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
 import { lastUrl, setLastUrl, settings, store } from "pixel-store";
-import type { DevtoolsDock } from "pixel-store";
+import type { DevtoolsDock, InstanceRow } from "pixel-store";
 
 import { Registry } from "../registry";
 import { Chrome } from "../ui/chrome";
@@ -21,11 +23,12 @@ import type {
   ChromeActions,
   ChromeLayout,
   DeviceView,
+  DownloadView,
   PageMenuItem,
   PageMenuView,
   PopupView,
 } from "../ui/types";
-import { searchOrUrl } from "../url";
+import { normalizeUrl, searchOrUrl } from "../url";
 import { bindingGlyphs, matchesBinding, parseKeyBinding } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
 import { clampDevtoolsFraction, computeLayout, deviceSpec, dividerFraction } from "./layout";
@@ -38,6 +41,7 @@ export interface SessionContext {
   key: string;
   argv: string[];
   env: NodeJS.ProcessEnv;
+  cwd: string;
   cdpPort: number | null;
   onClose(code: number): void;
 }
@@ -63,7 +67,17 @@ export function createSession(ctx: SessionContext): SessionHandle {
 
 const DEFAULT_URL = "https://github.com/zenbu-labs";
 
-const FONT_PATH = path.join(__dirname, "..", "..", "assets", "fonts", "JetBrainsMono-Regular.ttf");
+const FONT_FILE = path.join("assets", "fonts", "JetBrainsMono-Regular.ttf");
+
+function bundledFontPath(): string {
+  for (let dir = __dirname; ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, FONT_FILE);
+    if (fs.existsSync(candidate)) return candidate;
+    if (path.dirname(dir) === dir) {
+      throw new Error(`bundled font missing: ${FONT_FILE} (searched up from ${__dirname})`);
+    }
+  }
+}
 
 interface NewTabState {
   query: string;
@@ -76,6 +90,7 @@ interface NewTabState {
 class Session {
   private readonly ctx: SessionContext;
   private readonly backend: Backend | null;
+  private readonly tmux: boolean;
   private readonly marker: string;
   private readonly hideToolbar: boolean;
   private readonly partition: string | null;
@@ -123,23 +138,29 @@ class Session {
 
   private findOpen = false;
   private urlEditOpen = false;
-  private closeConfirmOpen = false;
   private palette: { query: string; index: number } | null = null;
   private newTab: NewTabState | null = null;
   private zoomHud: number | null = null;
   private zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
+  private download: DownloadView | null = null;
+  private downloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
-    this.backend = terminalBackend();
-    this.marker = `pixel-browser:${ctx.key}`;
+    this.backend = terminalBackend(ctx.env);
+    this.tmux = !!ctx.env.TMUX;
+    this.marker = `terminal-browser:${ctx.key}`;
     this.hideToolbar = ctx.argv.includes("--no-toolbar");
     this.partition = flagValue(ctx.argv, "--partition");
-    this.paletteBinding = parseKeyBinding(flagValue(ctx.argv, "--palette-key") ?? "super+p");
-    this.findBinding = parseKeyBinding(flagValue(ctx.argv, "--find-key") ?? "super+shift+f");
-    this.devtoolsBinding = parseKeyBinding(flagValue(ctx.argv, "--devtools-key") ?? "super+shift+i");
-    this.consoleBinding = parseKeyBinding(flagValue(ctx.argv, "--console-key") ?? "super+alt+j");
+    const binding = (flag: string, fallback: string) =>
+      parseKeyBinding(flagValue(ctx.argv, flag) ?? defaultBinding(fallback, ctx.env));
+    this.paletteBinding = binding("--palette-key", "super+p");
+    this.findBinding = binding("--find-key", "super+shift+f");
+    // we should use 2 shortcuts for console, also not sure if console actually works as expected
+    this.devtoolsBinding = binding("--devtools-key", "super+shift+i");
+    this.consoleBinding = binding("--console-key", "super+alt+j");
     this.fallbackState = initialBrowserState(this.initialUrl());
+    configureBrowserSession(this.partition, (progress) => this.showDownload(progress));
     this.tabs = new TabManager(
       {
         createController: (url, visible, onState) =>
@@ -149,6 +170,7 @@ class Session {
             this.devtoolsSurface!,
             this.surfaceLayout!,
             url,
+            this.ctx.cwd,
             this.windowBg,
             visible,
             this.partition,
@@ -169,6 +191,7 @@ class Session {
           else this.setDevtoolsDockSide(action === "dock-bottom" ? "bottom" : "right");
         },
         onPageMenu: (params) => this.openPageMenu(params),
+        onTabsChanged: () => this.registry?.update(),
         onActiveState: (state, urlChanged) => {
           if (urlChanged) rememberUrl(state.url);
           this.registry?.update();
@@ -187,7 +210,7 @@ class Session {
     this.displayScale = this.hostDisplayScale();
     this.root = createRoot({
       tty: this.ctx.tty,
-      sharedMemoryFrames: !isSshEnvironment(this.ctx.env),
+      tmux: this.tmux,
       keyEventTypes: true,
       onKey: (event) => this.handleKey(event),
       onPaste: (text) => {
@@ -211,28 +234,44 @@ class Session {
         if (this.devtoolsLayout) this.tabs.activeController?.devtools?.resize(this.devtoolsLayout);
         this.render();
       },
+      onColors: () => {
+        this.windowBg = this.themeBackground();
+        this.tabs.eachController((c) => void c.setBackground(this.windowBg));
+        this.render();
+      },
       onEngineExit: (error) => {
-        if (error) process.stderr.write(`pixel browser engine: ${error}\n`);
+        if (error) process.stderr.write(`terminal-browser engine: ${error}\n`);
         this.shutdown(error ? 1 : 0);
       },
     });
     if (process.platform === "darwin" && !this.root.sharedTextures) {
-      throw new Error("pixel-browser requires the patched Electron with shared texture support");
+      throw new Error("terminal-browser requires the patched Electron with shared texture support");
     }
     this.pageSurface = this.root.createSurface();
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
     this.recalculateLayout();
-    this.loadFont();
+    this.fontId = await this.root.registerFont(bundledFontPath());
     this.root.setPointerShape("default");
-    const themeBg = this.root.info.colors.background ?? [30, 32, 38, 255];
-    this.windowBg = `#${themeBg.slice(0, 3).map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+    this.windowBg = this.themeBackground();
     this.tabs.create(this.fallbackState.url);
     this.registry = new Registry({
       key: this.ctx.key,
       tty: this.ctx.tty ?? null,
+      splitDir: splitDirection(flagValue(this.ctx.argv, "--split-dir")),
+      parentTty: flagValue(this.ctx.argv, "--parent-tty"),
       state: () => this.tabs.activeState ?? this.fallbackState,
-      openTab: (url) => void this.tabs.create(url ?? DEFAULT_URL),
+      openTab: (url, cwd) => this.tabs.create(url ? normalizeUrl(url, cwd) : DEFAULT_URL).id,
+      activateTab: (id) => {
+        if (!this.tabs.has(id)) return false;
+        this.tabs.activate(id);
+        return true;
+      },
+      closeTab: (id) => {
+        if (!this.tabs.has(id)) return false;
+        this.tabs.close(id);
+        return true;
+      },
       viewport: () =>
         this.root
           ? {
@@ -242,9 +281,18 @@ class Session {
             }
           : null,
       tabs: () => this.tabs.registryView(),
+      targets: () => this.tabs.targets(),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
     this.render();
+  }
+
+  private cmdHeld(event: EngineKeyEvent): boolean {
+    return event.mods.super || (this.tmux && event.mods.alt);
+  }
+
+  private isPasteKey(event: EngineKeyEvent): boolean {
+    return event.kind === "press" && this.cmdHeld(event) && event.key === "v";
   }
 
   shutdown(code = 0) {
@@ -275,6 +323,11 @@ class Session {
     this.root?.nudgeResize();
   }
 
+  private themeBackground(): string {
+    const bg = this.root?.info.colors.background ?? [30, 32, 38, 255];
+    return `#${bg.slice(0, 3).map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+  }
+
   private render() {
     if (!this.root || !this.layout || !this.pageSurface || !this.popupSurface) return;
     if (!this.devtoolsSurface) return;
@@ -293,10 +346,10 @@ class Session {
             ? { suggestions: this.newTab.suggestions, index: this.newTab.index }
             : null
         }
-        closeConfirm={this.closeConfirmOpen}
         urlEdit={this.urlEditOpen}
         popup={this.popupView()}
         zoomHud={this.zoomHud}
+        download={this.download}
         palette={
           this.palette
             ? {
@@ -326,7 +379,7 @@ class Session {
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
       this.closeUrlEdit();
-      if (text.trim()) this.tabs.activeController?.navigate(searchOrUrl(text));
+      if (text.trim()) this.tabs.activeController?.navigate(searchOrUrl(text, this.ctx.cwd));
     },
     pointer: (event) => {
       this.browserFocused = true;
@@ -352,16 +405,14 @@ class Session {
     paletteRun: (index) => this.runPalette(index),
     paletteClose: () => this.closePalette(),
     tabSwitch: (id) => this.tabs.activate(id),
-    tabClose: (id) => (this.tabs.count <= 1 ? this.openCloseConfirm() : this.tabs.close(id)),
+    tabClose: (id) => (this.tabs.count <= 1 ? this.shutdown() : this.tabs.close(id)),
     tabNew: () => this.openNewTabModal(),
     newTabQuery: (text) => this.newTabQuery(text),
     newTabSubmit: (text) => {
       this.closeNewTabModal();
-      if (text.trim()) this.tabs.create(searchOrUrl(text));
+      if (text.trim()) this.tabs.create(searchOrUrl(text, this.ctx.cwd));
     },
     newTabCancel: () => this.closeNewTabModal(),
-    closeConfirmChoose: (closePane) => void this.resolveCloseConfirm(closePane),
-    closeConfirmCancel: () => this.cancelCloseConfirm(),
     popupPointer: (event) => this.tabs.activeController?.popup?.input.pointer(event),
     popupWheel: (event) => this.tabs.activeController?.popup?.input.wheel(event),
     popupClose: () => this.tabs.activeController?.popup?.close(),
@@ -428,19 +479,19 @@ class Session {
         this.shutdown();
         return;
       }
-      if (event.kind !== "release" && (event.mods.super || event.mods.ctrl)) {
+      if (event.kind !== "release" && this.cmdHeld(event)) {
         const direction = zoomDirection(event.key);
         if (direction !== null) {
           this.applyZoom(direction);
           return;
         }
       }
-      if (isPasteKey(event)) this.root?.requestClipboardImage();
+      if (this.isPasteKey(event)) this.root?.requestClipboardImage();
       browser.popup.input.key(event);
       return;
     }
     if (event.kind !== "release") {
-      if (event.mods.ctrl && event.key === "q") {
+      if (event.mods.ctrl && (event.key === "q" || event.key === "c")) {
         this.shutdown();
         return;
       }
@@ -461,12 +512,6 @@ class Session {
             this.render();
           }
         } else if (event.key === "enter") this.runPalette();
-        return;
-      }
-      if (this.closeConfirmOpen) {
-        if (event.key === "escape") this.cancelCloseConfirm();
-        else if (event.key === "y") void this.resolveCloseConfirm(true);
-        else if (event.key === "n") void this.resolveCloseConfirm(false);
         return;
       }
       if (this.newTab) {
@@ -496,7 +541,7 @@ class Session {
         if (event.key === "escape") this.closeUrlEdit();
         return;
       }
-      if ((event.mods.super || event.mods.ctrl) && event.key === "t") {
+      if ((this.cmdHeld(event) || event.mods.ctrl) && event.key === "t") {
         this.openNewTabModal();
         return;
       }
@@ -504,7 +549,7 @@ class Session {
         this.openPalette();
         return;
       }
-      if ((event.mods.super || event.mods.ctrl) && event.key === "l") {
+      if (this.cmdHeld(event) && event.key === "l") {
         this.openUrlEdit();
         return;
       }
@@ -528,7 +573,7 @@ class Session {
         browser?.findNext(!event.mods.shift);
         return;
       }
-      if ((event.mods.super || event.mods.ctrl) && event.key === "r") {
+      if (this.cmdHeld(event) && event.key === "r") {
         browser?.reload();
         return;
       }
@@ -540,7 +585,7 @@ class Session {
         browser?.forward();
         return;
       }
-      if (event.mods.super || event.mods.ctrl) {
+      if (this.cmdHeld(event)) {
         const direction = zoomDirection(event.key);
         if (direction !== null) {
           this.applyZoom(direction);
@@ -553,7 +598,7 @@ class Session {
       return;
     }
     if (this.browserFocused) {
-      if (isPasteKey(event)) this.root?.requestClipboardImage();
+      if (this.isPasteKey(event)) this.root?.requestClipboardImage();
       this.routeKey(event);
     }
   }
@@ -578,6 +623,30 @@ class Session {
     this.render();
   }
 
+  private showDownload(progress: DownloadProgress) {
+    const percent =
+      progress.total > 0 ? Math.round((progress.received / progress.total) * 100) : null;
+    if (
+      this.download?.state === progress.state &&
+      this.download.name === progress.name &&
+      this.download.percent === percent
+    ) {
+      return;
+    }
+    this.download = { name: progress.name, percent, state: progress.state };
+    if (this.downloadTimer) clearTimeout(this.downloadTimer);
+    this.downloadTimer =
+      progress.state === "progressing"
+        ? null
+        : setTimeout(() => {
+            this.download = null;
+            this.downloadTimer = null;
+            this.render();
+          }, 4000);
+    this.render();
+  }
+
+  // fixme: ghostty doesn't support that cursor type, not sure if any terminals do
   private syncCursor() {
     const browser = this.tabs.activeController;
     const shape = this.dividerHover
@@ -689,7 +758,7 @@ class Session {
 
   private openPageMenu(params: Electron.ContextMenuParams) {
     if (!this.surfaceLayout) return;
-    if (this.palette || this.newTab || this.urlEditOpen || this.closeConfirmOpen) return;
+    if (this.palette || this.newTab || this.urlEditOpen) return;
     if (this.tabs.activeController?.popup) return;
     const scale = this.surfaceLayout.scale;
     this.pageMenu = {
@@ -829,23 +898,8 @@ class Session {
       .catch(() => { });
   }
 
-  private openCloseConfirm() {
-    if (this.closeConfirmOpen) return;
-    this.closeConfirmOpen = true;
-    this.blurToOverlay();
-    this.render();
-  }
-
-  private cancelCloseConfirm() {
-    if (!this.closeConfirmOpen) return;
-    this.closeConfirmOpen = false;
-    this.refocusPage();
-    this.render();
-  }
-
-  private async resolveCloseConfirm(closePane: boolean) {
-    this.closeConfirmOpen = false;
-    if (closePane) await this.backend?.closePane?.(this.marker).catch(() => false);
+  private async closePaneAndExit() {
+    await this.backend?.closePane?.(this.marker).catch(() => false);
     this.shutdown();
   }
 
@@ -963,7 +1017,7 @@ class Session {
             id: "close-pane",
             label: "close pane",
             shortcut: "",
-            run: () => void this.resolveCloseConfirm(true),
+            run: () => void this.closePaneAndExit(),
           },
         ]
         : []),
@@ -1008,6 +1062,7 @@ class Session {
       : null;
   }
 
+  // this is scary code, popusp in general
   private popupView(): PopupView | null {
     const popup = this.tabs.activeController?.popup;
     if (!popup || !this.layout || !this.surfaceLayout) return null;
@@ -1028,19 +1083,9 @@ class Session {
     };
   }
 
-  private loadFont() {
-    if (!this.root) return;
-    this.root
-      .registerFont(FONT_PATH)
-      .then((id) => {
-        this.fontId = id;
-        this.render();
-      })
-      .catch(() => { });
-  }
-
+  // stupid
   private hostDisplayScale() {
-    const explicit = Number(this.ctx.env.PIXEL_BROWSER_DISPLAY_SCALE);
+    const explicit = Number(this.ctx.env.TERMINAL_BROWSER_DISPLAY_SCALE);
     if (Number.isFinite(explicit) && explicit > 0) return explicit;
     return screen.getPrimaryDisplay().scaleFactor;
   }
@@ -1063,10 +1108,6 @@ interface PaletteAction {
   run(): void;
 }
 
-function isPasteKey(event: EngineKeyEvent): boolean {
-  return event.kind === "press" && (event.mods.super || event.mods.ctrl) && event.key === "v";
-}
-
 function isPlainKey(event: EngineKeyEvent, key: string): boolean {
   return (
     event.key === key &&
@@ -1075,6 +1116,19 @@ function isPlainKey(event: EngineKeyEvent, key: string): boolean {
     !event.mods.alt &&
     !event.mods.shift
   );
+}
+
+function defaultBinding(spec: string, env: NodeJS.ProcessEnv): string {
+  if (!env.TMUX) return spec;
+  const parts = spec.split("+");
+  const key = parts.pop()!;
+  const mods = [...new Set(parts.map((mod) => (mod === "super" ? "alt" : mod)))];
+  return [...mods, key].join("+");
+}
+
+function splitDirection(value: string | null): InstanceRow["splitDir"] {
+  const directions = ["right", "left", "down", "up"] as const;
+  return directions.find((direction) => direction === value) ?? null;
 }
 
 function flagValue(argv: string[], flag: string): string | null {
@@ -1090,14 +1144,10 @@ function rememberUrl(url: string) {
   } catch { }
 }
 
-function terminalBackend(): Backend | null {
+function terminalBackend(env: NodeJS.ProcessEnv): Backend | null {
   try {
-    return detectBackend();
+    return detectBackend(env);
   } catch {
     return null;
   }
-}
-
-function isSshEnvironment(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY);
 }

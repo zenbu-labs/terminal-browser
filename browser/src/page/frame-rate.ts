@@ -2,7 +2,7 @@ import { screen } from "electron";
 
 
 export function frameRate() {
-  const configured = Number(process.env.PIXEL_BROWSER_FPS);
+  const configured = Number(process.env.TERMINAL_BROWSER_FPS);
   if (Number.isFinite(configured) && configured > 0) {
     return Math.max(1, Math.min(240, Math.round(configured)));
   }

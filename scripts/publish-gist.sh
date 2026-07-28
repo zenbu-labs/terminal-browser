@@ -2,13 +2,13 @@
 set -euo pipefail
 
 INSTALLER_GIST="c2ec553bd3a1faadfcb9e3f204b1d39c"
-DESCRIPTION_PREFIX="pixel build"
+DESCRIPTION_PREFIX="terminal-browser build"
 KEEP=10
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/dist-release"
-VERSION="$(cat "$OUT/pixel/VERSION")"
-TARGET="$(cat "$OUT/pixel/TARGET")"
+VERSION="$(cat "$OUT/terminal-browser/VERSION")"
+TARGET="$(cat "$OUT/terminal-browser/TARGET")"
 OWNER="$(gh api user --jq .login)"
 
 BUILD_URL="$(gh gist create -d "$DESCRIPTION_PREFIX $VERSION $TARGET" -f chunks.txt "$OUT/chunks.txt")"
@@ -25,12 +25,12 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 git clone -q "https://x-access-token:$(gh auth token)@gist.github.com/$BUILD_ID.git" "$WORK/build"
-cp "$OUT"/pixel-chunk-* "$WORK/build/"
+cp "$OUT"/terminal-browser-chunk-* "$WORK/build/"
 installer_for "$BUILD_ID" > "$WORK/build/install.sh"
 git -C "$WORK/build" add -A
 git -C "$WORK/build" \
-  -c user.name="pixel release" -c user.email="release@zenbu.dev" \
-  commit -q -m "pixel $VERSION"
+  -c user.name="terminal-browser release" -c user.email="release@zenbu.dev" \
+  commit -q -m "terminal-browser $VERSION"
 git -C "$WORK/build" push -q origin HEAD
 
 installer_for "$BUILD_ID" > "$WORK/install.sh"

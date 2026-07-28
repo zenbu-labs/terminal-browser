@@ -1,8 +1,21 @@
+export interface DamageRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface NativeEngine {
   info(): string;
   applyOps(ops: string): void;
-  updateSurface(id: number, bgra: Buffer, width: number, height: number): void;
-  updateSurfaceTexture?(id: number, handle: Buffer): void;
+  updateSurface(
+    id: number,
+    bgra: Buffer,
+    width: number,
+    height: number,
+    damage?: DamageRect,
+  ): void;
+  updateSurfaceTexture?(id: number, handle: Buffer, damage?: DamageRect): void;
   removeSurface(id: number): void;
   surfaceStats(): string;
   setKeyEventTypes(enabled: boolean): void;
@@ -12,17 +25,22 @@ export interface NativeEngine {
 
 export type Rgba = [number, number, number, number];
 
+export type TerminalColors = {
+  foreground: Rgba | null;
+  background: Rgba | null;
+  palette: (Rgba | null)[];
+};
+
+/**
+ * fixme: this is a very weird name to export
+ */
 export interface EngineInfo {
   width: number;
   height: number;
   cellWidth: number;
   cellHeight: number;
   basePx: number;
-  colors: {
-    foreground: Rgba | null;
-    background: Rgba | null;
-    palette: (Rgba | null)[];
-  };
+  colors: TerminalColors;
 }
 
 export interface HighlightSpan {
@@ -88,18 +106,17 @@ export interface DiffRow {
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const binding = require("../native/pixel.node") as {
-  PixelEngine: new (tty: string | undefined, sharedMemoryFrames: boolean) => NativeEngine;
+  PixelEngine: new (tty?: string, tmux?: boolean) => NativeEngine;
   highlight(source: string, language: string): HighlightSpan[];
   highlightCaptures(): string[];
   diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];
   parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[];
 };
 
-export function createNativeEngine(
-  tty: string | undefined,
-  sharedMemoryFrames: boolean,
-): NativeEngine {
-  return new binding.PixelEngine(tty, sharedMemoryFrames);
+export function createNativeEngine(tty?: string, tmux?: boolean): NativeEngine {
+  const pixelEngine =  new binding.PixelEngine(tty, tmux);
+
+  return pixelEngine
 }
 
 export function highlight(source: string, language: string): HighlightSpan[] {

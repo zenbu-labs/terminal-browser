@@ -1,9 +1,25 @@
-
 use std::io;
 
 use super::{Engine, EngineEvent};
+use crate::surfaces::Rect;
 use crate::terminal::{Mouse, MouseKind};
 use crate::tree::PxRect;
+
+fn offset(rect: Rect, abs: PxRect, visible: PxRect) -> Rect {
+    let x1 = (abs.x.max(0.0) as u32 + rect.x).max(visible.x.max(0.0) as u32);
+    let y1 = (abs.y.max(0.0) as u32 + rect.y).max(visible.y.max(0.0) as u32);
+    let x2 = (abs.x.max(0.0) as u32 + rect.x + rect.w).min((visible.x + visible.w).max(0.0) as u32);
+    let y2 = (abs.y.max(0.0) as u32 + rect.y + rect.h).min((visible.y + visible.h).max(0.0) as u32);
+    if x2 <= x1 || y2 <= y1 {
+        return Rect::default();
+    }
+    Rect {
+        x: x1,
+        y: y1,
+        w: x2 - x1,
+        h: y2 - y1,
+    }
+}
 
 impl Engine {
     pub fn draw_surface(
@@ -11,30 +27,61 @@ impl Engine {
         surface: u32,
         width: u32,
         height: u32,
-        rgba: &[u8],
+        bgra: &[u8],
+        stride: usize,
+        damage: Option<Rect>,
     ) -> io::Result<usize> {
-        if width == 0 || height == 0 || rgba.len() != width as usize * height as usize * 4 {
+        let row_bytes = width as usize * 4;
+        if width == 0 || height == 0 || stride < row_bytes || bgra.len() < stride * height as usize
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "surface dimensions do not match its pixels",
             ));
         }
-        crate::surfaces::set(surface, width, height, rgba);
-        self.mark_surface_views(surface);
-        Ok(rgba.len())
+        let changed = crate::profiler::span("surface.convert", || {
+            crate::surfaces::write(surface, width, height, damage, bgra, stride)
+        });
+        crate::profiler::count("surface.rows", u64::from(changed.h));
+        self.damage_surface_views(surface, changed);
+        Ok(row_bytes * height as usize)
     }
 
     pub fn delete_surface(&mut self, surface: u32) -> io::Result<()> {
         crate::surfaces::remove(surface);
-        self.mark_surface_views(surface);
-        Ok(())
-    }
-
-    fn mark_surface_views(&mut self, surface: u32) {
         for view in self.comp.active_views() {
             let tree = &mut self.comp.views[view].tree;
             if tree.uses_surface(surface) {
                 tree.mark_paint();
+            }
+        }
+        Ok(())
+    }
+
+    fn damage_surface_views(&mut self, surface: u32, changed: Rect) {
+        let size = crate::surfaces::with(surface, |s| (s.width, s.height));
+        let Some((surface_w, surface_h)) = size else {
+            return;
+        };
+        for view in self.comp.active_views() {
+            let view_size = self.comp.views[view].size;
+            let tree = &self.comp.views[view].tree;
+            let mut damage = Rect::default();
+            let mut scaled = false;
+            for (abs, visible) in tree.surface_rects(surface) {
+                if abs.w.round() as u32 != surface_w || abs.h.round() as u32 != surface_h {
+                    scaled = true;
+                    break;
+                }
+                damage = damage.union(offset(changed, abs, visible));
+            }
+            if scaled {
+                self.comp.views[view].tree.mark_paint();
+                continue;
+            }
+            let damage = damage.clamped(view_size.0, view_size.1);
+            if !damage.is_empty() {
+                self.comp.views[view].damage = self.comp.views[view].damage.union(damage);
             }
         }
     }

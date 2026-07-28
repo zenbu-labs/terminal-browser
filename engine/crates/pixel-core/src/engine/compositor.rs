@@ -1,6 +1,6 @@
-
 use crate::canvas::Canvas;
 use crate::style::Color;
+use crate::surfaces::Rect;
 use crate::tree::Tree;
 
 const DIVIDER_W: u32 = 6;
@@ -15,8 +15,10 @@ pub struct View {
     pub tree: Tree,
     pub canvas: Canvas,
     pub clear_color: Color,
+    pub clear_color_owned: bool,
     pub origin_x: u32,
     pub size: (u32, u32),
+    pub damage: Rect,
 }
 
 impl View {
@@ -25,8 +27,10 @@ impl View {
             tree: Tree::new((window.0 as f32, window.1 as f32)),
             canvas: Canvas::new(window.0, window.1),
             clear_color: [0, 0, 0, 255],
+            clear_color_owned: false,
             origin_x: 0,
             size: window,
+            damage: Rect::default(),
         }
     }
 
@@ -42,6 +46,7 @@ pub struct Compositor {
     pub dirty: bool,
     pub divider_drag: bool,
     pub split: Option<f32>,
+    pub relayout: bool,
     panes: [usize; 2],
     divider_hover: bool,
 }
@@ -55,6 +60,7 @@ impl Compositor {
             dirty: true,
             divider_drag: false,
             split: None,
+            relayout: true,
             panes: [0, 1],
             divider_hover: false,
         }
@@ -155,6 +161,7 @@ impl Compositor {
             resized.push((index, size));
         }
         self.dirty = true;
+        self.relayout = true;
         resized
     }
 
@@ -168,14 +175,28 @@ impl Compositor {
         self.apply_layout(false)
     }
 
-    pub(crate) fn compose(&mut self) {
-        if (self.frame.width, self.frame.height) != self.window {
+    pub(crate) fn compose(&mut self, painted: &[(usize, Rect)], whole_frame: bool) {
+        let resized = (self.frame.width, self.frame.height) != self.window;
+        if resized {
             self.frame = Canvas::new(self.window.0, self.window.1);
         }
+        let everything = resized || whole_frame || std::mem::take(&mut self.relayout);
         for view in self.active_views() {
+            let size = self.views[view].size;
+            let rect = if everything {
+                Rect::sized(size.0, size.1)
+            } else {
+                painted
+                    .iter()
+                    .find(|(index, _)| *index == view)
+                    .map_or(Rect::default(), |(_, rect)| *rect)
+            };
+            if rect.is_empty() {
+                continue;
+            }
             let origin = self.views[view].origin_x;
             let (canvas, frame) = (&self.views[view].canvas, &mut self.frame);
-            blit(frame, canvas, origin, 0);
+            blit(frame, canvas, origin, rect);
         }
         self.draw_divider();
     }
@@ -206,16 +227,18 @@ impl Compositor {
     }
 }
 
-fn blit(dst: &mut Canvas, src: &Canvas, x: u32, y: u32) {
-    if src.width == 0 || src.height == 0 || x >= dst.width || y >= dst.height {
+fn blit(dst: &mut Canvas, src: &Canvas, origin_x: u32, region: Rect) {
+    let region = region.clamped(src.width, src.height);
+    let dst_x = origin_x + region.x;
+    if region.is_empty() || dst_x >= dst.width || region.y >= dst.height {
         return;
     }
-    let cols = src.width.min(dst.width - x) as usize;
-    let rows = src.height.min(dst.height - y) as usize;
-    for row in 0..rows {
-        let src_start = row * src.width as usize * 4;
-        let dst_start = ((y as usize + row) * dst.width as usize + x as usize) * 4;
-        dst.pixels[dst_start..dst_start + cols * 4]
-            .copy_from_slice(&src.pixels[src_start..src_start + cols * 4]);
+    let cols = (region.w.min(dst.width - dst_x)) as usize * 4;
+    let rows = region.h.min(dst.height - region.y) as usize;
+    for row in region.y as usize..region.y as usize + rows {
+        let src_start = (row * src.width as usize + region.x as usize) * 4;
+        let dst_start = (row * dst.width as usize + dst_x as usize) * 4;
+        dst.pixels[dst_start..dst_start + cols]
+            .copy_from_slice(&src.pixels[src_start..src_start + cols]);
     }
 }

@@ -20,7 +20,6 @@ function Backdrop({ layout, onClose }: { layout: ChromeLayout; onClose(): void }
   );
 }
 
-
 function lastRowRadius(last: boolean, rem: number) {
   if (!last) return undefined;
   const radius = Math.max(2, rem * 0.55 - 1);
@@ -274,85 +273,6 @@ export function NewTabCard({
           })}
         </Box>
       )}
-    </ModalCard>
-  );
-}
-
-export function CloseConfirmCard({
-  actions,
-  layout,
-  theme,
-}: {
-  actions: ChromeActions;
-  layout: ChromeLayout;
-  theme: Theme;
-}) {
-  const rem = layout.rem;
-  const cardW = Math.min(rem * 23, layout.width - rem * 4);
-  const rowH = rem * 2;
-  const options: { label: string; hint: string; closePane: boolean }[] = [
-    { label: "close the terminal pane", hint: "y", closePane: true },
-    { label: "just exit the browser", hint: "n", closePane: false },
-  ];
-  return (
-    <ModalCard layout={layout} theme={theme} width={cardW} onClose={actions.closeConfirmCancel}>
-      <Box
-        style={{
-          height: rem * 2.4,
-          alignItems: "center",
-          gap: rem * 0.4,
-          padding: { left: rem * 0.85, right: rem * 0.85 },
-          border: { bottom: [1, theme.hairline] },
-        }}
-      >
-        <Box
-          style={{
-            width: rem * 0.5,
-            height: rem * 0.5,
-            cornerRadius: rem * 0.25,
-            background: theme.accent,
-          }}
-        />
-        <Text style={{ fontSize: rem * 0.88, color: theme.muted, wrap: false, selectable: false }}>
-          close the last tab?
-        </Text>
-        <Box style={{ flexGrow: 1, flexBasis: 0 }} />
-        <Text style={{ fontSize: rem * 0.82, color: theme.disabled, wrap: false, selectable: false }}>
-          esc cancels
-        </Text>
-      </Box>
-      <Box style={{ flexDirection: "column", padding: { top: rem * 0.25, bottom: rem * 0.25 } }}>
-        {options.map((option) => (
-          <Box
-            key={option.hint}
-            style={{
-              height: rowH,
-              alignItems: "center",
-              gap: rem * 0.55,
-              padding: { left: rem * 0.85, right: rem * 0.85 },
-              hoverBackground: theme.hover,
-            }}
-            onClick={() => actions.closeConfirmChoose(option.closePane)}
-          >
-            <Text
-              style={{
-                flexGrow: 1,
-                flexBasis: 0,
-                fontSize: rem * 0.95,
-                wrap: false,
-                selectable: false,
-              }}
-            >
-              {option.label}
-            </Text>
-            <Text
-              style={{ fontSize: rem * 0.82, color: theme.muted, wrap: false, selectable: false }}
-            >
-              {option.hint}
-            </Text>
-          </Box>
-        ))}
-      </Box>
     </ModalCard>
   );
 }

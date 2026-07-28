@@ -12,5 +12,12 @@ export const migrations: { id: string; statements: string[] }[] = [
     "statements": [
       "CREATE TABLE `settings` (\n\t`id` integer PRIMARY KEY NOT NULL,\n\t`devtools_dock` text DEFAULT 'bottom' NOT NULL,\n\t`devtools_fraction` real DEFAULT 0.4 NOT NULL\n);"
     ]
+  },
+  {
+    "id": "0002_fat_marten_broadcloak",
+    "statements": [
+      "ALTER TABLE `instances` ADD `split_dir` text;",
+      "ALTER TABLE `instances` ADD `parent_tty` text;"
+    ]
   }
 ];

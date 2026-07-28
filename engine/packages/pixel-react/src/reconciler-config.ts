@@ -266,8 +266,8 @@ export class Bridge {
   private nextId = 1;
   private seq = 0;
 
-  constructor(tty: string | undefined, sharedMemoryFrames: boolean) {
-    this.engine = createNativeEngine(tty, sharedMemoryFrames);
+  constructor(tty?: string, tmux?: boolean) {
+    this.engine = createNativeEngine(tty, tmux);
     if (!defaultBridge) defaultBridge = this;
   }
 
@@ -299,7 +299,7 @@ export class Bridge {
 let defaultBridge: Bridge | null = null;
 
 export function getBridge(): Bridge {
-  if (!defaultBridge) defaultBridge = new Bridge(undefined, true);
+  if (!defaultBridge) defaultBridge = new Bridge();
   return defaultBridge;
 }
 

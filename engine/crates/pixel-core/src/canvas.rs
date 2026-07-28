@@ -28,12 +28,70 @@ fn corner_insets(radius: [f32; 4], row: i64, height: i64) -> (i64, i64) {
     )
 }
 
+#[derive(Default)]
+pub(crate) struct CanvasStats {
+    pub boxes: std::cell::Cell<u64>,
+    pub boxes_clipped_out: std::cell::Cell<u64>,
+    pub paths: std::cell::Cell<u64>,
+    pub paths_clipped: std::cell::Cell<u64>,
+}
+
+std::thread_local! {
+    static STATS: CanvasStats = CanvasStats::default();
+}
+
+fn tally(pick: impl Fn(&CanvasStats) -> &std::cell::Cell<u64>) {
+    STATS.with(|s| {
+        let cell = pick(s);
+        cell.set(cell.get() + 1);
+    });
+}
+
+pub(crate) fn take_canvas_stats() -> (u64, u64, u64, u64) {
+    STATS.with(|s| {
+        (
+            s.boxes.take(),
+            s.boxes_clipped_out.take(),
+            s.paths.take(),
+            s.paths_clipped.take(),
+        )
+    })
+}
+
+fn solid_paint(color: [u8; 4]) -> tiny_skia::Paint<'static> {
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
+    paint.anti_alias = true;
+    paint
+}
+
+fn blend_pixel(dst: &mut [u8], src: &[u8], alpha: u8) {
+    let inv = 255 - u32::from(alpha);
+    for (d, &s) in dst.iter_mut().zip(src) {
+        *d = (u32::from(s) + (u32::from(*d) * inv + 127) / 255).min(255) as u8;
+    }
+}
+
+fn blend_row(dst: &mut [u8], src: &[u8]) {
+    if src.chunks_exact(4).all(|s| s[3] == 255) {
+        dst.copy_from_slice(src);
+        return;
+    }
+    for (dst, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        match s[3] {
+            255 => dst.copy_from_slice(s),
+            0 => {}
+            alpha => blend_pixel(dst, s, alpha),
+        }
+    }
+}
+
 pub struct Canvas {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
     clip_stack: Vec<(u32, u32, u32, u32)>,
-    clip_mask: Option<(tiny_skia::Mask, (u32, u32, u32, u32))>,
+    scratch: Vec<u8>,
 }
 
 impl Canvas {
@@ -43,7 +101,7 @@ impl Canvas {
             height,
             pixels: vec![0; (width * height * 4) as usize],
             clip_stack: Vec::new(),
-            clip_mask: None,
+            scratch: Vec::new(),
         }
     }
 
@@ -126,7 +184,17 @@ impl Canvas {
         color: [u8; 4],
         shear: f32,
     ) {
-        self.draw_marked_sheared(font, text, 0..text.len(), x, baseline, px, color, &[], shear);
+        self.draw_marked_sheared(
+            font,
+            text,
+            0..text.len(),
+            x,
+            baseline,
+            px,
+            color,
+            &[],
+            shear,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -209,8 +277,16 @@ impl Canvas {
             let whole = offset.floor();
             let frac = offset - whole;
             for (i, out) in sheared.iter_mut().enumerate() {
-                let right = if i < w { f32::from(mask[row * w + i]) * (1.0 - frac) } else { 0.0 };
-                let left = if i > 0 { f32::from(mask[row * w + i - 1]) * frac } else { 0.0 };
+                let right = if i < w {
+                    f32::from(mask[row * w + i]) * (1.0 - frac)
+                } else {
+                    0.0
+                };
+                let left = if i > 0 {
+                    f32::from(mask[row * w + i - 1]) * frac
+                } else {
+                    0.0
+                };
                 *out = (right + left).round() as u8;
             }
             self.blend_rows(x + whole as i32, py, w + 1, 1, &sheared, color);
@@ -244,6 +320,53 @@ impl Canvas {
 }
 
 impl Canvas {
+    fn clipped_out(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
+        let (cx1, cy1, cx2, cy2) = self.clip_bounds();
+        tally(|s| &s.boxes);
+        let out = x + w <= cx1 as f32 || y + h <= cy1 as f32 || x >= cx2 as f32 || y >= cy2 as f32;
+        if out {
+            tally(|s| &s.boxes_clipped_out);
+        }
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_large_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: [f32; 4],
+        max_radius: f32,
+        color: [u8; 4],
+    ) -> bool {
+        let strip = (max_radius.ceil() * 2.0).max(2.0);
+        let whole_pixels = [x, y, w, h].iter().all(|v| (v - v.round()).abs() < 0.01);
+        if color[3] != 255 || !whole_pixels || w * h < 65536.0 || h < strip * 2.0 + 2.0 {
+            return false;
+        }
+        let top = y + strip;
+        let bottom = y + h - strip;
+        if let Some(path) = rounded_rect_path(x, y, w, strip, [radius[0], radius[1], 0.0, 0.0]) {
+            self.paint_path(&path, color, None);
+        }
+        if let Some(path) = rounded_rect_path(x, bottom, w, strip, [0.0, 0.0, radius[2], radius[3]])
+        {
+            self.paint_path(&path, color, None);
+        }
+        let x1 = x.round().max(0.0) as u32;
+        let x2 = (x + w).round().max(0.0) as u32;
+        self.fill_rect(
+            x1,
+            top.round().max(0.0) as u32,
+            x2.saturating_sub(x1),
+            (bottom - top).round().max(0.0) as u32,
+            color,
+        );
+        true
+    }
+
     pub fn fill_rounded_rect(
         &mut self,
         x: f32,
@@ -253,10 +376,13 @@ impl Canvas {
         radius: [f32; 4],
         color: [u8; 4],
     ) {
-        if w <= 0.0 || h <= 0.0 {
+        if w <= 0.0 || h <= 0.0 || self.clipped_out(x, y, w, h) {
             return;
         }
         let max_radius = radius.iter().fold(0.0f32, |a, &r| a.max(r));
+        if self.fill_large_rounded_rect(x, y, w, h, radius, max_radius, color) {
+            return;
+        }
         if max_radius.min(w / 2.0).min(h / 2.0) < 0.5 && color[3] == 255 {
             let x1 = x.round().max(0.0) as u32;
             let y1 = y.round().max(0.0) as u32;
@@ -281,6 +407,9 @@ impl Canvas {
         width: f32,
         color: [u8; 4],
     ) {
+        if self.clipped_out(x - width, y - width, w + width * 2.0, h + width * 2.0) {
+            return;
+        }
         let inset = width / 2.0;
         if let Some(path) = rounded_rect_path(
             x + inset,
@@ -329,22 +458,32 @@ impl Canvas {
             let src_row = &src[src_off + col0..src_off + col1];
             let dst_off = ((row as u32 * self.width + rx1 as u32) * 4) as usize;
             let dst_row = &mut self.pixels[dst_off..dst_off + src_row.len()];
-            for (dst, s) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
-                match s[3] {
-                    255 => dst.copy_from_slice(s),
-                    0 => {}
-                    sa => {
-                        let inv = 255 - u32::from(sa);
-                        for (d, &sv) in dst.iter_mut().zip(s) {
-                            *d = (u32::from(sv) + (u32::from(*d) * inv + 127) / 255).min(255) as u8;
-                        }
-                    }
-                }
-            }
+            blend_row(dst_row, src_row);
         }
     }
 
-    // todo: bilinear scaling i think is causing a little bit of blurryness
+    pub fn blit_opaque_rgba(&mut self, x: f32, y: f32, src: &[u8], src_w: u32, src_h: u32) {
+        let (cx1, cy1, cx2, cy2) = self.clip_bounds();
+        let x0 = x.round() as i64;
+        let y0 = y.round() as i64;
+        let x1 = x0.max(cx1 as i64);
+        let y1 = y0.max(cy1 as i64);
+        let x2 = (x0 + i64::from(src_w)).min(cx2 as i64);
+        let y2 = (y0 + i64::from(src_h)).min(cy2 as i64);
+        if x2 <= x1 || y2 <= y1 {
+            return;
+        }
+        let src_stride = src_w as usize * 4;
+        let dst_stride = self.width as usize * 4;
+        let bytes = (x2 - x1) as usize * 4;
+        let col0 = (x1 - x0) as usize * 4;
+        for row in y1..y2 {
+            let src_off = (row - y0) as usize * src_stride + col0;
+            let dst_off = row as usize * dst_stride + x1 as usize * 4;
+            self.pixels[dst_off..dst_off + bytes].copy_from_slice(&src[src_off..src_off + bytes]);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn blit_scaled_rgba(
         &mut self,
@@ -394,79 +533,37 @@ impl Canvas {
         if x2 <= x1 || y2 <= y1 {
             return;
         }
-        let scale_x = src_w as f32 / dst_w as f32;
-        let scale_y = src_h as f32 / dst_h as f32;
+        crate::profiler::count("surface.resampled", 1);
         let src_stride = src_w as usize * 4;
-        let sample_axis = |i: i64, origin: i64, scale: f32, max: u32| {
-            let center = ((i - origin) as f32 + 0.5) * scale - 0.5;
-            let clamped = center.clamp(0.0, (max - 1) as f32);
-            let lo = clamped.floor() as usize;
-            (lo, (lo + 1).min(max as usize - 1), clamped - lo as f32)
+        let dst_stride = self.width as usize * 4;
+        let sample = |i: i64, origin: i64, dst_extent: u32, max: u32| {
+            let scaled = (i - origin) as u32 as u64 * max as u64 / dst_extent as u64;
+            (scaled as u32).min(max - 1) as usize
         };
-        // the x sample coordinates are identical for every row: build them once
-        // instead of per pixel (this loop runs on multi-megapixel surfaces)
-        let columns: Vec<(usize, usize, f32)> = (x1..x2)
-            .map(|col| sample_axis(col, x0, scale_x, src_w))
+        // the x sample coordinates repeat on every row, so build them once
+        let columns: Vec<usize> = (x1..x2)
+            .map(|col| sample(col, x0, dst_w, src_w) * 4)
             .collect();
-        let stride = self.width as usize * 4;
-        let region = &mut self.pixels[y1 as usize * stride..y2 as usize * stride];
-        let paint_row = |row: i64, row_pixels: &mut [u8]| {
+        for row in y1..y2 {
             let (inset_l, inset_r) = corner_insets(radius, row - y0, i64::from(dst_h));
             let rx1 = x1.max(x0 + inset_l);
             let rx2 = x2.min(x0 + i64::from(dst_w) - inset_r);
             if rx2 <= rx1 {
-                return;
+                continue;
             }
-            let (sy0, sy1, fy) = sample_axis(row, y0, scale_y, src_h);
-            let dst_row =
-                &mut row_pixels[rx1 as usize * 4..rx1 as usize * 4 + ((rx2 - rx1) as usize) * 4];
+            let src_row = &src[sample(row, y0, dst_h, src_h) * src_stride..][..src_stride];
+            let dst_off = row as usize * dst_stride + rx1 as usize * 4;
+            let dst_row = &mut self.pixels[dst_off..dst_off + (rx2 - rx1) as usize * 4];
             let cols = &columns[(rx1 - x1) as usize..(rx2 - x1) as usize];
-            for (&(sx0, sx1, fx), dst) in cols.iter().zip(dst_row.chunks_exact_mut(4)) {
-                let texel = |sy: usize, sx: usize| &src[sy * src_stride + sx * 4..][..4];
-                let (tl, tr) = (texel(sy0, sx0), texel(sy0, sx1));
-                let (bl, br) = (texel(sy1, sx0), texel(sy1, sx1));
-                let mut sample = [0u8; 4];
-                for c in 0..4 {
-                    let top = tl[c] as f32 + (tr[c] as f32 - tl[c] as f32) * fx;
-                    let bottom = bl[c] as f32 + (br[c] as f32 - bl[c] as f32) * fx;
-                    sample[c] = (top + (bottom - top) * fy).round() as u8;
-                }
-                match sample[3] {
-                    255 => dst.copy_from_slice(&sample),
+            for (&col, dst) in cols.iter().zip(dst_row.chunks_exact_mut(4)) {
+                let s = &src_row[col..col + 4];
+                match s[3] {
+                    255 => dst.copy_from_slice(s),
                     0 => {}
-                    sa => {
-                        let inv = 255 - u32::from(sa);
-                        for (d, &sv) in dst.iter_mut().zip(&sample) {
-                            *d = (u32::from(sv) + (u32::from(*d) * inv + 127) / 255).min(255) as u8;
-                        }
-                    }
+                    sa => blend_pixel(dst, s, sa),
                 }
             }
-        };
-        let rows = y2 - y1;
-        let area = rows * (x2 - x1);
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get().min(8))
-            .unwrap_or(1);
-        if area < 262_144 || threads < 2 {
-            for (i, row_pixels) in region.chunks_exact_mut(stride).enumerate() {
-                paint_row(y1 + i as i64, row_pixels);
-            }
-            return;
         }
-        // rows are disjoint slices of the canvas, so bands can paint in parallel
-        let band_rows = (rows as usize).div_ceil(threads);
-        std::thread::scope(|scope| {
-            for (band, band_pixels) in region.chunks_mut(band_rows * stride).enumerate() {
-                let paint_row = &paint_row;
-                scope.spawn(move || {
-                    let first = y1 + (band * band_rows) as i64;
-                    for (i, row_pixels) in band_pixels.chunks_exact_mut(stride).enumerate() {
-                        paint_row(first + i as i64, row_pixels);
-                    }
-                });
-            }
-        });
     }
 
     pub(crate) fn stroke_path(
@@ -501,70 +598,87 @@ impl Canvas {
         }
         let pad = stroke.as_ref().map_or(0.0, |s| s.width) / 2.0 + 1.0;
         let bounds = path.bounds();
-        let inside = self.clip_stack.is_empty()
+        if bounds.right() + pad <= cx1 as f32
+            || bounds.bottom() + pad <= cy1 as f32
+            || bounds.left() - pad >= cx2 as f32
+            || bounds.top() - pad >= cy2 as f32
+        {
+            return;
+        }
+        tally(|s| &s.paths);
+        let unclipped = (cx1, cy1, cx2, cy2) == (0, 0, self.width, self.height);
+        let inside = unclipped
             || (bounds.left() - pad >= cx1 as f32
                 && bounds.top() - pad >= cy1 as f32
                 && bounds.right() + pad <= cx2 as f32
                 && bounds.bottom() + pad <= cy2 as f32);
-        let mask = if inside {
-            None
-        } else {
-            self.ensure_clip_mask();
-            self.clip_mask.as_ref().map(|(mask, _)| mask)
-        };
+        if !inside {
+            tally(|s| &s.paths_clipped);
+            self.paint_path_clipped(path, color, stroke, (cx1, cy1, cx2, cy2), pad);
+            return;
+        }
         let Some(mut pixmap) =
             tiny_skia::PixmapMut::from_bytes(&mut self.pixels, self.width, self.height)
         else {
             return;
         };
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
-        paint.anti_alias = true;
+        let paint = solid_paint(color);
         match stroke {
             None => pixmap.fill_path(
                 path,
                 &paint,
                 tiny_skia::FillRule::Winding,
                 tiny_skia::Transform::identity(),
-                mask,
+                None,
             ),
             Some(stroke) => pixmap.stroke_path(
                 path,
                 &paint,
                 &stroke,
                 tiny_skia::Transform::identity(),
-                mask,
+                None,
             ),
         }
     }
 
-    // tiny-skia has no scissor rect, so rect clips become a full-canvas
-    // alpha mask, rebuilt only when a path is drawn under different bounds.
-    fn ensure_clip_mask(&mut self) {
-        let bounds = self.clip_bounds();
-        if self
-            .clip_mask
-            .as_ref()
-            .is_some_and(|(_, built_for)| *built_for == bounds)
-        {
+    fn paint_path_clipped(
+        &mut self,
+        path: &tiny_skia::Path,
+        color: [u8; 4],
+        stroke: Option<tiny_skia::Stroke>,
+        clip: (u32, u32, u32, u32),
+        pad: f32,
+    ) {
+        let bounds = path.bounds();
+        let (cx1, cy1, cx2, cy2) = clip;
+        let x1 = ((bounds.left() - pad).floor().max(0.0) as u32).max(cx1);
+        let y1 = ((bounds.top() - pad).floor().max(0.0) as u32).max(cy1);
+        let x2 = ((bounds.right() + pad).ceil().max(0.0) as u32).min(cx2);
+        let y2 = ((bounds.bottom() + pad).ceil().max(0.0) as u32).min(cy2);
+        if x2 <= x1 || y2 <= y1 {
             return;
         }
-        self.clip_mask = None;
-        let (x1, y1, x2, y2) = bounds;
-        let Some(mut mask) = tiny_skia::Mask::new(self.width, self.height) else {
-            return;
-        };
-        let Some(rect) = tiny_skia::Rect::from_ltrb(x1 as f32, y1 as f32, x2 as f32, y2 as f32)
-        else {
-            return;
-        };
-        mask.fill_path(
-            &tiny_skia::PathBuilder::from_rect(rect),
-            tiny_skia::FillRule::Winding,
-            false,
-            tiny_skia::Transform::identity(),
-        );
-        self.clip_mask = Some((mask, bounds));
+        let (w, h) = (x2 - x1, y2 - y1);
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.clear();
+        scratch.resize(w as usize * h as usize * 4, 0);
+        if let Some(mut pixmap) = tiny_skia::PixmapMut::from_bytes(&mut scratch, w, h) {
+            let paint = solid_paint(color);
+            let shift = tiny_skia::Transform::from_translate(-(x1 as f32), -(y1 as f32));
+            match stroke {
+                None => pixmap.fill_path(path, &paint, tiny_skia::FillRule::Winding, shift, None),
+                Some(stroke) => pixmap.stroke_path(path, &paint, &stroke, shift, None),
+            }
+            let row_bytes = w as usize * 4;
+            for row in 0..h as usize {
+                let dst = ((y1 as usize + row) * self.width as usize + x1 as usize) * 4;
+                blend_row(
+                    &mut self.pixels[dst..dst + row_bytes],
+                    &scratch[row * row_bytes..][..row_bytes],
+                );
+            }
+        }
+        self.scratch = scratch;
     }
 }
 
@@ -741,22 +855,20 @@ mod tests {
     }
 
     #[test]
-    fn rounded_path_inside_the_clip_skips_the_mask_but_still_paints() {
+    fn rounded_path_inside_the_clip_still_paints() {
         let mut canvas = Canvas::new(16, 8);
         canvas.push_clip(0.0, 0.0, 16.0, 8.0);
         canvas.fill_rounded_rect(4.0, 2.0, 8.0, 4.0, [1.5; 4], [8, 8, 8, 255]);
-        assert!(canvas.clip_mask.is_none(), "fully-inside path builds no mask");
         let px = |x: u32, y: u32| &canvas.pixels[((y * 16 + x) * 4) as usize..][..4];
         assert_eq!(px(8, 4), &[8, 8, 8, 255], "painted");
         assert_eq!(px(1, 4), &[0, 0, 0, 0], "outside the rect untouched");
     }
 
     #[test]
-    fn clip_mask_survives_pop_push_of_the_same_bounds() {
+    fn repainting_under_the_same_clip_stays_clipped() {
         let mut canvas = Canvas::new(16, 8);
         canvas.push_clip(0.0, 0.0, 8.0, 8.0);
         canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [8, 8, 8, 255]);
-        assert!(canvas.clip_mask.is_some());
         canvas.pop_clip();
         canvas.push_clip(0.0, 0.0, 8.0, 8.0);
         canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [5, 5, 5, 255]);
@@ -765,18 +877,11 @@ mod tests {
         assert_eq!(px(12, 4), &[0, 0, 0, 0], "beyond clip still untouched");
     }
 
-
     #[test]
     fn per_corner_radius_rounds_only_bottom_corners() {
         let mut canvas = Canvas::new(12, 12);
-        canvas.fill_rounded_rect(
-            0.0,
-            0.0,
-            12.0,
-            12.0,
-            [0.0, 0.0, 6.0, 6.0],
-            [9, 9, 9, 255],
-        );
+
+        canvas.fill_rounded_rect(0.0, 0.0, 12.0, 12.0, [0.0, 0.0, 6.0, 6.0], [9, 9, 9, 255]);
         let px = |x: u32, y: u32| &canvas.pixels[((y * 12 + x) * 4) as usize..][..4];
         assert_eq!(px(0, 0), &[9, 9, 9, 255], "top-left square");
         assert_eq!(px(11, 0), &[9, 9, 9, 255], "top-right square");
@@ -816,4 +921,3 @@ mod tests {
         assert_eq!(&canvas.pixels[0..4], &[10, 20, 30, 255]);
     }
 }
-

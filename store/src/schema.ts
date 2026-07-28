@@ -23,6 +23,8 @@ export const instances = sqliteTable("instances", {
     height: number;
     scale: number;
   } | null>(),
+  splitDir: text("split_dir", { enum: ["right", "left", "down", "up"] }),
+  parentTty: text("parent_tty"),
   startedAt: integer("started_at").notNull(),
 });
 

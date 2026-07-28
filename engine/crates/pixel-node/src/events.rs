@@ -152,6 +152,10 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             "height": height,
             "basePx": base_px,
         }),
+        EngineEvent::Colors { colors } => json!({
+            "type": "colors",
+            "colors": crate::colors_json(colors),
+        }),
         EngineEvent::Inspect {
             view,
             node,

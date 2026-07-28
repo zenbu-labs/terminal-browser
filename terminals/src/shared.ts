@@ -12,10 +12,15 @@ export interface Pane {
 }
 
 export interface Backend {
-  app: "ghostty" | "kitty" | "wezterm";
+  app: "ghostty" | "kitty" | "wezterm" | "tmux"
   panes(): Promise<Pane[]>;
   listAll(): Promise<Omit<Pane, "self">[]>;
-  split(direction: Direction, command: string[], cwd: string): Promise<void>;
+  split(
+    direction: Direction,
+    command: string[],
+    cwd: string,
+    size?: number | null,
+  ): Promise<void>;
   focusPane(titleNeedle: string): Promise<boolean>;
   focusSelf(): Promise<boolean>;
   sendText(paneId: string, text: string): Promise<boolean>;

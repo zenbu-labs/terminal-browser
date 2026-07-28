@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-dev}"
 OUT="$ROOT/dist-release"
-STAGE="$OUT/pixel"
+STAGE="$OUT/terminal-browser"
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
@@ -26,24 +26,22 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 rm -rf "$OUT"
-mkdir -p "$STAGE"/{bin,cli/dist,browser/dist,browser/native,electron,assets/fonts}
+mkdir -p "$STAGE"/{bin,cli/dist,browser/dist,browser/native,electron,agent-browser/bin,assets/fonts,skill}
 
 (cd "$ROOT/engine" && cargo build -p pixel-node --release)
 cp "${CARGO_TARGET_DIR:-$ROOT/engine/target}/release/$NATIVE_LIBRARY" "$STAGE/browser/native/pixel.node"
 
-ESBUILD="$ROOT/node_modules/.bin/esbuild"
-bundle() {
-  "$ESBUILD" "$1" \
-    --bundle --platform=node --format=cjs \
-    --external:electron '--external:*.node' \
-    --alias:pixel-react="$ROOT/engine/packages/pixel-react/src/index.ts" \
-    --alias:pixel-terminals="$ROOT/terminals/src/index.ts" \
-    --alias:pixel-store="$ROOT/store/src/index.ts" \
-    --define:process.env.NODE_ENV='"production"' \
-    --sourcemap --outfile="$2" --log-level=warning
-}
-bundle "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
-bundle "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
+AGENT_BROWSER_BIN="$("$ROOT/scripts/agent-browser.sh" --path)"
+cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
+if [ "$TARGET" = "darwin-arm64" ]; then
+  codesign --force --sign - --timestamp=none "$STAGE/agent-browser/bin/agent-browser" 2>/dev/null || true
+fi
+
+"$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
+"$ROOT/scripts/bundle.sh" "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
+
+"$ROOT/scripts/generate-skill.sh"
+cp "$ROOT/skill/SKILL.md" "$STAGE/skill/SKILL.md"
 
 cp "$ROOT/assets/fonts/JetBrainsMono-Regular.ttf" "$STAGE/assets/fonts/"
 
@@ -58,7 +56,7 @@ if [ "$TARGET" = "darwin-arm64" ]; then
     -c "Set :CFBundleExecutable Pixel" \
     -c "Set :CFBundleName Pixel" \
     -c "Set :CFBundleDisplayName Pixel" \
-    -c "Set :CFBundleIdentifier dev.zenbu.pixel" \
+    -c "Set :CFBundleIdentifier dev.zenbu.terminal-browser" \
     "$APP/Contents/Info.plist" >/dev/null
   codesign --force --sign - --timestamp=none "$APP" 2>/dev/null
   ELECTRON_EXEC='electron/Pixel.app/Contents/MacOS/Pixel'
@@ -67,29 +65,29 @@ else
   ELECTRON_EXEC='electron/electron'
 fi
 
-sed "s|__ELECTRON_EXEC__|$ELECTRON_EXEC|" > "$STAGE/bin/pixel" <<'EOF'
+sed "s|__ELECTRON_EXEC__|$ELECTRON_EXEC|" > "$STAGE/bin/terminal-browser" <<'EOF'
 #!/bin/sh
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
-export PIXEL_DIST_ROOT="$ROOT"
+export TERMINAL_BROWSER_DIST_ROOT="$ROOT"
 export ELECTRON_RUN_AS_NODE=1
 exec "$ROOT/__ELECTRON_EXEC__" "$ROOT/cli/dist/main.js" "$@"
 EOF
-chmod +x "$STAGE/bin/pixel"
+chmod +x "$STAGE/bin/terminal-browser"
 echo "$VERSION" > "$STAGE/VERSION"
 echo "$TARGET" > "$STAGE/TARGET"
 
-TARBALL="$OUT/pixel-$TARGET.tar.gz"
-tar -czf "$TARBALL" -C "$OUT" pixel
+TARBALL="$OUT/terminal-browser-$TARGET.tar.gz"
+tar -czf "$TARBALL" -C "$OUT" terminal-browser
 
-split -b 45m "$TARBALL" "$OUT/pixel-chunk-"
+split -b 45m "$TARBALL" "$OUT/terminal-browser-chunk-"
 {
   if [ "$TARGET" = "darwin-arm64" ]; then
     shasum -a 256 "$TARBALL" | cut -d' ' -f1
   else
     sha256sum "$TARBALL" | cut -d' ' -f1
   fi
-  (cd "$OUT" && ls pixel-chunk-*)
+  (cd "$OUT" && ls terminal-browser-chunk-*)
 } > "$OUT/chunks.txt"
 
 du -h "$TARBALL"
-echo "chunks: $(cd "$OUT" && ls pixel-chunk-* | wc -l | tr -d ' ')"
+echo "chunks: $(cd "$OUT" && ls terminal-browser-chunk-* | wc -l | tr -d ' ')"

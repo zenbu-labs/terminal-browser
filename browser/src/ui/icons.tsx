@@ -29,6 +29,7 @@ export const ICONS = {
   plus: "M 12 5.5 L 12 18.5 M 5.5 12 L 18.5 12",
   reload: `${arcPath(12, 12, 6.5, 0, 315)} M 15.77 4.31 L 16.6 7.4 L 13.51 6.57`,
   search: `${arcPath(11, 11, 5.75, 0, 360)} M 15.4 15.4 L 19.25 19.25`,
+  download: "M 12 4.5 L 12 14.5 M 7.75 10.5 L 12 14.75 L 16.25 10.5 M 5.5 18.5 L 18.5 18.5",
 };
 
 export type IconName = keyof typeof ICONS;

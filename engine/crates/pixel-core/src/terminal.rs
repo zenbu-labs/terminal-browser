@@ -14,6 +14,8 @@ pub enum Event {
     Focus(bool),
     WindowSize(WindowSize),
     ClipboardData { items: Vec<(String, Vec<u8>)>, ok: bool },
+    ColorSchemeChanged,
+    Colors(TerminalColors),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,11 +114,57 @@ pub enum MouseButton {
     None,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalColors {
     pub foreground: Option<[u8; 4]>,
     pub background: Option<[u8; 4]>,
     pub palette: [Option<[u8; 4]>; 16],
+}
+
+impl TerminalColors {
+    fn set(&mut self, slot: ColorSlot, rgba: [u8; 4]) {
+        match slot {
+            ColorSlot::Foreground => self.foreground = Some(rgba),
+            ColorSlot::Background => self.background = Some(rgba),
+            ColorSlot::Palette(i) => self.palette[i as usize] = Some(rgba),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSlot {
+    Foreground,
+    Background,
+    Palette(u8),
+}
+
+const COLOR_SLOT_COUNT: usize = 18;
+const COLOR_QUERY_TIMEOUT: Duration = Duration::from_millis(1200);
+const COLOR_QUERY_IDLE: Duration = Duration::from_millis(250);
+
+struct ColorQuery {
+    colors: TerminalColors,
+    received: usize,
+    started: Instant,
+    last_reply: Option<Instant>,
+}
+
+impl ColorQuery {
+    fn new() -> Self {
+        Self {
+            colors: TerminalColors::default(),
+            received: 0,
+            started: Instant::now(),
+            last_reply: None,
+        }
+    }
+
+    fn deadline(&self) -> Instant {
+        match self.last_reply {
+            Some(at) => (at + COLOR_QUERY_IDLE).min(self.started + COLOR_QUERY_TIMEOUT),
+            None => self.started + COLOR_QUERY_TIMEOUT,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +176,7 @@ pub struct WindowSize {
 }
 
 impl WindowSize {
+    // fixme: why is this an option? if this is not an invariant, we should define the terminals this is the case for
     pub fn cell_size(&self) -> Option<(u32, u32)> {
         if self.cols > 0 && self.rows > 0 && self.width_px > 0 && self.height_px > 0 {
             Some((self.width_px / self.cols, self.height_px / self.rows))
@@ -176,6 +225,7 @@ pub struct Terminal {
     cell: Option<(u32, u32)>,
     cell_query_unsupported: bool,
     pending: Vec<u8>,
+    lone_escape_since: Option<Instant>,
     shm_frames: bool,
     frame_seq: u64,
     tmux: bool,
@@ -188,6 +238,9 @@ pub struct Terminal {
     // if the terminal supports https://sw.kovidgoyal.net/kitty/clipboard/
     clipboard_data: bool,
     clip_read: Option<ClipRead>,
+    // if the terminal tells us when its palette changes (DEC private mode 2031)
+    color_scheme_updates: bool,
+    color_query: Option<ColorQuery>,
 }
 
 #[derive(Default)]
@@ -198,6 +251,8 @@ struct ClipRead {
 }
 
 const CLIP_READ_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+const LONE_ESCAPE_WAIT: Duration = Duration::from_millis(50);
 
 const RESIZE_WAKE_SLOTS: usize = 64;
 static RESIZE_WAKE_FDS: [std::sync::atomic::AtomicI32; RESIZE_WAKE_SLOTS] =
@@ -244,39 +299,38 @@ impl Waker {
 }
 
 impl Terminal {
-    pub fn new(shared_memory_frames: bool) -> io::Result<Self> {
+    pub fn new() -> io::Result<Self> {
         let tmux = crate::tmux::in_tmux();
+        if tmux {
+            crate::tmux::enable_passthrough();
+        }
         Self::with_handle(
             TtyHandle::Stdio {
                 stdin: io::stdin(),
                 stdout: io::stdout(),
             },
             tmux,
-            shared_memory_frames,
         )
     }
 
-    pub fn open(tty_path: &str, shared_memory_frames: bool) -> io::Result<Self> {
+    pub fn open(tty_path: &str, tmux: bool) -> io::Result<Self> {
         let file = std::fs::File::options().read(true).write(true).open(tty_path)?;
-        Self::with_handle(TtyHandle::File(file), false, shared_memory_frames)
+        Self::with_handle(TtyHandle::File(file), tmux)
     }
 
-    fn with_handle(
-        mut io: TtyHandle,
-        tmux: bool,
-        shared_memory_frames: bool,
-    ) -> io::Result<Self> {
-        if tmux {
-            crate::tmux::enable_passthrough();
-        }
+    fn with_handle(mut io: TtyHandle, tmux: bool) -> io::Result<Self> {
         let saved = retry_intr(|| termios::tcgetattr(&io.read_fd()))?;
         let mut raw = saved.clone();
         raw.make_raw();
         retry_intr(|| termios::tcsetattr(&io.read_fd(), OptionalActions::Drain, &raw))?;
 
+        // would prefer if they weren't magic and linked to some known doc on the internet
         io.out().write_all(
             b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
         )?; // enable many reporting modes so we get info about mouse/keyboard
+        if tmux {
+            io.out().write_all(b"\x1b[>4;2m")?;
+        }
         io.out().flush()?;
 
         let mut terminal = Self {
@@ -287,6 +341,7 @@ impl Terminal {
             cell: None,
             cell_query_unsupported: false,
             pending: Vec::new(),
+            lone_escape_since: None,
             shm_frames: false,
             frame_seq: 0,
             tmux,
@@ -298,11 +353,22 @@ impl Terminal {
             terminal_id: NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             clipboard_data: false,
             clip_read: None,
+            color_scheme_updates: false,
+            color_query: None,
         };
-        terminal.mouse_pixels = terminal.probe_mouse_pixels()?;
+        terminal.mouse_pixels = !tmux && terminal.probe_mouse_pixels()?;
         terminal.clipboard_data = !tmux && terminal.probe_clipboard_data()?;
-        terminal.shm_frames = shared_memory_frames && terminal.probe_shm_frames()?;
+        terminal.shm_frames = terminal.probe_shm_frames()?;
+        terminal.color_scheme_updates = terminal.probe_color_scheme()?;
+        if terminal.color_scheme_updates {
+            terminal.io.out().write_all(b"\x1b[?2031h")?;
+            terminal.io.out().flush()?;
+        }
         Ok(terminal)
+    }
+
+    pub fn reports_color_scheme(&self) -> bool {
+        self.color_scheme_updates
     }
 
     pub fn is_tmux(&self) -> bool {
@@ -324,6 +390,9 @@ impl Terminal {
         self.io.out()
             .write_all(&crate::kitty::kitty_query_shm(SHM_PROBE_ID, &name, self.tmux))?;
         self.io.out().flush()?;
+        /**
+         * really dislike this
+         */
         let reply = self.read_report(300, |buf| parse_probe_reply(buf, b"_Gi=299;"))?;
         let _ = rustix::shm::unlink(&name);
         Ok(reply.unwrap_or(false))
@@ -367,6 +436,11 @@ impl Terminal {
             frame.extend_from_slice(b"\x1b[H");
             Placement::Cursor
         };
+        /*
+          we eventualy need to be more principled about
+          being generic over graphcis protocols to support
+          more terminals (even if degraded)
+         */
         if self.shm_frames {
             let name = crate::profiler::span("kitty.shm", || self.write_shm_frame(&canvas.pixels))?;
             frame.extend_from_slice(&crate::kitty::kitty_transmit_shm(
@@ -424,6 +498,7 @@ impl Terminal {
         loop {
             if let Some((raw, used)) = parse_event(&self.pending) {
                 self.pending.drain(..used);
+                self.lone_escape_since = None;
 
            
                 return Ok(Some(match raw {
@@ -445,10 +520,32 @@ impl Terminal {
                         Some(event) => event,
                         None => continue,
                     },
+                    RawEvent::ColorSchemeChanged => Event::ColorSchemeChanged,
+                    RawEvent::Color(slot, rgba) => match self.collect_color(slot, rgba) {
+                        Some(colors) => Event::Colors(colors),
+                        None => continue,
+                    },
                 }));
             }
-            let wait = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+            let escape_deadline = self.lone_escape_deadline();
+            let color_deadline = self.color_query.as_ref().map(ColorQuery::deadline);
+            let until = [deadline, escape_deadline, color_deadline]
+                .into_iter()
+                .flatten()
+                .min();
+            let wait = until.map(|d| d.saturating_duration_since(Instant::now()));
             if !self.wait_for_input(wait)? {
+                if escape_deadline.is_some_and(|d| Instant::now() >= d) {
+                    self.pending.drain(..1);
+                    self.lone_escape_since = None;
+                    return Ok(Some(Event::Key(KeyEvent::plain(Key::Escape))));
+                }
+                if color_deadline.is_some_and(|d| Instant::now() >= d) {
+                    match self.take_settled_colors() {
+                        Some(colors) => return Ok(Some(Event::Colors(colors))),
+                        None => continue,
+                    }
+                }
                 return Ok(None);
             }
             let mut chunk = [0u8; 256];
@@ -462,6 +559,14 @@ impl Terminal {
             }
             self.pending.extend_from_slice(&chunk[..n]);
         }
+    }
+
+    fn lone_escape_deadline(&mut self) -> Option<Instant> {
+        if !self.tmux || self.pending.first() != Some(&0x1b) {
+            self.lone_escape_since = None;
+            return None;
+        }
+        Some(*self.lone_escape_since.get_or_insert_with(Instant::now) + LONE_ESCAPE_WAIT)
     }
 
     pub fn waker(&mut self) -> io::Result<Waker> {
@@ -583,10 +688,7 @@ impl Terminal {
     }
 
     pub fn query_colors(&mut self) -> io::Result<TerminalColors> {
-        let mut query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\".to_vec();
-        for i in 0..16 {
-            query.extend_from_slice(format!("\x1b]4;{i};?\x1b\\").as_bytes());
-        }
+        let query = Self::color_queries();
         self.io.out().write_all(&query)?;
         self.io.out().flush()?;
 
@@ -642,6 +744,44 @@ impl Terminal {
         self.io.out().write_all(b"\x1b[?5522$p")?;
         self.io.out().flush()?;
         Ok(self.read_report(150, parse_decrqm_5522)?.unwrap_or(false))
+    }
+
+    fn probe_color_scheme(&mut self) -> io::Result<bool> {
+        self.io.out().write_all(b"\x1b[?2031$p")?;
+        self.io.out().flush()?;
+        Ok(self.read_report(150, parse_decrqm_2031)?.unwrap_or(false))
+    }
+
+    fn color_queries() -> Vec<u8> {
+        let mut query = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\".to_vec();
+        for i in 0..16 {
+            query.extend_from_slice(format!("\x1b]4;{i};?\x1b\\").as_bytes());
+        }
+        query
+    }
+
+    pub fn request_colors(&mut self) -> io::Result<()> {
+        let query = Self::color_queries();
+        self.io.out().write_all(&query)?;
+        self.io.out().flush()?;
+        self.color_query = Some(ColorQuery::new());
+        Ok(())
+    }
+
+    fn take_settled_colors(&mut self) -> Option<TerminalColors> {
+        let query = self.color_query.take()?;
+        (query.received > 0).then_some(query.colors)
+    }
+
+    fn collect_color(&mut self, slot: ColorSlot, rgba: [u8; 4]) -> Option<TerminalColors> {
+        let query = self.color_query.as_mut()?;
+        query.colors.set(slot, rgba);
+        query.received += 1;
+        query.last_reply = Some(Instant::now());
+        if query.received < COLOR_SLOT_COUNT {
+            return None;
+        }
+        self.take_settled_colors()
     }
 
     fn read_report<T>(
@@ -814,6 +954,12 @@ impl Drop for Terminal {
         }
         let delete = crate::kitty::kitty_delete(self.image_id, self.tmux);
         let _ = self.io.out().write_all(&delete);
+        if self.tmux {
+            let _ = self.io.out().write_all(b"\x1b[>4;0m");
+        }
+        if self.color_scheme_updates {
+            let _ = self.io.out().write_all(b"\x1b[?2031l");
+        }
         let _ = self.io.out().write_all(
             b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
         );
@@ -830,6 +976,8 @@ enum RawEvent {
     Focus(bool),
     WindowSize(WindowSize),
     Clip(ClipPacket),
+    Color(ColorSlot, [u8; 4]),
+    ColorSchemeChanged,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -912,7 +1060,10 @@ fn parse_event(buf: &[u8]) -> Option<(RawEvent, usize)> {
             }
             consume_string_sequence(buf).map(|end| match parse_osc52_reply(&buf[..end]) {
                 Some(text) => (RawEvent::Paste(text), end),
-                None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
+                None => match parse_osc_color_reply(&buf[..end]) {
+                    Some((slot, rgba)) => (RawEvent::Color(slot, rgba), end),
+                    None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
+                },
             })
         }
         b'O' => {
@@ -1129,6 +1280,8 @@ fn parse_csi(buf: &[u8]) -> Option<(RawEvent, usize)> {
             Some(ws) => RawEvent::WindowSize(ws),
             None => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
         },
+        // `CSI ? 997 ; 1 n` — the terminal's palette changed under us.
+        b'n' if params.starts_with(b"?997") => RawEvent::ColorSchemeChanged,
         _ => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
     };
     Some((event, end))
@@ -1247,7 +1400,7 @@ fn decode_mods(param: u32) -> Mods {
         shift: bits & 1 != 0,
         alt: bits & 2 != 0,
         ctrl: bits & 4 != 0,
-        sup: bits & 8 != 0,
+        sup: bits & 8 != 0, // interesting
     }
 }
 
@@ -1354,14 +1507,14 @@ fn parse_decrqm_5522(buf: &[u8]) -> Option<bool> {
     Some(ps == b'1' || ps == b'2' || ps == b'3')
 }
 
-fn parse_osc_color(buf: &[u8], selector: &str) -> Option<[u8; 4]> {
-    let text = String::from_utf8_lossy(buf);
-    let prefix = format!("\x1b]{selector}rgb:");
-    let start = text.find(&prefix)? + prefix.len();
-    let spec: String = text[start..]
-        .chars()
-        .take_while(|c| c.is_ascii_hexdigit() || *c == '/')
-        .collect();
+fn parse_decrqm_2031(buf: &[u8]) -> Option<bool> {
+    let start = buf.windows(8).position(|w| w == b"\x1b[?2031;")? + 8;
+    let ps = *buf.get(start)?;
+    Some(ps == b'1' || ps == b'2')
+}
+
+/// `rgb:RRRR/GGGG/BBBB`, with each channel 1-4 hex digits.
+fn parse_rgb_spec(spec: &str) -> Option<[u8; 4]> {
     let mut channels = spec.split('/').map(|hex| {
         let value = u16::from_str_radix(hex, 16).ok()?;
         Some(match hex.len() {
@@ -1376,6 +1529,43 @@ fn parse_osc_color(buf: &[u8], selector: &str) -> Option<[u8; 4]> {
     let g = channels.next()??;
     let b = channels.next()??;
     Some([r, g, b, 255])
+}
+
+fn parse_osc_color(buf: &[u8], selector: &str) -> Option<[u8; 4]> {
+    let text = String::from_utf8_lossy(buf);
+    let prefix = format!("\x1b]{selector}rgb:");
+    let start = text.find(&prefix)? + prefix.len();
+    let spec: String = text[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_hexdigit() || *c == '/')
+        .collect();
+    parse_rgb_spec(&spec)
+}
+
+/// One complete OSC reply: `OSC 10|11 ; rgb:… ST` or `OSC 4 ; <index> ; rgb:… ST`.
+fn parse_osc_color_reply(seq: &[u8]) -> Option<(ColorSlot, [u8; 4])> {
+    let text = String::from_utf8_lossy(seq);
+    let body = text.strip_prefix("\x1b]")?;
+    let (selector, rest) = body.split_once(';')?;
+    let (slot, rest) = match selector {
+        "10" => (ColorSlot::Foreground, rest),
+        "11" => (ColorSlot::Background, rest),
+        "4" => {
+            let (index, rest) = rest.split_once(';')?;
+            let index: u8 = index.parse().ok()?;
+            if index >= 16 {
+                return None;
+            }
+            (ColorSlot::Palette(index), rest)
+        }
+        _ => return None,
+    };
+    let spec: String = rest
+        .strip_prefix("rgb:")?
+        .chars()
+        .take_while(|c| c.is_ascii_hexdigit() || *c == '/')
+        .collect();
+    Some((slot, parse_rgb_spec(&spec)?))
 }
 
 fn parse_cell_size_report(buf: &[u8]) -> Option<(u32, u32)> {
@@ -1582,13 +1772,52 @@ mod tests {
         assert_eq!(parse_event(b"\x1b_Gi=1;OK"), None, "reply mid-arrival");
         assert_eq!(
             parse_event(b"\x1b]11;rgb:1e/2a/34\x07x"),
-            Some((key(Key::Unknown), 18)),
+            Some((RawEvent::Color(ColorSlot::Background, [30, 42, 52, 255]), 18)),
             "late OSC reply, BEL-terminated"
         );
         assert_eq!(
             parse_event(b"\x1bP1$r0m\x1b\\"),
             Some((key(Key::Unknown), 9))
         );
+    }
+
+    #[test]
+    fn reads_color_replies_for_every_slot() {
+        assert_eq!(
+            parse_event(b"\x1b]10;rgb:ff/ee/dd\x1b\\"),
+            Some((RawEvent::Color(ColorSlot::Foreground, [255, 238, 221, 255]), 19))
+        );
+        assert_eq!(
+            parse_event(b"\x1b]4;13;rgb:9f9f/8686/ebeb\x1b\\"),
+            Some((RawEvent::Color(ColorSlot::Palette(13), [159, 134, 235, 255]), 27))
+        );
+        assert_eq!(
+            parse_osc_color_reply(b"\x1b]4;99;rgb:11/22/33\x07"),
+            None,
+            "slots past the 16 we track"
+        );
+    }
+
+    #[test]
+    fn color_replies_between_keystrokes_leave_the_keystroke_alone() {
+        let stream = b"\x1b]11;rgb:1e/2a/34\x07a";
+        let (event, used) = parse_event(stream).unwrap();
+        assert_eq!(event, RawEvent::Color(ColorSlot::Background, [30, 42, 52, 255]));
+        assert_eq!(parse_event(&stream[used..]), Some((key(Key::Char('a')), 1)));
+    }
+
+    #[test]
+    fn reads_the_color_scheme_notification() {
+        assert_eq!(parse_event(b"\x1b[?997;1n"), Some((RawEvent::ColorSchemeChanged, 9)));
+        assert_eq!(parse_event(b"\x1b[?997;2n"), Some((RawEvent::ColorSchemeChanged, 9)));
+    }
+
+    #[test]
+    fn decrqm_reports_color_scheme_support() {
+        assert_eq!(parse_decrqm_2031(b"\x1b[?2031;1$y"), Some(true));
+        assert_eq!(parse_decrqm_2031(b"\x1b[?2031;2$y"), Some(true));
+        assert_eq!(parse_decrqm_2031(b"\x1b[?2031;0$y"), Some(false));
+        assert_eq!(parse_decrqm_2031(b""), None, "terminal never answered");
     }
 
     #[test]
@@ -1908,8 +2137,8 @@ mod tty_tests {
         let (master_b, _slave_b, path_b) = open_pty();
         let _drain_a = drain(&master_a);
         let _drain_b = drain(&master_b);
-        let mut a = Terminal::open(&path_a, true).unwrap();
-        let mut b = Terminal::open(&path_b, true).unwrap();
+        let mut a = Terminal::open(&path_a, false).unwrap();
+        let mut b = Terminal::open(&path_b, false).unwrap();
 
         assert_ne!(a.terminal_id, b.terminal_id);
         assert_ne!(a.shm_name(0), b.shm_name(0));
@@ -1936,5 +2165,54 @@ mod tty_tests {
             -1,
             "dropping a terminal must release its resize slot"
         );
+    }
+
+    #[test]
+    fn a_bare_escape_resolves_on_its_own_under_tmux() {
+        use std::io::Write as _;
+        let (mut master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+        let mut term = Terminal::open(&path, true).unwrap();
+
+        master.write_all(b"\x1b").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(
+            matches!(&got, Some(Event::Key(key)) if key.key == Key::Escape),
+            "tmux sends the escape key as a bare 0x1b: {got:?}"
+        );
+
+        master.write_all(b"\x1b[112;3u").unwrap();
+        let next = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(
+            matches!(&next, Some(Event::Key(key)) if key.key == Key::Char('p') && key.mods.alt),
+            "the key after an escape must survive: {next:?}"
+        );
+    }
+
+    #[test]
+    fn a_bare_escape_still_waits_for_more_outside_tmux() {
+        use std::io::Write as _;
+        let (mut master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+        let mut term = Terminal::open(&path, false).unwrap();
+
+        master.write_all(b"\x1b").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(200))).unwrap();
+        assert!(got.is_none(), "outside tmux escape arrives as CSI-u: {got:?}");
+    }
+
+    #[test]
+    fn a_wake_ends_a_blocking_poll() {
+        let (master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+        let mut term = Terminal::open(&path, false).unwrap();
+        let waker = term.waker().unwrap();
+
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            waker.wake();
+        });
+        let got = term.poll_event(None).unwrap();
+        assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
     }
 }

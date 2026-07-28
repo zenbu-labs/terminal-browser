@@ -6,10 +6,10 @@ import { app } from "electron";
 
 // er i don't think this is necessary anymore given our daemon but i guess it doesn't hurt to be explicit 
 export function claimProfile() {
-  const appData = process.env.PIXEL_BROWSER_APPDATA ?? app.getPath("appData");
+  const appData = process.env.TERMINAL_BROWSER_APPDATA ?? app.getPath("appData");
   for (let i = 0; i < 32; i++) {
     const dir = path.join(appData, i === 0 ? "Pixel Browser" : `Pixel Browser ${i + 1}`);
-    const lock = path.join(dir, "pixel.lock");
+    const lock = path.join(dir, "terminal-browser.lock");
     try {
       fs.mkdirSync(dir, { recursive: true });
       try {
@@ -28,7 +28,7 @@ export function claimProfile() {
       return;
     } catch {}
   }
-  app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), "pixel-browser-")));
+  app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-")));
 }
 
 function alive(pid: number) {

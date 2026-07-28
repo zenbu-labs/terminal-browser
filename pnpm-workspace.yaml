@@ -1,7 +1,6 @@
 packages:
   - engine/packages/*
   - engine/examples/*
-  - agent/*
   - browser
   - cli
   - store

@@ -1,9 +1,9 @@
 {
-  "name": "pixel-cli",
+  "name": "terminal-browser-cli",
   "version": "0.1.0",
   "private": true,
   "bin": {
-    "pixel": "./dist/main.js"
+    "terminal-browser": "./dist/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

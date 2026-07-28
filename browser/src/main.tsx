@@ -51,10 +51,12 @@ void (async () => {
     await runDaemon(cdpPort);
     return;
   }
+  const argv = process.argv.slice(2);
   session = createSession({
     key: String(process.pid),
-    argv: process.argv.slice(2),
+    argv,
     env: process.env,
+    cwd: argv.find((arg) => arg.startsWith("--cwd="))?.slice("--cwd=".length) ?? process.cwd(),
     cdpPort,
     onClose: (code) => app.exit(code),
   });

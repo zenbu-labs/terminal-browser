@@ -11,11 +11,13 @@ import type { SessionHandle } from "./session/session";
 // what
 const IDLE_EXIT_MS = 15_000;
 
+
 interface OpenRequest {
   cmd: "open";
   tty: string;
   argv?: string[];
   env?: Record<string, string | undefined>;
+  cwd?: string;
   build?: string;
 }
 
@@ -29,7 +31,7 @@ export function buildStamp(): string {
 
 export async function runDaemon(cdpPort: number | null): Promise<void> {
   if (await socketAlive()) {
-    process.stderr.write("pixel-browser daemon already running\n");
+    process.stderr.write("terminal-browser daemon already running\n");
     app.exit(3);
     return;
   }
@@ -93,6 +95,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
               key: sessionKey,
               argv: message.argv ?? [],
               env: message.env ?? {},
+              cwd: message.cwd ?? process.cwd(),
               cdpPort,
               onClose: (code) => {
                 sessions.delete(sessionKey);
@@ -127,7 +130,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     });
   });
   server.on("error", (error) => {
-    process.stderr.write(`pixel-browser daemon socket error: ${error}\n`);
+    process.stderr.write(`terminal-browser daemon socket error: ${error}\n`);
     app.exit(1);
   });
   server.listen(DAEMON_SOCKET);

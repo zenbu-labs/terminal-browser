@@ -5,62 +5,28 @@ import net from "node:net";
 import path from "node:path";
 
 import { DAEMON_SOCKET, LOGS_DIR, ensureDataDir } from "pixel-store";
-import { detectBackend, setPaneTitle } from "pixel-terminals";
-import type { Backend, Direction, Pane } from "pixel-terminals";
+import {
+  callerTty,
+  checkKittyGraphics,
+  detectBackend,
+  prepareTmux,
+  setPaneTitle,
+  unsupportedGraphicsMessage,
+} from "pixel-terminals";
+import type { Backend, Direction } from "pixel-terminals";
+import { actionCommand } from "./action";
 import { control } from "./control";
+import { commandHelp, helpTopics, rootHelp } from "./help";
+import { locate, recordKey, reusable } from "./instances";
+import { lsCommand } from "./ls";
 import { instances } from "./registry";
 import type { InstanceRecord } from "./registry";
 
-const DIST_ROOT = process.env.PIXEL_DIST_ROOT ?? null;
+const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
 delete process.env.ELECTRON_RUN_AS_NODE;
 
-const HELP = `
-Usage: pixel <command> [args]
-
-  open [url] [options]   Open a browser in a new split or tab.
-
-    Options:
-      --dir <direction>     Split direction: right, left, down, up
-      --size <fraction>     Pane size (0.2-0.95)
-      --split               Force new split even if browser exists
-      --here                Run in current pane, block until close
-      --isolated            Use dedicated browser process/profile
-      --palette-key <key>   Command palette key (default: super+p)
-      --find-key <key>      Find-in-page key (default: super+f)
-      --action-mods <mods>  Action shortcut mods (default: super+shift, "none" disables)
-
-  help                  Show this help
-`;
-
-interface LocatedInstance extends InstanceRecord {
-  window: string | null;
-  tab: string | null;
-  inCurrentTab: boolean;
-}
-
-const TITLE_PATTERN = /pixel-browser:([\w-]+)/;
-
-function locate(records: InstanceRecord[], panes: Pane[]): LocatedInstance[] {
-  const self = panes.find((pane) => pane.self);
-  const byKey = new Map<string, Pane>();
-  for (const pane of panes) {
-    const match = TITLE_PATTERN.exec(pane.title);
-    if (match) byKey.set(match[1], pane);
-  }
-  return records.map((record) => {
-    const pane = byKey.get(record.key);
-    return {
-      ...record,
-      window: pane?.window ?? null,
-      tab: pane?.tab ?? null,
-      inCurrentTab:
-        !!pane && !!self && pane.window === self.window && pane.tab === self.tab,
-    };
-  });
-}
-
 function fail(message: string): never {
-  process.stderr.write(`pixel: ${message}\n`);
+  process.stderr.write(`terminal-browser: ${message}\n`);
   process.exit(1);
 }
 
@@ -119,7 +85,7 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
   const main = path.join(browserDir, "dist", "main.js");
   for (const required of [electron, main]) {
     if (!fs.existsSync(required)) {
-      fail(`missing ${required} — build the browser first (pnpm --filter pixel-browser build)`);
+      fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
     }
   }
   ensureDataDir();
@@ -134,9 +100,9 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
 
 function clientLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const runner = DIST_ROOT
-    ? [path.join(DIST_ROOT, "bin", "pixel")]
+    ? [path.join(DIST_ROOT, "bin", "terminal-browser")]
     : [process.execPath, path.resolve(__dirname, "main.js")];
-  const quoted = [...runner, "open", "--here", ...argv]
+  const quoted = [...runner, "open", ...argv]
     .map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`)
     .join(" ");
   return { command: ["/bin/sh", "-c", `exec ${quoted}`], cwd: process.cwd() };
@@ -152,6 +118,11 @@ function ownTtyPath(): string | null {
   } catch {
     return null;
   }
+}
+
+function interactiveTty(): string | null {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
+  return ownTtyPath();
 }
 
 function browserBuildStamp(): string {
@@ -224,6 +195,7 @@ async function openSession(argv: string[], tty: string): Promise<{ socket: net.S
     tty,
     argv,
     env: process.env,
+    cwd: process.cwd(),
     build: browserBuildStamp(),
   })}\n`;
   const ask = (socket: net.Socket) =>
@@ -259,8 +231,8 @@ async function attachHere(argv: string[]): Promise<never> {
     socket.destroy();
     throw new Error(reply.error ?? "daemon refused the session");
   }
-  // the title marker is how pixel commands find this pane
-  setPaneTitle(tty, `pixel-browser:${reply.session}`);
+  // the title marker is how terminal-browser commands find this pane
+  setPaneTitle(tty, `terminal-browser:${reply.session}`);
   nextReply(socket, (message) => {
     if (message.event === "closed") process.exit(message.code ?? 0);
   });
@@ -285,9 +257,10 @@ async function attachHere(argv: string[]): Promise<never> {
 }
 
 async function openHere(argv: string[]): Promise<never> {
+  prepareTmux();
   const isolated = takeBoolFlag(argv, "--isolated");
   if (!isolated) return attachHere(argv);
-  const { command, cwd } = browserLaunchCommand(argv);
+  const { command, cwd } = browserLaunchCommand([...argv, `--cwd=${process.cwd()}`]);
   const child = spawn(command[0], command.slice(1), { cwd, stdio: "inherit" });
   const code: number = await new Promise((resolve) =>
     child.on("exit", (status) => resolve(status ?? 0)),
@@ -295,29 +268,21 @@ async function openHere(argv: string[]): Promise<never> {
   process.exit(code);
 }
 
-function isSshSession(): boolean {
-  return !!(
-    process.env.SSH_CONNECTION ||
-    process.env.SSH_CLIENT ||
-    process.env.SSH_TTY
-  );
+const DIRECTIONS: Direction[] = ["right", "left", "down", "up"];
+
+function isDirection(value: string): value is Direction {
+  return (DIRECTIONS as string[]).includes(value);
 }
 
-function openOverSsh(args: string[]): Promise<never> {
-  for (const flag of ["--dir", "--size", "--split"]) {
-    if (args.includes(flag)) {
-      fail(`${flag} is unavailable over SSH because Pixel runs in the current SSH pane`);
-    }
-  }
-  return openHere(args);
-}
-
-function takeDirection(args: string[]): Direction {
-  const direction = (takeFlag(args, "--dir") ?? "right") as Direction;
-  if (!["right", "left", "down", "up"].includes(direction)) {
-    fail(`invalid --dir ${direction} (right|left|down|up)`);
-  }
-  return direction;
+function takeDirection(args: string[]): { direction: Direction; explicit: boolean } {
+  const flag = takeFlag(args, "--dir");
+  if (flag !== undefined && !isDirection(flag)) fail(`invalid --dir ${flag} (right|left|down|up)`);
+  const filler = args.indexOf("split");
+  if (filler >= 0) args.splice(filler, 1);
+  const wordAt = args.findIndex(isDirection);
+  const word = wordAt >= 0 ? (args.splice(wordAt, 1)[0] as Direction) : undefined;
+  const direction = (flag as Direction | undefined) ?? word;
+  return { direction: direction ?? "right", explicit: direction !== undefined };
 }
 
 function takeSizeFlag(args: string[]): number | null {
@@ -348,7 +313,7 @@ async function applySplitSize(
     down: "up",
     up: "down",
   };
-  await backend.resizePane(`pixel-browser:${record.key}`, grow[direction], deltaPoints);
+  await backend.resizePane(`terminal-browser:${recordKey(record)}`, grow[direction], deltaPoints);
 }
 
 async function launchInSplit(
@@ -357,12 +322,12 @@ async function launchInSplit(
   argv: string[],
   size?: number | null,
 ): Promise<InstanceRecord> {
-  const before = new Set((await instances()).map((record) => record.key));
+  const before = new Set((await instances()).map(recordKey));
   const { command, cwd } = clientLaunchCommand(argv);
-  await backend.split(direction, command, cwd);
+  await backend.split(direction, command, cwd, size);
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    const fresh = (await instances()).find((record) => !before.has(record.key));
+    const fresh = (await instances()).find((record) => !before.has(recordKey(record)));
     if (fresh) {
       if (size) await applySplitSize(backend, direction, fresh, size).catch(() => {});
       return fresh;
@@ -372,49 +337,142 @@ async function launchInSplit(
   fail("browser did not register within 20s (is the split open?)");
 }
 
-async function openCommand(backend: Backend, args: string[]) {
+// the browser paints the page as an image in the pane, so a terminal without the
+// kitty graphics protocol can launch it but never show it — refuse up front
+async function requireKittyGraphics() {
+  // passthrough has to be on before we can probe through tmux
+  prepareTmux();
+  if ((await checkKittyGraphics()) !== "unsupported") return;
+  // not fail(): this one stands on its own, without the command-name prefix
+  process.stderr.write(unsupportedGraphicsMessage(process.stderr.isTTY === true));
+  process.exit(1);
+}
+
+// slop fixme
+// these options are very poorly designed
+async function openCommand(args: string[]) {
   const forceSplit = takeBoolFlag(args, "--split");
-  const direction = takeDirection(args);
+  const { direction, explicit } = takeDirection(args);
   const size = takeSizeFlag(args);
   const paletteKey = takeKeyBinding(args, "--palette-key");
   const findKey = takeKeyBinding(args, "--find-key");
   const actionMods = takeModsBinding(args, "--action-mods");
+  const bindings: string[] = [];
+  if (paletteKey) bindings.push(`--palette-key=${paletteKey}`);
+  if (findKey) bindings.push(`--find-key=${findKey}`);
+  if (actionMods) bindings.push(`--action-mods=${actionMods}`);
+  if (isSshSession() && (forceSplit || explicit || size !== null)) {
+    fail("split options are unavailable over SSH because terminal-browser runs in the current pane");
+  }
+  await requireKittyGraphics();
+  if (isSshSession() || (!forceSplit && !explicit && interactiveTty())) {
+    return openHere([...args, ...bindings]);
+  }
+  const backend = detectBackend();
   const url = args[0];
+  const tty = ownTtyPath() ?? callerTty();
   if (!forceSplit) {
     const records = await instances();
     if (records.length > 0) {
-      const located = locate(records, await backend.panes());
-      const here = located.find((record) => record.inCurrentTab);
-      if (here) {
-        return print(await control(here.socket, url ? { cmd: "open-tab", url } : { cmd: "open-tab" }));
+      const found = locate(records, await backend.panes());
+      const target = reusable(found, explicit ? direction : null, tty);
+      if (target) {
+        return print(
+          await control(
+            target.socket,
+            url ? { cmd: "open-tab", url, cwd: process.cwd() } : { cmd: "open-tab" },
+          ),
+        );
       }
     }
   }
   const argv = url ? [url] : [];
-  if (paletteKey) argv.push(`--palette-key=${paletteKey}`);
-  if (findKey) argv.push(`--find-key=${findKey}`);
-  if (actionMods) argv.push(`--action-mods=${actionMods}`);
+  argv.push(`--split-dir=${direction}`);
+  if (tty) argv.push(`--parent-tty=${tty}`);
+  argv.push(...bindings);
   print(await launchInSplit(backend, direction, argv, size));
 }
 
-async function main() {
-  const [command, ...args] = process.argv.slice(2);
-  if (!command || command === "help" || command === "--help" || command === "-h") {
-    process.stdout.write(HELP);
-    return;
-  }
-  if (command === "open" && takeBoolFlag(args, "--here")) {
-    return openHere(args);
-  }
-  if (command === "open" && isSshSession()) {
-    return openOverSsh(args);
-  }
-  if (command === "open") {
-    return openCommand(detectBackend(), args);
-  }
-  fail(`unknown command: ${command}\n\n${HELP}`);
+function isSshSession(): boolean {
+  return Boolean(process.env.SSH_CONNECTION || process.env.SSH_CLIENT || process.env.SSH_TTY);
 }
 
-void main().catch((error: unknown) => {
-  fail(error instanceof Error ? error.message : String(error));
-});
+function splitPassthrough(args: string[]): { own: string[]; passthrough: string[] } {
+  const at = args.indexOf("--");
+  if (at < 0) return { own: args, passthrough: [] };
+  return { own: args.slice(0, at), passthrough: args.slice(at + 1) };
+}
+
+function takeTabFlag(args: string[]): number | undefined {
+  const raw = takeFlag(args, "--tab");
+  if (raw === undefined) return undefined;
+  const id = Number(raw.replace(/^t/, ""));
+  if (!Number.isInteger(id)) fail(`invalid --tab ${raw} (a tab id from terminal-browser ls)`);
+  return id;
+}
+
+function asksForHelp(args: string[]): boolean {
+  const end = args.indexOf("--");
+  const own = end < 0 ? args : args.slice(0, end);
+  return own.includes("--help") || own.includes("-h");
+}
+
+function helpCommand(topic: string | undefined): number {
+  if (!topic) {
+    process.stdout.write(rootHelp());
+    return 0;
+  }
+  const help = commandHelp(topic);
+  if (!help) fail(`no help for ${topic} (try ${helpTopics().join(", ")})`);
+  process.stdout.write(help);
+  return 0;
+}
+
+async function main(): Promise<number> {
+  const [command, ...args] = process.argv.slice(2);
+  if (!command || command === "--help" || command === "-h") {
+    process.stdout.write(rootHelp());
+    return 0;
+  }
+  if (command === "help") return helpCommand(args[0]);
+  if (asksForHelp(args)) {
+    const help = commandHelp(command);
+    if (help) {
+      process.stdout.write(help);
+      return 0;
+    }
+  }
+  if (command === "open") {
+    await openCommand(args);
+    return 0;
+  }
+  if (command === "ls") {
+    const all = takeBoolFlag(args, "--all");
+    const json = takeBoolFlag(args, "--json");
+    await lsCommand(detectBackend(), all, json);
+    return 0;
+  }
+  if (command === "action") {
+    const { own, passthrough } = splitPassthrough(args);
+    const options = {
+      browserKey: takeFlag(own, "--browser"),
+      tabId: takeTabFlag(own),
+      targetId: takeFlag(own, "--target"),
+      follow: takeBoolFlag(own, "--follow"),
+      resolve: takeBoolFlag(own, "--resolve"),
+      printEnv: takeBoolFlag(own, "--env"),
+      passthrough,
+    };
+    if (own.length > 0) fail(`unexpected ${own[0]} — put agent-browser arguments after --`);
+    return actionCommand(detectBackend(), options);
+  }
+  fail(`unknown command: ${command}\n\n${rootHelp()}`);
+}
+
+void main()
+  .then((code) => {
+    if (code) process.exit(code);
+  })
+  .catch((error: unknown) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });

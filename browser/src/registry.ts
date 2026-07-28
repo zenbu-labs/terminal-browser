@@ -12,15 +12,22 @@ import { INSTANCES_DIR } from "pixel-store";
 export interface ControlHost {
   key: string;
   tty: string | null;
+  splitDir: InstanceRow["splitDir"];
+  parentTty: string | null;
   state(): BrowserState;
-  openTab(url?: string): void;
+  openTab(url?: string, cwd?: string): number;
+  activateTab(id: number): boolean;
+  closeTab(id: number): boolean;
   tabs(): unknown;
+  targets(): Promise<unknown>;
   viewport(): { width: number; height: number; scale: number } | null;
 }
 
 interface ControlRequest {
   cmd: string;
   url?: string;
+  cwd?: string;
+  tab?: number;
 }
 
 function ownTty(): string | null {
@@ -80,6 +87,8 @@ export class Registry {
       pid: process.pid,
       key: this.host.key,
       tty: this.tty,
+      splitDir: this.host.splitDir,
+      parentTty: this.host.parentTty,
       socket: this.socketPath,
       cdpPort: this.cdpPort,
       startedAt: this.startedAt,
@@ -126,9 +135,22 @@ export class Registry {
     switch (request.cmd) {
       case "state":
         return this.record();
-      case "open-tab":
-        this.host.openTab(request.url);
-        return this.record();
+      case "open-tab": {
+        const id = this.host.openTab(request.url, request.cwd);
+        return { ...this.record(), openedTab: id, tabs: await this.host.targets() };
+      }
+      case "targets":
+        return { ...this.record(), tabs: await this.host.targets() };
+      case "activate-tab": {
+        if (request.tab === undefined) throw new Error("activate-tab needs a tab id");
+        if (!this.host.activateTab(request.tab)) throw new Error(`no tab ${request.tab}`);
+        return { ...this.record(), tabs: await this.host.targets() };
+      }
+      case "close-tab": {
+        if (request.tab === undefined) throw new Error("close-tab needs a tab id");
+        if (!this.host.closeTab(request.tab)) throw new Error(`no tab ${request.tab}`);
+        return { ...this.record(), tabs: await this.host.targets() };
+      }
       default:
         throw new Error(`unknown command: ${request.cmd}`);
     }

@@ -1,3 +1,4 @@
+import type { Rgba } from "../native";
 import { createLogStore, createStore } from "./store";
 
 export const consoleLogs = createLogStore();
@@ -111,6 +112,7 @@ export interface DevtoolsState {
   height: number;
   basePx: number;
   cpuRate: number;
+  background: Rgba | null;
 }
 
 export const devtoolsStore = createStore<DevtoolsState>({
@@ -120,4 +122,5 @@ export const devtoolsStore = createStore<DevtoolsState>({
   height: 0,
   basePx: 16,
   cpuRate: 1,
+  background: null,
 });

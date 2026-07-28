@@ -4,7 +4,7 @@ import type { BrowserState } from "../page/types";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
 import type { Theme } from "./theme";
-import type { ChromeActions, ChromeLayout } from "./types";
+import type { ChromeActions, ChromeLayout, DownloadView } from "./types";
 
 export function FindBar({
   state,
@@ -83,6 +83,47 @@ function FindButton({
       onClick={onClick}
     >
       <Icon icon={icon} size={rem * 0.8} color={theme.muted} />
+    </Box>
+  );
+}
+
+export function DownloadHud({
+  download,
+  layout,
+  theme,
+}: {
+  download: DownloadView;
+  layout: ChromeLayout;
+  theme: Theme;
+}) {
+  const rem = layout.rem;
+  const status =
+    download.state === "done"
+      ? "saved"
+      : download.state === "failed"
+        ? "failed"
+        : download.percent != null
+          ? `${download.percent}%`
+          : "downloading";
+  return (
+    <Box
+      style={{
+        position: "absolute",
+        inset: { bottom: rem * 0.6, left: rem * 0.75 },
+        height: rem * 2,
+        alignItems: "center",
+        gap: rem * 0.5,
+        padding: { left: rem * 0.8, right: rem * 0.8 },
+        background: theme.bg,
+        cornerRadius: rem * 0.5,
+        border: { width: 1, color: theme.fieldBorder },
+      }}
+    >
+      <Icon icon="download" size={rem * 0.8} color={theme.muted} />
+      <Text style={{ fontSize: rem * 0.9, wrap: false, selectable: false }}>{download.name}</Text>
+      <Text style={{ color: theme.muted, fontSize: rem * 0.8, wrap: false, selectable: false }}>
+        {status}
+      </Text>
     </Box>
   );
 }

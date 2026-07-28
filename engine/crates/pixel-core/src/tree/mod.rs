@@ -865,6 +865,14 @@ impl Tree {
             .any(|node| node.surface == Some(surface))
     }
 
+    pub fn surface_rects(&self, surface: u32) -> impl Iterator<Item = (PxRect, PxRect)> + '_ {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .filter(move |node| node.surface == Some(surface))
+            .map(|node| (node.abs, node.visible))
+    }
+
     pub(crate) fn mark_paint(&mut self) {
         self.needs_paint = true;
     }
@@ -898,7 +906,6 @@ impl Tree {
                 )
             });
             crate::profiler::span("tree.widgets", || self.layout_mark_widgets(fonts));
-            
 
             let root_taffy = self.node(self.root).taffy;
             crate::profiler::span("tree.layout", || {
@@ -922,7 +929,6 @@ impl Tree {
             self.needs_paint = true;
         }
     }
-
 
     fn resolve(&mut self, id: NodeId, inherited: Resolved) {
         let node = self.node_mut(id);
@@ -953,8 +959,7 @@ impl Tree {
         } else {
             None
         };
-        if (is_input || !marks.is_empty())
-            && children.iter().any(|&c| self.node(c).mark.is_some())
+        if (is_input || !marks.is_empty()) && children.iter().any(|&c| self.node(c).mark.is_some())
         {
             self.mark_parents.push(id);
         }
@@ -1379,10 +1384,10 @@ impl Tree {
             return false;
         };
         node.text.is_some()
-            && node
-                .children
-                .iter()
-                .all(|&c| self.get(c).is_some_and(|n| n.mark.is_some() || n.slot.is_some()))
+            && node.children.iter().all(|&c| {
+                self.get(c)
+                    .is_some_and(|n| n.mark.is_some() || n.slot.is_some())
+            })
             && node.input.is_none()
             && !node.hidden
             && node.resolved.selectable

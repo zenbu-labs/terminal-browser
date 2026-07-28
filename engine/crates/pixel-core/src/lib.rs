@@ -15,7 +15,7 @@ mod scroll;
 mod scrollbar;
 mod selection;
 mod style;
-mod surfaces;
+pub mod surfaces;
 mod terminal;
 mod text_input;
 mod throttle;
@@ -32,7 +32,7 @@ pub use engine::{
 pub use kitty::kitty_transmit;
 pub use logging::{LogEntry, LogLevel};
 pub use menu::{CONTEXT_MENU_KEY, MenuEntry, MenuItem, MenuStyle, context_menu};
-pub use native::{NativeDelta, NativeScroll};
+pub use native::{NativeEvent, NativeScroll};
 pub use paint::paint;
 pub use profiler::{CounterRecord, ProfileData, Profiler, SpanRecord};
 pub use shape::{LineCap, LineJoin, PathCmd, ShapeProps, ShapeStroke, parse_path_data};
@@ -45,8 +45,8 @@ pub use style::{
     Overflow, Position, ScrollbarStyle, SelectionMode, Style,
 };
 pub use terminal::{
-    Event, Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors, Waker,
-    WindowSize,
+    Event, Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors,
+    Waker, WindowSize,
 };
 pub use text_input::{
     Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput, line_height,

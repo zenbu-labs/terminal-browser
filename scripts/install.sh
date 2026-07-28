@@ -9,23 +9,23 @@ case "$(uname -s)-$(uname -m)" in
   Linux-aarch64|Linux-arm64) HOST_TARGET="linux-arm64" ;;
   Linux-x86_64|Linux-amd64) HOST_TARGET="linux-x64" ;;
   *)
-    echo "pixel does not support $(uname -s) $(uname -m)" >&2
+    echo "terminal-browser does not support $(uname -s) $(uname -m)" >&2
     exit 1
     ;;
 esac
 
 if [ "$HOST_TARGET" != "$TARGET" ]; then
-  echo "this pixel build targets $TARGET, not $HOST_TARGET" >&2
+  echo "this terminal-browser build targets $TARGET, not $HOST_TARGET" >&2
   exit 1
 fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "downloading pixel..."
+echo "downloading terminal-browser..."
 curl -fsSL --retry 3 "$BASE_URL/chunks.txt" -o "$TMP/chunks.txt"
 SHA="$(head -1 "$TMP/chunks.txt")"
-TARBALL="$TMP/pixel.tar.gz"
+TARBALL="$TMP/terminal-browser.tar.gz"
 : > "$TARBALL"
 tail -n +2 "$TMP/chunks.txt" | while read -r chunk; do
   [ -n "$chunk" ] || continue
@@ -45,7 +45,7 @@ fi
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN_HOME="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
-APP="$DATA_HOME/pixel/app"
+APP="$DATA_HOME/terminal-browser/app"
 if [ -d "$APP" ]; then
   echo "updating existing install (was $(cat "$APP/VERSION" 2>/dev/null || echo unknown))"
 else
@@ -54,25 +54,39 @@ fi
 rm -rf "$APP.new"
 mkdir -p "$APP.new"
 tar -xzf "$TARBALL" -C "$APP.new" --strip-components 1
-pkill -f 'pixel/app/browser/dist/main\.js' 2>/dev/null || true
+pkill -f 'terminal-browser/app/browser/dist/main\.js' 2>/dev/null || true
 rm -rf "$APP"
 mv "$APP.new" "$APP"
 
 mkdir -p "$BIN_HOME"
-cat > "$BIN_HOME/pixel" <<EOF
+cat > "$BIN_HOME/terminal-browser" <<EOF
 #!/bin/sh
-exec "$APP/bin/pixel" "\$@"
+exec "$APP/bin/terminal-browser" "\$@"
 EOF
-chmod +x "$BIN_HOME/pixel"
+chmod +x "$BIN_HOME/terminal-browser"
 
-echo "installed pixel $(cat "$APP/VERSION")"
+SKILL_DIR="${AGENT_SKILLS_HOME:-$HOME/.agents/skills}/terminal-browser"
+mkdir -p "$SKILL_DIR"
+cp "$APP/skill/SKILL.md" "$SKILL_DIR/SKILL.md"
+
+LINKED=""
+for base in "$HOME/.claude" "$HOME/.codex" "$HOME/.cursor" "$HOME/.gemini"; do
+  [ -d "$base/skills" ] || continue
+  LINK="$base/skills/terminal-browser"
+  if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then continue; fi
+  ln -sfn "$SKILL_DIR" "$LINK"
+  LINKED="$LINKED $(basename "$base")"
+done
+
+echo "installed terminal-browser $(cat "$APP/VERSION")"
+echo "skill $SKILL_DIR${LINKED:+ (linked into$LINKED)}"
 case ":$PATH:" in
   *":$BIN_HOME:"*) ;;
   *)
     echo
-    echo "add $BIN_HOME to your PATH first (in your shell's rc file):"
-    echo "  export PATH=\"$BIN_HOME:\$PATH\""
+    echo "add $BIN_HOME to your PATH first:"
+    echo "  echo 'export PATH=\"$BIN_HOME:\$PATH\"' >> ~/.zshrc && exec zsh"
     ;;
 esac
 echo
-echo "  pixel open example.com"
+echo "  terminal-browser open example.com"

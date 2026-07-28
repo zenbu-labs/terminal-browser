@@ -40,6 +40,12 @@ export interface PopupView {
   height: number;
 }
 
+export interface DownloadView {
+  name: string;
+  percent: number | null;
+  state: "progressing" | "done" | "failed";
+}
+
 export type PageMenuItem =
   | { id: string; label: string; enabled: boolean; shortcut: string }
   | { id: string; separator: true };
@@ -72,8 +78,6 @@ export interface ChromeActions {
   newTabQuery(text: string): void;
   newTabSubmit(text: string): void;
   newTabCancel(): void;
-  closeConfirmChoose(closePane: boolean): void;
-  closeConfirmCancel(): void;
   popupPointer(event: PointerEvent): void;
   popupWheel(event: WheelEvent): void;
   popupClose(): void;
