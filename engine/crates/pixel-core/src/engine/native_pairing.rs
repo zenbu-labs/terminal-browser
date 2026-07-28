@@ -13,6 +13,7 @@ pub(super) struct NativePairing {
     held_travel: f32,
     undecided_since: Option<Instant>,
     last_precise: Option<Instant>,
+    paired: bool,
     ready: Vec<(f32, f32)>,
     zoom: f32,
 }
@@ -24,6 +25,7 @@ impl NativePairing {
             held_travel: 0.0,
             undecided_since: None,
             last_precise: None,
+            paired: false,
             ready: Vec::new(),
             zoom: 1.0,
         }
@@ -38,6 +40,13 @@ impl NativePairing {
         pane: (f32, f32),
         pad: (f32, f32),
     ) {
+        // a quiet stream means the gesture ended, so the next one pairs afresh
+        if self
+            .last_precise
+            .is_some_and(|at| now.saturating_duration_since(at) > STREAM_WINDOW)
+        {
+            self.paired = false;
+        }
         for event in events {
             match event {
                 NativeEvent::Cursor { point } => hover.note_cursor(scale_point(point, scale), now),
@@ -71,8 +80,14 @@ impl NativePairing {
                     if phase & PHASE_BEGAN != 0 {
                         self.forget_held();
                         self.undecided_since = None;
+                        self.paired = false;
                     }
                     let px = (delta_x * scale, delta_y * scale);
+                    // the terminal already told us this gesture is ours
+                    if self.paired {
+                        self.ready.push(px);
+                        continue;
+                    }
                     match hover.verdict(now, pane, pad) {
                         Verdict::Deliver => {
                             self.ready.extend(self.held.drain(..));
@@ -94,13 +109,27 @@ impl NativePairing {
         }
     }
 
-    pub fn on_wheel_tick(&mut self, local: (f32, f32), now: Instant, hover: &mut HoverOracle) -> bool {
-        hover.note_tick(local, now);
+    /// A wheel tick only reaches us when the pointer is over our pane, so it
+    /// settles the gesture on its own — geometry never has to agree.
+    pub fn on_wheel_tick(
+        &mut self,
+        local: Option<(f32, f32)>,
+        now: Instant,
+        hover: &mut HoverOracle,
+    ) -> bool {
+        if let Some(local) = local {
+            hover.note_tick(local, now);
+        }
         self.undecided_since = None;
         self.ready.extend(self.held.drain(..));
         self.held_travel = 0.0;
-        self.last_precise
-            .is_some_and(|at| now.saturating_duration_since(at) < STREAM_WINDOW)
+        let streaming = self
+            .last_precise
+            .is_some_and(|at| now.saturating_duration_since(at) < STREAM_WINDOW);
+        if streaming {
+            self.paired = true;
+        }
+        streaming
     }
 
     pub fn take(&mut self) -> (f32, Vec<(f32, f32)>) {
@@ -114,6 +143,7 @@ impl NativePairing {
         self.forget_held();
         self.undecided_since = None;
         self.last_precise = None;
+        self.paired = false;
     }
 
     fn hold(&mut self, px: (f32, f32), now: Instant) {
@@ -188,12 +218,70 @@ mod tests {
         (NativePairing::new(), hover, now)
     }
 
+    // tmux cannot report pixel positions, so the oracle is told nothing and can
+    // never locate the pane. The wheel tick has to carry the gesture by itself.
+    #[test]
+    fn a_wheel_tick_pairs_the_gesture_without_any_geometry() {
+        let mut pairing = NativePairing::new();
+        let mut hover = HoverOracle::new();
+        let now = Instant::now();
+
+        pairing.ingest(
+            vec![scroll(3.0, PHASE_BEGAN), scroll(5.0, 0)],
+            1.0,
+            now,
+            &mut hover,
+            PANE,
+            PAD,
+        );
+        assert!(!hover.calibrated());
+        assert!(
+            pairing.take().1.is_empty(),
+            "held until the terminal confirms the pane"
+        );
+
+        assert!(
+            pairing.on_wheel_tick(None, now, &mut hover),
+            "the tick rides the native stream"
+        );
+        assert_eq!(
+            pairing.take().1,
+            vec![(0.0, 3.0), (0.0, 5.0)],
+            "the tick releases what was held"
+        );
+
+        pairing.ingest(vec![scroll(7.0, 0)], 1.0, now, &mut hover, PANE, PAD);
+        assert_eq!(
+            pairing.take().1,
+            vec![(0.0, 7.0)],
+            "and the rest of the gesture follows"
+        );
+
+        let later = now + STREAM_WINDOW * 2;
+        pairing.ingest(vec![scroll(9.0, 0)], 1.0, later, &mut hover, PANE, PAD);
+        assert!(
+            pairing.take().1.is_empty(),
+            "a later gesture waits for its own tick"
+        );
+    }
+
     #[test]
     fn located_pane_delivers_the_first_pixel_of_every_flick() {
         let (mut pairing, mut hover, now) = located();
         for flick in 0..4 {
-            pairing.ingest(vec![at(3.0, PHASE_BEGAN, (500.0, 500.0))], 1.0, now, &mut hover, PANE, PAD);
-            assert_eq!(pairing.take().1, vec![(0.0, 3.0)], "flick {flick} scrolled nothing");
+            pairing.ingest(
+                vec![at(3.0, PHASE_BEGAN, (500.0, 500.0))],
+                1.0,
+                now,
+                &mut hover,
+                PANE,
+                PAD,
+            );
+            assert_eq!(
+                pairing.take().1,
+                vec![(0.0, 3.0)],
+                "flick {flick} scrolled nothing"
+            );
         }
     }
 
@@ -201,7 +289,10 @@ mod tests {
     fn scrolling_away_from_the_pane_delivers_nothing() {
         let (mut pairing, mut hover, now) = located();
         pairing.ingest(
-            vec![at(3.0, PHASE_BEGAN, (1400.0, 500.0)), at(9.0, 0, (1400.0, 500.0))],
+            vec![
+                at(3.0, PHASE_BEGAN, (1400.0, 500.0)),
+                at(9.0, 0, (1400.0, 500.0)),
+            ],
             1.0,
             now,
             &mut hover,
@@ -224,9 +315,13 @@ mod tests {
             PANE,
             PAD,
         );
-        assert_eq!(pairing.take().1, Vec::<(f32, f32)>::new(), "nothing proved hover yet");
+        assert_eq!(
+            pairing.take().1,
+            Vec::<(f32, f32)>::new(),
+            "nothing proved hover yet"
+        );
 
-        assert!(pairing.on_wheel_tick((400.0, 300.0), now, &mut hover));
+        assert!(pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover));
         assert_eq!(pairing.take().1, vec![(0.0, 3.0), (0.0, 2.0)]);
     }
 
@@ -235,11 +330,25 @@ mod tests {
         let mut pairing = NativePairing::new();
         let mut hover = HoverOracle::new();
         let now = Instant::now();
-        pairing.ingest(vec![at(1.0, PHASE_BEGAN, (500.0, 500.0))], 1.0, now, &mut hover, PANE, PAD);
-        assert!(pairing.on_wheel_tick((400.0, 300.0), now, &mut hover));
+        pairing.ingest(
+            vec![at(1.0, PHASE_BEGAN, (500.0, 500.0))],
+            1.0,
+            now,
+            &mut hover,
+            PANE,
+            PAD,
+        );
+        assert!(pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover));
         pairing.take();
 
-        pairing.ingest(vec![at(2.0, PHASE_BEGAN, (500.0, 500.0))], 1.0, now, &mut hover, PANE, PAD);
+        pairing.ingest(
+            vec![at(2.0, PHASE_BEGAN, (500.0, 500.0))],
+            1.0,
+            now,
+            &mut hover,
+            PANE,
+            PAD,
+        );
         assert_eq!(pairing.take().1, vec![(0.0, 2.0)]);
     }
 
@@ -248,11 +357,25 @@ mod tests {
         let mut pairing = NativePairing::new();
         let mut hover = HoverOracle::new();
         let now = Instant::now();
-        pairing.ingest(vec![at(1.0, PHASE_BEGAN, (500.0, 500.0))], 1.0, now, &mut hover, PANE, PAD);
-        pairing.on_wheel_tick((400.0, 300.0), now, &mut hover);
+        pairing.ingest(
+            vec![at(1.0, PHASE_BEGAN, (500.0, 500.0))],
+            1.0,
+            now,
+            &mut hover,
+            PANE,
+            PAD,
+        );
+        pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover);
         pairing.take();
 
-        pairing.ingest(vec![at(2.0, PHASE_BEGAN, (1400.0, 900.0))], 1.0, now, &mut hover, PANE, PAD);
+        pairing.ingest(
+            vec![at(2.0, PHASE_BEGAN, (1400.0, 900.0))],
+            1.0,
+            now,
+            &mut hover,
+            PANE,
+            PAD,
+        );
         assert_eq!(pairing.take().1, Vec::<(f32, f32)>::new());
     }
 
@@ -263,7 +386,7 @@ mod tests {
         let now = Instant::now();
         let deltas: Vec<_> = (0..200).map(|_| scroll(10.0, 0)).collect();
         pairing.ingest(deltas, 1.0, now, &mut hover, PANE, PAD);
-        pairing.on_wheel_tick((400.0, 300.0), now, &mut hover);
+        pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover);
         let total: f32 = pairing.take().1.iter().map(|(_, dy)| dy).sum();
         assert!(total <= HOLD_LIMIT, "flushed {total}px in one go");
     }
@@ -273,12 +396,30 @@ mod tests {
         let mut pairing = NativePairing::new();
         let mut hover = HoverOracle::new();
         let start = Instant::now();
-        pairing.ingest(vec![at(3.0, PHASE_BEGAN, (500.0, 500.0))], 1.0, start, &mut hover, PANE, PAD);
+        pairing.ingest(
+            vec![at(3.0, PHASE_BEGAN, (500.0, 500.0))],
+            1.0,
+            start,
+            &mut hover,
+            PANE,
+            PAD,
+        );
         let late = start + PAIR_WINDOW + Duration::from_millis(1);
         pairing.ingest(Vec::new(), 1.0, late, &mut hover, PANE, PAD);
 
-        pairing.ingest(vec![at(2.0, 0, (500.0, 500.0))], 1.0, late, &mut hover, PANE, PAD);
-        assert_eq!(pairing.take().1, Vec::<(f32, f32)>::new(), "absence was latched");
+        pairing.ingest(
+            vec![at(2.0, 0, (500.0, 500.0))],
+            1.0,
+            late,
+            &mut hover,
+            PANE,
+            PAD,
+        );
+        assert_eq!(
+            pairing.take().1,
+            Vec::<(f32, f32)>::new(),
+            "absence was latched"
+        );
     }
 
     #[test]
@@ -286,7 +427,7 @@ mod tests {
         let mut pairing = NativePairing::new();
         let mut hover = HoverOracle::new();
         let now = Instant::now();
-        assert!(!pairing.on_wheel_tick((400.0, 300.0), now, &mut hover));
+        assert!(!pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover));
     }
 
     #[test]
@@ -309,7 +450,7 @@ mod tests {
             PANE,
             PAD,
         );
-        assert!(!pairing.on_wheel_tick((400.0, 300.0), now, &mut hover));
+        assert!(!pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover));
     }
 
     #[test]

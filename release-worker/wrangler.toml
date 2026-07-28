@@ -1,0 +1,22 @@
+name = "terminal-browser-releases"
+main = "src/index.ts"
+compatibility_date = "2026-07-27"
+
+# Lets the worker import the real installer script as a string instead of
+# keeping a second copy of it inline.
+[[rules]]
+type = "Text"
+globs = ["**/*.sh"]
+fallthrough = true
+
+[[r2_buckets]]
+binding = "RELEASES"
+bucket_name = "terminal-browser-releases"
+
+[[d1_databases]]
+binding = "STATS"
+database_name = "terminal-browser-stats"
+database_id = "fill-me-in-at-hookup"
+
+[observability]
+enabled = true

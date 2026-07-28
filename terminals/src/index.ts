@@ -9,6 +9,8 @@ export type { Backend, Direction, Pane } from "./shared";
 export { callerTty, setPaneTitle } from "./shared";
 export { prepareTmux } from "./tmux";
 export type { GraphicsSupport } from "./graphics";
+export type { PixelUnit } from "./pixels";
+export { reportedPixelUnit } from "./pixels";
 export {
   checkKittyGraphics,
   graphicsFromEnv,

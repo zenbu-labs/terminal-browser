@@ -47,3 +47,6 @@ store/dist/
 .claude/worktrees/
 tools/
 dist-release/
+
+.dev.vars
+.wrangler/

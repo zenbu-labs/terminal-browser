@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app, clipboard, screen } from "electron";
+import { app, screen } from "electron";
 import { createRoot } from "pixel-react";
 import type { EngineKeyEvent, PixelRoot, Surface } from "pixel-react";
-import { detectBackend } from "pixel-terminals";
+import { detectBackend, reportedPixelUnit } from "pixel-terminals";
 import type { Backend } from "pixel-terminals";
 
 import { configureBrowserSession } from "../page/browser-session";
@@ -288,6 +288,39 @@ class Session {
     return event.kind === "press" && this.cmdHeld(event) && event.key === "v";
   }
 
+  private isCopyKey(event: EngineKeyEvent): boolean {
+    return event.kind === "press" && this.cmdHeld(event) && event.key === "c";
+  }
+
+  private isCutKey(event: EngineKeyEvent): boolean {
+    return event.kind === "press" && this.cmdHeld(event) && event.key === "x";
+  }
+
+  /** The surface the keyboard is talking to, matching how routeKey picks one. */
+  private focusedInput(): { selectionText(): Promise<string>; cut(): void } | null {
+    const browser = this.tabs.activeController;
+    if (!browser) return null;
+    if (browser.popup) return browser.popup.input;
+    if (browser.devtoolsFocused && browser.devtools) return browser.devtools.input;
+    return browser;
+  }
+
+  private async copySelection() {
+    const text = await this.focusedInput()?.selectionText();
+    if (text) this.root?.setClipboard(text);
+  }
+
+  // the page deletes the selection only after we have read it, so the cut
+  // cannot race the copy
+  private async cutSelection() {
+    const input = this.focusedInput();
+    if (!input) return;
+    const text = await input.selectionText();
+    if (!text) return;
+    this.root?.setClipboard(text);
+    input.cut();
+  }
+
   shutdown(code = 0) {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
@@ -474,6 +507,11 @@ class Session {
         }
       }
       if (this.isPasteKey(event)) this.root?.requestClipboardImage();
+      if (this.isCopyKey(event)) void this.copySelection();
+      if (this.isCutKey(event)) {
+        void this.cutSelection();
+        return;
+      }
       browser.popup.input.key(event);
       return;
     }
@@ -586,6 +624,11 @@ class Session {
     }
     if (this.browserFocused) {
       if (this.isPasteKey(event)) this.root?.requestClipboardImage();
+      if (this.isCopyKey(event)) void this.copySelection();
+      if (this.isCutKey(event)) {
+        void this.cutSelection();
+        return;
+      }
       this.routeKey(event);
     }
   }
@@ -781,10 +824,10 @@ class Session {
         browser.reload();
         return;
       case "copy":
-        browser.copySelection();
+        this.root?.setClipboard(menu.selectionText);
         return;
       case "copy-link":
-        clipboard.writeText(menu.linkURL);
+        this.root?.setClipboard(menu.linkURL);
         return;
       case "inspect":
         this.openDevtools();
@@ -1070,10 +1113,11 @@ class Session {
     };
   }
 
-  // stupid
+  // how many of the terminal's reported pixels make up one css pixel of page
   private hostDisplayScale() {
     const explicit = Number(this.ctx.env.TERMINAL_BROWSER_DISPLAY_SCALE);
     if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    if (reportedPixelUnit(this.ctx.env) === "css") return 1;
     return screen.getPrimaryDisplay().scaleFactor;
   }
 

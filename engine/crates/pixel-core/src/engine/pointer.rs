@@ -14,7 +14,11 @@ pub(super) enum DragTarget {
 }
 
 impl Engine {
-    pub(super) fn handle_mouse(&mut self, mouse: Mouse, out: &mut Vec<EngineEvent>) -> io::Result<()> {
+    pub(super) fn handle_mouse(
+        &mut self,
+        mouse: Mouse,
+        out: &mut Vec<EngineEvent>,
+    ) -> io::Result<()> {
         let point = (mouse.x as f32, mouse.y as f32);
         self.cursor = Some(point);
         let now = Instant::now();
@@ -31,16 +35,22 @@ impl Engine {
         );
         if self.use_native && self.native.is_some() {
             self.ingest_native();
+            let located = self.pixel_mouse.then_some(point);
             if scrolling && mouse.mods == Mods::default() {
-                if self.pairing.on_wheel_tick(point, now, &mut self.hover_oracle) {
+                if self
+                    .pairing
+                    .on_wheel_tick(located, now, &mut self.hover_oracle)
+                {
                     return Ok(());
                 }
-            } else {
-                self.hover_oracle.note_local(point, now);
+            } else if let Some(located) = located {
+                self.hover_oracle.note_local(located, now);
             }
         }
-        if matches!(mouse.kind, MouseKind::Down | MouseKind::Up | MouseKind::Move)
-            && self.forward_pointer(mouse, point, out)
+        if matches!(
+            mouse.kind,
+            MouseKind::Down | MouseKind::Up | MouseKind::Move
+        ) && self.forward_pointer(mouse, point, out)
         {
             return Ok(());
         }
@@ -88,17 +98,20 @@ impl Engine {
                 if self.begin_bar_drag(view, local) {
                     return Ok(());
                 }
-                let drag_node = self.comp.views[view].tree.hit_drag(local.0, local.1).filter(|&id| {
-                    let tree = &self.comp.views[view].tree;
-                    let drag_order = tree.paint_order_of(id).unwrap_or(0);
-                    let covered = match tree.hit_target(local.0, local.1) {
-                        Some(HitTarget::Input(t)) | Some(HitTarget::Click(t)) => {
-                            tree.paint_order_of(t).unwrap_or(0) > drag_order
-                        }
-                        _ => false,
-                    };
-                    !covered
-                });
+                let drag_node = self.comp.views[view]
+                    .tree
+                    .hit_drag(local.0, local.1)
+                    .filter(|&id| {
+                        let tree = &self.comp.views[view].tree;
+                        let drag_order = tree.paint_order_of(id).unwrap_or(0);
+                        let covered = match tree.hit_target(local.0, local.1) {
+                            Some(HitTarget::Input(t)) | Some(HitTarget::Click(t)) => {
+                                tree.paint_order_of(t).unwrap_or(0) > drag_order
+                            }
+                            _ => false,
+                        };
+                        !covered
+                    });
                 if let Some(id) = drag_node {
                     self.drag = Some((view, DragTarget::Node(id)));
                     out.push(EngineEvent::Drag {
@@ -140,9 +153,11 @@ impl Engine {
                         key: self.comp.views[view].tree.key_of(node).map(str::to_string),
                         x: local.0,
                         y: local.1,
-                        offset: self.comp.views[view]
-                            .tree
-                            .offset_at_point(node, local, &self.fonts),
+                        offset: self.comp.views[view].tree.offset_at_point(
+                            node,
+                            local,
+                            &self.fonts,
+                        ),
                     });
                 }
             }

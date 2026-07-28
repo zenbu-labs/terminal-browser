@@ -3,11 +3,12 @@ name: release
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
-  group: release
-  cancel-in-progress: true
+  group: release-${{ startsWith(github.ref, 'refs/tags/v') && 'stable' || 'dev' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   build:
@@ -18,31 +19,66 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/../cargo-target
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+            echo "version=main-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
 
       - run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: scripts/release.sh "main-$(git rev-parse --short HEAD)"
+        run: scripts/release.sh "${{ steps.v.outputs.version }}" "${{ steps.v.outputs.channel }}"
 
       - name: Publish
         id: publish
         env:
-          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          RELEASE_ORIGIN: ${{ vars.RELEASE_ORIGIN }}
         run: |
-          scripts/publish-gist.sh | tee /tmp/publish.log
-          grep -E '^(pinned|latest)=' /tmp/publish.log >> "$GITHUB_OUTPUT"
+          scripts/publish-r2.sh | tee /tmp/publish.log
+          grep -E '^(pinned|latest)=' /tmp/publish.log >> "$GITHUB_OUTPUT" || true
 
-      - name: Installer
+      - name: Summary
         run: |
           {
-            echo "### pixel \`main-$(git rev-parse --short HEAD)\`"
+            echo "### terminal-browser \`${{ steps.v.outputs.version }}\` (${{ steps.v.outputs.channel }})"
             echo
-            echo "This commit:"
+            echo "This build:"
             echo '```sh'
             echo "curl -fsSL ${{ steps.publish.outputs.pinned }} | bash"
             echo '```'
-            echo "Always current main:"
+            echo "Always current ${{ steps.v.outputs.channel }}:"
             echo '```sh'
             echo "curl -fsSL ${{ steps.publish.outputs.latest }} | bash"
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  worker:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Deploy worker
+        working-directory: release-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          npm install --no-package-lock
+          npx wrangler d1 migrations apply terminal-browser-stats --remote
+          npx wrangler deploy

@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-BASE_URL="__BASE_URL__"
+DOWNLOAD_URL="__DOWNLOAD_URL__"
+VERSION="__VERSION__"
+CHANNEL="__CHANNEL__"
+SHA256="__SHA256__"
+SIZE="__SIZE__"
 
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
   echo "terminal-browser currently supports Apple Silicon macOS only" >&2
@@ -11,17 +15,11 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "downloading terminal-browser..."
-curl -fsSL "$BASE_URL/chunks.txt" -o "$TMP/chunks.txt"
-SHA="$(head -1 "$TMP/chunks.txt")"
 TARBALL="$TMP/terminal-browser.tar.gz"
-: > "$TARBALL"
-tail -n +2 "$TMP/chunks.txt" | while read -r chunk; do
-  [ -n "$chunk" ] || continue
-  echo "  $chunk"
-  curl -fsSL --retry 3 "$BASE_URL/$chunk" >> "$TARBALL"
-done
-echo "$SHA  $TARBALL" | shasum -a 256 -c - >/dev/null || {
+echo "downloading terminal-browser $VERSION ($((SIZE / 1000000)) MB)"
+curl -fL --retry 3 --retry-delay 2 --progress-bar "$DOWNLOAD_URL" -o "$TARBALL"
+
+echo "$SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || {
   echo "download corrupted (checksum mismatch), try again" >&2
   exit 1
 }
@@ -62,8 +60,12 @@ for base in "$HOME/.claude" "$HOME/.codex" "$HOME/.cursor" "$HOME/.gemini"; do
   LINKED="$LINKED $(basename "$base")"
 done
 
-echo "installed terminal-browser $(cat "$APP/VERSION")"
+echo "installed terminal-browser $(cat "$APP/VERSION")${CHANNEL:+ ($CHANNEL)}"
 echo "skill $SKILL_DIR${LINKED:+ (linked into$LINKED)}"
+
+if [ -z "${TERMINAL_BROWSER_SKIP_EDITOR_SETUP:-}" ]; then
+  "$APP/bin/terminal-browser" setup || true
+fi
 case ":$PATH:" in
   *":$BIN_HOME:"*) ;;
   *)
@@ -74,4 +76,3 @@ case ":$PATH:" in
 esac
 echo
 echo "  terminal-browser open example.com"
-

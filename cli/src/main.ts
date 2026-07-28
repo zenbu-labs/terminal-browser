@@ -16,6 +16,7 @@ import {
 import type { Backend, Direction } from "pixel-terminals";
 import { actionCommand } from "./action";
 import { control } from "./control";
+import { setupCommand } from "./editors";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { locate, recordKey, reusable } from "./instances";
 import { lsCommand } from "./ls";
@@ -467,6 +468,7 @@ async function main(): Promise<number> {
     await lsCommand(detectBackend(), all, json);
     return 0;
   }
+  if (command === "setup") return setupCommand();
   if (command === "action") {
     const { own, passthrough } = splitPassthrough(args);
     const options = {
