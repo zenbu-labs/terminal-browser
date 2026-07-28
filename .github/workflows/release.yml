@@ -5,14 +5,26 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a stable release (dev build if none)"
+        type: choice
+        default: none
+        options: [none, patch, minor, major]
+
+permissions:
+  contents: write
 
 concurrency:
-  group: release-${{ startsWith(github.ref, 'refs/tags/v') && 'stable' || 'dev' }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+  group: release-${{ (startsWith(github.ref, 'refs/tags/v') || inputs.bump != 'none') && 'stable' || 'dev' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') && (inputs.bump == '' || inputs.bump == 'none') }}
 
 jobs:
   build:
     runs-on: [self-hosted, macOS, ARM64]
+    outputs:
+      channel: ${{ steps.v.outputs.channel }}
+      version: ${{ steps.v.outputs.version }}
     env:
       # The runner checks out into a fresh directory each run; keeping the rust
       # build outside it means only changed crates recompile.
@@ -25,13 +37,22 @@ jobs:
       - name: Resolve version
         id: v
         run: |
+          BUMP="${{ inputs.bump }}"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "channel=stable" >> "$GITHUB_OUTPUT"
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            CHANNEL=stable
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [ -n "$BUMP" ] && [ "$BUMP" != none ]; then
+            CHANNEL=stable
+            VERSION="$(scripts/next-version.sh "$BUMP")"
+            git -c user.name="terminal-browser release" -c user.email="release@zenbu.dev" \
+              tag -a "$VERSION" -m "terminal-browser $VERSION"
+            git push origin "$VERSION"
           else
-            echo "channel=dev" >> "$GITHUB_OUTPUT"
-            echo "version=main-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            CHANNEL=dev
+            VERSION="main-$(git rev-parse --short HEAD)"
           fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - run: pnpm install --frozen-lockfile
 
@@ -47,6 +68,16 @@ jobs:
         run: |
           scripts/publish-r2.sh | tee /tmp/publish.log
           grep -E '^(pinned|latest)=' /tmp/publish.log >> "$GITHUB_OUTPUT" || true
+
+      - name: GitHub release
+        if: steps.v.outputs.channel == 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.v.outputs.version }}" \
+            --title "${{ steps.v.outputs.version }}" \
+            --notes "$(printf 'Install:\n\n```sh\ncurl -fsSL %s | bash\n```\n\nPinned to this version:\n\n```sh\ncurl -fsSL %s | bash\n```\n' \
+              "${{ steps.publish.outputs.latest }}" "${{ steps.publish.outputs.pinned }}")"
 
       - name: Summary
         run: |
@@ -65,7 +96,8 @@ jobs:
 
   worker:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    if: needs.build.outputs.channel == 'stable'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
