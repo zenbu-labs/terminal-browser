@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-dev}"
+CHANNEL="${2:-dev}"
 OUT="$ROOT/dist-release"
 STAGE="$OUT/terminal-browser"
 APP="$STAGE/electron/Pixel.app"
@@ -59,11 +60,16 @@ echo "$VERSION" > "$STAGE/VERSION"
 TARBALL="$OUT/terminal-browser-darwin-arm64.tar.gz"
 tar -czf "$TARBALL" -C "$OUT" terminal-browser
 
-split -b 45m "$TARBALL" "$OUT/terminal-browser-chunk-"
+cat > "$OUT/manifest.json" <<EOF
 {
-  shasum -a 256 "$TARBALL" | cut -d' ' -f1
-  (cd "$OUT" && ls terminal-browser-chunk-*)
-} > "$OUT/chunks.txt"
+  "version": "$VERSION",
+  "channel": "$CHANNEL",
+  "platform": "darwin-arm64",
+  "file": "$(basename "$TARBALL")",
+  "sha256": "$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)",
+  "size": $(stat -f%z "$TARBALL"),
+  "published": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
 
 du -h "$TARBALL"
-echo "chunks: $(cd "$OUT" && ls terminal-browser-chunk-* | wc -l | tr -d ' ')"

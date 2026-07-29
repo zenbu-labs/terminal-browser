@@ -1,0 +1,23 @@
+name = "terminal-browser-releases"
+main = "src/index.ts"
+compatibility_date = "2026-07-27"
+workers_dev = true
+
+# The marketing site on Vercel owns the rest of the domain, so the worker only
+# claims /install and everything nested under it.
+routes = [
+  { pattern = "terminal-browser.sh/install", zone_name = "terminal-browser.sh" },
+  { pattern = "terminal-browser.sh/install/*", zone_name = "terminal-browser.sh" },
+]
+
+[[r2_buckets]]
+binding = "RELEASES"
+bucket_name = "terminal-browser-releases"
+
+[[d1_databases]]
+binding = "STATS"
+database_name = "terminal-browser-stats"
+database_id = "98e5d38f-d45c-4667-b69e-aab291bd66a9"
+
+[observability]
+enabled = true

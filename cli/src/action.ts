@@ -28,8 +28,6 @@ export interface ActionOptions {
   tabId?: number;
   targetId?: string;
   follow: boolean;
-  resolve: boolean;
-  printEnv: boolean;
   passthrough: string[];
 }
 
@@ -248,26 +246,6 @@ async function interceptTabLifecycle(
 export async function actionCommand(backend: Backend, options: ActionOptions) {
   const selection = await select(backend, options);
   const { browser, tab } = selection;
-
-  if (options.resolve) {
-    const resolved = {
-      browser: recordKey(browser),
-      cdpPort: browser.cdpPort,
-      socket: browser.socket,
-      pane: { window: browser.window, tab: browser.tab, pane: browser.pane },
-      tab,
-      session: sessionName(browser),
-    };
-    process.stdout.write(`${JSON.stringify(resolved, null, 2)}\n`);
-    return 0;
-  }
-
-  if (options.printEnv) {
-    process.stdout.write(`AGENT_BROWSER_SOCKET_DIR=${AGENT_SOCKETS_DIR}\n`);
-    process.stdout.write(`AGENT_BROWSER_SESSION_NAME=${sessionName(browser)}\n`);
-    process.stdout.write(`TERMINAL_BROWSER_TARGET_ID=${tab.targetId ?? ""}\n`);
-    return 0;
-  }
 
   if (options.passthrough.length === 0) {
     throw new Error("nothing to run — pass a command after --, e.g. terminal-browser action -- snapshot");

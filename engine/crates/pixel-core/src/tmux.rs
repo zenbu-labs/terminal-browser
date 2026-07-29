@@ -13,6 +13,31 @@ pub fn enable_passthrough() {
         .output();
 }
 
+/// Turns passthrough on for whichever pane owns this tty. `set -p` alone would target the pane the
+/// caller happens to be sitting in, which is the wrong one when a browser is handed a tty belonging
+/// to a pane somewhere else.
+pub fn enable_passthrough_for_tty(tty_path: &str) {
+    let Ok(panes) = std::process::Command::new("tmux")
+        .args(["list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"])
+        .output()
+    else {
+        return;
+    };
+    let listing = String::from_utf8_lossy(&panes.stdout);
+    let pane = listing.lines().find_map(|line| {
+        let (tty, id) = line.split_once(' ')?;
+        (tty == tty_path).then_some(id)
+    });
+    match pane {
+        Some(pane) => {
+            let _ = std::process::Command::new("tmux")
+                .args(["set", "-t", pane, "-p", "allow-passthrough", "on"])
+                .output();
+        }
+        None => enable_passthrough(),
+    }
+}
+
 pub fn passthrough(seq: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(seq.len() + 16);
     out.extend_from_slice(b"\x1bPtmux;");

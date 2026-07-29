@@ -16,6 +16,7 @@ import {
 import type { Backend, Direction } from "pixel-terminals";
 import { actionCommand } from "./action";
 import { control } from "./control";
+import { setupCommand } from "./editors";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { locate, recordKey, reusable } from "./instances";
 import { lsCommand } from "./ls";
@@ -50,36 +51,13 @@ function takeBoolFlag(args: string[], name: string): boolean {
   return true;
 }
 
-const BINDING_MODS = ["cmd", "super", "ctrl", "alt", "option", "shift"];
-
-function takeKeyBinding(args: string[], flag: string, fallback?: string): string | undefined {
-  const spec = takeFlag(args, flag) ?? fallback;
-  if (spec === undefined || spec === "none") return spec;
-  const parts = spec.toLowerCase().split("+");
-  const key = parts.pop();
-  if (!key || key.length !== 1 || parts.length === 0 || parts.some((part) => !BINDING_MODS.includes(part))) {
-    fail(`invalid ${flag} ${spec} (e.g. super+alt+p, ctrl+shift+p, or none to disable)`);
-  }
-  return spec;
-}
-
-function takeModsBinding(args: string[], flag: string, fallback?: string): string | undefined {
-  const spec = takeFlag(args, flag) ?? fallback;
-  if (spec === undefined || spec === "none") return spec;
-  const parts = spec.toLowerCase().split("+");
-  if (parts.length === 0 || parts.some((part) => !BINDING_MODS.includes(part))) {
-    fail(`invalid ${flag} ${spec} (modifiers only, e.g. super+alt+shift, or none to disable)`);
-  }
-  return spec;
-}
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = path.resolve(__dirname, "..", "..", "browser");
   const electron = DIST_ROOT
     ? path.join(DIST_ROOT, "electron", "Pixel.app", "Contents", "MacOS", "Pixel")
-    : path.join(browserDir, "node_modules", ".bin", "electron");
+    : path.join(browserDir, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron");
   const main = path.join(browserDir, "dist", "main.js");
   for (const required of [electron, main]) {
     if (!fs.existsSync(required)) {
@@ -96,14 +74,11 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
   return { command: ["/bin/sh", "-c", line], cwd: browserDir };
 }
 
-function clientLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
+function clientLaunchCommand(argv: string[]): string[] {
   const runner = DIST_ROOT
     ? [path.join(DIST_ROOT, "bin", "terminal-browser")]
     : [process.execPath, path.resolve(__dirname, "main.js")];
-  const quoted = [...runner, "open", ...argv]
-    .map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`)
-    .join(" ");
-  return { command: ["/bin/sh", "-c", `exec ${quoted}`], cwd: process.cwd() };
+  return [...runner, "open", ...argv];
 }
 
 function ownTtyPath(): string | null {
@@ -256,13 +231,10 @@ async function attachHere(argv: string[]): Promise<never> {
 
 async function openHere(argv: string[]): Promise<never> {
   prepareTmux();
-  const isolated = takeBoolFlag(argv, "--isolated");
-  if (!isolated) {
-    try {
-      return await attachHere(argv);
-    } catch (error) {
-      process.stderr.write(`terminal-browser: daemon attach failed (${String(error)}); running isolated\n`);
-    }
+  try {
+    return await attachHere(argv);
+  } catch (error) {
+    process.stderr.write(`terminal-browser: daemon attach failed (${String(error)}); starting a separate browser\n`);
   }
   const { command, cwd } = browserLaunchCommand([...argv, `--cwd=${process.cwd()}`]);
   const child = spawn(command[0], command.slice(1), { cwd, stdio: "inherit" });
@@ -279,14 +251,9 @@ function isDirection(value: string): value is Direction {
 }
 
 function takeDirection(args: string[]): { direction: Direction; explicit: boolean } {
-  const flag = takeFlag(args, "--dir");
-  if (flag !== undefined && !isDirection(flag)) fail(`invalid --dir ${flag} (right|left|down|up)`);
-  const filler = args.indexOf("split");
-  if (filler >= 0) args.splice(filler, 1);
-  const wordAt = args.findIndex(isDirection);
-  const word = wordAt >= 0 ? (args.splice(wordAt, 1)[0] as Direction) : undefined;
-  const direction = (flag as Direction | undefined) ?? word;
-  return { direction: direction ?? "right", explicit: direction !== undefined };
+  const at = args.findIndex(isDirection);
+  if (at < 0) return { direction: "right", explicit: false };
+  return { direction: args.splice(at, 1)[0] as Direction, explicit: true };
 }
 
 function takeSizeFlag(args: string[]): number | null {
@@ -345,8 +312,7 @@ async function launchInSplit(
   size?: number | null,
 ): Promise<InstanceRecord> {
   const before = new Set((await instances()).map(recordKey));
-  const { command, cwd } = clientLaunchCommand(argv);
-  await backend.split(direction, command, cwd, size);
+  await backend.split(direction, clientLaunchCommand(argv), size);
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const fresh = (await instances()).find((record) => !before.has(recordKey(record)));
@@ -370,45 +336,61 @@ async function requireKittyGraphics() {
   process.exit(1);
 }
 
-// slop fixme
-// these options are very poorly designed
+// flags the browser process reads itself; the cli passes them along unchanged
+const BROWSER_FLAGS = [
+  "--no-toolbar",
+  "--partition=",
+  "--palette-key=",
+  "--find-key=",
+  "--devtools-key=",
+  "--console-key=",
+  "--split-dir=",
+  "--parent-tty=",
+];
+
+function rejectUnknownFlags(args: string[]) {
+  for (const arg of args) {
+    if (!arg.startsWith("-")) continue;
+    const known = BROWSER_FLAGS.some((flag) =>
+      flag.endsWith("=") ? arg.startsWith(flag) : arg === flag,
+    );
+    if (!known) fail(`unknown option ${arg.split("=")[0]} (terminal-browser open --help)`);
+  }
+}
+
 async function openCommand(args: string[]) {
-  const forceSplit = takeBoolFlag(args, "--split");
   const { direction, explicit } = takeDirection(args);
   const size = takeSizeFlag(args);
-  const paletteKey = takeKeyBinding(args, "--palette-key");
-  const findKey = takeKeyBinding(args, "--find-key");
-  const actionMods = takeModsBinding(args, "--action-mods");
-  const bindings: string[] = [];
-  if (paletteKey) bindings.push(`--palette-key=${paletteKey}`);
-  if (findKey) bindings.push(`--find-key=${findKey}`);
-  if (actionMods) bindings.push(`--action-mods=${actionMods}`);
+  rejectUnknownFlags(args);
+  const positionals = args.filter((arg) => !arg.startsWith("-"));
+  if (positionals.length > 1) {
+    fail(`unexpected ${positionals[1]} (directions are right, left, down, up)`);
+  }
   await requireKittyGraphics();
-  if (!forceSplit && !explicit && interactiveTty()) {
-    return openHere([...args, ...bindings]);
+  if (!explicit && interactiveTty()) {
+    return openHere(args);
   }
   const backend = detectBackend();
-  const url = args[0];
+  const url = args.find((arg) => !arg.startsWith("-"));
   const tty = ownTtyPath() ?? callerTty();
-  if (!forceSplit) {
-    const records = await instances();
-    if (records.length > 0) {
-      const found = locate(records, await backend.panes());
-      const target = reusable(found, explicit ? direction : null, tty);
-      if (target) {
-        return print(
-          await control(
-            target.socket,
-            url ? { cmd: "open-tab", url, cwd: process.cwd() } : { cmd: "open-tab" },
-          ),
-        );
-      }
+  const records = await instances();
+  if (records.length > 0) {
+    const found = locate(records, await backend.panes());
+    const target = reusable(found, explicit ? direction : null, tty);
+    if (target) {
+      return print(
+        await control(
+          target.socket,
+          url ? { cmd: "open-tab", url, cwd: process.cwd() } : { cmd: "open-tab" },
+        ),
+      );
     }
   }
-  const argv = url ? [url] : [];
+  // the new pane starts in the terminal's default directory, so a relative
+  // path stops meaning anything unless it becomes absolute here
+  const argv = args.map((arg) => (arg === url && fs.existsSync(arg) ? path.resolve(arg) : arg));
   argv.push(`--split-dir=${direction}`);
   if (tty) argv.push(`--parent-tty=${tty}`);
-  argv.push(...bindings);
   print(await launchInSplit(backend, direction, argv, size));
 }
 
@@ -445,7 +427,7 @@ function helpCommand(topic: string | undefined): number {
 
 async function main(): Promise<number> {
   const [command, ...args] = process.argv.slice(2);
-  if (!command || command === "--help" || command === "-h") {
+  if (command === "--help" || command === "-h") {
     process.stdout.write(rootHelp());
     return 0;
   }
@@ -467,6 +449,7 @@ async function main(): Promise<number> {
     await lsCommand(detectBackend(), all, json);
     return 0;
   }
+  if (command === "setup") return setupCommand();
   if (command === "action") {
     const { own, passthrough } = splitPassthrough(args);
     const options = {
@@ -474,14 +457,19 @@ async function main(): Promise<number> {
       tabId: takeTabFlag(own),
       targetId: takeFlag(own, "--target"),
       follow: takeBoolFlag(own, "--follow"),
-      resolve: takeBoolFlag(own, "--resolve"),
-      printEnv: takeBoolFlag(own, "--env"),
       passthrough,
     };
     if (own.length > 0) fail(`unexpected ${own[0]} — put agent-browser arguments after --`);
     return actionCommand(detectBackend(), options);
   }
-  fail(`unknown command: ${command}\n\n${rootHelp()}`);
+  // anything else is an open, the way an editor treats a bare file argument
+  const rest = process.argv.slice(2);
+  if (asksForHelp(rest)) {
+    process.stdout.write(commandHelp("open") ?? rootHelp());
+    return 0;
+  }
+  await openCommand(rest);
+  return 0;
 }
 
 void main()

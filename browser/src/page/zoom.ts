@@ -23,6 +23,17 @@ export function stepZoom(contents: WebContents, direction: ZoomDirection): numbe
   return factor;
 }
 
+/** Multiplies the contents' zoom by a ratio, for following the terminal's own font-size
+ * zoom rather than stepping the preset ladder. */
+export function scaleZoom(contents: WebContents, ratio: number): number {
+  const floor = ZOOM_PRESETS[0];
+  const ceiling = ZOOM_PRESETS.at(-1)!;
+  const exact = contents.getZoomFactor() * ratio;
+  const factor = Math.min(ceiling, Math.max(floor, Math.round(exact * 1000) / 1000));
+  contents.setZoomFactor(factor);
+  return factor;
+}
+
 /** cmd+= / cmd+- / cmd+0 (with the shifted spellings kitty-style key events
  * can report), or null when the key is not a zoom combo */
 export function zoomDirection(key: string): ZoomDirection | null {

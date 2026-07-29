@@ -18,11 +18,11 @@ import { PageInput } from "./input";
 import { PopupWindow } from "./popup";
 import { cssSize, damageOf, initialBrowserState, paintedNothing } from "./types";
 import type { BrowserState, BrowserSurfaceLayout, DeviceSpec } from "./types";
-import { stepZoom } from "./zoom";
+import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
 export class BrowserController {
-  private readonly surface: Surface;
+  readonly surface: Surface;
   private readonly popupSurface: Surface;
   private readonly devtoolsSurface: Surface;
   private readonly window: BrowserWindow;
@@ -50,7 +50,6 @@ export class BrowserController {
     this.window.webContents.setFrameRate(this.visible ? frameRate() : 4);
   };
   private visible = true;
-  private painted = false;
   private wholeSurfaceNext = true;
   cursorShape = "default";
   onCursorChange: ((shape: string) => void) | null = null;
@@ -91,7 +90,6 @@ export class BrowserController {
       width: size.width,
       height: size.height,
       useContentSize: true,
-      backgroundColor: background,
       show: false,
       frame: false,
       paintWhenInitiallyHidden: true,
@@ -127,13 +125,11 @@ export class BrowserController {
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.defaultUserAgent = this.window.webContents.getUserAgent();
+    // hidden tabs keep presenting (at the low frame rate) so their own surface
+    // always holds a recent frame for the instant a tab switch rebinds to it
     this.window.webContents.on("paint", (event) => {
       const texture = event.texture;
       if (!texture) return;
-      if (!this.visible) {
-        texture.release();
-        return;
-      }
       this.submitTexture(texture);
     });
     this.window.webContents.on("did-start-loading", () => this.updateState({ loading: true }));
@@ -182,7 +178,6 @@ export class BrowserController {
             useContentSize: true,
             show: false,
             frame: false,
-            backgroundColor: background,
             skipTaskbar: true,
             fullscreenable: false,
             resizable: false,
@@ -202,7 +197,6 @@ export class BrowserController {
       return { action: "deny" };
     });
     this.window.webContents.on("did-create-window", (child) => this.adoptPopup(child));
-    if (visible) this.surface.clear();
     void this.window.loadURL(normalizeUrl(initialUrl, cwd));
     this.onState(this.state);
   }
@@ -247,6 +241,12 @@ export class BrowserController {
 
   zoom(direction: ZoomDirection): number {
     const factor = stepZoom(this.window.webContents, direction);
+    this.updateState({ zoom: factor });
+    return factor;
+  }
+
+  scaleZoom(ratio: number): number {
+    const factor = scaleZoom(this.window.webContents, ratio);
     this.updateState({ zoom: factor });
     return factor;
   }
@@ -306,7 +306,6 @@ export class BrowserController {
   /** Follows the terminal's theme, so a page honouring prefers-color-scheme flips with it. */
   async setBackground(background: string): Promise<void> {
     this.background = background;
-    this.window.setBackgroundColor(background);
     await this.emulateColorScheme();
   }
 
@@ -411,8 +410,12 @@ export class BrowserController {
     this.window.webContents.inspectElement(Math.round(x), Math.round(y));
   }
 
-  copySelection() {
-    this.window.webContents.copy();
+  selectionText() {
+    return this.input.selectionText();
+  }
+
+  cut() {
+    this.input.cut();
   }
 
   blurContent() {
@@ -460,7 +463,7 @@ export class BrowserController {
     screen.off("display-added", this.onDisplayChange);
     screen.off("display-removed", this.onDisplayChange);
     screen.off("display-metrics-changed", this.onDisplayChange);
-    if (this.visible) this.surface.clear();
+    this.surface.close();
     this.window.destroy();
   }
 
@@ -470,8 +473,6 @@ export class BrowserController {
     this.popup?.setVisible(visible);
     this.devtools?.setVisible(visible);
     if (visible) {
-      if (!this.painted) this.surface.clear();
-      this.wholeSurfaceNext = true;
       this.window.webContents.setFrameRate(frameRate());
       this.window.webContents.invalidate();
     } else {
@@ -528,7 +529,6 @@ export class BrowserController {
       const damage = this.wholeSurfaceNext ? undefined : damageOf(info);
       this.wholeSurfaceNext = false;
       this.surface.present({ ioSurface: handle, damage });
-      this.painted = true;
     } finally {
       texture.release();
     }

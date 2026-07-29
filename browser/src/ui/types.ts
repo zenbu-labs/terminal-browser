@@ -15,7 +15,6 @@ export interface TabRow {
   title: string;
   favicon: string | null;
   active: boolean;
-  loading: boolean;
 }
 
 export interface DeviceRect {
@@ -88,7 +87,6 @@ export interface ChromeActions {
   devtoolsDividerHover(hovering: boolean): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
-  zoomReset(): void;
 }
 
 export interface ChromeLayout {

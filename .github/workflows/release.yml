@@ -3,46 +3,112 @@ name: release
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Cut a stable release (dev build if none)"
+        type: choice
+        default: none
+        options: [none, patch, minor, major]
+
+permissions:
+  contents: write
 
 concurrency:
-  group: release
-  cancel-in-progress: true
+  group: release-${{ (startsWith(github.ref, 'refs/tags/v') || inputs.bump != 'none') && 'stable' || 'dev' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') && (inputs.bump == '' || inputs.bump == 'none') }}
 
 jobs:
   build:
     runs-on: [self-hosted, macOS, ARM64]
+    outputs:
+      channel: ${{ steps.v.outputs.channel }}
+      version: ${{ steps.v.outputs.version }}
     env:
       # The runner checks out into a fresh directory each run; keeping the rust
       # build outside it means only changed crates recompile.
       CARGO_TARGET_DIR: ${{ github.workspace }}/../cargo-target
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: v
+        run: |
+          BUMP="${{ inputs.bump }}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            CHANNEL=stable
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [ -n "$BUMP" ] && [ "$BUMP" != none ]; then
+            CHANNEL=stable
+            VERSION="$(scripts/next-version.sh "$BUMP")"
+            git -c user.name="terminal-browser release" -c user.email="release@zenbu.dev" \
+              tag -a "$VERSION" -m "terminal-browser $VERSION"
+            git push origin "$VERSION"
+          else
+            CHANNEL=dev
+            VERSION="main-$(git rev-parse --short HEAD)"
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: scripts/release.sh "main-$(git rev-parse --short HEAD)"
+        run: scripts/release.sh "${{ steps.v.outputs.version }}" "${{ steps.v.outputs.channel }}"
 
       - name: Publish
         id: publish
         env:
-          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          RELEASE_ORIGIN: ${{ vars.RELEASE_ORIGIN }}
         run: |
-          scripts/publish-gist.sh | tee /tmp/publish.log
-          grep -E '^(pinned|latest)=' /tmp/publish.log >> "$GITHUB_OUTPUT"
+          scripts/publish-r2.sh | tee /tmp/publish.log
+          grep -E '^(pinned|latest)=' /tmp/publish.log >> "$GITHUB_OUTPUT" || true
 
-      - name: Installer
+      - name: GitHub release
+        if: steps.v.outputs.channel == 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.v.outputs.version }}" \
+            --title "${{ steps.v.outputs.version }}" \
+            --notes "$(printf 'Install:\n\n```sh\ncurl -fsSL %s | bash\n```\n\nPinned to this version:\n\n```sh\ncurl -fsSL %s | bash\n```\n' \
+              "${{ steps.publish.outputs.latest }}" "${{ steps.publish.outputs.pinned }}")"
+
+      - name: Summary
         run: |
           {
-            echo "### pixel \`main-$(git rev-parse --short HEAD)\`"
+            echo "### terminal-browser \`${{ steps.v.outputs.version }}\` (${{ steps.v.outputs.channel }})"
             echo
-            echo "This commit:"
+            echo "This build:"
             echo '```sh'
             echo "curl -fsSL ${{ steps.publish.outputs.pinned }} | bash"
             echo '```'
-            echo "Always current main:"
+            echo "Always current ${{ steps.v.outputs.channel }}:"
             echo '```sh'
             echo "curl -fsSL ${{ steps.publish.outputs.latest }} | bash"
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  worker:
+    runs-on: ubuntu-latest
+    needs: build
+    if: needs.build.outputs.channel == 'stable'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Deploy worker
+        working-directory: release-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm ci
+          npx wrangler d1 migrations apply terminal-browser-stats --remote
+          npx wrangler deploy

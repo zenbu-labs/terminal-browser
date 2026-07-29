@@ -142,7 +142,6 @@ export class TabManager {
       title: tab.state.title || displayUrl(tab.state.url),
       favicon: tab.state.favicon,
       active: tab.id === this.activeId,
-      loading: tab.state.loading,
     }));
   }
 

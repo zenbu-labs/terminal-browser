@@ -30,9 +30,35 @@ fn emit(out: &mut Vec<u8>, seq: &[u8], tmux: bool) {
 }
 
 // this looks like slop nonsense, verify its needed
-pub(crate) fn kitty_query_shm(image_id: u32, name: &str, tmux: bool) -> Vec<u8> {
+/// Where the terminal picks a frame up from, instead of reading it out of the escape sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Medium {
+    /// A shared memory object. The terminal unlinks it once read, so every frame needs a new one.
+    Shared,
+    /// A regular file, which the terminal leaves alone. That lets one mapping serve every frame.
+    File,
+}
+
+impl Medium {
+    fn key(self) -> char {
+        match self {
+            Medium::Shared => 's',
+            Medium::File => 'f',
+        }
+    }
+}
+
+pub(crate) fn kitty_query_medium(
+    image_id: u32,
+    name: &str,
+    medium: Medium,
+    width: u32,
+    height: u32,
+    tmux: bool,
+) -> Vec<u8> {
     let payload = BASE64.encode(name);
-    let seq = format!("\x1b_Gi={image_id},a=q,t=s,f=32,s=1,v=1;{payload}\x1b\\");
+    let t = medium.key();
+    let seq = format!("\x1b_Gi={image_id},a=q,t={t},f=32,s={width},v={height};{payload}\x1b\\");
     let mut out = Vec::new();
     emit(&mut out, seq.as_bytes(), tmux);
     out
@@ -40,18 +66,21 @@ pub(crate) fn kitty_query_shm(image_id: u32, name: &str, tmux: bool) -> Vec<u8> 
 
 // i want to look into how we do this, and be very careful and abstract this well per terminal
 // and make it very clear what we explicitly support/don't
-pub(crate) fn kitty_transmit_shm(
+pub(crate) fn kitty_transmit_named(
     image_id: u32,
     width: u32,
     height: u32,
     name: &str,
+    medium: Medium,
     placement: Placement,
     tmux: bool,
 ) -> Vec<u8> {
     let payload = BASE64.encode(name);
     let keys = placement.keys();
-    let seq =
-        format!("\x1b_Ga=T,f=32,s={width},v={height},t=s,i={image_id},{keys},q=2;{payload}\x1b\\");
+    let t = medium.key();
+    let seq = format!(
+        "\x1b_Ga=T,f=32,s={width},v={height},t={t},i={image_id},{keys},q=2;{payload}\x1b\\"
+    );
     let mut out = Vec::new();
     emit(&mut out, seq.as_bytes(), tmux);
     out

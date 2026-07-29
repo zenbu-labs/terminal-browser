@@ -98,7 +98,7 @@ export function TabStrip({
   const closeGap = rem * 0.25;
   const entries = useAnimatedTabs(tabs, (tab) => {
     let width = rem * 1.4 + Math.min(label(tab).length, 28) * charW;
-    if (tab.loading || tab.favicon) width += (tab.loading ? rem * 0.35 : rem * 0.85) + rem * 0.35;
+    if (tab.favicon) width += rem * 0.85 + rem * 0.35;
     if (tab.active) width += closeW + rem * 0.35;
     width += closeW + closeGap + rem * 0.35;
     return Math.round(width);
@@ -136,17 +136,7 @@ export function TabStrip({
           onMouseEnter={() => setHovered(tab.id)}
           onMouseLeave={() => setHovered((id) => (id === tab.id ? null : id))}
         >
-          {tab.loading ? (
-            <Box
-              style={{
-                width: rem * 0.35,
-                height: rem * 0.35,
-                cornerRadius: rem * 0.175,
-                background: theme.accent,
-                flexShrink: 0,
-              }}
-            />
-          ) : tab.favicon ? (
+          {tab.favicon ? (
             <Image
               src={tab.favicon}
               style={{

@@ -178,9 +178,6 @@ function Toolbar({
         onClick={actions.reload}
       />
       <TabStrip tabs={tabs} state={state} actions={actions} rem={rem} theme={theme} />
-      {Math.round(state.zoom * 100) !== 100 && (
-        <ZoomChip zoom={state.zoom} rem={rem} theme={theme} onReset={actions.zoomReset} />
-      )}
     </Box>
   );
 }
@@ -359,34 +356,3 @@ function ToolbarButton({
   );
 }
 
-// not 100% sure if we want this, but im not super opposed to it
-function ZoomChip({
-  zoom,
-  rem,
-  theme,
-  onReset,
-}: {
-  zoom: number;
-  rem: number;
-  theme: Theme;
-  onReset(): void;
-}) {
-  return (
-    <Box
-      style={{
-        height: rem * 1.5,
-        alignItems: "center",
-        padding: { left: rem * 0.55, right: rem * 0.55 },
-        cornerRadius: rem * 0.75,
-        background: theme.field,
-        hoverBackground: theme.hover,
-        flexShrink: 0,
-      }}
-      onClick={onReset}
-    >
-      <Text style={{ fontSize: rem * 0.82, color: theme.muted, wrap: false, selectable: false }}>
-        {Math.round(zoom * 100)}%
-      </Text>
-    </Box>
-  );
-}
