@@ -41,8 +41,7 @@ async function renderInstaller(env: Env, manifest: Manifest, origin: string): Pr
     .replaceAll("__VERSION__", manifest.version)
     .replaceAll("__CHANNEL__", manifest.channel)
     .replaceAll("__SHA256__", manifest.sha256)
-    .replaceAll("__SIZE__", String(manifest.size))
-    .replaceAll("__PLATFORM__", manifest.platform);
+    .replaceAll("__SIZE__", String(manifest.size));
 }
 
 async function installerResponse(env: Env, manifest: Manifest, origin: string): Promise<Response> {

@@ -562,6 +562,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     bridge.flush();
   }
 
+  /**
+   * 
+   * fixme: node types?
+   */
   const forwardResize = () => bridge.engine.applyOps(JSON.stringify({ view: 0, ops: [] }));
   if (!options.tty) process.stdout.on("resize", forwardResize);
 

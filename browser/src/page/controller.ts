@@ -29,7 +29,6 @@ export class BrowserController {
   private readonly devtoolsSurface: Surface;
   private readonly window: BrowserWindow;
   private readonly onState: (state: BrowserState) => void;
-  private readonly onError: (error: Error) => void;
   private readonly renderScale: number;
   private layout: BrowserSurfaceLayout;
   private state: BrowserState;
@@ -78,7 +77,6 @@ export class BrowserController {
     visible: boolean,
     partition: string | null,
     onState: (state: BrowserState) => void,
-    onError: (error: Error) => void,
   ) {
     this.partition = partition;
     this.cwd = cwd;
@@ -89,7 +87,6 @@ export class BrowserController {
     this.visible = visible;
     this.layout = layout;
     this.onState = onState;
-    this.onError = onError;
     this.renderScale = browserRenderScale(layout);
     this.state = initialBrowserState(initialUrl);
     const size = this.contentSize(layout);
@@ -142,7 +139,6 @@ export class BrowserController {
               };
             },
             stopped: () => this.stopped,
-            onError: (error) => this.onError(error),
           })
         : null;
     this.window.webContents.setFrameRate(frameRate());
@@ -244,6 +240,7 @@ export class BrowserController {
       return;
     }
     this.layout = layout;
+    // why keep frame?
     if (!options?.keepFrame) this.surface.clear();
     if (this.screencast) {
       void this.screencast.reconfigure();
@@ -417,7 +414,6 @@ export class BrowserController {
         this.devtoolsFocused = false;
         this.onDevtoolsChange?.();
       },
-      (error) => this.onError(error),
     );
     devtools.onCursorChange = () => this.onCursorChange?.(devtools.cursorShape);
     devtools.setVisible(this.visible);
@@ -559,6 +555,18 @@ export class BrowserController {
     }
   }
 
+  /**
+   * 
+   * okay we are absolutely getting somewhere
+   * 
+   * for each tab there is a browser window
+   * 
+   * 
+   * and submitting a textsure is just passing the surface handle and then forwarding it to the engine
+   * 
+   * but its not clear to me how the surface is correlated between the UI and the backend logic here
+   * 
+   */
   private submitTexture(texture: OffscreenSharedTexture) {
     try {
       const info = texture.textureInfo;
@@ -615,7 +623,6 @@ export class BrowserController {
         this.onPopupChange?.();
       },
       this.visible,
-      (error) => this.onError(error),
     );
     this.popup = popup;
     this.onPopupChange?.();
@@ -646,3 +653,4 @@ function browserRenderScale(layout: BrowserSurfaceLayout) {
   const cssPixels = layout.width * layout.height / (layout.scale * layout.scale);
   return Math.max(0.5, Math.min(layout.scale, Math.sqrt(maxPixels / cssPixels)));
 }
+

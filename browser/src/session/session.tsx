@@ -175,7 +175,6 @@ class Session {
             visible,
             this.partition,
             onState,
-            (error) => this.fail(error),
           ),
         deviceSpec: () => deviceSpec(this.deviceMode),
         onActivated: () => {
@@ -344,12 +343,6 @@ class Session {
     } catch { }
     this.root?.stop();
     this.ctx.onClose(code);
-  }
-
-  private fail(error: Error) {
-    if (this.shuttingDown) return;
-    process.stderr.write(`${error.stack ?? error.message}\n`);
-    this.shutdown(1);
   }
 
   nudgeResize() {

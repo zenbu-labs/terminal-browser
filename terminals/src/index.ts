@@ -1,5 +1,4 @@
 import { ghostty } from "./ghostty";
-import { createInline } from "./inline";
 import { createKitty } from "./kitty";
 import { createTmux } from "./tmux";
 import { createWezterm } from "./wezterm";
@@ -24,10 +23,10 @@ export {
 export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   const term = env.TERM ?? "";
   if (env.TMUX) return createTmux(env);
-  if (term.includes("ghostty")) return detectGhostty();
+  if (term.includes("ghostty")) return ghostty;
   if (term.includes("kitty")) return createKitty(env);
   if (env.TERM_PROGRAM === "ghostty" || env.GHOSTTY_RESOURCES_DIR) {
-    return detectGhostty();
+    return ghostty;
   }
   if (env.KITTY_WINDOW_ID || env.KITTY_PID) return createKitty(env);
   if (env.TERM_PROGRAM === "WezTerm" || env.WEZTERM_PANE) return createWezterm(env);
@@ -35,13 +34,4 @@ export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
     "unsupported terminal: need Ghostty, kitty (allow_remote_control), or WezTerm\n" +
       `\nTerminals that work: ${TERMINALS_URL}`,
   );
-}
-
-function detectGhostty(): Backend {
-  if (process.platform !== "darwin") {
-    return createInline(
-      "splits are unavailable in Ghostty outside macOS because Ghostty has no way to script them there — terminal-browser runs in the current pane",
-    );
-  }
-  return ghostty;
 }

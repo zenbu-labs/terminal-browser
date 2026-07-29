@@ -47,7 +47,6 @@ export class DevtoolsWindow {
     renderScale: number,
     onAction: (action: DevtoolsAction) => void,
     onClosed: () => void,
-    onError: (error: Error) => void,
   ) {
     this.pageContents = pageContents;
     this.surface = surface;
@@ -91,7 +90,6 @@ export class DevtoolsWindow {
               mobile: false,
             }),
             stopped: () => this.destroyed,
-            onError,
           })
         : null;
     this.window.webContents.setFrameRate(frameRate());

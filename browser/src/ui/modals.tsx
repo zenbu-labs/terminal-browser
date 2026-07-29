@@ -20,6 +20,7 @@ function Backdrop({ layout, onClose }: { layout: ChromeLayout; onClose(): void }
   );
 }
 
+
 function lastRowRadius(last: boolean, rem: number) {
   if (!last) return undefined;
   const radius = Math.max(2, rem * 0.55 - 1);
@@ -276,3 +277,4 @@ export function NewTabCard({
     </ModalCard>
   );
 }
+

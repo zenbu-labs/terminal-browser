@@ -316,7 +316,13 @@ async function attachHere(argv: string[]): Promise<never> {
 async function openHere(argv: string[]): Promise<never> {
   prepareTmux();
   const isolated = takeBoolFlag(argv, "--isolated");
-  if (!isolated) return attachHere(argv);
+  if (!isolated) {
+    try {
+      return await attachHere(argv);
+    } catch (error) {
+      process.stderr.write(`terminal-browser: daemon attach failed (${String(error)}); running isolated\n`);
+    }
+  }
   const { command, cwd } = browserLaunchCommand([...argv, `--cwd=${process.cwd()}`]);
   const child = spawn(command[0], command.slice(1), { cwd, stdio: "inherit" });
   const code: number = await new Promise((resolve) =>
@@ -431,7 +437,7 @@ async function openCommand(args: string[]) {
   if (!forceSplit) {
     const records = await instances();
     if (records.length > 0) {
-      const found = locate(records, await backend.panes(), tty);
+      const found = locate(records, await backend.panes());
       const target = reusable(found, explicit ? direction : null, tty);
       if (target) {
         return print(

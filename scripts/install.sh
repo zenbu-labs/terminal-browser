@@ -6,20 +6,9 @@ VERSION="__VERSION__"
 CHANNEL="__CHANNEL__"
 SHA256="__SHA256__"
 SIZE="__SIZE__"
-TARGET="__PLATFORM__"
 
-case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) HOST_TARGET="darwin-arm64" ;;
-  Linux-aarch64|Linux-arm64) HOST_TARGET="linux-arm64" ;;
-  Linux-x86_64|Linux-amd64) HOST_TARGET="linux-x64" ;;
-  *)
-    echo "terminal-browser does not support $(uname -s) $(uname -m)" >&2
-    exit 1
-    ;;
-esac
-
-if [ "$HOST_TARGET" != "$TARGET" ]; then
-  echo "this terminal-browser build targets $TARGET, not $HOST_TARGET" >&2
+if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
+  echo "terminal-browser currently supports Apple Silicon macOS only" >&2
   exit 1
 fi
 
@@ -30,15 +19,10 @@ TARBALL="$TMP/terminal-browser.tar.gz"
 echo "downloading terminal-browser $VERSION ($((SIZE / 1000000)) MB)"
 curl -fL --retry 3 --retry-delay 2 --progress-bar "$DOWNLOAD_URL" -o "$TARBALL"
 
-if [ "$HOST_TARGET" = "darwin-arm64" ]; then
-  ACTUAL_SHA="$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
-else
-  ACTUAL_SHA="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
-fi
-if [ "$ACTUAL_SHA" != "$SHA256" ]; then
+echo "$SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || {
   echo "download corrupted (checksum mismatch), try again" >&2
   exit 1
-fi
+}
 
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN_HOME="${XDG_BIN_HOME:-$HOME/.local/bin}"

@@ -90,8 +90,8 @@ export class PageInput {
       return;
     }
     const scale = this.target.scale();
-    this.wheelRemainderX += event.deltaX / scale;
-    this.wheelRemainderY += event.deltaY / scale;
+    this.wheelRemainderX += -event.deltaX / scale;
+    this.wheelRemainderY += -event.deltaY / scale;
     const deltaX = wholeDelta(this.wheelRemainderX);
     const deltaY = wholeDelta(this.wheelRemainderY);
     this.wheelRemainderX -= deltaX;
@@ -104,8 +104,8 @@ export class PageInput {
         type: "mouseWheel",
         x: this.lastX,
         y: this.lastY,
-        deltaX,
-        deltaY,
+        deltaX: -deltaX,
+        deltaY: -deltaY,
         modifiers: cdpModifiers(event.mods),
         pointerType: "mouse",
       });
@@ -115,13 +115,13 @@ export class PageInput {
       type: "mouseWheel",
       x: this.lastX,
       y: this.lastY,
-      deltaX: -deltaX,
-      deltaY: -deltaY,
+      deltaX,
+      deltaY,
       // chromium exposes wheelTicks*120 to pages as the legacy wheelDelta;
       // js scrollers like monaco read only that, so zero ticks kill their
       // scrolling. real macOS trackpads report one tick per 40 pixels
-      wheelTicksX: event.precise ? -deltaX / 40 : Math.sign(-deltaX),
-      wheelTicksY: event.precise ? -deltaY / 40 : Math.sign(-deltaY),
+      wheelTicksX: event.precise ? deltaX / 40 : Math.sign(deltaX),
+      wheelTicksY: event.precise ? deltaY / 40 : Math.sign(deltaY),
       hasPreciseScrollingDeltas: event.precise,
       canScroll: true,
       // trackpad pinch reaches pages the way chromium delivers it natively:
@@ -257,6 +257,11 @@ export class PageInput {
     }
     this.sentKeys.clear();
   }
+  /**
+   * 
+   * why are we hard coding huerestics for vscode web??
+   * 
+   */
 
   // vs code web never acts on Enter keydowns synthesized by sendInputEvent —
   // its quick-open accept keybinding ignores them (identical DOM events
@@ -407,6 +412,11 @@ function editingCommands(event: EngineKeyEvent): string[] | null {
   return null;
 }
 
+/**
+ * 
+ * this is extremly odd to me and makes 0 sense and reads as slop
+ * 
+ */
 // Ghostty's default keybinds rewrite cmd+backspace into ctrl+u, cmd+left/right
 // into ctrl+a/ctrl+e, and option+arrows into esc b/f before the engine sees
 // them, so the mac editing combos arrive here as these control keys (mirrors

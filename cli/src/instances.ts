@@ -1,4 +1,3 @@
-import { callerTty } from "pixel-terminals";
 import type { Backend, Direction, Pane } from "pixel-terminals";
 
 import { control } from "./control";
@@ -27,11 +26,7 @@ export function recordKey(record: InstanceRecord): string {
   return record.key ?? String(record.pid);
 }
 
-export function locate(
-  records: InstanceRecord[],
-  panes: Pane[],
-  selfTty: string | null = null,
-): Browser[] {
+export function locate(records: InstanceRecord[], panes: Pane[]): Browser[] {
   const self = panes.find((pane) => pane.self);
   const byKey = new Map<string, Pane>();
   for (const pane of panes) {
@@ -46,9 +41,7 @@ export function locate(
       tab: pane?.tab ?? null,
       pane: pane?.pane ?? null,
       inCurrentTab:
-        pane && self
-          ? pane.window === self.window && pane.tab === self.tab
-          : selfTty !== null && (record.tty === selfTty || record.parentTty === selfTty),
+        !!pane && !!self && pane.window === self.window && pane.tab === self.tab,
     };
   });
 }
@@ -64,7 +57,7 @@ export function reusable(
 }
 
 export async function browsers(backend: Backend): Promise<Browser[]> {
-  return locate(await instances(), await backend.panes(), callerTty());
+  return locate(await instances(), await backend.panes());
 }
 
 export async function targets(browser: Browser): Promise<TabTarget[]> {

@@ -44,7 +44,6 @@ export class PopupWindow {
     onChange: () => void,
     onClosed: () => void,
     visible: boolean,
-    onError: (error: Error) => void,
   ) {
     this.window = window;
     this.surface = surface;
@@ -91,7 +90,6 @@ export class PopupWindow {
         mobile: false,
       }),
       stopped: () => this.destroyed,
-      onError,
     });
     this.window.webContents.debugger.on("message", (_event, method, params) => {
       if (method === "Page.screencastFrame") this.screencast.handleFrame(params);

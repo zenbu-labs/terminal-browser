@@ -1038,6 +1038,9 @@ enum FrameTransport {
 
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/**
+ * need to think about this case harder 
+ */
 fn frame_image_id(tmux: bool) -> u32 {
     if !tmux {
         return 1;

@@ -12,7 +12,7 @@ export interface Pane {
 }
 
 export interface Backend {
-  app: "ghostty" | "kitty" | "wezterm" | "tmux" | "inline"
+  app: "ghostty" | "kitty" | "wezterm" | "tmux"
   panes(): Promise<Pane[]>;
   listAll(): Promise<Omit<Pane, "self">[]>;
   split(
@@ -42,7 +42,7 @@ export function callerTty(): string | null {
     }
     if (!out) return null;
     const [ppid, tty] = out.split(/\s+/);
-    if (tty && tty !== "??" && tty !== "?") return `/dev/${tty}`;
+    if (tty && tty !== "??") return `/dev/${tty}`;
     pid = Number(ppid);
     if (!Number.isFinite(pid)) return null;
   }

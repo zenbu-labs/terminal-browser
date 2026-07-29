@@ -17,8 +17,10 @@ if (process.platform === "linux") {
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
-ensureDataDir();
-fs.mkdirSync(LOGS_DIR, { recursive: true });
+try {
+  ensureDataDir();
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+} catch {}
 app.commandLine.appendSwitch("enable-logging", "file");
 app.commandLine.appendSwitch("log-file", path.join(LOGS_DIR, "chromium.log"));
 app.setName("Pixel Browser");
@@ -44,8 +46,8 @@ process.on("SIGINT", () => (session ? session.close() : app.exit(130)));
 process.on("SIGTERM", () => (session ? session.close() : app.exit(143)));
 
 void (async () => {
-  const cdpPort = await freePort();
-  app.commandLine.appendSwitch("remote-debugging-port", String(cdpPort));
+  const cdpPort = await freePort().catch(() => null);
+  if (cdpPort != null) app.commandLine.appendSwitch("remote-debugging-port", String(cdpPort));
   await app.whenReady();
   if (process.argv.slice(2).includes("--daemon")) {
     await runDaemon(cdpPort);

@@ -5,7 +5,6 @@ export interface ScreencastTarget {
   cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
   metrics(): { width: number; height: number; deviceScaleFactor: number; mobile: boolean };
   stopped(): boolean;
-  onError(error: Error): void;
 }
 
 export class Screencast {
@@ -53,12 +52,12 @@ export class Screencast {
         this.surface.present({ bgra: image.toBitmap(), width, height });
       }
     } catch (error) {
-      this.target.onError(toError(error));
+      report(error);
     } finally {
       void this.target
         .cdp("Page.screencastFrameAck", { sessionId: frame.sessionId })
         .catch((error) => {
-          if (this.streaming && !this.target.stopped()) this.target.onError(toError(error));
+          if (this.streaming && !this.target.stopped()) report(error);
         });
     }
   }
@@ -66,7 +65,7 @@ export class Screencast {
   private enqueue(): Promise<void> {
     this.queue = this.queue
       .then(() => this.reconcile())
-      .catch((error) => this.target.onError(toError(error)));
+      .catch(report);
     return this.queue;
   }
 
@@ -105,6 +104,7 @@ export class Screencast {
   }
 }
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+function report(error: unknown) {
+  const value = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  process.stderr.write(`screencast: ${value}\n`);
 }
