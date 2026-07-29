@@ -273,6 +273,7 @@ pub struct Engine {
     term_focused: bool,
     pub native: Option<NativeScroll>,
     pub use_native: bool,
+    pixel_mouse: bool,
     last_native_scroll: Option<Instant>,
     pairing: NativePairing,
     hover_oracle: HoverOracle,
@@ -313,6 +314,9 @@ pub struct Engine {
     last_color_request: Option<Instant>,
     last_step: Instant,
     last_frame: Instant,
+    last_frame_bytes: usize,
+    frame_deferred: bool,
+    frame_budget_bytes_per_sec: f32,
     pub stats: FrameStats,
 }
 
@@ -338,6 +342,9 @@ impl Engine {
         let base_px = px_for_cell_height(&config.fonts[config.cell_metrics_font], cell.1 as f32);
         let native = NativeScroll::spawn(term.waker().ok());
         let use_native = native.is_some();
+        // without pixel mouse reports every position is a cell centre, which is
+        // too coarse to locate the pane; pairing rides the wheel tick instead
+        let pixel_mouse = term.reports_pixel_mouse();
         logging::info(
             "engine",
             format!(
@@ -371,6 +378,7 @@ impl Engine {
             term_focused: true,
             native,
             use_native,
+            pixel_mouse,
             last_native_scroll: None,
             pairing: NativePairing::new(),
             hover_oracle: HoverOracle::new(),
@@ -405,6 +413,9 @@ impl Engine {
             last_color_request: None,
             last_step: Instant::now(),
             last_frame: Instant::now(),
+            last_frame_bytes: 0,
+            frame_deferred: false,
+            frame_budget_bytes_per_sec: frame_budget_bytes_per_sec(),
             stats: FrameStats::default(),
         };
         engine.sync_clear_colors();
@@ -605,7 +616,7 @@ impl Engine {
         }
         self.check_resize(&mut out)?;
         self.frame()?;
-        let first_wait = if self.animating() {
+        let first_wait = if self.animating() || self.frame_deferred {
             Some(Duration::from_millis(6))
         } else if !out.is_empty() {
             Some(Duration::ZERO)
@@ -890,6 +901,12 @@ impl Engine {
         Ok(())
     }
 
+    pub fn set_clipboard(&mut self, text: &str) {
+        if let Err(error) = self.term.set_clipboard(text) {
+            logging::warn("engine", format!("clipboard write failed: {error}"));
+        }
+    }
+
     pub fn request_clipboard_image(&mut self, view: usize) {
         let root = self.comp.views[view].tree.root();
         self.clipboard.request_paste(view, root);
@@ -912,7 +929,42 @@ impl Engine {
         self.clipboard.attach_rich(&mut self.term, token, marks);
     }
 
+    /// How long the last frame earns before another may go out. Shared memory
+    /// frames cost the same whatever they contain, so they never wait; frames
+    /// sent as pixels are paced to a byte budget, because a terminal reading
+    /// them through tmux falls further behind with every one it is handed.
+    fn frame_debt(&self) -> Duration {
+        if !self.term.frames_are_inline() {
+            return Duration::ZERO;
+        }
+        let budget = self.frame_budget_bytes_per_sec;
+        if budget <= 0.0 {
+            return Duration::ZERO;
+        }
+        Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2))
+    }
+
+    fn draws_something(&self) -> bool {
+        self.comp.dirty
+            || self.comp.active_views().iter().any(|&i| {
+                let view = &self.comp.views[i];
+                view.tree.dirty()
+                    || !view.damage.is_empty()
+                    || (view.canvas.width, view.canvas.height) != view.size
+            })
+    }
+
     fn frame(&mut self) -> io::Result<()> {
+        let debt = self.frame_debt();
+        if !debt.is_zero() && Instant::now().duration_since(self.last_frame) < debt {
+            // nothing is lost: no paint flag is cleared until the frame goes out
+            self.frame_deferred = self.draws_something();
+            if self.frame_deferred {
+                return Ok(());
+            }
+        } else {
+            self.frame_deferred = false;
+        }
         let active = self.comp.active_views();
         let work: Vec<(usize, Option<Rect>)> = active
             .iter()
@@ -975,6 +1027,7 @@ impl Engine {
             self.compose(&painted);
             let bytes = crate::profiler::span("draw", || self.term.draw(&self.comp.frame))?;
             crate::profiler::count("bytes", bytes as u64);
+            self.last_frame_bytes = bytes;
 
             let gap = start.duration_since(self.last_frame).as_secs_f32();
             self.last_frame = start;
@@ -1008,6 +1061,16 @@ impl Engine {
         });
         self.comp.dirty = false;
     }
+}
+
+const DEFAULT_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
+
+fn frame_budget_bytes_per_sec() -> f32 {
+    let configured = std::env::var("TERMINAL_BROWSER_FRAME_BUDGET_MBPS")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| *value >= 0.0);
+    configured.unwrap_or(DEFAULT_FRAME_BUDGET_MB_PER_SEC) * 1_000_000.0
 }
 
 pub fn px_for_cell_height(font: &fontdue::Font, cell_height: f32) -> f32 {

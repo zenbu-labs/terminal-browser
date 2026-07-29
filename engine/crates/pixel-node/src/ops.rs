@@ -152,6 +152,9 @@ enum Op {
         marks: Vec<RichClipMarkDto>,
     },
     RequestClipboardImage {},
+    SetClipboard {
+        text: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -834,6 +837,7 @@ fn apply_op(
             );
         }
         Op::RequestClipboardImage {} => engine.request_clipboard_image(view),
+        Op::SetClipboard { text } => engine.set_clipboard(&text),
     }
 }
 

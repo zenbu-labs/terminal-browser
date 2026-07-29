@@ -24,6 +24,7 @@ Usage: terminal-browser <command> [args]
 
   open    Open the browser in a terminal pane
   ls      List running browsers and their tabs
+  setup   Turn on terminal images in vscode-family editors
   action  Drive an open tab (snapshot, click, fill, eval)
   help    Show this help
 
@@ -63,6 +64,18 @@ ids it prints are what --tab takes in terminal-browser action.
 Options:
   --all                 Every browser, not just this terminal tab
   --json                Machine readable, including cdp ports and pane ids
+```
+
+```
+$ terminal-browser setup --help
+Usage: terminal-browser setup
+
+Editors built on vscode ship with terminal images switched off, so the browser
+cannot draw anything in their terminals until "terminal.integrated.enableImages"
+is true. This finds every vscode-family editor on this machine and turns it on,
+leaving the rest of each settings file as it was.
+
+The installer runs this for you. Run it again after installing a new editor.
 ```
 
 ```

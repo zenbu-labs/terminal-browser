@@ -100,7 +100,10 @@ impl HoverOracle {
             at: now,
         });
         let origin = (cursor.0 - local.0, cursor.1 - local.1);
-        if self.origin.is_some_and(|known| apart(known, origin) > AGREEMENT) {
+        if self
+            .origin
+            .is_some_and(|known| apart(known, origin) > AGREEMENT)
+        {
             logging::info("engine", "native scroll pane moved, recalibrating");
             self.origin = None;
             self.candidate = None;
@@ -186,7 +189,10 @@ impl HoverOracle {
         if self.origin.is_none() {
             logging::info(
                 "engine",
-                format!("native scroll located pane at {:.0},{:.0}", origin.0, origin.1),
+                format!(
+                    "native scroll located pane at {:.0},{:.0}",
+                    origin.0, origin.1
+                ),
             );
         }
         self.origin = Some(origin);
@@ -230,6 +236,35 @@ mod tests {
         (oracle, now)
     }
 
+    // A terminal without pixel mouse reports (tmux) names a cell, and the
+    // engine turns that into the middle of the cell. The origin it implies then
+    // jumps around by up to a cell, which is why those positions are withheld
+    // from the oracle and the wheel tick pairs the gesture instead.
+    #[test]
+    fn cell_quantized_positions_cannot_locate_the_pane() {
+        const CELL: (f32, f32) = (16.0, 34.0);
+        let origin = (100.0, 200.0);
+        let quantize = |v: f32, c: f32| (v / c).floor() * c + c / 2.0;
+        let now = Instant::now();
+
+        let mut quantized = HoverOracle::new();
+        let mut exact = HoverOracle::new();
+        for step in 0..12 {
+            let cursor = (500.0 + step as f32 * 3.0, 500.0 + step as f32 * 2.0);
+            let local = (cursor.0 - origin.0, cursor.1 - origin.1);
+            quantized.note_cursor(cursor, now);
+            quantized.note_tick((quantize(local.0, CELL.0), quantize(local.1, CELL.1)), now);
+            exact.note_cursor(cursor, now);
+            exact.note_tick(local, now);
+        }
+
+        assert!(exact.calibrated(), "pixel positions locate the pane");
+        assert!(
+            !quantized.calibrated(),
+            "cell positions cannot, so do not pretend they can"
+        );
+    }
+
     #[test]
     fn hovering_locates_the_pane_and_answers_geometrically() {
         let (mut oracle, now) = calibrated();
@@ -252,10 +287,18 @@ mod tests {
         oracle.note_cursor((500.0, 500.0), now);
         oracle.note_local((400.0, 300.0), now);
         assert!(!oracle.calibrated());
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Deliver, "latched by the local report");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Deliver,
+            "latched by the local report"
+        );
 
         oracle.note_cursor((900.0, 900.0), now);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Unknown, "latch is void once the cursor moves");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Unknown,
+            "latch is void once the cursor moves"
+        );
     }
 
     #[test]
@@ -297,18 +340,33 @@ mod tests {
     fn a_tick_that_contradicts_geometry_recalibrates() {
         let (mut oracle, now) = calibrated();
         oracle.note_cursor((800.0, 500.0), now);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Deliver, "stale rect still says yes");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Deliver,
+            "stale rect still says yes"
+        );
 
         oracle.note_tick((400.0, 300.0), now);
-        assert!(!oracle.calibrated(), "the tick disagreed, so the rect is dropped");
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Deliver, "but the tick proved hover");
+        assert!(
+            !oracle.calibrated(),
+            "the tick disagreed, so the rect is dropped"
+        );
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Deliver,
+            "but the tick proved hover"
+        );
 
         for _ in 0..SAMPLES_TO_TRUST {
             oracle.note_cursor((800.0, 500.0), now);
             oracle.note_local((400.0, 300.0), now);
         }
         oracle.note_cursor((401.0, 500.0), now);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Deliver, "relocated to 400,200");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Deliver,
+            "relocated to 400,200"
+        );
         oracle.note_cursor((399.0, 500.0), now);
         assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Discard);
     }
@@ -317,13 +375,25 @@ mod tests {
     fn a_window_on_top_of_the_pane_blocks_delivery() {
         let (mut oracle, now) = calibrated();
         oracle.note_window(Some((100.0, 200.0, 800.0, 600.0)));
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Deliver, "that window is our terminal");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Deliver,
+            "that window is our terminal"
+        );
 
         oracle.note_window(Some((300.0, 300.0, 200.0, 200.0)));
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Discard, "something smaller is on top");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Discard,
+            "something smaller is on top"
+        );
 
         oracle.note_window(None);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Deliver, "no answer does not gate");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Deliver,
+            "no answer does not gate"
+        );
     }
 
     #[test]
@@ -337,10 +407,18 @@ mod tests {
         assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Discard);
 
         oracle.note_cursor((501.0, 500.0), now);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Discard, "a pixel of jitter is not a move");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Discard,
+            "a pixel of jitter is not a move"
+        );
 
         oracle.note_cursor((540.0, 500.0), now);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Unknown, "moved, so ask again");
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Unknown,
+            "moved, so ask again"
+        );
     }
 
     #[test]
@@ -367,7 +445,10 @@ mod tests {
 
         oracle.note_local((400.0, 300.0), now + CORRELATION_WINDOW * 2);
         assert!(oracle.wants_cursor(now + CORRELATION_WINDOW * 2));
-        assert!(!oracle.wants_cursor(now + VERIFY_WINDOW * 2), "interest expires");
+        assert!(
+            !oracle.wants_cursor(now + VERIFY_WINDOW * 2),
+            "interest expires"
+        );
     }
 
     #[test]

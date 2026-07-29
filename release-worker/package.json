@@ -1,0 +1,16 @@
+{
+  "name": "release-worker",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "migrate": "wrangler d1 migrations apply terminal-browser-stats --remote",
+    "migrate:local": "wrangler d1 migrations apply terminal-browser-stats --local"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260722.1",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.20.0"
+  }
+}

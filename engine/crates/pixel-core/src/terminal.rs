@@ -13,7 +13,10 @@ pub enum Event {
     Paste(String),
     Focus(bool),
     WindowSize(WindowSize),
-    ClipboardData { items: Vec<(String, Vec<u8>)>, ok: bool },
+    ClipboardData {
+        items: Vec<(String, Vec<u8>)>,
+        ok: bool,
+    },
     ColorSchemeChanged,
     Colors(TerminalColors),
 }
@@ -196,7 +199,10 @@ fn retry_intr<T>(mut call: impl FnMut() -> rustix::io::Result<T>) -> rustix::io:
 }
 
 enum TtyHandle {
-    Stdio { stdin: io::Stdin, stdout: io::Stdout },
+    Stdio {
+        stdin: io::Stdin,
+        stdout: io::Stdout,
+    },
     File(std::fs::File),
 }
 
@@ -226,7 +232,8 @@ pub struct Terminal {
     cell_query_unsupported: bool,
     pending: Vec<u8>,
     lone_escape_since: Option<Instant>,
-    shm_frames: bool,
+    transport: FrameTransport,
+    frame_files: Vec<FrameFile>,
     frame_seq: u64,
     tmux: bool,
     image_id: u32,
@@ -342,7 +349,8 @@ impl Terminal {
             cell_query_unsupported: false,
             pending: Vec::new(),
             lone_escape_since: None,
-            shm_frames: false,
+            transport: FrameTransport::Inline,
+            frame_files: Vec::new(),
             frame_seq: 0,
             tmux,
             image_id: frame_image_id(tmux),
@@ -358,7 +366,7 @@ impl Terminal {
         };
         terminal.mouse_pixels = !tmux && terminal.probe_mouse_pixels()?;
         terminal.clipboard_data = !tmux && terminal.probe_clipboard_data()?;
-        terminal.shm_frames = terminal.probe_shm_frames()?;
+        terminal.transport = terminal.probe_transport()?;
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
         if terminal.color_scheme_updates {
             terminal.io.out().write_all(b"\x1b[?2031h")?;
@@ -382,20 +390,116 @@ impl Terminal {
         self.io.out().flush()
     }
 
-    fn probe_shm_frames(&mut self) -> io::Result<bool> {
+    /// Asks the terminal where it is willing to read frames from, preferring the medium it does
+    /// not destroy after reading: a file mapping can be reused every frame, a shared memory object
+    /// has to be rebuilt each time, and inline means the pixels go down the tty.
+    ///
+    /// Under tmux the question and its answer both travel through passthrough, and an answer that
+    /// arrives late or lands on another pane reads the same as a terminal that cannot do it at all.
+    /// `TERMINAL_BROWSER_FRAMES` picks one outright: `file`, `shared` or `inline`.
+    fn probe_transport(&mut self) -> io::Result<FrameTransport> {
+        if let Some(forced) = std::env::var("TERMINAL_BROWSER_FRAMES")
+            .ok()
+            .and_then(|value| match value.trim() {
+                "file" => Some(FrameTransport::File),
+                "shared" | "shm" => Some(FrameTransport::Shared),
+                "inline" => Some(FrameTransport::Inline),
+                _ => None,
+            })
+        {
+            crate::logging::info("terminal", format!("frame transport forced to {forced:?}"));
+            return Ok(forced);
+        }
+        if self.probe_frame_file()? {
+            crate::logging::info("terminal", "frames go through a file the terminal re-reads");
+            return Ok(FrameTransport::File);
+        }
+        if self.probe_shared_memory()? {
+            crate::logging::info("terminal", "frames go through shared memory");
+            return Ok(FrameTransport::Shared);
+        }
+        crate::logging::warn(
+            "terminal",
+            if self.tmux {
+                "no answer about file or shared memory frames under tmux, sending pixels inline — \
+                 check `tmux show -p allow-passthrough`, or set TERMINAL_BROWSER_FRAMES=file"
+            } else {
+                "terminal takes neither file nor shared memory frames, sending pixels inline"
+            },
+        );
+        Ok(FrameTransport::Inline)
+    }
+
+    fn probe_frame_file(&mut self) -> io::Result<bool> {
+        let path = self.frame_path(FRAME_SLOTS);
+        if std::fs::write(&path, [0u8, 0, 0, 255]).is_err() {
+            return Ok(false);
+        }
+        let name = path.to_string_lossy().into_owned();
+        self.io.out().write_all(&crate::kitty::kitty_query_medium(
+            FILE_PROBE_ID,
+            &name,
+            crate::kitty::Medium::File,
+            1,
+            1,
+            self.tmux,
+        ))?;
+        self.io.out().flush()?;
+        let reply = self.read_report(FRAME_PROBE_TIMEOUT_MS, |buf| {
+            parse_probe_reply(buf, b"_Gi=300;")
+        })?;
+        let _ = std::fs::remove_file(&path);
+        Ok(reply.unwrap_or(false))
+    }
+
+    fn probe_shared_memory(&mut self) -> io::Result<bool> {
         let name = format!("/px-{}-q", std::process::id());
         if write_shm(&name, &[0, 0, 0, 255]).is_err() {
             return Ok(false);
         }
-        self.io.out()
-            .write_all(&crate::kitty::kitty_query_shm(SHM_PROBE_ID, &name, self.tmux))?;
+        self.io.out().write_all(&crate::kitty::kitty_query_medium(
+            SHM_PROBE_ID,
+            &name,
+            crate::kitty::Medium::Shared,
+            1,
+            1,
+            self.tmux,
+        ))?;
         self.io.out().flush()?;
-        /**
-         * really dislike this
-         */
-        let reply = self.read_report(300, |buf| parse_probe_reply(buf, b"_Gi=299;"))?;
+        let reply = self.read_report(FRAME_PROBE_TIMEOUT_MS, |buf| {
+            parse_probe_reply(buf, b"_Gi=299;")
+        })?;
         let _ = rustix::shm::unlink(&name);
         Ok(reply.unwrap_or(false))
+    }
+
+    fn frame_path(&self, slot: u64) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "terminal-browser-{}-{}-{slot}.rgba",
+            std::process::id(),
+            self.terminal_id
+        ))
+    }
+
+    /// Rewrites the next slot in place. The ring exists because the terminal may still be reading
+    /// the frame we sent last.
+    fn write_frame_file(&mut self, data: &[u8]) -> io::Result<String> {
+        if self
+            .frame_files
+            .first()
+            .is_none_or(|file| file.len != data.len())
+        {
+            self.frame_files.clear();
+            for slot in 0..FRAME_SLOTS {
+                self.frame_files
+                    .push(FrameFile::create(self.frame_path(slot), data.len())?);
+            }
+        }
+        let index = (self.frame_seq % FRAME_SLOTS) as usize;
+        self.frame_seq += 1;
+        let file = &mut self.frame_files[index];
+        file.write(data);
+        Ok(file.path.to_string_lossy().into_owned())
     }
 
     fn shm_name(&self, seq: u64) -> String {
@@ -403,7 +507,7 @@ impl Terminal {
     }
 
     fn write_shm_frame(&mut self, data: &[u8]) -> io::Result<String> {
-        let name = self.shm_name(self.frame_seq % SHM_FRAME_SLOTS);
+        let name = self.shm_name(self.frame_seq % FRAME_SLOTS);
         self.frame_seq += 1;
         let _ = rustix::shm::unlink(&name);
         write_shm(&name, data)?;
@@ -437,17 +541,25 @@ impl Terminal {
             Placement::Cursor
         };
         /*
-          we eventualy need to be more principled about
-          being generic over graphcis protocols to support
-          more terminals (even if degraded)
-         */
-        if self.shm_frames {
-            let name = crate::profiler::span("kitty.shm", || self.write_shm_frame(&canvas.pixels))?;
-            frame.extend_from_slice(&crate::kitty::kitty_transmit_shm(
+         we eventualy need to be more principled about
+         being generic over graphcis protocols to support
+         more terminals (even if degraded)
+        */
+        if let Some(medium) = match self.transport {
+            FrameTransport::File => Some(crate::kitty::Medium::File),
+            FrameTransport::Shared => Some(crate::kitty::Medium::Shared),
+            FrameTransport::Inline => None,
+        } {
+            let name = crate::profiler::span("kitty.handoff", || match self.transport {
+                FrameTransport::File => self.write_frame_file(&canvas.pixels),
+                _ => self.write_shm_frame(&canvas.pixels),
+            })?;
+            frame.extend_from_slice(&crate::kitty::kitty_transmit_named(
                 self.image_id,
                 canvas.width,
                 canvas.height,
                 &name,
+                medium,
                 placement,
                 self.tmux,
             ));
@@ -500,7 +612,6 @@ impl Terminal {
                 self.pending.drain(..used);
                 self.lone_escape_since = None;
 
-           
                 return Ok(Some(match raw {
                     RawEvent::Key(key) => Event::Key(key),
                     RawEvent::Paste(text) => Event::Paste(text),
@@ -658,6 +769,18 @@ impl Terminal {
             width_px: u32::from(ws.ws_xpixel),
             height_px: u32::from(ws.ws_ypixel),
         })
+    }
+
+    /// Whether mouse reports carry pixels. Without it they name a cell, and
+    /// the position is only ever the middle of that cell.
+    pub fn reports_pixel_mouse(&self) -> bool {
+        self.mouse_pixels
+    }
+
+    /// Whether every frame travels down the tty as pixels. Shared memory sends
+    /// a name instead, which costs the same whatever the window size.
+    pub fn frames_are_inline(&self) -> bool {
+        self.transport == FrameTransport::Inline
     }
 
     pub fn forget_cell_size(&mut self) {
@@ -898,7 +1021,20 @@ impl Terminal {
 }
 
 const SHM_PROBE_ID: u32 = 299;
-const SHM_FRAME_SLOTS: u64 = 8;
+const FILE_PROBE_ID: u32 = 300;
+/// tmux adds a hop in each direction, so the answer needs longer than a direct terminal would take.
+const FRAME_PROBE_TIMEOUT_MS: u64 = 300;
+
+const FRAME_SLOTS: u64 = 8;
+
+/// How a frame reaches the terminal, cheapest first. Inline means the pixels travel inside the
+/// escape sequence, which costs a compress and a write proportional to the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameTransport {
+    File,
+    Shared,
+    Inline,
+}
 
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -919,6 +1055,58 @@ fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
         return None;
     }
     Some(rest.starts_with(b"OK"))
+}
+
+/// A frame the terminal reads off disk. The mapping is made once and rewritten every frame, so a
+/// frame costs a copy into pages that are already resident rather than faulting in a fresh mapping.
+/// Only worth it because the terminal leaves the file alone, unlike a shared memory object.
+#[allow(unsafe_code)]
+struct FrameFile {
+    path: std::path::PathBuf,
+    map: std::ptr::NonNull<u8>,
+    len: usize,
+}
+
+#[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
+impl FrameFile {
+    fn create(path: std::path::PathBuf, len: usize) -> io::Result<Self> {
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        rustix::fs::ftruncate(&file, len as u64)?;
+        let map = unsafe {
+            rustix::mm::mmap(
+                std::ptr::null_mut(),
+                len,
+                rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE,
+                rustix::mm::MapFlags::SHARED,
+                &file,
+                0,
+            )?
+        };
+        let map = std::ptr::NonNull::new(map.cast::<u8>())
+            .ok_or_else(|| io::Error::other("frame file mapped to nothing"))?;
+        // touching every page now keeps the first frame off the slow path with the rest
+        unsafe { std::ptr::write_bytes(map.as_ptr(), 0, len) };
+        Ok(Self { path, map, len })
+    }
+
+    fn write(&mut self, data: &[u8]) {
+        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.map.as_ptr(), self.len) };
+    }
+}
+
+#[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
+impl Drop for FrameFile {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = rustix::mm::munmap(self.map.as_ptr().cast(), self.len);
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 #[allow(unsafe_code)]
@@ -949,7 +1137,7 @@ impl Drop for Terminal {
         if let Some(slot) = self.resize_slot.take() {
             RESIZE_WAKE_FDS[slot].store(-1, std::sync::atomic::Ordering::Release);
         }
-        for slot in 0..SHM_FRAME_SLOTS {
+        for slot in 0..FRAME_SLOTS {
             let _ = rustix::shm::unlink(self.shm_name(slot));
         }
         let delete = crate::kitty::kitty_delete(self.image_id, self.tmux);
@@ -964,7 +1152,9 @@ impl Drop for Terminal {
             b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
         );
         let _ = self.io.out().flush();
-        let _ = retry_intr(|| termios::tcsetattr(&self.io.read_fd(), OptionalActions::Flush, &self.saved));
+        let _ = retry_intr(|| {
+            termios::tcsetattr(&self.io.read_fd(), OptionalActions::Flush, &self.saved)
+        });
     }
 }
 
@@ -1595,6 +1785,24 @@ mod tests {
         );
         assert_eq!(parse(b"\x1b_Gi=299;O"), None, "partial");
         assert_eq!(parse(b"\x1b[?1016;1$y"), None);
+    }
+
+    #[test]
+    fn a_frame_file_is_rewritten_in_place_and_removed_on_drop() {
+        let path = std::env::temp_dir().join(format!("tb-frametest-{}.rgba", std::process::id()));
+        let first: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
+        let second: Vec<u8> = (0..4096).map(|i| (i % 97) as u8).collect();
+
+        let mut file = FrameFile::create(path.clone(), first.len()).unwrap();
+        file.write(&first);
+        assert_eq!(std::fs::read(&path).unwrap(), first);
+
+        // the same mapping serves every frame, which is the whole point of using a file
+        file.write(&second);
+        assert_eq!(std::fs::read(&path).unwrap(), second);
+
+        drop(file);
+        assert!(!path.exists(), "the frame file outlived the terminal");
     }
 
     #[test]

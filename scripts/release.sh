@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-dev}"
+CHANNEL="${2:-dev}"
 OUT="$ROOT/dist-release"
 STAGE="$OUT/terminal-browser"
 
@@ -48,6 +49,11 @@ cp "$ROOT/assets/fonts/JetBrainsMono-Regular.ttf" "$STAGE/assets/fonts/"
 ELECTRON_DIST="$(node -e 'const p=require("path");console.log(p.join(p.dirname(require.resolve("electron/package.json",{paths:[process.argv[1]]})),"dist"))' "$ROOT/browser")"
 pnpm --dir "$ROOT/browser" install:electron
 
+if [ "$TARGET" = "darwin-arm64" ] && ! grep -qi "zenbu-labs" "$ROOT/.npmrc"; then
+  echo "refusing to build: .npmrc no longer points at the patched electron mirror" >&2
+  exit 1
+fi
+
 if [ "$TARGET" = "darwin-arm64" ]; then
   APP="$STAGE/electron/Pixel.app"
   ditto "$ELECTRON_DIST/Electron.app" "$APP"
@@ -79,15 +85,24 @@ echo "$TARGET" > "$STAGE/TARGET"
 TARBALL="$OUT/terminal-browser-$TARGET.tar.gz"
 tar -czf "$TARBALL" -C "$OUT" terminal-browser
 
-split -b 45m "$TARBALL" "$OUT/terminal-browser-chunk-"
+if [ "$TARGET" = "darwin-arm64" ]; then
+  SHA256="$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
+  SIZE="$(stat -f%z "$TARBALL")"
+else
+  SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+  SIZE="$(stat -c%s "$TARBALL")"
+fi
+
+cat > "$OUT/manifest.json" <<EOF
 {
-  if [ "$TARGET" = "darwin-arm64" ]; then
-    shasum -a 256 "$TARBALL" | cut -d' ' -f1
-  else
-    sha256sum "$TARBALL" | cut -d' ' -f1
-  fi
-  (cd "$OUT" && ls terminal-browser-chunk-*)
-} > "$OUT/chunks.txt"
+  "version": "$VERSION",
+  "channel": "$CHANNEL",
+  "platform": "$TARGET",
+  "file": "$(basename "$TARBALL")",
+  "sha256": "$SHA256",
+  "size": $SIZE,
+  "published": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
 
 du -h "$TARBALL"
-echo "chunks: $(cd "$OUT" && ls terminal-browser-chunk-* | wc -l | tr -d ' ')"

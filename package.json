@@ -5,7 +5,10 @@
     "browser": "pnpm --filter terminal-browser start",
     "build:dist": "scripts/release.sh \"local-$(git rev-parse --short HEAD)\"",
     "install:dist": "scripts/install-local.sh",
-    "dist": "pnpm build:dist && pnpm install:dist"
+    "dist": "pnpm build:dist && pnpm install:dist",
+    "release:patch": "scripts/tag-release.sh patch",
+    "release:minor": "scripts/tag-release.sh minor",
+    "release:major": "scripts/tag-release.sh major"
   },
   "packageManager": "pnpm@10.13.1",
   "devDependencies": {

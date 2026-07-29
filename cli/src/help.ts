@@ -40,6 +40,18 @@ Options:
   --json                Machine readable, including cdp ports and pane ids
 `,
   },
+  setup: {
+    summary: "Turn on terminal images in vscode-family editors",
+    usage: "terminal-browser setup",
+    body: `
+Editors built on vscode ship with terminal images switched off, so the browser
+cannot draw anything in their terminals until "terminal.integrated.enableImages"
+is true. This finds every vscode-family editor on this machine and turns it on,
+leaving the rest of each settings file as it was.
+
+The installer runs this for you. Run it again after installing a new editor.
+`,
+  },
   action: {
     summary: "Drive an open tab (snapshot, click, fill, eval)",
     usage: "terminal-browser action [selectors] -- <command>",

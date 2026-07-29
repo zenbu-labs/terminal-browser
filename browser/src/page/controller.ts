@@ -446,8 +446,12 @@ export class BrowserController {
     this.window.webContents.inspectElement(Math.round(x), Math.round(y));
   }
 
-  copySelection() {
-    this.window.webContents.copy();
+  selectionText() {
+    return this.input.selectionText();
+  }
+
+  cut() {
+    this.input.cut();
   }
 
   blurContent() {

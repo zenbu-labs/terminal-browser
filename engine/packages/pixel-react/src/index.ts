@@ -123,6 +123,12 @@ export function requestClipboardImage(): void {
   bridge.flush();
 }
 
+export function setClipboard(text: string): void {
+  const bridge = getBridge();
+  bridge.push(APP_VIEW, { op: "setClipboard", text });
+  bridge.flush();
+}
+
 export interface KeyMods {
   shift: boolean;
   alt: boolean;
@@ -168,6 +174,7 @@ export interface PixelRoot {
   setPointerShape(shape: string): void;
   setKeyCapture(keys: string[]): void;
   requestClipboardImage(): void;
+  setClipboard(text: string): void;
 }
 
 export interface SurfaceStats {
@@ -638,6 +645,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     requestClipboardImage() {
       bridge.push(APP_VIEW, { op: "requestClipboardImage" });
+      bridge.flush();
+    },
+    setClipboard(text: string) {
+      bridge.push(APP_VIEW, { op: "setClipboard", text });
       bridge.flush();
     },
   };

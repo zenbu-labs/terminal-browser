@@ -173,7 +173,10 @@ impl Engine {
         let events = native.drain();
         let scale = native.scale;
         if native.dead() {
-            logging::warn("engine", "native scroll helper exited; falling back to wheel ticks");
+            logging::warn(
+                "engine",
+                "native scroll helper exited; falling back to wheel ticks",
+            );
             self.native = None;
             self.pairing.reset();
             self.hover_oracle.invalidate();
@@ -186,7 +189,7 @@ impl Engine {
         let (pane, pad) = self.pane_extent();
         self.pairing
             .ingest(events, scale, now, &mut self.hover_oracle, pane, pad);
-        let wants_cursor = self.hover_oracle.wants_cursor(now);
+        let wants_cursor = self.pixel_mouse && self.hover_oracle.wants_cursor(now);
         if let Some(native) = &mut self.native {
             native.request_positions(wants_cursor);
         }
@@ -235,7 +238,11 @@ impl Engine {
             logging::info("engine", "native scroll delivering");
         }
         self.last_native_scroll = Some(Instant::now());
-        if self.comp.views[view].tree.hit_wheel(local.0, local.1).is_some() {
+        if self.comp.views[view]
+            .tree
+            .hit_wheel(local.0, local.1)
+            .is_some()
+        {
             let mut delta_x = 0.0;
             let mut delta_y = 0.0;
             for (dx, dy) in &scrolls {
