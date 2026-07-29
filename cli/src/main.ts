@@ -174,23 +174,6 @@ function browserBuildStamp(): string {
   }
 }
 
-function startupFailure(): string {
-  const log = path.join(LOGS_DIR, "stderr.log");
-  let tail: string;
-  try {
-    tail = fs
-      .readFileSync(log, "utf8")
-      .trimEnd()
-      .split("\n")
-      .slice(-8)
-      .join("\n");
-  } catch {
-    return "";
-  }
-  if (!tail) return "";
-  return `\n\nlast lines of ${log}:\n${tail}`;
-}
-
 function connectDaemon(): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = net.connect(DAEMON_SOCKET);
@@ -218,7 +201,7 @@ async function daemonSocket(): Promise<net.Socket> {
       await sleep(200);
     }
   }
-  throw new Error(`daemon did not start${startupFailure()}`);
+  throw new Error("daemon did not start");
 }
 
 interface DaemonReply {

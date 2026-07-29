@@ -100,15 +100,7 @@ export class PageInput {
     if (this.target.cdpInput) {
       // the devtools protocol negates wheel deltas internally, so it takes
       // them with the DOM sign — opposite of sendInputEvent below
-      void this.target.cdp("Input.dispatchMouseEvent", {
-        type: "mouseWheel",
-        x: this.lastX,
-        y: this.lastY,
-        deltaX: -deltaX,
-        deltaY: -deltaY,
-        modifiers: cdpModifiers(event.mods),
-        pointerType: "mouse",
-      });
+      this.cdpWheel(-deltaX, -deltaY, cdpModifiers(event.mods));
       return;
     }
     this.target.contents().sendInputEvent({
@@ -130,6 +122,18 @@ export class PageInput {
     });
   }
 
+  private cdpWheel(deltaX: number, deltaY: number, modifiers: number) {
+    void this.target.cdp("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: this.lastX,
+      y: this.lastY,
+      deltaX,
+      deltaY,
+      modifiers,
+      pointerType: "mouse",
+    });
+  }
+
   // A ctrl+precise wheel only ever means trackpad pinch (the engine encodes
   // pinch that way, and modified scrolls from the terminal are never precise).
   // Chromium delivers pinch to pages as a synthetic wheel built in
@@ -141,15 +145,7 @@ export class PageInput {
     const pinchScale = 1 - event.deltaY / 100;
     if (pinchScale <= 0) return;
     if (this.target.cdpInput) {
-      void this.target.cdp("Input.dispatchMouseEvent", {
-        type: "mouseWheel",
-        x: this.lastX,
-        y: this.lastY,
-        deltaX: 0,
-        deltaY: -100 * Math.log(pinchScale),
-        modifiers: 2,
-        pointerType: "mouse",
-      });
+      this.cdpWheel(0, -100 * Math.log(pinchScale), 2);
       return;
     }
     this.target.contents().sendInputEvent({
