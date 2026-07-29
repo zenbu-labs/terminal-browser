@@ -76,6 +76,45 @@ function takeModsBinding(args: string[], flag: string, fallback?: string): strin
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function setuidHelperUsable(electron: string): boolean {
+  const dir = path.dirname(electron);
+  for (const helper of [
+    path.join(dir, "chrome-sandbox"),
+    path.join(dir, "..", "electron", "dist", "chrome-sandbox"),
+  ]) {
+    try {
+      const stat = fs.statSync(helper);
+      if (stat.uid === 0 && (stat.mode & 0o4000) !== 0) return true;
+    } catch {}
+  }
+  return false;
+}
+
+function userNamespacesAllowed(): boolean {
+  try {
+    execFileSync("unshare", ["--user", "true"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// chromium refuses to start rather than drop its sandbox, and an unprivileged install
+// cannot give chrome-sandbox the root-owned setuid bit its helper sandbox needs
+function sandboxArgs(electron: string): string[] {
+  if (setuidHelperUsable(electron)) return [];
+  return userNamespacesAllowed() ? ["--disable-setuid-sandbox"] : ["--no-sandbox"];
+}
+
+// the page is painted offscreen, so on a machine with no display chromium should not
+// go looking for one — it dies on the way there
+function electronArgs(electron: string): string[] {
+  if (process.platform !== "linux") return [];
+  const headless =
+    process.env.DISPLAY || process.env.WAYLAND_DISPLAY ? [] : ["--ozone-platform=headless"];
+  return [...sandboxArgs(electron), ...headless];
+}
+
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = path.resolve(__dirname, "..", "..", "browser");
   const electron = DIST_ROOT
@@ -92,7 +131,7 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
   ensureDataDir();
   const logDir = LOGS_DIR;
   fs.mkdirSync(logDir, { recursive: true });
-  const quoted = [electron, main, ...argv]
+  const quoted = [electron, ...electronArgs(electron), main, ...argv]
     .map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`)
     .join(" ");
   const line = `exec ${quoted} 2>>'${logDir.replaceAll("'", `'\\''`)}/stderr.log'`;
@@ -135,6 +174,23 @@ function browserBuildStamp(): string {
   }
 }
 
+function startupFailure(): string {
+  const log = path.join(LOGS_DIR, "stderr.log");
+  let tail: string;
+  try {
+    tail = fs
+      .readFileSync(log, "utf8")
+      .trimEnd()
+      .split("\n")
+      .slice(-8)
+      .join("\n");
+  } catch {
+    return "";
+  }
+  if (!tail) return "";
+  return `\n\nlast lines of ${log}:\n${tail}`;
+}
+
 function connectDaemon(): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = net.connect(DAEMON_SOCKET);
@@ -162,7 +218,7 @@ async function daemonSocket(): Promise<net.Socket> {
       await sleep(200);
     }
   }
-  throw new Error("daemon did not start");
+  throw new Error(`daemon did not start${startupFailure()}`);
 }
 
 interface DaemonReply {
@@ -375,7 +431,7 @@ async function openCommand(args: string[]) {
   if (!forceSplit) {
     const records = await instances();
     if (records.length > 0) {
-      const found = locate(records, await backend.panes());
+      const found = locate(records, await backend.panes(), tty);
       const target = reusable(found, explicit ? direction : null, tty);
       if (target) {
         return print(

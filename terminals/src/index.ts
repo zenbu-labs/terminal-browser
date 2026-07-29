@@ -1,4 +1,5 @@
 import { ghostty } from "./ghostty";
+import { createInline } from "./inline";
 import { createKitty } from "./kitty";
 import { createTmux } from "./tmux";
 import { createWezterm } from "./wezterm";
@@ -38,7 +39,9 @@ export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
 
 function detectGhostty(): Backend {
   if (process.platform !== "darwin") {
-    throw new Error("Ghostty split control is only available on macOS");
+    return createInline(
+      "splits are unavailable in Ghostty outside macOS because Ghostty has no way to script them there — terminal-browser runs in the current pane",
+    );
   }
   return ghostty;
 }
