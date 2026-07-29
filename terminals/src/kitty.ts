@@ -118,18 +118,11 @@ export function createKitty(env: NodeJS.ProcessEnv = process.env): Backend {
       }
       return panes;
     },
-    async split(direction, command, cwd, size) {
+    async split(direction, command, size) {
       await ensureSplitsLayout();
       const location = direction === "right" || direction === "left" ? "vsplit" : "hsplit";
       const bias = size ? [`--bias=${Math.round(size * 100)}`] : [];
-      await kittyCmd([
-        "launch",
-        `--location=${location}`,
-        `--cwd=${cwd}`,
-        ...bias,
-        "--",
-        ...command,
-      ]);
+      await kittyCmd(["launch", `--location=${location}`, ...bias, "--", ...command]);
       if (direction === "left" || direction === "up") {
         await kittyCmd(["action", "move_window", direction]);
       }

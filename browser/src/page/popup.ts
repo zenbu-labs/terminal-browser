@@ -2,7 +2,7 @@ import { nativeImage } from "electron";
 import type { BrowserWindow } from "electron";
 import type { Surface } from "pixel-react";
 import { PageInput } from "./input";
-import { stepZoom } from "./zoom";
+import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
 export interface PopupState {
@@ -13,15 +13,6 @@ export interface PopupState {
   height: number;
 }
 
-/** A window.open() child window rendered into the popup surface; the chrome
- * draws it inside a modal over the page. The real chromium window keeps its
- * opener relationship, so oauth-style popups can postMessage back to the page
- * that opened them.
- *
- * Offscreen child windows never get a sized platform view (their viewport is
- * 0x0 and they never paint), so the renderer is sized with a device-metrics
- * override and pixels arrive through the devtools screencast instead of paint
- * events. Once the override is in place, regular input events work. */
 export class PopupWindow {
   readonly input: PageInput;
   private readonly window: BrowserWindow;
@@ -91,6 +82,10 @@ export class PopupWindow {
 
   zoom(direction: ZoomDirection): number {
     return stepZoom(this.window.webContents, direction);
+  }
+
+  scaleZoom(ratio: number): number {
+    return scaleZoom(this.window.webContents, ratio);
   }
 
   setVisible(visible: boolean) {

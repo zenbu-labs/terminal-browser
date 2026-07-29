@@ -9,22 +9,17 @@ const COMMANDS: Record<string, CommandHelp> = {
     summary: "Open the browser in a terminal pane",
     usage: "terminal-browser open [url] [direction] [options]",
     body: `
-Opens the browser inside the terminal. With no direction it takes over the
-current pane; a direction, or --split, puts it in a new pane beside you. A url,
-a localhost port, or a path to a local html file all work.
+Opens the browser in the current pane. Pass a direction (right, left, down,
+up) to open it in a new pane instead.
+
+The url can be a normal url, a localhost port, or a path to an html file.
 
 Options:
-  --dir <direction>     Split direction: right, left, down, up (default right)
-  --size <fraction>     Pane size (0.2-0.95)
-  --split               Split instead of taking over the current pane
-  --isolated            Use a dedicated browser process and profile
-  --palette-key <key>   Command palette key (default super+p, none disables)
-  --find-key <key>      Find-in-page key (default super+f, none disables)
-  --action-mods <mods>  Action shortcut mods (default super+shift, none disables)
+  --size <fraction>   How much of the space the new pane takes (0.2 to 0.95)
 
 Examples:
   terminal-browser open localhost:3000
-  terminal-browser open ./report.html --split
+  terminal-browser open ./report.html right
   terminal-browser open example.com down --size 0.4
 `,
   },
@@ -36,27 +31,32 @@ Lists the browsers running in this terminal tab, each with its tabs. The tab
 ids it prints are what --tab takes in terminal-browser action.
 
 Options:
-  --all                 Every browser, not just this terminal tab
-  --json                Machine readable, including cdp ports and pane ids
+  --all               Every browser, not just this terminal tab
+  --json              Machine readable, including cdp ports and pane ids
+`,
+  },
+  setup: {
+    summary: "Configure installed terminals so terminal-browser works best",
+    usage: "terminal-browser setup",
+    body: `
+Finds the terminals on this machine and fixes any settings that would keep the
+browser from drawing in them. Editors built on vscode ship with terminal images
+switched off, so this turns "terminal.integrated.enableImages" on in each one.
 `,
   },
   action: {
-    summary: "Drive an open tab (snapshot, click, fill, eval)",
+    summary: "Use the open browser through the agent-browser CLI",
     usage: "terminal-browser action [selectors] -- <command>",
     body: `
-Runs an agent-browser command against a tab that is already open. With no
-selectors it picks the browser in this terminal tab and that browser's active
-tab.
+An agent-browser compatible CLI for the browser you already have open.
+Everything after -- is an agent-browser command. With no selectors it targets
+the browser in this terminal tab and that browser's active tab.
 
 Selectors:
-  --browser <key>       A browser key from terminal-browser ls
-  --tab <id>            A tab id from terminal-browser ls
-  --target <id>         A cdp target id
-  --follow              Bring the tab to the front before running the command
-
-Instead of running a command:
-  --resolve             Print the browser and tab the selectors resolve to
-  --env                 Print the agent-browser session environment
+  --browser <key>     A browser key from terminal-browser ls
+  --tab <id>          A tab id from terminal-browser ls
+  --target <id>       A CDP target id
+  --follow            Bring the tab to the front before running the command
 
 Examples:
   terminal-browser action -- snapshot
@@ -77,10 +77,10 @@ export function rootHelp(): string {
     ([name, help]) => `  ${name.padEnd(width)}  ${help.summary}`,
   );
   return block(`
-Usage: terminal-browser <command> [args]
+Usage: terminal-browser [url] [direction]
+       terminal-browser <command> [args]
 
 ${lines.join("\n")}
-  ${"help".padEnd(width)}  Show this help
 
 terminal-browser <command> --help for one command's options
 `);

@@ -2,8 +2,6 @@ import fs from "node:fs";
 
 export type GraphicsSupport = "supported" | "unsupported" | "unknown";
 
-export const TERMINALS_URL = "https://terminal-browser.com/terminals";
-
 export const SKIP_ENV = "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK";
 
 const PROBE_ID = 4207;
@@ -19,8 +17,10 @@ function probeSequence(tmux: boolean): string {
   return `${tmux ? passthrough(query) : query}\x1b[c`;
 }
 
+// The needle omits the `\x1b_` that starts the reply: tmux with extended-keys on re-encodes the
+// escape pairs of a passed-through reply as key events, leaving only the body intact.
 function graphicsReply(buffer: string): boolean | null {
-  const needle = `_Gi=${PROBE_ID};`;
+  const needle = `Gi=${PROBE_ID};`;
   const at = buffer.indexOf(needle);
   if (at < 0) return null;
   const rest = buffer.slice(at + needle.length);
@@ -116,10 +116,12 @@ export function unsupportedGraphicsMessage(color = false): string {
   const sgr = (code: string, text: string) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
   return [
     "",
-    `  ${sgr("1", "This terminal does not have the required features to run terminal-browser.")}`,
+    `  ${sgr("1", "This terminal cannot show images, which terminal-browser needs.")}`,
     "",
-    `  ${sgr("2", "See a list of supported terminals:")}`,
-    `  ${sgr("4", TERMINALS_URL)}`,
+    `  ${sgr("2", "We recommend Ghostty:")}`,
+    `  ${sgr("4", "https://ghostty.org/download")}`,
+    "",
+    `  ${sgr("2", "Any terminal that supports the kitty graphics protocol works too.")}`,
     "",
   ].join("\n");
 }

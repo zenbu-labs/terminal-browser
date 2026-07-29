@@ -148,13 +148,12 @@ const splitScript = (direction: Direction) => `
 on run argv
   set marker to item 1 of argv
   set cmdText to item 2 of argv
-  set cwdText to item 3 of argv
   tell application "Ghostty"
     repeat with w in windows
       repeat with tb in tabs of w
         repeat with term in terminals of tb
           if (name of term) contains marker then
-            split term direction ${direction} with configuration {initial working directory:cwdText, initial input:cmdText & linefeed}
+            split term direction ${direction} with configuration {initial input:cmdText & linefeed}
             return
           end if
         end repeat
@@ -226,9 +225,9 @@ export const ghostty: Backend = {
   async sendText(paneId, text) {
     return osascript(SEND_SCRIPT, [paneId, text]).trim() === "ok";
   },
-  split(direction, command, cwd) {
+  split(direction, command) {
     return withMarkedPane((marker) => {
-      osascript(splitScript(direction), [marker, shellQuote(command), cwd]);
+      osascript(splitScript(direction), [marker, shellQuote(command)]);
     });
   },
   async focusPane(titleNeedle) {

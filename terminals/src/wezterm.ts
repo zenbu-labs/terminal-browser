@@ -31,9 +31,9 @@ export function createWezterm(env: NodeJS.ProcessEnv = process.env): Backend {
         self: pane.pane_id === selfId,
       }));
     },
-    async split(direction, command, cwd) {
+    async split(direction, command) {
       const flag = { right: "--right", left: "--left", down: "--bottom", up: "--top" }[direction];
-      await wezterm(["cli", "split-pane", flag, "--cwd", cwd, "--", ...command]);
+      await wezterm(["cli", "split-pane", flag, "--", ...command]);
     },
     async listAll() {
       return backend.panes();

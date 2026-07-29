@@ -162,6 +162,20 @@ export class PageInput {
     void this.target.contents().insertText(text);
   }
 
+  /** The selected text, wherever it is: a frame's document, or an editable
+   * field inside one. Empty when nothing is selected. */
+  async selectionText(): Promise<string> {
+    for (const frame of this.target.contents().mainFrame.framesInSubtree) {
+      const text = await frame.executeJavaScript(SELECTION_SNIPPET).catch(() => "");
+      if (typeof text === "string" && text) return text;
+    }
+    return "";
+  }
+
+  cut() {
+    this.target.contents().cut();
+  }
+
   /** A native paste() hands the page a trusted event with every clipboard
    * flavor, so it's preferred whenever the OS clipboard actually holds the
    * image; the other sources only have the bytes at image.path, which must
@@ -274,6 +288,17 @@ export class PageInput {
     return result;
   }
 }
+
+// input types like number and email throw when asked where their selection is
+const SELECTION_SNIPPET = `(() => {
+  const el = document.activeElement;
+  try {
+    if (el && "selectionStart" in el && el.selectionStart !== el.selectionEnd) {
+      return el.value.slice(el.selectionStart, el.selectionEnd);
+    }
+  } catch {}
+  return String(getSelection() ?? "");
+})()`;
 
 function wholeDelta(value: number) {
   return value < 0 ? Math.ceil(value) : Math.floor(value);

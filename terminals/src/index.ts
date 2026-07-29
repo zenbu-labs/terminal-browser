@@ -3,19 +3,19 @@ import { createKitty } from "./kitty";
 import { createTmux } from "./tmux";
 import { createWezterm } from "./wezterm";
 import { Backend } from "./shared";
-import { TERMINALS_URL } from "./graphics";
 
 export type { Backend, Direction, Pane } from "./shared";
 export { callerTty, setPaneTitle } from "./shared";
 export { prepareTmux } from "./tmux";
 export type { GraphicsSupport } from "./graphics";
+export type { PixelUnit } from "./pixels";
+export { reportedPixelUnit } from "./pixels";
 export {
   checkKittyGraphics,
   graphicsFromEnv,
   probeKittyGraphics,
   unsupportedGraphicsMessage,
   SKIP_ENV as GRAPHICS_SKIP_ENV,
-  TERMINALS_URL,
 } from "./graphics";
 
 export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
@@ -29,7 +29,6 @@ export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   if (env.KITTY_WINDOW_ID || env.KITTY_PID) return createKitty(env);
   if (env.TERM_PROGRAM === "WezTerm" || env.WEZTERM_PANE) return createWezterm(env);
   throw new Error(
-    "unsupported terminal: need Ghostty, kitty (allow_remote_control), or WezTerm\n" +
-      `\nTerminals that work: ${TERMINALS_URL}`,
+    "terminal-browser cannot control this terminal. We recommend Ghostty (https://ghostty.org/download). kitty, WezTerm, and tmux also work.",
   );
 }

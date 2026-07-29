@@ -52,7 +52,7 @@ export function createTmux(env: NodeJS.ProcessEnv = process.env): Backend {
       }
       return panes;
     },
-    async split(direction, command, cwd, size) {
+    async split(direction, command, size) {
       const before = direction === "left" || direction === "up" ? ["-b"] : [];
       const length = size ? ["-l", `${Math.round(size * 100)}%`] : [];
       const target = selfPane();
@@ -61,8 +61,6 @@ export function createTmux(env: NodeJS.ProcessEnv = process.env): Backend {
         SPLIT_FLAG[direction],
         ...before,
         ...length,
-        "-c",
-        cwd,
         ...(target ? ["-t", target] : []),
         shellQuote(command),
       ]);

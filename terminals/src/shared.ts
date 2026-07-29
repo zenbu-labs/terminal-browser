@@ -15,12 +15,7 @@ export interface Backend {
   app: "ghostty" | "kitty" | "wezterm" | "tmux"
   panes(): Promise<Pane[]>;
   listAll(): Promise<Omit<Pane, "self">[]>;
-  split(
-    direction: Direction,
-    command: string[],
-    cwd: string,
-    size?: number | null,
-  ): Promise<void>;
+  split(direction: Direction, command: string[], size?: number | null): Promise<void>;
   focusPane(titleNeedle: string): Promise<boolean>;
   focusSelf(): Promise<boolean>;
   sendText(paneId: string, text: string): Promise<boolean>;
@@ -54,7 +49,11 @@ export function setPaneTitle(tty: string, title: string): void {
 }
 
 export function shellQuote(argv: string[]): string {
-  return argv.map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`).join(" ");
+  return argv
+    .map((arg) =>
+      arg !== "" && /^[\w\-./:=+@%,]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`,
+    )
+    .join(" ");
 }
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
