@@ -20,7 +20,7 @@ Options:
 Examples:
   terminal-browser open localhost:3000
   terminal-browser open ./report.html right
-  terminal-browser open example.com down --size 0.4
+  terminal-browser open github.com/zenbu-labs down --size 0.4
 `,
   },
   ls: {
