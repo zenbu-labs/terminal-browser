@@ -76,18 +76,24 @@ async function keyMatches(request: Request, env: Env): Promise<boolean> {
   return crypto.subtle.timingSafeEqual(a, b);
 }
 
-function recordDownload(env: Env, ctx: ExecutionContext, channel: string, version: string) {
+function recordDownload(
+  env: Env,
+  ctx: ExecutionContext,
+  channel: string,
+  version: string,
+  platform: string,
+) {
   const day = new Date().toISOString().slice(0, 10);
   ctx.waitUntil(
     env.STATS.prepare(
-      `INSERT INTO downloads (version, day, channel, count) VALUES (?1, ?2, ?3, 1)
-       ON CONFLICT (version, day, channel) DO UPDATE SET count = count + 1`,
+      `INSERT INTO downloads (version, day, channel, platform, count) VALUES (?1, ?2, ?3, ?4, 1)
+       ON CONFLICT (version, day, channel, platform) DO UPDATE SET count = count + 1`,
     )
-      .bind(version, day, channel)
+      .bind(version, day, channel, platform)
       .run()
       .then(() => undefined)
       .catch((error) => {
-        console.error("download count failed", error);
+        console.error("download count failed", error instanceof Error ? error.message : error);
       }),
   );
 }
@@ -118,7 +124,10 @@ async function serveDownload(
 
   // A resumed download arrives with a range, so only unranged requests are
   // counted — otherwise one install could register several times.
-  if (!range && request.method === "GET") recordDownload(env, ctx, channel, version);
+  if (!range && request.method === "GET") {
+    const platform = file.match(/^terminal-browser-(.+)\.tar\.gz$/)?.[1] ?? "";
+    recordDownload(env, ctx, channel, version, platform);
+  }
 
   // R2 reports a range on unranged reads too, so the request header is what
   // decides between 200 and 206.
@@ -143,9 +152,9 @@ async function serveStats(request: Request, env: Env): Promise<Response> {
   const bind = channel ? [since, channel] : [since];
 
   const query = byDay
-    ? `SELECT version, channel, day, count FROM downloads ${where} ORDER BY day DESC, count DESC`
-    : `SELECT version, channel, SUM(count) AS count, MIN(day) AS first, MAX(day) AS last
-       FROM downloads ${where} GROUP BY version, channel ORDER BY count DESC`;
+    ? `SELECT version, channel, platform, day, count FROM downloads ${where} ORDER BY day DESC, count DESC`
+    : `SELECT version, channel, platform, SUM(count) AS count, MIN(day) AS first, MAX(day) AS last
+       FROM downloads ${where} GROUP BY version, channel, platform ORDER BY count DESC`;
 
   const { results } = await env.STATS.prepare(query)
     .bind(...bind)
