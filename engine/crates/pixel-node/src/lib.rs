@@ -33,9 +33,24 @@ fn draw_frame(
     frame: &surface::SurfaceFrame,
 ) -> std::result::Result<u32, String> {
     match &frame.pixels {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        SurfacePixels::Texture(texture) => {
-            let locked = texture.lock()?;
+        #[cfg(target_os = "macos")]
+        SurfacePixels::IoSurface(surface) => {
+            let locked = surface.lock()?;
+            engine
+                .draw_surface(
+                    frame.id,
+                    locked.width,
+                    locked.height,
+                    locked.pixels(),
+                    locked.stride,
+                    frame.damage,
+                )
+                .map(|_| locked.height)
+                .map_err(|error| error.to_string())
+        }
+        #[cfg(target_os = "linux")]
+        SurfacePixels::Pixmap(surface) => {
+            let locked = surface.lock()?;
             engine
                 .draw_surface(
                     frame.id,
@@ -392,7 +407,7 @@ impl PixelEngine {
             iosurface::RetainedSurface::from_handle(handle.as_ref()).map_err(Error::from_reason)?;
         self.surfaces.submit(
             id,
-            SurfacePixels::Texture(surface),
+            SurfacePixels::IoSurface(surface),
             damage.map(DamageRect::into_rect),
         );
         self.waker.wake();
@@ -421,7 +436,7 @@ impl PixelEngine {
         .map_err(Error::from_reason)?;
         self.surfaces.submit(
             id,
-            SurfacePixels::Texture(surface),
+            SurfacePixels::Pixmap(surface),
             damage.map(DamageRect::into_rect),
         );
         self.waker.wake();

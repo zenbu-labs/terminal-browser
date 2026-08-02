@@ -103,12 +103,6 @@ jobs:
       - name: Build
         run: scripts/release.sh "${{ needs.prepare.outputs.version }}" "${{ needs.prepare.outputs.channel }}"
 
-      - name: Publish target
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: scripts/publish-r2.sh
-
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
@@ -119,7 +113,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [prepare, build]
+    needs: [prepare, build, worker]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -143,7 +137,7 @@ jobs:
           RELEASE_ORIGIN: ${{ vars.RELEASE_ORIGIN }}
           FLIP_LATEST: ${{ needs.prepare.outputs.flip }}
         run: |
-          scripts/publish-r2-aggregate.sh | tee /tmp/publish.log
+          scripts/publish-r2.sh | tee /tmp/publish.log
           grep -E '^(pinned|latest)=' /tmp/publish.log >> "$GITHUB_OUTPUT" || true
 
       - name: GitHub release
@@ -179,14 +173,14 @@ jobs:
 
   worker:
     runs-on: ubuntu-latest
-    needs: [prepare, release]
-    if: needs.prepare.outputs.channel == 'stable'
+    needs: prepare
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Deploy worker
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (inputs.bump != '' && inputs.bump != 'none')
         working-directory: release-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
