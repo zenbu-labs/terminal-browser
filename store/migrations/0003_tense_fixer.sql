@@ -1,0 +1,1 @@
+ALTER TABLE `instances` ADD `tty7_pane` integer;

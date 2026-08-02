@@ -30,6 +30,10 @@ function sawPrimaryDa(buffer: string): boolean {
   return /\x1b\[\?[0-9;]*c/.test(buffer);
 }
 
+function isTty7(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.TTY7_PANE || env.TERM_PROGRAM === "tty7");
+}
+
 export function probeKittyGraphics(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<GraphicsSupport> {
@@ -39,6 +43,7 @@ export function probeKittyGraphics(
   }
 
   const tmux = Boolean(env.TMUX);
+  const intermediary = tmux || isTty7(env);
   const wasRaw = stdin.isRaw;
 
   return new Promise<GraphicsSupport>((resolve) => {
@@ -63,9 +68,7 @@ export function probeKittyGraphics(
       buffer += chunk.toString("binary");
       const reply = graphicsReply(buffer);
       if (reply !== null) return finish(reply ? "supported" : "unsupported");
-      // inside tmux the DA1 answer comes from tmux itself, so it can beat the outer
-      // terminal's passthrough reply — there it is not evidence of anything
-      if (!tmux && sawPrimaryDa(buffer)) return finish("unsupported");
+      if (!intermediary && sawPrimaryDa(buffer)) return finish("unsupported");
       if (buffer.length > 1024) finish("unknown");
     };
 
@@ -78,7 +81,7 @@ export function probeKittyGraphics(
     stdin.on("data", onData);
 
     timer = setTimeout(() => {
-      finish(sawPrimaryDa(buffer) ? "unsupported" : "unknown");
+      finish(!intermediary && sawPrimaryDa(buffer) ? "unsupported" : "unknown");
     }, PROBE_TIMEOUT_MS);
 
     try {
@@ -92,6 +95,7 @@ export function probeKittyGraphics(
 /** Best guess from the environment, for when we cannot probe the tty. */
 export function graphicsFromEnv(env: NodeJS.ProcessEnv = process.env): GraphicsSupport {
   const term = env.TERM ?? "";
+  if (isTty7(env)) return "supported";
   if (term.includes("kitty") || env.KITTY_WINDOW_ID || env.KITTY_PID) return "supported";
   if (term.includes("ghostty") || env.TERM_PROGRAM === "ghostty" || env.GHOSTTY_RESOURCES_DIR) {
     return "supported";

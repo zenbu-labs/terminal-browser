@@ -12,6 +12,7 @@ import { INSTANCES_DIR } from "pixel-store";
 export interface ControlHost {
   key: string;
   tty: string | null;
+  tty7Pane: number | null;
   splitDir: InstanceRow["splitDir"];
   parentTty: string | null;
   state(): BrowserState;
@@ -87,6 +88,7 @@ export class Registry {
       pid: process.pid,
       key: this.host.key,
       tty: this.tty,
+      tty7Pane: this.host.tty7Pane,
       splitDir: this.host.splitDir,
       parentTty: this.host.parentTty,
       socket: this.socketPath,

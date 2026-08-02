@@ -12,7 +12,7 @@ export interface Pane {
 }
 
 export interface Backend {
-  app: "ghostty" | "kitty" | "wezterm" | "tmux"
+  app: "ghostty" | "kitty" | "wezterm" | "tmux" | "tty7"
   panes(): Promise<Pane[]>;
   listAll(): Promise<Omit<Pane, "self">[]>;
   split(direction: Direction, command: string[], size?: number | null): Promise<void>;

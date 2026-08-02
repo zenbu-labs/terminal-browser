@@ -258,6 +258,7 @@ class Session {
     this.registry = new Registry({
       key: this.ctx.key,
       tty: this.ctx.tty ?? null,
+      tty7Pane: tty7Pane(this.ctx.env.TTY7_PANE),
       splitDir: splitDirection(flagValue(this.ctx.argv, "--split-dir")),
       parentTty: flagValue(this.ctx.argv, "--parent-tty"),
       state: () => this.tabs.activeState ?? this.fallbackState,
@@ -1203,4 +1204,9 @@ function terminalBackend(env: NodeJS.ProcessEnv): Backend | null {
   } catch {
     return null;
   }
+}
+
+function tty7Pane(value: string | undefined): number | null {
+  const pane = Number(value?.replace(/^%/, ""));
+  return Number.isInteger(pane) ? pane : null;
 }

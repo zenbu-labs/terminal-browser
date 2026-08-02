@@ -22,6 +22,7 @@ export const instances = sqliteTable("instances", {
     width: number;
     height: number;
   } | null>(),
+  tty7Pane: integer("tty7_pane"),
   splitDir: text("split_dir", { enum: ["right", "left", "down", "up"] }),
   parentTty: text("parent_tty"),
   startedAt: integer("started_at").notNull(),

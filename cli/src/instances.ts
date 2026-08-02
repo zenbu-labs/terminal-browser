@@ -34,7 +34,11 @@ export function locate(records: InstanceRecord[], panes: Pane[]): Browser[] {
     if (match) byKey.set(match[1], pane);
   }
   return records.map((record) => {
-    const pane = byKey.get(recordKey(record));
+    const pane =
+      (record.tty7Pane === null
+        ? undefined
+        : panes.find((candidate) => candidate.pane === String(record.tty7Pane))) ??
+      byKey.get(recordKey(record));
     return {
       ...record,
       window: pane?.window ?? null,
