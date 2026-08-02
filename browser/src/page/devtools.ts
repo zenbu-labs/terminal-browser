@@ -12,10 +12,6 @@ import type { BrowserSurfaceLayout } from "./types";
 
 export type DevtoolsAction = "close" | "dock-bottom" | "dock-right";
 
-/** Chrome DevTools for one page, rendered into its own engine surface. The
- * inspector frontend loads into a second offscreen window via
- * setDevToolsWebContents, so its frames arrive through the same shared
- * texture path as the page's. */
 export class DevtoolsWindow {
   readonly input: PageInput;
   private readonly pageContents: WebContents;

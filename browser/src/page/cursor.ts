@@ -1,6 +1,3 @@
-/** chromium cursor types that map straight to the CSS shape names terminals
- * accept via OSC 22 (kitty pointer-shape protocol; ghostty parses the same
- * names) */
 const CSS_CURSORS = new Set([
   "default", "crosshair", "text", "wait", "help", "progress",
   "cell", "vertical-text", "context-menu", "alias", "copy", "move",

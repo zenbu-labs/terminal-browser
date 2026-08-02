@@ -272,10 +272,11 @@ function isDirection(value: string): value is Direction {
   return (DIRECTIONS as string[]).includes(value);
 }
 
-function takeDirection(args: string[]): { direction: Direction; explicit: boolean } {
-  const at = args.findIndex(isDirection);
-  if (at < 0) return { direction: "right", explicit: false };
-  return { direction: args.splice(at, 1)[0] as Direction, explicit: true };
+function takeSplitFlag(args: string[]): Direction | null {
+  const raw = takeFlag(args, "--split");
+  if (raw === undefined) return null;
+  if (!isDirection(raw)) fail(`invalid --split ${raw} (right, left, down, up)`);
+  return raw;
 }
 
 function takeSizeFlag(args: string[]): number | null {
@@ -381,24 +382,27 @@ function rejectUnknownFlags(args: string[]) {
 }
 
 async function openCommand(args: string[]) {
-  const { direction, explicit } = takeDirection(args);
+  const split = takeSplitFlag(args);
   const size = takeSizeFlag(args);
+  if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
   rejectUnknownFlags(args);
   const positionals = args.filter((arg) => !arg.startsWith("-"));
   if (positionals.length > 1) {
-    fail(`unexpected ${positionals[1]} (directions are right, left, down, up)`);
+    fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
   }
   await requireKittyGraphics();
-  if (!explicit && interactiveTty()) {
+  if (!split && interactiveTty()) {
     return openHere(args);
   }
+  // without a tty there is no pane to take over, so a split is the only way in
+  const direction = split ?? "right";
   const backend = detectBackend();
   const url = args.find((arg) => !arg.startsWith("-"));
   const tty = ownTtyPath() ?? callerTty();
   const records = await instances();
   if (records.length > 0) {
     const found = locate(records, await backend.panes());
-    const target = reusable(found, explicit ? direction : null, tty);
+    const target = reusable(found, split, tty);
     if (target) {
       return print(
         await control(

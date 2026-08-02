@@ -9,8 +9,6 @@ export interface InputTarget {
   cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
 }
 
-/** Translates engine pointer/wheel/key events into chromium input events for
- * one webContents. Shared by the main page and popup windows. */
 export class PageInput {
   private readonly target: InputTarget;
   private lastX = 0;
@@ -82,26 +80,14 @@ export class PageInput {
       y: this.lastY,
       deltaX,
       deltaY,
-      // chromium exposes wheelTicks*120 to pages as the legacy wheelDelta;
-      // js scrollers like monaco read only that, so zero ticks kill their
-      // scrolling. real macOS trackpads report one tick per 40 pixels
       wheelTicksX: event.precise ? deltaX / 40 : Math.sign(deltaX),
       wheelTicksY: event.precise ? deltaY / 40 : Math.sign(deltaY),
       hasPreciseScrollingDeltas: event.precise,
       canScroll: true,
-      // trackpad pinch reaches pages the way chromium delivers it natively:
-      // as ctrl+wheel events (the engine already encodes pinch that way)
       modifiers: this.modifiers(event.mods),
     });
   }
 
-  // A ctrl+precise wheel only ever means trackpad pinch (the engine encodes
-  // pinch that way, and modified scrolls from the terminal are never precise).
-  // Chromium delivers pinch to pages as a synthetic wheel built in
-  // TouchpadPinchEventQueue: deltaY = 100*ln(scale), deltaX = 0, wheel ticks
-  // carry only the sign, position pinned to the cursor. Pages recover the
-  // scale with Math.exp(-deltaY/100). The engine encodes deltaY as
-  // -magnification*100, so scale = 1 - deltaY/100.
   private pinch(event: WheelEvent) {
     const pinchScale = 1 - event.deltaY / 100;
     if (pinchScale <= 0) return;
@@ -213,10 +199,6 @@ export class PageInput {
    * 
    */
 
-  // vs code web never acts on Enter keydowns synthesized by sendInputEvent —
-  // its quick-open accept keybinding ignores them (identical DOM events
-  // dispatched over the devtools protocol work), so enter goes through the
-  // debugger instead
   private async dispatchEnter(event: EngineKeyEvent) {
     const base = {
       key: "Enter",
@@ -240,9 +222,6 @@ export class PageInput {
     }
   }
 
-  // synthesized key events skip the macOS responder chain that turns combos
-  // like cmd+backspace into editing commands, so the renderer ignores them;
-  // the devtools protocol lets us attach the command to the key event directly
   private async dispatchEditing(event: EngineKeyEvent, commands: string[]) {
     const info = EDITING_KEY_INFO[event.key];
     if (!info) return;
@@ -286,7 +265,6 @@ export class PageInput {
   }
 }
 
-// input types like number and email throw when asked where their selection is
 const SELECTION_SNIPPET = `(() => {
   const el = document.activeElement;
   try {

@@ -6,10 +6,6 @@ import { net, nativeImage } from "electron";
 
 import { FAVICONS_DIR } from "pixel-store";
 
-/** Fetches a page's favicon into a local file the engine can decode, keyed by
- * url hash so repeat visits hit the disk cache. The bytes go through
- * nativeImage when possible (png output); formats it can't read (ico, svg)
- * are written raw for the engine's decoder to try. */
 export class FaviconCache {
   constructor(private readonly dir: string = FAVICONS_DIR) {}
 

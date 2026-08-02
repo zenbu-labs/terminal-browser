@@ -3,11 +3,11 @@ name: terminal-browser
 description: A real browser running inside the terminal. It splits the human's terminal pane automatically, so you can show a website side by side with the conversation, render HTML to visualize something, and drive whatever tab is open — snapshot, click, fill, eval — with the `terminal-browser action` subcommand.
 ---
 
-`terminal-browser open <url>` puts a browser in a terminal pane. With no
-direction it takes over the current pane. A direction word (`right`, `down`,
-`left`, `up`) opens a new pane beside the human, which is how you show a page
-next to the conversation. A path to a local html file works the same as a url,
-so writing a page and opening it is a way to show something you built.
+`terminal-browser open <url>` puts a browser in a terminal pane. On its own it
+takes over the current pane. `--split right` (or `down`, `left`, `up`) opens a
+new pane beside the human, which is how you show a page next to the
+conversation. A path to a local html file works the same as a url, so writing a
+page and opening it is a way to show something you built.
 
 `terminal-browser ls` shows the browsers and tabs in this terminal tab, with the
 tab ids the other commands take.
@@ -20,7 +20,7 @@ tab unless you select another one.
 
 ```
 $ terminal-browser help
-Usage: terminal-browser [url] [direction]
+Usage: terminal-browser [url] [options]
        terminal-browser <command> [args]
 
   open    Open the browser in a terminal pane
@@ -33,20 +33,21 @@ terminal-browser <command> --help for one command's options
 
 ```
 $ terminal-browser open --help
-Usage: terminal-browser open [url] [direction] [options]
+Usage: terminal-browser open [url] [options]
 
-Opens the browser in the current pane. Pass a direction (right, left, down,
-up) to open it in a new pane instead.
+Opens the browser in the current pane. Pass --split to open it in a new
+split pane instead.
 
 The url can be a normal url, a localhost port, or a path to an html file.
 
 Options:
-  --size <fraction>   How much of the space the new pane takes (0.2 to 0.95)
+  --split <direction>   Open in a new pane: right, left, down, up
+  --size <fraction>     How much of the space the split takes (0.2 to 0.95)
 
 Examples:
   terminal-browser open localhost:3000
-  terminal-browser open ./report.html right
-  terminal-browser open github.com/zenbu-labs down --size 0.4
+  terminal-browser open ./report.html --split right
+  terminal-browser open github.com/zenbu-labs --split down --size 0.4
 ```
 
 ```

@@ -4,6 +4,7 @@
   "private": true,
   "main": "dist/main.js",
   "scripts": {
+    "postinstall": "bash ../scripts/fetch-electron.sh",
     "build": "tsc -p tsconfig.json",
     "build:engine": "pnpm --filter pixel-react build",
     "start": "pnpm build:engine && pnpm build && LOGS=\"${XDG_STATE_HOME:-$HOME/.local/state}/pixel/logs\" && mkdir -p \"$LOGS\" && exec electron dist/main.js 2>>\"$LOGS/stderr.log\"",

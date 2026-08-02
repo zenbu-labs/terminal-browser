@@ -7,20 +7,21 @@ interface CommandHelp {
 const COMMANDS: Record<string, CommandHelp> = {
   open: {
     summary: "Open the browser in a terminal pane",
-    usage: "terminal-browser open [url] [direction] [options]",
+    usage: "terminal-browser open [url] [options]",
     body: `
-Opens the browser in the current pane. Pass a direction (right, left, down,
-up) to open it in a new split pane instead.
+Opens the browser in the current pane. Pass --split to open it in a new
+split pane instead.
 
 The url can be a normal url, a localhost port, or a path to an html file.
 
 Options:
-  --size <fraction>   How much of the space the new pane takes (0.2 to 0.95)
+  --split <direction>   Open in a new pane: right, left, down, up
+  --size <fraction>     How much of the space the split takes (0.2 to 0.95)
 
 Examples:
   terminal-browser open localhost:3000
-  terminal-browser open ./report.html right
-  terminal-browser open github.com/zenbu-labs down --size 0.4
+  terminal-browser open ./report.html --split right
+  terminal-browser open github.com/zenbu-labs --split down --size 0.4
 `,
   },
   ls: {
@@ -77,7 +78,7 @@ export function rootHelp(): string {
     ([name, help]) => `  ${name.padEnd(width)}  ${help.summary}`,
   );
   return block(`
-Usage: terminal-browser [url] [direction]
+Usage: terminal-browser [url] [options]
        terminal-browser <command> [args]
 
 ${lines.join("\n")}

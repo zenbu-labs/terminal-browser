@@ -23,9 +23,8 @@ export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   const term = env.TERM ?? "";
   const ghosttyBackend = process.platform === "darwin" ? ghostty : ghosttyInline;
   if (env.TMUX) return createTmux(env);
-  if (term.includes("ghostty")) return ghosttyBackend;
-  if (term.includes("kitty")) return createKitty(env);
-  if (env.TERM_PROGRAM === "ghostty" || env.GHOSTTY_RESOURCES_DIR) {
+  if (term.includes("ghostty") || env.TERM_PROGRAM === "ghostty" || env.GHOSTTY_RESOURCES_DIR) {
+    if (process.platform === "darwin" && (env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0) throw new Error(`Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`);
     return ghosttyBackend;
   }
   if (env.KITTY_WINDOW_ID || env.KITTY_PID) return createKitty(env);
