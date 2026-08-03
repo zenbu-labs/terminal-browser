@@ -6,7 +6,7 @@ import { cursorShapeFor } from "./cursor";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
 import { offscreenPreferences } from "./offscreen";
-import { presentBitmap, presentTexture } from "./paint";
+import { presentPaint } from "./paint";
 import { cssSize } from "./types";
 import type { BrowserSurfaceLayout } from "./types";
 
@@ -78,17 +78,13 @@ export class DevtoolsWindow {
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
-    this.window.webContents.on("paint", (event, _dirtyRect, image) => {
+    this.window.webContents.on("paint", (event, dirtyRect, image) => {
       if (!this.visible) {
         event.texture?.release();
         return;
       }
-      if (event.texture) {
-        if (presentTexture(this.surface, event.texture, this.wholeSurfaceNext)) {
-          this.wholeSurfaceNext = false;
-        }
-      } else {
-        presentBitmap(this.surface, image);
+      if (presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)) {
+        this.wholeSurfaceNext = false;
       }
     });
     this.window.webContents.on("cursor-changed", (_event, type) => {

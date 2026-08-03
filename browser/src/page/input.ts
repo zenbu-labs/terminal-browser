@@ -110,9 +110,6 @@ export class PageInput {
       void this.dispatchEnter(event).catch(() => {});
       return;
     }
-    // only macOS needs the responder-chain translation below; on linux the
-    // renderer handles chords like ctrl+a itself, and Ghostty there does not
-    // rewrite cmd/option combos into control keys
     const commands = process.platform === "darwin" ? editingCommands(event) : null;
     if (commands) {
       void this.dispatchEditing(event, commands).catch(() => {});

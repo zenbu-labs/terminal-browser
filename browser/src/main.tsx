@@ -38,11 +38,6 @@ function freePort(): Promise<number> {
   });
 }
 
-// The app's lifetime is the terminal session, not its (offscreen) windows —
-// without this, closing the last window (e.g. the linux shared-texture probe)
-// triggers electron's default quit.
-app.on("window-all-closed", () => {});
-
 process.on("SIGINT", () => (session ? session.close() : app.exit(130)));
 process.on("SIGTERM", () => (session ? session.close() : app.exit(143)));
 

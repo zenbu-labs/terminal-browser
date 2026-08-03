@@ -1,5 +1,4 @@
 import { ghostty } from "./ghostty";
-import { ghosttyInline } from "./ghostty-inline";
 import { createKitty } from "./kitty";
 import { createTmux } from "./tmux";
 import { createWezterm } from "./wezterm";
@@ -21,15 +20,21 @@ export {
 
 export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   const term = env.TERM ?? "";
-  const ghosttyBackend = process.platform === "darwin" ? ghostty : ghosttyInline;
   if (env.TMUX) return createTmux(env);
   if (term.includes("ghostty") || env.TERM_PROGRAM === "ghostty" || env.GHOSTTY_RESOURCES_DIR) {
-    if (process.platform === "darwin" && (env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0) throw new Error(`Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`);
-    return ghosttyBackend;
+    if (process.platform !== "darwin") {
+      throw new Error(
+        "Ghostty on Linux doesn't support scripted splits. Run without --split, or use tmux, kitty (with config changes), or WezTerm (partial support).",
+      );
+    }
+    if ((env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0) throw new Error(`Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`);
+    return ghostty;
   }
   if (env.KITTY_WINDOW_ID || env.KITTY_PID) return createKitty(env);
   if (env.TERM_PROGRAM === "WezTerm" || env.WEZTERM_PANE) return createWezterm(env);
   throw new Error(
-    "terminal-browser cannot control this terminal. We recommend Ghostty (https://ghostty.org/download). kitty, WezTerm, and tmux also work.",
+    process.platform === "darwin"
+      ? "terminal-browser cannot control this terminal. We recommend Ghostty (https://ghostty.org/download). kitty, WezTerm, and tmux also work."
+      : "terminal-browser cannot control this terminal. We recommend tmux, or kitty (with config changes), or WezTerm (partial support).",
   );
 }

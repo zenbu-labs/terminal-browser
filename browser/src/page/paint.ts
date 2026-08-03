@@ -1,4 +1,4 @@
-import type { NativeImage, OffscreenSharedTexture, TextureInfo } from "electron";
+import type { NativeImage, OffscreenSharedTexture, Rectangle, TextureInfo } from "electron";
 import type { Surface, SurfaceTexture } from "pixel-react";
 import { damageOf, paintedNothing } from "./types";
 
@@ -24,10 +24,23 @@ export function textureFrameOf(info: TextureInfo): SurfaceTexture | null {
   };
 }
 
-/** Presents one shared-texture paint. Returns true when the surface received
- * pixels, so callers know their next paint no longer has to cover the whole
- * surface. Always releases the texture. */
-export function presentTexture(
+/** Presents one paint event in whichever form it arrived: a shared texture
+ * when the session runs zero-copy, otherwise the software bitmap. Returns
+ * true when the surface received pixels, so callers know their next paint no
+ * longer has to cover the whole surface. */
+export function presentPaint(
+  surface: Surface,
+  texture: OffscreenSharedTexture | undefined,
+  image: NativeImage,
+  dirtyRect: Rectangle,
+  wholeSurface: boolean,
+): boolean {
+  if (texture) return presentTexture(surface, texture, wholeSurface);
+  return presentBitmap(surface, image, wholeSurface ? undefined : dirtyRect);
+}
+
+/** Always releases the texture. */
+function presentTexture(
   surface: Surface,
   texture: OffscreenSharedTexture,
   wholeSurface: boolean,
@@ -46,11 +59,10 @@ export function presentTexture(
   }
 }
 
-/** Presents one software paint (offscreen mode without shared textures).
- * The image is the whole window, so no damage is forwarded. */
-export function presentBitmap(surface: Surface, image: NativeImage): boolean {
+function presentBitmap(surface: Surface, image: NativeImage, dirtyRect?: Rectangle): boolean {
   const size = image.getSize();
   if (size.width <= 0 || size.height <= 0) return false;
-  surface.present({ bgra: image.toBitmap(), width: size.width, height: size.height });
+  const damage = dirtyRect && dirtyRect.width > 0 && dirtyRect.height > 0 ? dirtyRect : undefined;
+  surface.present({ bgra: image.toBitmap(), width: size.width, height: size.height, damage });
   return true;
 }

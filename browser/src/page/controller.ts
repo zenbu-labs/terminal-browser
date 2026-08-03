@@ -15,7 +15,7 @@ import { FaviconCache } from "./favicon";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
 import { offscreenPreferences } from "./offscreen";
-import { presentBitmap, presentTexture } from "./paint";
+import { presentPaint } from "./paint";
 import { PopupWindow } from "./popup";
 import { cssSize, initialBrowserState } from "./types";
 import type { BrowserState, BrowserSurfaceLayout, DeviceSpec } from "./types";
@@ -122,13 +122,9 @@ export class BrowserController {
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.defaultUserAgent = this.window.webContents.getUserAgent();
-    this.window.webContents.on("paint", (event, _dirtyRect, image) => {
-      if (event.texture) {
-        if (presentTexture(this.surface, event.texture, this.wholeSurfaceNext)) {
-          this.wholeSurfaceNext = false;
-        }
-      } else {
-        presentBitmap(this.surface, image);
+    this.window.webContents.on("paint", (event, dirtyRect, image) => {
+      if (presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)) {
+        this.wholeSurfaceNext = false;
       }
     });
     this.window.webContents.on("did-start-loading", () => this.updateState({ loading: true }));

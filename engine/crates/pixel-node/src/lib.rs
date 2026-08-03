@@ -36,49 +36,47 @@ fn draw_frame(
         #[cfg(target_os = "macos")]
         SurfacePixels::IoSurface(surface) => {
             let locked = surface.lock()?;
-            engine
-                .draw_surface(
-                    frame.id,
-                    locked.width,
-                    locked.height,
-                    locked.pixels(),
-                    locked.stride,
-                    frame.damage,
-                )
-                .map(|_| locked.height)
-                .map_err(|error| error.to_string())
+            draw_pixels(
+                engine,
+                frame,
+                locked.width,
+                locked.height,
+                locked.pixels(),
+                locked.stride,
+            )
         }
         #[cfg(target_os = "linux")]
         SurfacePixels::Pixmap(surface) => {
             let locked = surface.lock()?;
-            engine
-                .draw_surface(
-                    frame.id,
-                    locked.width,
-                    locked.height,
-                    locked.pixels(),
-                    locked.stride,
-                    frame.damage,
-                )
-                .map(|_| locked.height)
-                .map_err(|error| error.to_string())
+            draw_pixels(
+                engine,
+                frame,
+                locked.width,
+                locked.height,
+                locked.pixels(),
+                locked.stride,
+            )
         }
         SurfacePixels::Owned {
             bgra,
             width,
             height,
-        } => engine
-            .draw_surface(
-                frame.id,
-                *width,
-                *height,
-                bgra,
-                *width as usize * 4,
-                frame.damage,
-            )
-            .map(|_| *height)
-            .map_err(|error| error.to_string()),
+        } => draw_pixels(engine, frame, *width, *height, bgra, *width as usize * 4),
     }
+}
+
+fn draw_pixels(
+    engine: &mut Engine,
+    frame: &surface::SurfaceFrame,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    stride: usize,
+) -> std::result::Result<u32, String> {
+    engine
+        .draw_surface(frame.id, width, height, pixels, stride, frame.damage)
+        .map(|_| height)
+        .map_err(|error| error.to_string())
 }
 
 /// One plane of a dmabuf-backed shared texture, as Electron reports it on
@@ -390,9 +388,10 @@ impl PixelEngine {
     }
 }
 
-// Zero-copy frame submission is per-platform: each platform exports its own
-// method shaped after the handle Electron produces there, and the JS side
-// feature-detects which one exists.
+// Zero-copy frame submission is per-platform: each platform exports the method
+// shaped after the handle Electron produces there, and the JS side
+// feature-detects which one exists. The cfg has to gate whole impl blocks —
+// napi registers every method in a block, even ones cfg strips out.
 #[cfg(target_os = "macos")]
 #[napi]
 impl PixelEngine {
@@ -443,3 +442,4 @@ impl PixelEngine {
         Ok(())
     }
 }
+

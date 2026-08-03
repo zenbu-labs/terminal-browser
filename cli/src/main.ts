@@ -19,7 +19,7 @@ import { control } from "./control";
 import { setupCommand } from "./editors";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { locate, recordKey, reusable } from "./instances";
-import { linuxSandboxAvailable } from "./sandbox";
+import { linuxSandboxError } from "./sandbox";
 import { lsCommand } from "./ls";
 import { instances } from "./registry";
 import type { InstanceRecord } from "./registry";
@@ -74,15 +74,12 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
       fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
     }
   }
-  // Chromium decides on the sandbox before the main script runs, so the
-  // switch has to be on the real command line.
-  if (process.platform === "linux" && !linuxSandboxAvailable(electron)) {
-    argv = [...argv, "--no-sandbox"];
+  if (process.platform === "linux") {
+    const sandboxError = linuxSandboxError(electron);
+    if (sandboxError) fail(sandboxError);
   }
-  // Rendering is offscreen (into the terminal), so a display server is only
-  // ceremony — headless ozone lets the browser run on plain SSH sessions.
-  // Its virtual screen defaults to 1x1 and windows clamp to it, so give it
-  // room for any pane size.
+  // rendering headless ozone defaults to 1x1 pixels, so we set the screen size to 8192x8192
+  // will still render at expected screen size (not 8192x8192, which is an arbritary resolution)
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     argv = [...argv, "--ozone-platform=headless", "--ozone-override-screen-size=8192,8192"];
   }

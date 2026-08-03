@@ -2,6 +2,12 @@ import type { EngineKeyEvent, KeyMods } from "pixel-react";
 
 export type KeyBinding = KeyMods & { key: string };
 
+// linux window managers own the super key, so defaults move to ctrl there
+export const defaultKeys =
+  process.platform === "darwin"
+    ? { palette: "super+p", find: "super+shift+f", devtools: "super+shift+i", console: "super+alt+j" }
+    : { palette: "ctrl+shift+p", find: "ctrl+shift+f", devtools: "ctrl+shift+i", console: "ctrl+alt+j" };
+
 export function parseKeyBinding(spec: string): KeyBinding | null {
   if (spec === "none") return null;
   const parts = spec.toLowerCase().split("+");
