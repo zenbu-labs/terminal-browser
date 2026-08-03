@@ -367,7 +367,11 @@ impl Terminal {
             color_scheme_updates: false,
             color_query: None,
         };
-        terminal.mouse_pixels = !tmux && terminal.probe_mouse_pixels()?;
+        // Probe even under tmux: with allow-passthrough the outer terminal may
+        // answer. When the probe is silent we still learn from the first report
+        // in mouse_position_px (iTerm2 commonly enables 1016 through passthrough
+        // without a DECRQM reply ever making it back).
+        terminal.mouse_pixels = terminal.probe_mouse_pixels().unwrap_or(false);
         terminal.clipboard_data = !tmux && terminal.probe_clipboard_data()?;
         terminal.transport = terminal.probe_transport()?;
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
@@ -761,7 +765,21 @@ impl Terminal {
         }
     }
 
-    fn mouse_position_px(&self, x: u32, y: u32) -> (u32, u32) {
+    fn mouse_position_px(&mut self, x: u32, y: u32) -> (u32, u32) {
+        if !self.mouse_pixels {
+            // SGR-Pixels (1016) reports can arrive even when DECRQM said no —
+            // common with iTerm2 under tmux passthrough. Cell coords never
+            // exceed the grid; pixel coords almost always do on a real window.
+            if let Ok(ws) = self.size()
+                && looks_like_pixel_mouse(x, y, ws.cols, ws.rows)
+            {
+                self.mouse_pixels = true;
+                crate::logging::info(
+                    "terminal",
+                    "mouse reports look like pixels; treating them as pixels",
+                );
+            }
+        }
         if self.mouse_pixels {
             (x.saturating_sub(1), y.saturating_sub(1))
         } else {
@@ -1662,6 +1680,13 @@ fn consume_string_sequence(buf: &[u8]) -> Option<usize> {
     }
 }
 
+/// True when an SGR mouse report's x/y cannot be cell coordinates for the
+/// current grid — used to self-heal when the terminal is in SGR-Pixels (1016)
+/// but DECRQM never told us so (iTerm2 + tmux is the usual case).
+fn looks_like_pixel_mouse(x: u32, y: u32, cols: u32, rows: u32) -> bool {
+    (cols > 0 && x > cols) || (rows > 0 && y > rows)
+}
+
 fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<(MouseKind, MouseButton, Mods, u32, u32)> {
     let rest = params.strip_prefix(b"<")?;
     let mut fields = rest.split(|&b| b == b';');
@@ -1885,6 +1910,16 @@ mod tests {
         assert_eq!(parse_cell_size_report(b"ab\x1b[6;28;13tcd"), Some((13, 28)));
         assert_eq!(parse_cell_size_report(b"\x1b[6;14"), None);
         assert_eq!(parse_cell_size_report(b"\x1b[6;0;0t"), None);
+    }
+
+    #[test]
+    fn out_of_grid_mouse_reports_are_treated_as_pixels() {
+        assert!(looks_like_pixel_mouse(500, 300, 120, 40));
+        assert!(looks_like_pixel_mouse(121, 1, 120, 40));
+        assert!(looks_like_pixel_mouse(1, 41, 120, 40));
+        assert!(!looks_like_pixel_mouse(120, 40, 120, 40));
+        assert!(!looks_like_pixel_mouse(1, 1, 120, 40));
+        assert!(!looks_like_pixel_mouse(500, 300, 0, 0));
     }
 
     #[test]

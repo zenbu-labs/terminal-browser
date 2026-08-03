@@ -1,4 +1,5 @@
 import { ghostty } from "./ghostty";
+import { createIterm, isIterm } from "./iterm";
 import { createKitty } from "./kitty";
 import { createTmux } from "./tmux";
 import { createWezterm } from "./wezterm";
@@ -17,6 +18,7 @@ export {
   unsupportedGraphicsMessage,
   SKIP_ENV as GRAPHICS_SKIP_ENV,
 } from "./graphics";
+export { isIterm } from "./iterm";
 
 export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   const term = env.TERM ?? "";
@@ -27,7 +29,8 @@ export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   }
   if (env.KITTY_WINDOW_ID || env.KITTY_PID) return createKitty(env);
   if (env.TERM_PROGRAM === "WezTerm" || env.WEZTERM_PANE) return createWezterm(env);
+  if (isIterm(env)) return createIterm(env);
   throw new Error(
-    "terminal-browser cannot control this terminal. We recommend Ghostty (https://ghostty.org/download). kitty, WezTerm, and tmux also work.",
+    "terminal-browser cannot control this terminal. We recommend Ghostty (https://ghostty.org/download). kitty, WezTerm, iTerm2, and tmux also work.",
   );
 }

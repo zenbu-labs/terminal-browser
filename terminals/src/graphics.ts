@@ -97,6 +97,16 @@ export function graphicsFromEnv(env: NodeJS.ProcessEnv = process.env): GraphicsS
     return "supported";
   }
   if (env.TERM_PROGRAM === "WezTerm" || env.WEZTERM_PANE) return "supported";
+  // iTerm2 implements the kitty graphics protocol (3.5+). LC_TERMINAL survives
+  // into nested tmux, so this still identifies the outer host there.
+  if (
+    env.TERM_PROGRAM === "iTerm.app" ||
+    env.LC_TERMINAL === "iTerm2" ||
+    env.ITERM_SESSION_ID ||
+    env.ITERM_PROFILE
+  ) {
+    return "supported";
+  }
   // tmux hides whatever is outside it; without a probe we cannot say
   if (env.TMUX) return "unknown";
   return "unsupported";
