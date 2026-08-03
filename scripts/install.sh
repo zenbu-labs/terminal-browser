@@ -1,16 +1,30 @@
 #!/bin/bash
 set -euo pipefail
 
-DOWNLOAD_URL="__DOWNLOAD_URL__"
 VERSION="__VERSION__"
 CHANNEL="__CHANNEL__"
-SHA256="__SHA256__"
-SIZE="__SIZE__"
 
-if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
-  echo "terminal-browser currently supports Apple Silicon macOS only" >&2
+# One "target url sha256 size" line per platform, filled in by the release worker.
+PLATFORMS="__PLATFORMS__"
+
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) TARGET=darwin-arm64 ;;
+  Linux-x86_64|Linux-amd64) TARGET=linux-x64 ;;
+  Linux-aarch64|Linux-arm64) TARGET=linux-arm64 ;;
+  *)
+    echo "terminal-browser does not support $(uname -s) $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+ROW="$(printf '%s\n' "$PLATFORMS" | awk -v t="$TARGET" '$1 == t')"
+if [ -z "$ROW" ]; then
+  echo "terminal-browser $VERSION has no build for $TARGET" >&2
   exit 1
 fi
+read -r _ DOWNLOAD_URL SHA256 SIZE <<EOF
+$ROW
+EOF
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -19,7 +33,12 @@ TARBALL="$TMP/terminal-browser.tar.gz"
 echo "downloading terminal-browser $VERSION ($((SIZE / 1000000)) MB)"
 curl -fL --retry 3 --retry-delay 2 --progress-bar "$DOWNLOAD_URL" -o "$TARBALL"
 
-echo "$SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || {
+if command -v sha256sum >/dev/null 2>&1; then
+  CHECK="sha256sum -c -"
+else
+  CHECK="shasum -a 256 -c -"
+fi
+echo "$SHA256  $TARBALL" | $CHECK >/dev/null || {
   echo "download corrupted (checksum mismatch), try again" >&2
   exit 1
 }
@@ -71,7 +90,11 @@ case ":$PATH:" in
   *)
     echo
     echo "add $BIN_HOME to your PATH first:"
-    echo "  echo 'export PATH=\"$BIN_HOME:\$PATH\"' >> ~/.zshrc && exec zsh"
+    case "${SHELL:-}" in
+      */zsh) echo "  echo 'export PATH=\"$BIN_HOME:\$PATH\"' >> ~/.zshrc && exec zsh" ;;
+      */bash) echo "  echo 'export PATH=\"$BIN_HOME:\$PATH\"' >> ~/.bashrc && exec bash" ;;
+      *) echo "  export PATH=\"$BIN_HOME:\$PATH\" (add it to your shell's rc file)" ;;
+    esac
     ;;
 esac
 echo

@@ -19,6 +19,7 @@ import { control } from "./control";
 import { setupCommand } from "./editors";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { locate, recordKey, reusable } from "./instances";
+import { linuxSandboxError } from "./sandbox";
 import { lsCommand } from "./ls";
 import { instances } from "./registry";
 import type { InstanceRecord } from "./registry";
@@ -53,16 +54,34 @@ function takeBoolFlag(args: string[], name: string): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const ELECTRON_DIST_BIN =
+  process.platform === "darwin"
+    ? ["terminal-browser.app", "Contents", "MacOS", "terminal-browser"]
+    : ["electron"];
+const ELECTRON_DEV_BIN =
+  process.platform === "darwin"
+    ? ["Electron.app", "Contents", "MacOS", "Electron"]
+    : ["electron"];
+
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = path.resolve(__dirname, "..", "..", "browser");
   const electron = DIST_ROOT
-    ? path.join(DIST_ROOT, "electron", "terminal-browser.app", "Contents", "MacOS", "terminal-browser")
-    : path.join(browserDir, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron");
+    ? path.join(DIST_ROOT, "electron", ...ELECTRON_DIST_BIN)
+    : path.join(browserDir, "node_modules", "electron", "dist", ...ELECTRON_DEV_BIN);
   const main = path.join(browserDir, "dist", "main.js");
   for (const required of [electron, main]) {
     if (!fs.existsSync(required)) {
       fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
     }
+  }
+  if (process.platform === "linux") {
+    const sandboxError = linuxSandboxError(electron);
+    if (sandboxError) fail(sandboxError);
+  }
+  // rendering headless ozone defaults to 1x1 pixels, so we set the screen size to 8192x8192
+  // will still render at expected screen size (not 8192x8192, which is an arbritary resolution)
+  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    argv = [...argv, "--ozone-platform=headless", "--ozone-override-screen-size=8192,8192"];
   }
   ensureDataDir();
   const logDir = LOGS_DIR;
@@ -271,6 +290,10 @@ let cachedScale: number | null = null;
 
 function displayScale(): number {
   if (cachedScale !== null) return cachedScale;
+  if (process.platform !== "darwin") {
+    cachedScale = 1;
+    return cachedScale;
+  }
   try {
     const out = execFileSync(
       "osascript",

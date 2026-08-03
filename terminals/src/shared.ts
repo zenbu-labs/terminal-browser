@@ -37,7 +37,8 @@ export function callerTty(): string | null {
     }
     if (!out) return null;
     const [ppid, tty] = out.split(/\s+/);
-    if (tty && tty !== "??") return `/dev/${tty}`;
+    // ps prints "??" on macOS and "?" on linux when a process has no tty
+    if (tty && tty !== "??" && tty !== "?") return `/dev/${tty}`;
     pid = Number(ppid);
     if (!Number.isFinite(pid)) return null;
   }

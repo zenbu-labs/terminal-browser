@@ -5,6 +5,16 @@ export interface DamageRect {
   height: number;
 }
 
+/** One plane of a dmabuf-backed shared texture, as Electron reports it on Linux. */
+export interface SurfacePixmap {
+  fd: number;
+  width: number;
+  height: number;
+  stride: number;
+  offset: number;
+  size: number;
+}
+
 export interface NativeEngine {
   info(): string;
   applyOps(ops: string): void;
@@ -16,6 +26,7 @@ export interface NativeEngine {
     damage?: DamageRect,
   ): void;
   updateSurfaceTexture?(id: number, handle: Buffer, damage?: DamageRect): void;
+  updateSurfacePixmap?(id: number, pixmap: SurfacePixmap, damage?: DamageRect): void;
   removeSurface(id: number): void;
   surfaceStats(): string;
   setKeyEventTypes(enabled: boolean): void;

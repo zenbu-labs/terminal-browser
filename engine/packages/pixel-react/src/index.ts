@@ -89,12 +89,13 @@ export type {
   MarkdownRow,
   MarkdownSpan,
   Rgba,
+  SurfacePixmap,
   TerminalColors,
 } from "./native";
 export { HIGHLIGHT_CAPTURES, diff, highlight, parseMarkdown } from "./native";
 export { useTerminalColors } from "./colors";
 export { Surface } from "./surface";
-export type { SurfaceFrame } from "./surface";
+export type { SurfaceFrame, SurfaceTexture } from "./surface";
 export { Markdown } from "./markdown";
 export type { MarkdownProps, MarkdownTheme } from "./markdown";
 export { openDevtools, closeDevtools, toggleDevtools, requestLayout, engineOp };
@@ -594,7 +595,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
 
   return {
     info,
-    sharedTextures: typeof bridge.engine.updateSurfaceTexture === "function",
+    sharedTextures:
+      typeof bridge.engine.updateSurfaceTexture === "function" ||
+      typeof bridge.engine.updateSurfacePixmap === "function",
     render(element: ReactNode) {
       const wrapped = devtoolsEnabled
         ? createElement(ReactProfiler, { id: "pixel-app", onRender: onAppRender }, element)

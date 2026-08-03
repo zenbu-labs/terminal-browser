@@ -10,6 +10,7 @@ import type { Backend } from "pixel-terminals";
 import { configureBrowserSession } from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
+import { resolveOffscreenMode } from "../page/offscreen";
 import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
@@ -29,7 +30,7 @@ import type {
   PopupView,
 } from "../ui/types";
 import { normalizeUrl, searchOrUrl } from "../url";
-import { bindingGlyphs, matchesBinding, parseKeyBinding } from "./keybindings";
+import { bindingGlyphs, defaultKeys, matchesBinding, parseKeyBinding } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
 import { clampDevtoolsFraction, computeLayout, deviceSpec, dividerFraction } from "./layout";
 import type { DeviceMode, DevtoolsPlacement } from "./layout";
@@ -154,11 +155,11 @@ class Session {
     this.partition = flagValue(ctx.argv, "--partition");
     const binding = (flag: string, fallback: string) =>
       parseKeyBinding(flagValue(ctx.argv, flag) ?? defaultBinding(fallback, ctx.env));
-    this.paletteBinding = binding("--palette-key", "super+p");
-    this.findBinding = binding("--find-key", "super+shift+f");
+    this.paletteBinding = binding("--palette-key", defaultKeys.palette);
+    this.findBinding = binding("--find-key", defaultKeys.find);
     // we should use 2 shortcuts for console, also not sure if console actually works as expected
-    this.devtoolsBinding = binding("--devtools-key", "super+shift+i");
-    this.consoleBinding = binding("--console-key", "super+alt+j");
+    this.devtoolsBinding = binding("--devtools-key", defaultKeys.devtools);
+    this.consoleBinding = binding("--console-key", defaultKeys.console);
     this.fallbackState = initialBrowserState(this.initialUrl());
     configureBrowserSession(this.partition, (progress) => this.showDownload(progress));
     this.tabs = new TabManager(
@@ -244,14 +245,17 @@ class Session {
         this.shutdown(error ? 1 : 0);
       },
     });
-    if (!this.root.sharedTextures) {
-      throw new Error("terminal-browser requires the patched Electron with shared texture support");
-    }
+    // the linux shared-texture probe can take a while, so it runs alongside
+    // font registration; only tab creation below needs the resolved mode
+    const [, fontId] = await Promise.all([
+      resolveOffscreenMode(this.root.sharedTextures),
+      this.root.registerFont(bundledFontPath()),
+    ]);
+    this.fontId = fontId;
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
     this.followCellZoom();
     this.recalculateLayout();
-    this.fontId = await this.root.registerFont(bundledFontPath());
     this.root.setPointerShape("default");
     this.windowBg = this.themeBackground();
     this.tabs.create(this.fallbackState.url);

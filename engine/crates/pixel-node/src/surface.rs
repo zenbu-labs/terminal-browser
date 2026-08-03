@@ -6,7 +6,9 @@ use pixel_core::surfaces::Rect;
 
 pub enum SurfacePixels {
     #[cfg(target_os = "macos")]
-    Texture(crate::iosurface::RetainedSurface),
+    IoSurface(crate::iosurface::RetainedSurface),
+    #[cfg(target_os = "linux")]
+    Pixmap(crate::pixmap::PixmapSurface),
     Owned {
         bgra: Vec<u8>,
         width: u32,

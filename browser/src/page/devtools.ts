@@ -1,11 +1,13 @@
 import { BrowserWindow, screen } from "electron";
-import type { OffscreenSharedTexture, WebContents } from "electron";
+import type { WebContents } from "electron";
 import type { Surface } from "pixel-react";
 import type { DevtoolsDock } from "pixel-store";
 import { cursorShapeFor } from "./cursor";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
-import { cssSize, damageOf, paintedNothing } from "./types";
+import { offscreenPreferences } from "./offscreen";
+import { presentPaint } from "./paint";
+import { cssSize } from "./types";
 import type { BrowserSurfaceLayout } from "./types";
 
 export type DevtoolsAction = "close" | "dock-bottom" | "dock-right";
@@ -58,11 +60,7 @@ export class DevtoolsWindow {
       fullscreenable: false,
       resizable: false,
       webPreferences: {
-        offscreen: {
-          useSharedTexture: true,
-          sharedTexturePixelFormat: "argb",
-          deviceScaleFactor: renderScale,
-        },
+        offscreen: offscreenPreferences(renderScale),
         sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
@@ -80,14 +78,14 @@ export class DevtoolsWindow {
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
-    this.window.webContents.on("paint", (event) => {
-      const texture = event.texture;
-      if (!texture) return;
+    this.window.webContents.on("paint", (event, dirtyRect, image) => {
       if (!this.visible) {
-        texture.release();
+        event.texture?.release();
         return;
       }
-      this.submitTexture(texture);
+      if (presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)) {
+        this.wholeSurfaceNext = false;
+      }
     });
     this.window.webContents.on("cursor-changed", (_event, type) => {
       const shape = cursorShapeFor(type);
@@ -205,20 +203,6 @@ export class DevtoolsWindow {
     screen.off("display-metrics-changed", this.onDisplayChange);
     if (!this.pageContents.isDestroyed()) this.pageContents.closeDevTools();
     this.window.destroy();
-  }
-
-  private submitTexture(texture: OffscreenSharedTexture) {
-    try {
-      const info = texture.textureInfo;
-      const handle = info.handle.ioSurface;
-      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
-      if (paintedNothing(info) && !this.wholeSurfaceNext) return;
-      const damage = this.wholeSurfaceNext ? undefined : damageOf(info);
-      this.wholeSurfaceNext = false;
-      this.surface.present({ ioSurface: handle, damage });
-    } finally {
-      texture.release();
-    }
   }
 
   private async installControls() {

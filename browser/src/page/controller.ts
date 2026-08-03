@@ -1,5 +1,4 @@
 import { BrowserWindow, screen } from "electron";
-import type { OffscreenSharedTexture } from "electron";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -15,8 +14,10 @@ import type { DevtoolsDock } from "pixel-store";
 import { FaviconCache } from "./favicon";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
+import { offscreenPreferences } from "./offscreen";
+import { presentPaint } from "./paint";
 import { PopupWindow } from "./popup";
-import { cssSize, damageOf, initialBrowserState, paintedNothing } from "./types";
+import { cssSize, initialBrowserState } from "./types";
 import type { BrowserState, BrowserSurfaceLayout, DeviceSpec } from "./types";
 import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
@@ -99,11 +100,7 @@ export class BrowserController {
       resizable: false,
       webPreferences: {
         ...(partition ? { partition } : {}),
-        offscreen: {
-          useSharedTexture: true,
-          sharedTexturePixelFormat: "argb",
-          deviceScaleFactor: this.renderScale,
-        },
+        offscreen: offscreenPreferences(this.renderScale),
         sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
@@ -125,10 +122,10 @@ export class BrowserController {
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.defaultUserAgent = this.window.webContents.getUserAgent();
-    this.window.webContents.on("paint", (event) => {
-      const texture = event.texture;
-      if (!texture) return;
-      this.submitTexture(texture);
+    this.window.webContents.on("paint", (event, dirtyRect, image) => {
+      if (presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)) {
+        this.wholeSurfaceNext = false;
+      }
     });
     this.window.webContents.on("did-start-loading", () => this.updateState({ loading: true }));
     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
@@ -503,21 +500,6 @@ export class BrowserController {
       this.window.webContents.setUserAgent(this.defaultUserAgent);
     }
     this.window.webContents.reload();
-  }
-
- 
-  private submitTexture(texture: OffscreenSharedTexture) {
-    try {
-      const info = texture.textureInfo;
-      const handle = info.handle.ioSurface;
-      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
-      if (paintedNothing(info) && !this.wholeSurfaceNext) return;
-      const damage = this.wholeSurfaceNext ? undefined : damageOf(info);
-      this.wholeSurfaceNext = false;
-      this.surface.present({ ioSurface: handle, damage });
-    } finally {
-      texture.release();
-    }
   }
 
   private async loadFavicon(urls: string[]) {

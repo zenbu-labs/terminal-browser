@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(target_os = "macos")]
 use std::thread;
 use std::time::Duration;
 
@@ -13,6 +14,7 @@ const IDLE_POLL: Duration = Duration::from_millis(30);
 
 struct Inner {
     rate_x100: AtomicU32,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     threads: [AtomicU32; MAX_THREADS],
     shutdown: AtomicBool,
 }
@@ -136,6 +138,7 @@ fn run_controller(inner: &Inner) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use std::time::Instant;
 
     /// most of that window at 8x.

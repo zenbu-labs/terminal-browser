@@ -110,7 +110,7 @@ export class PageInput {
       void this.dispatchEnter(event).catch(() => {});
       return;
     }
-    const commands = editingCommands(event);
+    const commands = process.platform === "darwin" ? editingCommands(event) : null;
     if (commands) {
       void this.dispatchEditing(event, commands).catch(() => {});
       return;
