@@ -1,5 +1,7 @@
 import fs from "node:fs";
 
+import { isIterm } from "./iterm";
+
 export type GraphicsSupport = "supported" | "unsupported" | "unknown";
 
 export const SKIP_ENV = "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK";
@@ -97,16 +99,7 @@ export function graphicsFromEnv(env: NodeJS.ProcessEnv = process.env): GraphicsS
     return "supported";
   }
   if (env.TERM_PROGRAM === "WezTerm" || env.WEZTERM_PANE) return "supported";
-  // iTerm2 implements the kitty graphics protocol (3.5+). LC_TERMINAL survives
-  // into nested tmux, so this still identifies the outer host there.
-  if (
-    env.TERM_PROGRAM === "iTerm.app" ||
-    env.LC_TERMINAL === "iTerm2" ||
-    env.ITERM_SESSION_ID ||
-    env.ITERM_PROFILE
-  ) {
-    return "supported";
-  }
+  if (isIterm(env)) return "supported";
   // tmux hides whatever is outside it; without a probe we cannot say
   if (env.TMUX) return "unknown";
   return "unsupported";

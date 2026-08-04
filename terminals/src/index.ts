@@ -24,7 +24,11 @@ export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   const term = env.TERM ?? "";
   if (env.TMUX) return createTmux(env);
   if (term.includes("ghostty") || env.TERM_PROGRAM === "ghostty" || env.GHOSTTY_RESOURCES_DIR) {
-    if ((env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0) throw new Error(`Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`);
+    if ((env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0) {
+      throw new Error(
+        `Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`,
+      );
+    }
     return ghostty;
   }
   if (env.KITTY_WINDOW_ID || env.KITTY_PID) return createKitty(env);
