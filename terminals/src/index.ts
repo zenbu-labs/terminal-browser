@@ -1,3 +1,4 @@
+import { createCmux } from "./cmux";
 import { ghostty } from "./ghostty";
 import { createKitty } from "./kitty";
 import { createTmux } from "./tmux";
@@ -21,6 +22,9 @@ export {
 export function detectBackend(env: NodeJS.ProcessEnv = process.env): Backend {
   const term = env.TERM ?? "";
   if (env.TMUX) return createTmux(env);
+  // cmux embeds libghostty and so inherits TERM_PROGRAM=ghostty, but Ghostty.app
+  // cannot script its panes. Check it before the ghostty branch below.
+  if (env.CMUX_SURFACE_ID || env.CMUX_BUNDLE_ID) return createCmux(env);
   if (term.includes("ghostty") || env.TERM_PROGRAM === "ghostty" || env.GHOSTTY_RESOURCES_DIR) {
     if ((env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0) throw new Error(`Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`);
     return ghostty;
