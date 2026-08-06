@@ -1,6 +1,7 @@
-import type { Backend } from "pixel-terminals";
+import type { Backend, Pane } from "pixel-terminals";
 
-import { browsers, recordKey, targets } from "./instances";
+import { locate, recordKey, targets } from "./instances";
+import { instances } from "./registry";
 import type { Browser, TabTarget } from "./instances";
 
 interface Listed {
@@ -53,8 +54,20 @@ function render(list: Listed[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+/** Listing every browser does not depend on knowing our own pane, so a shell we
+ * cannot place — sandboxed, tmux, ssh — still gets the list instead of an error. */
+async function paneList(backend: Backend, all: boolean): Promise<Pane[]> {
+  if (!all) return backend.panes();
+  try {
+    return await backend.panes();
+  } catch {
+    return (await backend.listAll()).map((pane) => ({ ...pane, self: false }));
+  }
+}
+
 export async function lsCommand(backend: Backend, all: boolean, json: boolean) {
-  const found = await browsers(backend);
+  const panes = await paneList(backend, all);
+  const found = locate(await instances(), panes);
   const scoped = all ? found : found.filter((browser) => browser.inCurrentTab);
   const list = await collect(scoped);
   if (!json) {
@@ -64,7 +77,6 @@ export async function lsCommand(backend: Backend, all: boolean, json: boolean) {
     }
     return;
   }
-  const panes = await backend.panes();
   const self = panes.find((pane) => pane.self);
   process.stdout.write(
     `${JSON.stringify(
