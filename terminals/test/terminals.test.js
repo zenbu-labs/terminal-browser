@@ -98,3 +98,27 @@ test("plain ghostty is still ghostty", () => {
   assert.equal(detect(GHOSTTY_LOOKALIKE, async () => "")?.name, "ghostty");
 });
 
+// ssh carries LC_* across, so a shell on another machine says iTerm2 while osascript there
+// would have nothing to talk to. ITERM_SESSION_ID stays behind, so it is the honest signal
+test("a session reached over ssh from iTerm2 is not iTerm2", () => {
+  const env = { LC_TERMINAL: "iTerm2", LC_TERMINAL_VERSION: "3.7b", TERM: "xterm-256color" };
+  assert.equal(detect(env, async () => ""), null);
+});
+
+test("a terminal launched from iTerm2 keeps its own name", () => {
+  const env = { ...GHOSTTY_LOOKALIKE, ITERM_SESSION_ID: "w0t0p0:0EDDBF06…" };
+  assert.equal(detect(env, async () => "")?.name, "ghostty");
+});
+
+// the id a shell carries belongs to the session that started it, which may be long gone,
+// while the tty it is sitting on is always the session in front of you
+test("iTerm2 trusts the tty over the id the shell inherited", async () => {
+  const listed = "23551\t1\tLIVE\t/dev/ttys003\n23551\t2\tOTHER\t/dev/ttys004\n";
+  const env = { TERM_PROGRAM: "iTerm.app", ITERM_SESSION_ID: "w0t0p0:CLOSED" };
+  const terminal = detect(env, async () => listed);
+  assert.deepEqual(await terminal.getCurrentPane({ tty: "/dev/ttys003", cwd: "/" }), {
+    id: "LIVE",
+    tab: "23551:1",
+  });
+});
+
