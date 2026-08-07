@@ -11,6 +11,7 @@ export interface InputTarget {
 
 export class PageInput {
   private readonly target: InputTarget;
+  private readonly remapSuper: boolean;
   private lastX = 0;
   private lastY = 0;
   private lastSentX = 0;
@@ -22,8 +23,9 @@ export class PageInput {
   private wheelRemainderY = 0;
   private sentKeys = new Set<string>();
 
-  constructor(target: InputTarget) {
+  constructor(target: InputTarget, remapSuper = false) {
     this.target = target;
+    this.remapSuper = remapSuper;
   }
 
   pointer(event: PointerEvent) {
@@ -105,12 +107,13 @@ export class PageInput {
     });
   }
 
-  key(event: EngineKeyEvent) {
+  key(original: EngineKeyEvent) {
+    const event = this.remapSuper ? asCtrlChord(original) : original;
     if (event.key === "enter") {
       void this.dispatchEnter(event).catch(() => {});
       return;
     }
-    const commands = editingCommands(event);
+    const commands = editingCommands(event, !this.remapSuper);
     if (commands) {
       void this.dispatchEditing(event, commands).catch(() => {});
       return;
@@ -282,6 +285,52 @@ function cdpModifiers(mods: { shift: boolean; alt: boolean; ctrl: boolean; super
   );
 }
 
+/** Cursor motion and deletion do not mean the same thing under each platform's
+ * conventions, so swapping cmd for ctrl would turn "go to the start of the line"
+ * into "go one word left". These keep cmd and reach the page as a meta chord,
+ * which a page that wants them can bind for itself. */
+const MOTION_KEYS = new Set([
+  "left",
+  "right",
+  "up",
+  "down",
+  "home",
+  "end",
+  "pageup",
+  "pagedown",
+  "backspace",
+  "delete",
+]);
+
+/** Chromium only runs its own copy, cut and paste for the macOS chord, and that
+ * native path is what actually moves the text, so these have to stay on cmd. */
+const CLIPBOARD_KEYS = new Set(["c", "v", "x"]);
+
+/** Holding cmd is reported as its own key event. Rewriting that one too would
+ * tell the page control is down while the chord it belongs to still says meta,
+ * so the modifier itself is left alone and only the chord is rewritten. */
+const MODIFIER_KEYS = new Set([
+  "leftshift",
+  "leftcontrol",
+  "leftalt",
+  "leftsuper",
+  "rightshift",
+  "rightcontrol",
+  "rightalt",
+  "rightsuper",
+]);
+
+function keepsSuper(key: string): boolean {
+  return MOTION_KEYS.has(key) || CLIPBOARD_KEYS.has(key) || MODIFIER_KEYS.has(key);
+}
+
+/** Deliver a cmd chord as the matching ctrl chord, for pages that follow the
+ * PC keyboard conventions. A chord already holding ctrl collapses onto it. */
+function asCtrlChord(event: EngineKeyEvent): EngineKeyEvent {
+  if (!event.mods.super || keepsSuper(event.key)) return event;
+  return { ...event, mods: { ...event.mods, super: false, ctrl: true } };
+}
+
 const EDITING_KEY_INFO: Record<string, { key: string; code: string; keyCode: number }> = {
   backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
   left: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
@@ -300,10 +349,11 @@ const EDITING_KEY_INFO: Record<string, { key: string; code: string; keyCode: num
 };
 
 /** blink editing command(s) macOS would attach to this key combo, or null
- * when the combo is not an editing shortcut and should use the normal path */
-function editingCommands(event: EngineKeyEvent): string[] | null {
+ * when the combo is not an editing shortcut and should use the normal path.
+ * With macosControlChords off, ctrl combos are left for the page to handle. */
+function editingCommands(event: EngineKeyEvent, macosControlChords: boolean): string[] | null {
   const { key, mods } = event;
-  if (mods.ctrl) return controlEditingCommands(event);
+  if (mods.ctrl) return macosControlChords ? controlEditingCommands(event) : null;
   const select = mods.shift ? "AndModifySelection" : "";
   if (key === "backspace") {
     if (mods.super) return ["deleteToBeginningOfLine"];

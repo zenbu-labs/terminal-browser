@@ -83,9 +83,15 @@ export interface ChromeActions {
   record: RecordActions;
 }
 
+/** How much of the browser's own interface sits around the page.
+ * "minimal" drops the toolbar, "none" also drops the padding and border so the
+ * page reaches every edge of the pane. */
+export type ChromeMode = "full" | "minimal" | "none";
+
 export interface ChromeLayout {
   width: number;
   height: number;
+  bare: boolean;
   toolbarHeight: number;
   recordBarHeight: number;
   contentHeight: number;

@@ -398,6 +398,9 @@ async function requireGraphics(check: TerminalCheck) {
 
 const BROWSER_FLAGS = [
   "--no-toolbar",
+  "--chromeless",
+  "--remap-super",
+  "--chromeless-escape=",
   "--partition=",
   "--palette-key=",
   "--find-key=",

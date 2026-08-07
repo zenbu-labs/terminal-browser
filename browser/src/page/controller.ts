@@ -34,6 +34,7 @@ export class BrowserController {
   private contentFocused = false;
   private readonly input: PageInput;
   private readonly partition: string | null;
+  private readonly remapSuper: boolean;
   private readonly cwd: string;
   private background: string;
   private pendingPopupSize: { width: number; height: number } | null = null;
@@ -74,9 +75,11 @@ export class BrowserController {
     background: string,
     visible: boolean,
     partition: string | null,
+    remapSuper: boolean,
     onState: (state: BrowserState) => void,
   ) {
     this.partition = partition;
+    this.remapSuper = remapSuper;
     this.cwd = cwd;
     this.surface = surface;
     this.popupSurface = popupSurface;
@@ -113,15 +116,18 @@ export class BrowserController {
         backgroundThrottling: false,
       },
     });
-    this.input = new PageInput({
-      contents: () => this.window.webContents,
-      scale: () => this.layout.scale,
-      focus: () => this.focusContent(),
-      cdp: async (method, params) => {
-        await this.attachCdp();
-        return this.cdp(method, params);
+    this.input = new PageInput(
+      {
+        contents: () => this.window.webContents,
+        scale: () => this.layout.scale,
+        focus: () => this.focusContent(),
+        cdp: async (method, params) => {
+          await this.attachCdp();
+          return this.cdp(method, params);
+        },
       },
-    });
+      remapSuper,
+    );
     this.window.webContents.setFrameRate(frameRate());
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
@@ -551,6 +557,7 @@ export class BrowserController {
       size,
       this.renderScale,
       () => this.layout.scale,
+      this.remapSuper,
       () => this.onPopupChange?.(),
       () => {
         if (this.popup === popup) this.popup = null;

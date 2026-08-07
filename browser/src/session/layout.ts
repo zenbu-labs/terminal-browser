@@ -1,7 +1,7 @@
 import type { EngineInfo } from "pixel-react";
 import type { DevtoolsDock } from "pixel-store";
 import { snapToCssGrid, type BrowserSurfaceLayout } from "../page/types";
-import type { ChromeLayout } from "../ui/types";
+import type { ChromeLayout, ChromeMode } from "../ui/types";
 
 export interface SessionLayout {
   chrome: ChromeLayout;
@@ -75,19 +75,20 @@ export function recordBarHeight(info: EngineInfo): number {
 export function computeLayout(
   info: EngineInfo,
   scale: number,
-  hideToolbar: boolean,
+  mode: ChromeMode,
   devtools: DevtoolsPlacement | null,
   recordBar = 0,
 ): SessionLayout {
-  const toolbarHeight = hideToolbar
-    ? 0
-    : Math.min(info.height - info.cellHeight, Math.round(info.basePx * 2.1));
-  const pad = Math.round(info.basePx * 0.45);
-  const padLeft = Math.round(info.basePx * 0.2);
-  const padBottom = Math.round(info.basePx * 0.2);
+  const bare = mode === "none";
+  const toolbarHeight =
+    mode === "full" ? Math.min(info.height - info.cellHeight, Math.round(info.basePx * 2.1)) : 0;
+  const pad = bare ? 0 : Math.round(info.basePx * 0.45);
+  const padLeft = bare ? 0 : Math.round(info.basePx * 0.2);
+  const padBottom = bare ? 0 : Math.round(info.basePx * 0.2);
   const chrome: ChromeLayout = {
     width: info.width,
     height: info.height,
+    bare,
     toolbarHeight,
     recordBarHeight: recordBar,
     contentHeight: Math.max(1, info.height - toolbarHeight - recordBar),

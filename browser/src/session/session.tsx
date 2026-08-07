@@ -25,6 +25,7 @@ import { ICONS } from "../ui/icons";
 import type {
   ChromeActions,
   ChromeLayout,
+  ChromeMode,
   DownloadView,
   PageMenuItem,
   PageMenuView,
@@ -96,7 +97,8 @@ class Session {
   private readonly marker: string;
   private ownPane: Pane | null = null;
   private finding: Promise<Pane | null> | null = null;
-  private readonly hideToolbar: boolean;
+  private readonly chromeMode: ChromeMode;
+  private readonly remapSuper: boolean;
   private readonly partition: string | null;
   private paletteBinding: KeyBinding | null = null;
   private findBinding: KeyBinding | null = null;
@@ -157,7 +159,12 @@ class Session {
     this.ctx = ctx;
     this.terminal = detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
-    this.hideToolbar = ctx.argv.includes("--no-toolbar");
+    this.chromeMode = ctx.argv.includes("--chromeless")
+      ? "none"
+      : ctx.argv.includes("--no-toolbar")
+        ? "minimal"
+        : "full";
+    this.remapSuper = ctx.argv.includes("--remap-super");
     this.partition = flagValue(ctx.argv, "--partition");
     this.fallbackState = initialBrowserState(this.initialUrl());
     configureBrowserSession(this.partition, (progress) => this.showDownload(progress));
@@ -174,6 +181,7 @@ class Session {
             this.windowBg,
             visible,
             this.partition,
+            this.remapSuper,
             onState,
           ),
         onActivated: () => {
@@ -316,11 +324,19 @@ class Session {
     this.noSuper = !kittyKeyboard;
     const binding = (flag: string, fallback: string) =>
       parseKeyBinding(flagValue(this.ctx.argv, flag) ?? defaultBinding(fallback, this.noSuper));
-    this.paletteBinding = binding("--palette-key", "super+p");
-    this.findBinding = binding("--find-key", "super+shift+f");
+    // With no chrome the page owns nearly every chord, so the palette moves to one
+    // reserved combination and becomes the only way back to the browser's own commands.
+    this.paletteBinding = this.chromeless
+      ? parseKeyBinding(flagValue(this.ctx.argv, "--chromeless-escape") ?? "ctrl+shift+escape")
+      : binding("--palette-key", "super+p");
+    this.findBinding = this.chromeless ? null : binding("--find-key", "super+shift+f");
     // we should use 2 shortcuts for console, also not sure if console actually works as expected
     this.devtoolsBinding = binding("--devtools-key", "super+shift+i");
     this.consoleBinding = binding("--console-key", "super+alt+j");
+  }
+
+  private get chromeless(): boolean {
+    return this.chromeMode === "none";
   }
 
   private cmdHeld(event: EngineKeyEvent): boolean {
@@ -669,7 +685,9 @@ class Session {
       return;
     }
     if (event.kind !== "release") {
-      if (event.mods.ctrl && (event.key === "q" || event.key === "c")) {
+      // ctrl+c belongs to whatever the page is running, but ctrl+q stays a way out
+      // that every terminal can deliver, whatever the page has bound.
+      if (event.mods.ctrl && (event.key === "q" || (!this.chromeless && event.key === "c"))) {
         this.shutdown();
         return;
       }
@@ -720,6 +738,7 @@ class Session {
       }
       if (!this.findOpen && this.activeRecord()?.handleKey(event)) return;
       if (
+        !this.chromeless &&
         event.mods.ctrl &&
         !event.mods.super &&
         !event.mods.alt &&
@@ -729,7 +748,7 @@ class Session {
         if (!this.activeRecord()) void this.startRecording();
         return;
       }
-      if ((this.cmdHeld(event) || event.mods.ctrl) && event.key === "t") {
+      if (!this.chromeless && (this.cmdHeld(event) || event.mods.ctrl) && event.key === "t") {
         if (!this.activeRecord()?.reviewing) this.openNewTabModal();
         return;
       }
@@ -737,7 +756,7 @@ class Session {
         this.openPalette();
         return;
       }
-      if (this.cmdHeld(event) && event.key === "l") {
+      if (!this.chromeless && this.cmdHeld(event) && event.key === "l") {
         this.openUrlEdit();
         return;
       }
@@ -745,7 +764,12 @@ class Session {
         this.openFind();
         return;
       }
-      if (matchesBinding(event, this.devtoolsBinding) || isPlainKey(event, "f12")) {
+      // f12 is go-to-definition in editors, so with no chrome only the explicit
+      // binding opens devtools.
+      if (
+        matchesBinding(event, this.devtoolsBinding) ||
+        (!this.chromeless && isPlainKey(event, "f12"))
+      ) {
         this.toggleDevtools();
         return;
       }
@@ -761,24 +785,26 @@ class Session {
         browser?.findNext(!event.mods.shift);
         return;
       }
-      if (this.cmdHeld(event) && event.key === "r") {
-        this.activeRecord()?.reloaded();
-        browser?.reload();
-        return;
-      }
-      if (this.cmdHeld(event) && event.key === "[") {
-        browser?.back();
-        return;
-      }
-      if (this.cmdHeld(event) && event.key === "]") {
-        browser?.forward();
-        return;
-      }
-      if (this.cmdHeld(event)) {
-        const direction = zoomDirection(event.key);
-        if (direction !== null) {
-          this.applyZoom(direction);
+      if (!this.chromeless) {
+        if (this.cmdHeld(event) && event.key === "r") {
+          this.activeRecord()?.reloaded();
+          browser?.reload();
           return;
+        }
+        if (this.cmdHeld(event) && event.key === "[") {
+          browser?.back();
+          return;
+        }
+        if (this.cmdHeld(event) && event.key === "]") {
+          browser?.forward();
+          return;
+        }
+        if (this.cmdHeld(event)) {
+          const direction = zoomDirection(event.key);
+          if (direction !== null) {
+            this.applyZoom(direction);
+            return;
+          }
         }
       }
     }
@@ -1166,28 +1192,40 @@ class Session {
   }
 
   private paletteActions(): PaletteAction[] {
-    return [
-      {
-        id: "find",
-        label: "find in page",
-        shortcut: bindingLabel(this.findBinding),
-        run: () => this.openFind(),
-      },
-      {
-        id: "record",
-        label: this.activeRecord()
-          ? this.activeRecord()?.reviewing
-            ? "complete recording"
-            : "stop recording"
-          : "record page",
-        shortcut: this.activeRecord()?.reviewing ? "ctrl+enter" : "ctrl+r",
-        run: () => {
-          const record = this.activeRecord();
-          if (!record) void this.startRecording();
-          else if (record.reviewing) record.actions.complete();
-          else record.actions.stop();
+    const pageActions: PaletteAction[] = this.chromeless
+      ? [
+        {
+          id: "reload",
+          label: "reload page",
+          shortcut: "",
+          run: () => this.tabs.activeController?.reload(),
         },
-      },
+      ]
+      : [
+        {
+          id: "find",
+          label: "find in page",
+          shortcut: bindingLabel(this.findBinding),
+          run: () => this.openFind(),
+        },
+        {
+          id: "record",
+          label: this.activeRecord()
+            ? this.activeRecord()?.reviewing
+              ? "complete recording"
+              : "stop recording"
+            : "record page",
+          shortcut: this.activeRecord()?.reviewing ? "ctrl+enter" : "ctrl+r",
+          run: () => {
+            const record = this.activeRecord();
+            if (!record) void this.startRecording();
+            else if (record.reviewing) record.actions.complete();
+            else record.actions.stop();
+          },
+        },
+      ];
+    return [
+      ...pageActions,
       {
         id: "devtools",
         label: this.tabs.activeController?.devtools ? "close devtools" : "open devtools",
@@ -1208,6 +1246,9 @@ class Session {
           },
         ]
         : []),
+      ...(this.chromeless
+        ? [{ id: "quit", label: "quit", shortcut: "", run: () => this.shutdown() }]
+        : []),
     ];
   }
 
@@ -1223,7 +1264,7 @@ class Session {
     const result = computeLayout(
       this.root.info,
       this.displayScale,
-      this.hideToolbar,
+      this.chromeMode,
       reviewing ? null : placement,
       reviewing ? recordBarHeight(this.root.info) : 0,
     );

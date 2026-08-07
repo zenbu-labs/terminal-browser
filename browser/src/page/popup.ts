@@ -31,6 +31,7 @@ export class PopupWindow {
     size: { width: number; height: number },
     renderScale: number,
     scale: () => number,
+    remapSuper: boolean,
     onChange: () => void,
     onClosed: () => void,
   ) {
@@ -45,12 +46,15 @@ export class PopupWindow {
       width: size.width,
       height: size.height,
     };
-    this.input = new PageInput({
-      contents: () => this.window.webContents,
-      scale,
-      focus: () => this.focus(),
-      cdp: (method, params) => this.cdp(method, params),
-    });
+    this.input = new PageInput(
+      {
+        contents: () => this.window.webContents,
+        scale,
+        focus: () => this.focus(),
+        cdp: (method, params) => this.cdp(method, params),
+      },
+      remapSuper,
+    );
     const contents = window.webContents;
     contents.on("page-title-updated", (_event, title) => this.update({ title }));
     contents.on("did-navigate", (_event, url) => this.update({ url }));

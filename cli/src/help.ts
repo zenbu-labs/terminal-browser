@@ -18,10 +18,23 @@ Options:
   --split <direction>   Open in a new pane: right, left, down, up
   --size <fraction>     How much of the space the split takes (0.2 to 0.95)
 
+For apps that should look like they belong in the terminal rather than like a
+page being viewed:
+
+  --chromeless          No toolbar, padding or border, and the browser gives up
+                        the shortcuts a web app would want for itself. The
+                        palette on ctrl+shift+escape is the way back to reload,
+                        devtools and quit.
+  --chromeless-escape   Use another combination for that palette
+  --remap-super         Deliver cmd chords to the page as ctrl chords, for apps
+                        built around a PC keyboard. Copy, paste, cut and the
+                        cursor motion keys keep cmd.
+
 Examples:
   terminal-browser open localhost:3000
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
+  terminal-browser open localhost:8080 --chromeless --remap-super
 `,
   },
   ls: {

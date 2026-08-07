@@ -245,7 +245,7 @@ function BrowserTabContents({
   const dock = layout.devtools?.dock ?? null;
   return (
     <>
-      {interactive && (
+      {interactive && !layout.bare && (
         <Box
           style={{
             position: "absolute",
@@ -265,7 +265,9 @@ function BrowserTabContents({
           inset: { top: layout.page.y, left: layout.page.x },
           width: layout.page.width,
           height: layout.page.height,
-          cornerRadius: seamRadius(Math.max(2, layout.rem * 0.55 - 1), dock, "page"),
+          cornerRadius: layout.bare
+            ? 0
+            : seamRadius(Math.max(2, layout.rem * 0.55 - 1), dock, "page"),
           background: theme.bg,
         }}
         onPointer={interactive ? actions.pointer : undefined}
@@ -305,16 +307,18 @@ function DevtoolsPane({
       : { top: Math.round(divider.height / 2) + offset - 1, left: Math.round(divider.width / 2) - 1 };
   return (
     <>
-      <Box
-        style={{
-          position: "absolute",
-          inset: { top: rect.y - 1, left: rect.x - 1 },
-          width: rect.width + 2,
-          height: rect.height + 2,
-          cornerRadius: seamRadius(layout.rem * 0.55, rect.dock, "devtools"),
-          border: { width: 1, color: theme.fieldBorder },
-        }}
-      />
+      {!layout.bare && (
+        <Box
+          style={{
+            position: "absolute",
+            inset: { top: rect.y - 1, left: rect.x - 1 },
+            width: rect.width + 2,
+            height: rect.height + 2,
+            cornerRadius: seamRadius(layout.rem * 0.55, rect.dock, "devtools"),
+            border: { width: 1, color: theme.fieldBorder },
+          }}
+        />
+      )}
       <Box
         id="devtools-surface"
         surface={surface}
@@ -323,7 +327,9 @@ function DevtoolsPane({
           inset: { top: rect.y, left: rect.x },
           width: rect.width,
           height: rect.height,
-          cornerRadius: seamRadius(Math.max(2, layout.rem * 0.55 - 1), rect.dock, "devtools"),
+          cornerRadius: layout.bare
+            ? 0
+            : seamRadius(Math.max(2, layout.rem * 0.55 - 1), rect.dock, "devtools"),
           background: theme.bg,
         }}
         onPointer={actions.devtoolsPointer}
