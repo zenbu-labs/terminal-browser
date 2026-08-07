@@ -1,0 +1,36 @@
+{
+  "env": {
+    "TERM_PROGRAM": "iTerm.app",
+    "LC_TERMINAL": "iTerm2",
+    "ITERM_SESSION_ID": "w0t0p0:075EC871-10B5-4200-87D7-B52EC3C48AA6"
+  },
+  "exec": {
+    "osascript -": "23551\t1\t075EC871-10B5-4200-87D7-B52EC3C48AA6\t/dev/ttys000\n23551\t2\t3F2A9C14-77B0-4E51-9C3D-1A6E0B44D2E8\t/dev/ttys004\n",
+    "osascript - 075EC871-10B5-4200-87D7-B52EC3C48AA6 terminal-browser open beside": "ok"
+  },
+  "expect": {
+    "name": "iterm2",
+    "currentPane": {
+      "id": "075EC871-10B5-4200-87D7-B52EC3C48AA6",
+      "tab": "23551:1"
+    },
+    "split": {
+      "request": {
+        "direction": "right",
+        "command": [
+          "terminal-browser",
+          "open"
+        ],
+        "size": null,
+        "from": {
+          "id": "075EC871-10B5-4200-87D7-B52EC3C48AA6",
+          "tab": "23551:1"
+        },
+        "tty": null
+      },
+      "commands": [
+        "osascript - 075EC871-10B5-4200-87D7-B52EC3C48AA6 terminal-browser open beside"
+      ]
+    }
+  }
+}
