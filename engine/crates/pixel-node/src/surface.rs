@@ -9,6 +9,8 @@ pub enum SurfacePixels {
     IoSurface(crate::iosurface::RetainedSurface),
     #[cfg(target_os = "linux")]
     Pixmap(crate::pixmap::PixmapSurface),
+    #[cfg(target_os = "linux")]
+    Shm(crate::shm::ShmSurface),
     Owned {
         bgra: Vec<u8>,
         width: u32,

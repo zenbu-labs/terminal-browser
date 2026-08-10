@@ -7,7 +7,7 @@ import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
 import { offscreenPreferences } from "./offscreen";
 import { RENDER_ZOOM, applyRenderZoom, pinSurfacePixels, renderZoomBase, surfaceSize } from "./render-zoom";
-import { BitmapPresenter, presentPaint } from "./paint";
+import { BitmapPresenter, presentPaint, softwareFrameOf } from "./paint";
 import { cssSize } from "./types";
 import type { BrowserSurfaceLayout } from "./types";
 
@@ -85,13 +85,23 @@ export class DevtoolsWindow {
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.window.webContents.on("paint", (event, dirtyRect, image) => {
+      const softwareFrame = softwareFrameOf(event);
       if (!this.visible) {
         event.texture?.release();
+        softwareFrame?.release();
         return;
       }
-      const presented = event.texture
-        ? presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)
-        : this.bitmaps.push(image, dirtyRect, this.wholeSurfaceNext);
+      const presented =
+        event.texture || softwareFrame
+          ? presentPaint(
+              this.surface,
+              event.texture,
+              softwareFrame,
+              image,
+              dirtyRect,
+              this.wholeSurfaceNext,
+            )
+          : this.bitmaps.push(image, dirtyRect, this.wholeSurfaceNext);
       if (presented) {
         this.wholeSurfaceNext = false;
       }

@@ -17,6 +17,16 @@ export interface SurfacePixmap {
   modifier?: string;
 }
 
+/** A software frame from the patched Electron: the capturer's read-only
+ * shared memory region. Stride and size are in bytes. */
+export interface SurfaceShm {
+  fd: number;
+  width: number;
+  height: number;
+  stride: number;
+  size: number;
+}
+
 export interface NativeEngine {
   info(): string;
   applyOps(ops: string): void;
@@ -31,6 +41,12 @@ export interface NativeEngine {
   updateSurfacePixmap?(
     id: number,
     pixmap: SurfacePixmap,
+    damage?: DamageRect,
+    released?: (...args: unknown[]) => void,
+  ): void;
+  updateSurfaceShm?(
+    id: number,
+    shm: SurfaceShm,
     damage?: DamageRect,
     released?: (...args: unknown[]) => void,
   ): void;

@@ -16,8 +16,9 @@ import type { DevtoolsDock } from "pixel-store";
 import { FaviconCache } from "./favicon";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
-import { offscreenPreferences } from "./offscreen";
-import { BitmapPresenter, presentPaint } from "./paint";
+import { demoteToBitmap, offscreenPreferences } from "./offscreen";
+import { armSilentStopWatchdog } from "./watchdog";
+import { BitmapPresenter, presentPaint, softwareFrameOf } from "./paint";
 import { PopupWindow } from "./popup";
 import { cssSize, initialBrowserState } from "./types";
 import type { BrowserState, BrowserSurfaceLayout } from "./types";
@@ -133,25 +134,43 @@ export class BrowserController {
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.window.webContents.on("paint", (event, dirtyRect, image) => {
+      const softwareFrame = softwareFrameOf(event);
       const size = event.texture
         ? {
             width: event.texture.textureInfo.codedSize.width,
             height: event.texture.textureInfo.codedSize.height,
           }
-        : image.getSize();
+        : softwareFrame
+          ? {
+              width: softwareFrame.frameInfo.contentRect.width,
+              height: softwareFrame.frameInfo.contentRect.height,
+            }
+          : image.getSize();
+      const kind = event.texture ? "texture" : softwareFrame ? "shm" : "bitmap";
+      // fd write so the frame kind is diagnosable from the log file on any
+      // machine, like the offscreen mode line.
+      if (!this.lastFrameSize) fs.writeSync(2, `first frame: ${kind}\n`);
       const last = this.lastFrameSize;
       if (last?.width !== size.width || last.height !== size.height) {
         const wanted = this.contentSize(this.layout);
         appLog(
           "info",
           "scale",
-          `paint ${event.texture ? "texture" : "bitmap"} ${size.width}x${size.height} ` +
+          `paint ${kind} ${size.width}x${size.height} ` +
             `(wanted ${wanted.width}x${wanted.height} at ${this.renderScale}x)`,
         );
       }
-      const presented = event.texture
-        ? presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)
-        : this.bitmaps.push(image, dirtyRect, this.wholeSurfaceNext);
+      const presented =
+        event.texture || softwareFrame
+          ? presentPaint(
+              this.surface,
+              event.texture,
+              softwareFrame,
+              image,
+              dirtyRect,
+              this.wholeSurfaceNext,
+            )
+          : this.bitmaps.push(image, dirtyRect, this.wholeSurfaceNext);
       if (!presented) return;
       this.wholeSurfaceNext = false;
       this.lastFrameSize = size;
@@ -225,6 +244,7 @@ export class BrowserController {
       return { action: "deny" };
     });
     this.window.webContents.on("did-create-window", (child) => this.adoptPopup(child));
+    armSilentStopWatchdog(this.window.webContents, demoteToBitmap);
     void this.window.loadURL(normalizeUrl(initialUrl, cwd));
     this.onState(this.state);
   }

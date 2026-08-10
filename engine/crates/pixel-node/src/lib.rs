@@ -11,6 +11,8 @@ mod record;
 #[cfg(target_os = "linux")]
 mod gbm;
 mod pixmap;
+#[cfg(target_os = "linux")]
+mod shm;
 mod surface;
 
 use std::sync::Arc;
@@ -197,6 +199,27 @@ fn draw_frame(
                 .map(|_| locked.height)
                 .map_err(|error| error.to_string())
         }
+        // Linux: the frame is the capturer's shared memory region, plain
+        // cached RAM read in place. The capturer's damage rects are reliable,
+        // so the fused damage-trusted convert beats the compare-based one
+        // (which would re-read the previous frame only to find it changed).
+        #[cfg(target_os = "linux")]
+        SurfacePixels::Shm(surface) => {
+            let len = surface.stride * surface.height as usize;
+            engine
+                .draw_surface(
+                    frame.id,
+                    surface.width,
+                    surface.height,
+                    pixel_core::surfaces::Source::Uncached {
+                        bgra: &surface.pixels()[..len],
+                        stride: surface.stride,
+                    },
+                    frame.damage,
+                )
+                .map(|_| surface.height)
+                .map_err(|error| error.to_string())
+        }
         // Both platforms: bitmap mode, pixels already copied into our memory.
         SurfacePixels::Owned {
             bgra,
@@ -240,6 +263,18 @@ pub struct SurfacePixmap {
     /// DRM format modifier as a decimal string (u64 doesn't fit plain JS
     /// numbers). Absent means linear.
     pub modifier: Option<String>,
+}
+
+/// A software frame from the patched Electron: the capturer's read-only
+/// shared memory region. Stride and size are in bytes.
+#[cfg(target_os = "linux")]
+#[napi(object)]
+pub struct SurfaceShm {
+    pub fd: i32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub size: u32,
 }
 
 #[napi(object)]
@@ -700,6 +735,50 @@ impl PixelEngine {
         }
         self.surfaces
             .submit(id, SurfacePixels::Pixmap(surface), damage);
+        self.waker.wake();
+        Ok(())
+    }
+
+    #[napi]
+    pub fn update_surface_shm(
+        &self,
+        id: u32,
+        shm: SurfaceShm,
+        damage: Option<DamageRect>,
+        released: Option<ThreadsafeFunction<u32>>,
+    ) -> Result<()> {
+        let release_hook = released.map(|tsfn| {
+            Box::new(move || {
+                tsfn.call(Ok(0), ThreadsafeFunctionCallMode::NonBlocking);
+            }) as Box<dyn FnOnce() + Send>
+        });
+        let mut surface =
+            match shm::ShmSurface::from_region(shm.fd, shm.width, shm.height, shm.stride, shm.size)
+            {
+                Ok(surface) => surface,
+                Err(error) => {
+                    if let Some(hook) = release_hook {
+                        hook();
+                    }
+                    return Err(Error::from_reason(error));
+                }
+            };
+        if let Some(hook) = release_hook {
+            surface.set_on_drop(hook);
+        }
+        let damage = damage.map(DamageRect::into_rect);
+        if self.captures.wants(id) {
+            self.captures.capture(
+                id,
+                surface.pixels(),
+                surface.stride,
+                surface.width,
+                surface.height,
+                damage,
+            );
+        }
+        self.surfaces
+            .submit(id, SurfacePixels::Shm(surface), damage);
         self.waker.wake();
         Ok(())
     }

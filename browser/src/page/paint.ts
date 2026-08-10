@@ -1,42 +1,93 @@
 import type { NativeImage, OffscreenSharedTexture, Rectangle, TextureInfo } from "electron";
 import type { Surface, SurfaceTexture } from "pixel-react";
+import { textureAccepted, textureRejected } from "./offscreen";
 import { damageOf, paintedNothing } from "./types";
 
-/** Converts the paint event's platform-specific handle into an engine frame.
- * Returns null when the handle is one the engine cannot map for CPU reads. */
-export function textureFrameOf(info: TextureInfo): SurfaceTexture | null {
+const DRM_FORMAT_MOD_LINEAR = 0n;
+const DRM_FORMAT_MOD_INVALID = 0x00ffffffffffffffn;
+
+function x11Session(): boolean {
+  if (process.platform !== "linux") return false;
+  if (process.env.XDG_SESSION_TYPE === "x11") return true;
+  return !process.env.WAYLAND_DISPLAY && !!process.env.DISPLAY;
+}
+
+/** Converts the paint event's platform-specific handle into an engine frame,
+ * or a reason the engine cannot map this handle for CPU reads. */
+function textureFrameOf(info: TextureInfo): { frame: SurfaceTexture } | { reject: string } {
   const { ioSurface, nativePixmap } = info.handle;
-  if (ioSurface) return { ioSurface };
-  if (!nativePixmap || nativePixmap.planes.length !== 1) return null;
+  if (ioSurface) return { frame: { ioSurface } };
+  if (!nativePixmap) return { reject: "handle has no ioSurface or nativePixmap" };
+  if (nativePixmap.planes.length !== 1) {
+    return { reject: `dmabuf has ${nativePixmap.planes.length} planes` };
+  }
+  let modifier = BigInt(nativePixmap.modifier);
+  // X11 reports "invalid" for buffers allocated without modifier awareness,
+  // which in practice are linear (obs-browser ships the same equivalence).
+  // If one ever isn't, the engine-side import is the safety net.
+  if (modifier === DRM_FORMAT_MOD_INVALID && x11Session()) modifier = DRM_FORMAT_MOD_LINEAR;
   // A dmabuf is only CPU-mappable when the GPU laid it out linearly
-  // (DRM_FORMAT_MOD_LINEAR, modifier 0); tiled layouts need a GPU import.
-  if (BigInt(nativePixmap.modifier) !== 0n) return null;
+  // (DRM_FORMAT_MOD_LINEAR, modifier 0); tiled layouts need a GPU blit.
+  if (modifier !== DRM_FORMAT_MOD_LINEAR) {
+    return { reject: `tiled dmabuf (modifier 0x${modifier.toString(16)})` };
+  }
   const [plane] = nativePixmap.planes;
   return {
-    pixmap: {
-      fd: plane.fd,
-      width: info.codedSize.width,
-      height: info.codedSize.height,
-      stride: plane.stride,
-      offset: plane.offset,
-      size: plane.size,
-      modifier: String(nativePixmap.modifier),
+    frame: {
+      pixmap: {
+        fd: plane.fd,
+        width: info.codedSize.width,
+        height: info.codedSize.height,
+        stride: plane.stride,
+        offset: plane.offset,
+        size: plane.size,
+        modifier: String(modifier),
+      },
     },
   };
 }
 
+/** The paint event payload added by the forked Electron's
+ * offscreen.useSharedMemory option; the stock typings don't know it. */
+export interface OffscreenSoftwareFrame {
+  release(): void;
+  frameInfo: {
+    pixelFormat: string;
+    widgetType: string;
+    codedSize: { width: number; height: number };
+    contentRect: Rectangle;
+    stride: number;
+    dataSize: number;
+    timestamp: number;
+    metadata: {
+      captureUpdateRect?: Rectangle;
+      sourceSize?: { width: number; height: number };
+      frameCount: number;
+    };
+    fd: number;
+  };
+}
+
+export function softwareFrameOf(event: unknown): OffscreenSoftwareFrame | undefined {
+  const frame = (event as { softwareFrame?: OffscreenSoftwareFrame | null }).softwareFrame;
+  return frame ?? undefined;
+}
+
 /** Presents one paint event in whichever form it arrived: a shared texture
- * when the session runs zero-copy, otherwise the software bitmap. Returns
- * true when the surface received pixels, so callers know their next paint no
- * longer has to cover the whole surface. */
+ * when the session runs zero-copy, a shared memory frame when the patched
+ * Electron delivers software frames by fd, otherwise the software bitmap.
+ * Returns true when the surface received pixels, so callers know their next
+ * paint no longer has to cover the whole surface. */
 export function presentPaint(
   surface: Surface,
   texture: OffscreenSharedTexture | undefined,
+  softwareFrame: OffscreenSoftwareFrame | undefined,
   image: NativeImage,
   dirtyRect: Rectangle,
   wholeSurface: boolean,
 ): boolean {
   if (texture) return presentTexture(surface, texture, wholeSurface);
+  if (softwareFrame) return presentSoftwareFrame(surface, softwareFrame, dirtyRect, wholeSurface);
   return presentBitmap(surface, image, wholeSurface ? undefined : dirtyRect);
 }
 
@@ -51,20 +102,75 @@ function presentTexture(
   let handedOff = false;
   try {
     const info = texture.textureInfo;
-    if (info.widgetType !== "frame" || info.pixelFormat !== "bgra") return false;
-    const frame = textureFrameOf(info);
-    if (!frame) return false;
+    if (info.widgetType !== "frame") return false;
+    if (info.pixelFormat !== "bgra") {
+      textureRejected(`pixel format ${info.pixelFormat}`);
+      return false;
+    }
+    const sized = textureFrameOf(info);
+    if ("reject" in sized) {
+      textureRejected(sized.reject);
+      return false;
+    }
     if (paintedNothing(info) && !wholeSurface) return false;
     const damage = wholeSurface ? undefined : damageOf(info);
-    if ("pixmap" in frame) {
-      surface.present({ ...frame, damage, released: () => texture.release() });
+    if ("pixmap" in sized.frame) {
+      try {
+        surface.present({ ...sized.frame, damage, released: () => texture.release() });
+      } catch (error) {
+        textureRejected(`engine import failed: ${String(error)}`);
+        return false;
+      }
       handedOff = true;
     } else {
-      surface.present({ ...frame, damage });
+      surface.present({ ...sized.frame, damage });
     }
+    textureAccepted();
     return true;
   } finally {
     if (!handedOff) texture.release();
+  }
+}
+
+/** Same release discipline as presentTexture: the pooled region goes back to
+ * Electron only after the engine finished reading it. */
+function presentSoftwareFrame(
+  surface: Surface,
+  frame: OffscreenSoftwareFrame,
+  dirtyRect: Rectangle,
+  wholeSurface: boolean,
+): boolean {
+  let handedOff = false;
+  try {
+    const info = frame.frameInfo;
+    if (info.widgetType !== "frame") return false;
+    if (info.pixelFormat !== "bgra") return false;
+    // Offscreen capture is never letterboxed, so rows start at the region's
+    // start; a nonzero origin would break that assumption.
+    if (info.contentRect.x !== 0 || info.contentRect.y !== 0) return false;
+    const update = info.metadata.captureUpdateRect;
+    if (update && update.width <= 0 && update.height <= 0 && !wholeSurface) return false;
+    const damage =
+      wholeSurface || dirtyRect.width <= 0 || dirtyRect.height <= 0 ? undefined : dirtyRect;
+    try {
+      surface.present({
+        shm: {
+          fd: info.fd,
+          width: info.contentRect.width,
+          height: info.contentRect.height,
+          stride: info.stride,
+          size: info.dataSize,
+        },
+        damage,
+        released: () => frame.release(),
+      });
+    } catch {
+      return false;
+    }
+    handedOff = true;
+    return true;
+  } finally {
+    if (!handedOff) frame.release();
   }
 }
 

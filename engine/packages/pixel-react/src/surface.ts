@@ -1,8 +1,11 @@
-import type { DamageRect, NativeEngine, SurfacePixmap } from "./native";
+import type { DamageRect, NativeEngine, SurfacePixmap, SurfaceShm } from "./native";
 
 type Damaged = { damage?: DamageRect };
 
-export type SurfaceTexture = { ioSurface: Buffer } | { pixmap: SurfacePixmap };
+export type SurfaceTexture =
+  | { ioSurface: Buffer }
+  | { pixmap: SurfacePixmap }
+  | { shm: SurfaceShm };
 
 export type SurfaceFrame =
   | ({ bgra: Buffer; width: number; height: number } & Damaged) // i think we want to kilt the case of passing the raw pixels to react, there's never a case that I know of
@@ -26,7 +29,7 @@ export class Surface {
 
   present(frame: SurfaceFrame): void {
     if (this.closed) {
-      if ("pixmap" in frame) frame.released?.();
+      if ("pixmap" in frame || "shm" in frame) frame.released?.();
       return;
     }
     if ("ioSurface" in frame) {
@@ -37,7 +40,10 @@ export class Surface {
       const submit = this.engine.updateSurfacePixmap;
       if (!submit) throw new Error("dmabuf frames are not supported on this platform");
       submit.call(this.engine, this.id, frame.pixmap, frame.damage, frame.released);
-      return;
+    } else if ("shm" in frame) {
+      const submit = this.engine.updateSurfaceShm;
+      if (!submit) throw new Error("shared memory frames are not supported on this platform");
+      submit.call(this.engine, this.id, frame.shm, frame.damage, frame.released);
     } else {
       this.engine.updateSurface(this.id, frame.bgra, frame.width, frame.height, frame.damage);
     }

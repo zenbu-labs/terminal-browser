@@ -10,7 +10,7 @@ import type { Pane, Terminal } from "pixel-terminals";
 import { browserSession, configureBrowserSession } from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
-import { resolveOffscreenMode } from "../page/offscreen";
+import { initOffscreenMode, onDemoted } from "../page/offscreen";
 import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
@@ -252,13 +252,9 @@ class Session {
         this.shutdown(error ? 1 : 0);
       },
     });
-    // the linux shared-texture probe can take a while, so it runs alongside
-    // font registration; only tab creation below needs the resolved mode
-    const [, fontId] = await Promise.all([
-      resolveOffscreenMode(this.root.sharedTextures),
-      this.root.registerFont(bundledFontPath()),
-    ]);
-    this.fontId = fontId;
+    initOffscreenMode(this.root.sharedTextures);
+    onDemoted(() => this.tabs.recreateAll());
+    this.fontId = await this.root.registerFont(bundledFontPath());
     this.applyKeyBindings(this.root.info.kittyKeyboard);
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
