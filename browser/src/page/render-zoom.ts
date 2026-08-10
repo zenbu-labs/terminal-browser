@@ -1,14 +1,15 @@
 import type { WebContents } from "electron";
 
-/** On Linux the offscreen scale option changes nothing: frames come back sized in
- * CSS pixels no matter what scale the window asked for, so pages rasterize at 1x
- * and blur when the engine stretches them onto a denser pane. The way out is to
- * stop asking for a scale at all: pin the frame to the pane's device pixels with a
- * device-metrics override (which also frees the frame from the window manager's
- * screen-size clamp on tall panes) and let page zoom lay content back out at CSS
- * size. Pages see the right devicePixelRatio and paint pixel-for-pixel. On macOS
- * the offscreen scale works, so all of this stays inert. */
-export const RENDER_ZOOM = process.platform === "linux";
+/** Historical Linux workaround, now default-off: stock Electron ignored the
+ * offscreen scale option on native Wayland (Chromium's per-surface scaling
+ * clobbered it to 1x), so pages rasterized blurry and this module faked
+ * density with a device-metrics pin plus page zoom. Our patched Electron
+ * fixes the scale option (pixel-electron: osr-wayland-scale.patch), so Linux
+ * now takes the same native path as macOS. The zoom machinery stays behind
+ * TERMINAL_BROWSER_RENDER_ZOOM=1 as a rollback until the native path has
+ * soaked, then this whole file can go. */
+export const RENDER_ZOOM =
+  process.platform === "linux" && process.env.TERMINAL_BROWSER_RENDER_ZOOM === "1";
 
 export function renderZoomBase(renderScale: number): number {
   return RENDER_ZOOM ? renderScale : 1;

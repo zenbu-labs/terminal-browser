@@ -8,12 +8,13 @@ import { runDaemon } from "./daemon";
 import { LOGS_DIR, ensureDataDir } from "pixel-store";
 import { appLog, displayScale } from "pixel-react";
 import { claimProfile } from "./profile";
+import { RENDER_ZOOM } from "./page/render-zoom";
 
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
-// Offscreen rendering takes its sharpness from the process-wide scale, which is
-// decided before Electron is ready, so the compositor is asked directly. Without
-// this, pages on Linux rasterize at 1x and get upscaled into blur.
-if (process.platform === "linux" && !process.env.TERMINAL_BROWSER_DISPLAY_SCALE) {
+// Part of the render-zoom workaround (see page/render-zoom.ts): the zoom path
+// needs the process-wide scale forced before Electron is ready. The native
+// scale path passes the scale per window instead and must not force it.
+if (RENDER_ZOOM && !process.env.TERMINAL_BROWSER_DISPLAY_SCALE) {
   const scale = displayScale();
   appLog(
     "info",

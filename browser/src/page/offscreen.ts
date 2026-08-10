@@ -31,14 +31,16 @@ export async function resolveOffscreenMode(sharedTextures: boolean): Promise<voi
       throw new Error("terminal-browser requires the patched Electron with shared texture support");
     }
     mode = "shared-texture";
-  } else if (!sharedTextures || process.env.TERMINAL_BROWSER_SHARED_TEXTURE !== "1") {
-    // Linux defaults to the bitmap path while the shared-texture path soaks.
-    // That path (TERMINAL_BROWSER_SHARED_TEXTURE=1) hands the engine a dmabuf
-    // fd, reads it once with streaming loads, and releases the texture only
-    // after the read -- faster than bitmap and tear-free in benchmarks, held
-    // back only for real-world validation before it becomes the default.
+  } else if (!sharedTextures || process.env.TERMINAL_BROWSER_SHARED_TEXTURE === "0") {
     mode = "bitmap";
+  } else if (process.env.TERMINAL_BROWSER_SHARED_TEXTURE === "1") {
+    // Forced on: skip the probe (useful when the probe misjudges a machine).
+    mode = "shared-texture";
   } else {
+    // Default: one probe paint decides. Mappability is the only question --
+    // the engine reads dmabufs through the GPU driver's own mapping (gbm),
+    // which picks per buffer between a direct pointer and a staged copy, so
+    // there is no slow-placement machine to guard against.
     mode = (await probeSharedTexture()) ? "shared-texture" : "bitmap";
   }
   // fd write so the line lands in the log file even after the devtools

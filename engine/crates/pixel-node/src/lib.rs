@@ -9,6 +9,7 @@ mod mend;
 mod ops;
 mod record;
 #[cfg(target_os = "linux")]
+mod gbm;
 mod pixmap;
 mod surface;
 
@@ -180,7 +181,7 @@ fn draw_frame(
         // Linux: the frame is a GPU dmabuf whose CPU mapping is uncached.
         #[cfg(target_os = "linux")]
         SurfacePixels::Pixmap(surface) => {
-            let locked = surface.lock()?;
+            let locked = pixel_core::profiler::span("surface.map", || surface.lock())?;
             let len = locked.stride * locked.height as usize;
             engine
                 .draw_surface(
@@ -236,6 +237,9 @@ pub struct SurfacePixmap {
     pub stride: u32,
     pub offset: u32,
     pub size: u32,
+    /// DRM format modifier as a decimal string (u64 doesn't fit plain JS
+    /// numbers). Absent means linear.
+    pub modifier: Option<String>,
 }
 
 #[napi(object)]
@@ -655,6 +659,13 @@ impl PixelEngine {
                 tsfn.call(Ok(0), ThreadsafeFunctionCallMode::NonBlocking);
             }) as Box<dyn FnOnce() + Send>
         });
+        let modifier = pixmap
+            .modifier
+            .as_deref()
+            .map(|m| m.parse::<u64>())
+            .transpose()
+            .map_err(|_| Error::from_reason("pixmap modifier is not a u64"))?
+            .unwrap_or(0);
         let mut surface = match pixmap::PixmapSurface::from_plane(
             pixmap.fd,
             pixmap.width,
@@ -662,6 +673,7 @@ impl PixelEngine {
             pixmap.stride,
             pixmap.offset,
             pixmap.size,
+            modifier,
         ) {
             Ok(surface) => surface,
             Err(error) => {

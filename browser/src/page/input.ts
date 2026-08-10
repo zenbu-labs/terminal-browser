@@ -1,19 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-
 import { clipboard, nativeImage } from "electron";
 import type { WebContents } from "electron";
 import type { EngineKeyEvent, PastedImage, PointerEvent, WheelEvent } from "pixel-react";
-import { LOGS_DIR } from "pixel-store";
-
-const INPUT_TRACE = process.env.TERMINAL_BROWSER_INPUT_TRACE === "1";
-
-function traceWheel(line: string): void {
-  if (!INPUT_TRACE) return;
-  try {
-    fs.appendFileSync(path.join(LOGS_DIR, "input-trace.log"), `${Date.now()} ${line}\n`);
-  } catch {}
-}
 
 export interface InputTarget {
   contents(): WebContents;
@@ -95,7 +82,6 @@ export class PageInput {
     this.wheelRemainderX -= deltaX;
     this.wheelRemainderY -= deltaY;
     if (deltaX === 0 && deltaY === 0) return;
-    traceWheel(`precise dy=${deltaY} zoomFactor=${this.target.contents().getZoomFactor()}`);
     this.target.contents().sendInputEvent({
       type: "mouseWheel",
       x: this.lastX,
@@ -121,10 +107,6 @@ export class PageInput {
     const ticksY = -Math.sign(event.deltaY);
     if (ticksX === 0 && ticksY === 0) return;
     const step = WHEEL_DETENT_PX * this.target.zoomBase();
-    traceWheel(
-      `tick dy=${event.deltaY} step=${step} zoomBase=${this.target.zoomBase()} ` +
-        `zoomFactor=${this.target.contents().getZoomFactor()}`,
-    );
     this.target.contents().sendInputEvent({
       type: "mouseWheel",
       x: this.lastX,

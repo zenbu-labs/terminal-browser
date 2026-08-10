@@ -13,6 +13,8 @@ export interface SurfacePixmap {
   stride: number;
   offset: number;
   size: number;
+  /** DRM format modifier as a decimal string; absent means linear. */
+  modifier?: string;
 }
 
 export interface NativeEngine {

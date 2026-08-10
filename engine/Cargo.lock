@@ -756,6 +756,7 @@ dependencies = [
 name = "pixel-node"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "lz4_flex",
  "mp4",
  "napi",

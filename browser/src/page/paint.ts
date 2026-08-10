@@ -20,6 +20,7 @@ export function textureFrameOf(info: TextureInfo): SurfaceTexture | null {
       stride: plane.stride,
       offset: plane.offset,
       size: plane.size,
+      modifier: String(nativePixmap.modifier),
     },
   };
 }
