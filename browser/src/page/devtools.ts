@@ -1,11 +1,14 @@
 import { BrowserWindow, screen } from "electron";
-import type { OffscreenSharedTexture, WebContents } from "electron";
+import type { WebContents } from "electron";
 import type { Surface } from "pixel-react";
 import type { DevtoolsDock } from "pixel-store";
 import { cursorShapeFor } from "./cursor";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
-import { cssSize, damageOf, paintedNothing } from "./types";
+import { offscreenPreferences } from "./offscreen";
+import { RENDER_ZOOM, applyRenderZoom, pinSurfacePixels, renderZoomBase, surfaceSize } from "./render-zoom";
+import { BitmapPresenter, presentPaint } from "./paint";
+import { cssSize } from "./types";
 import type { BrowserSurfaceLayout } from "./types";
 
 export type DevtoolsAction = "close" | "dock-bottom" | "dock-right";
@@ -17,10 +20,12 @@ export class DevtoolsWindow {
   private readonly window: BrowserWindow;
   private readonly onAction: (action: DevtoolsAction) => void;
   private layout: BrowserSurfaceLayout;
+  private readonly renderScale: number;
   private dock: DevtoolsDock;
   private visible = true;
   private focused = false;
   private wholeSurfaceNext = true;
+  private readonly bitmaps: BitmapPresenter;
   private cdpAttached = false;
   private destroyed = false;
   private pendingPanel: string | null = null;
@@ -43,11 +48,13 @@ export class DevtoolsWindow {
   ) {
     this.pageContents = pageContents;
     this.surface = surface;
+    this.bitmaps = new BitmapPresenter(surface);
     this.layout = layout;
     this.dock = dock;
     this.onAction = onAction;
+    this.renderScale = renderScale;
     this.window = new BrowserWindow({
-      ...cssSize(layout.width, layout.height, layout.scale),
+      ...surfaceSize(cssSize(layout.width, layout.height, layout.scale), renderScale),
       useContentSize: true,
       backgroundColor: background,
       show: false,
@@ -58,11 +65,7 @@ export class DevtoolsWindow {
       fullscreenable: false,
       resizable: false,
       webPreferences: {
-        offscreen: {
-          useSharedTexture: true,
-          sharedTexturePixelFormat: "argb",
-          deviceScaleFactor: renderScale,
-        },
+        offscreen: offscreenPreferences(renderScale),
         sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
@@ -72,7 +75,8 @@ export class DevtoolsWindow {
     });
     this.input = new PageInput({
       contents: () => this.window.webContents,
-      scale: () => this.layout.scale,
+      scale: () => (RENDER_ZOOM ? 1 : this.layout.scale),
+      zoomBase: () => renderZoomBase(this.renderScale),
       focus: () => this.focus(),
       cdp: (method, params) => this.cdp(method, params),
     });
@@ -80,14 +84,17 @@ export class DevtoolsWindow {
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
-    this.window.webContents.on("paint", (event) => {
-      const texture = event.texture;
-      if (!texture) return;
+    this.window.webContents.on("paint", (event, dirtyRect, image) => {
       if (!this.visible) {
-        texture.release();
+        event.texture?.release();
         return;
       }
-      this.submitTexture(texture);
+      const presented = event.texture
+        ? presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)
+        : this.bitmaps.push(image, dirtyRect, this.wholeSurfaceNext);
+      if (presented) {
+        this.wholeSurfaceNext = false;
+      }
     });
     this.window.webContents.on("cursor-changed", (_event, type) => {
       const shape = cursorShapeFor(type);
@@ -125,8 +132,11 @@ export class DevtoolsWindow {
     }
     this.layout = layout;
     if (!options?.keepFrame) this.surface.clear();
-    const size = cssSize(layout.width, layout.height, layout.scale);
+    const size = surfaceSize(cssSize(layout.width, layout.height, layout.scale), this.renderScale);
     this.window.setContentSize(size.width, size.height, false);
+    if (this.cdpAttached) {
+      void pinSurfacePixels((method, params) => this.cdp(method, params), size).catch(() => {});
+    }
   }
 
   showPanel(panel: string) {
@@ -207,20 +217,6 @@ export class DevtoolsWindow {
     this.window.destroy();
   }
 
-  private submitTexture(texture: OffscreenSharedTexture) {
-    try {
-      const info = texture.textureInfo;
-      const handle = info.handle.ioSurface;
-      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
-      if (paintedNothing(info) && !this.wholeSurfaceNext) return;
-      const damage = this.wholeSurfaceNext ? undefined : damageOf(info);
-      this.wholeSurfaceNext = false;
-      this.surface.present({ ioSurface: handle, damage });
-    } finally {
-      texture.release();
-    }
-  }
-
   private async installControls() {
     await this.attachCdp();
     await this.window.webContents.executeJavaScript(controlsScript(this.dock), true);
@@ -240,6 +236,11 @@ export class DevtoolsWindow {
     });
     await this.cdp("Runtime.enable");
     await this.cdp("Runtime.addBinding", { name: "__pixelDevtools" });
+    await pinSurfacePixels(
+      (method, params) => this.cdp(method, params),
+      surfaceSize(cssSize(this.layout.width, this.layout.height, this.layout.scale), this.renderScale),
+    );
+    applyRenderZoom(this.window.webContents, this.renderScale, 1);
   }
 
   private async cdp(method: string, params?: Record<string, unknown>): Promise<unknown> {

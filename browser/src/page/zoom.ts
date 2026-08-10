@@ -7,8 +7,11 @@ const ZOOM_PRESETS = [
 export type ZoomDirection = 1 | -1 | 0;
 
 
-export function stepZoom(contents: WebContents, direction: ZoomDirection): number {
-  const current = contents.getZoomFactor();
+// The wire factor can carry a base multiplier the user never sees (render zoom on
+// Linux), so presets and returned values speak in the user's factor and the base is
+// reapplied only when talking to the WebContents.
+export function stepZoom(contents: WebContents, direction: ZoomDirection, base = 1): number {
+  const current = contents.getZoomFactor() / base;
   const factor =
     direction === 0
       ? 1
@@ -16,17 +19,17 @@ export function stepZoom(contents: WebContents, direction: ZoomDirection): numbe
         ? (ZOOM_PRESETS.find((preset) => preset > current * 1.001) ?? ZOOM_PRESETS.at(-1)!)
         : ([...ZOOM_PRESETS].reverse().find((preset) => preset < current * 0.999) ??
           ZOOM_PRESETS[0]);
-  contents.setZoomFactor(factor);
+  contents.setZoomFactor(factor * base);
   return factor;
 }
 
 
-export function scaleZoom(contents: WebContents, ratio: number): number {
+export function scaleZoom(contents: WebContents, ratio: number, base = 1): number {
   const floor = ZOOM_PRESETS[0];
   const ceiling = ZOOM_PRESETS.at(-1)!;
-  const exact = contents.getZoomFactor() * ratio;
+  const exact = (contents.getZoomFactor() / base) * ratio;
   const factor = Math.min(ceiling, Math.max(floor, Math.round(exact * 1000) / 1000));
-  contents.setZoomFactor(factor);
+  contents.setZoomFactor(factor * base);
   return factor;
 }
 

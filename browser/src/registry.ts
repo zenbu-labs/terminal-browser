@@ -1,8 +1,8 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
+import { callerTty } from "pixel-terminals";
 import { removeInstance, upsertInstance } from "pixel-store";
 import type { InstanceRow } from "pixel-store";
 
@@ -37,25 +37,6 @@ interface ControlRequest {
   tab?: number;
 }
 
-function ownTty(): string | null {
-  let pid = process.pid;
-  for (let hops = 0; hops < 20 && pid > 1; hops++) {
-    let out: string;
-    try {
-      out = execFileSync("ps", ["-o", "ppid=,tty=", "-p", String(pid)], {
-        encoding: "utf8",
-      });
-    } catch {
-      return null;
-    }
-    const [ppid, tty] = out.trim().split(/\s+/);
-    if (tty && tty !== "??") return `/dev/${tty}`;
-    pid = Number(ppid);
-    if (!Number.isFinite(pid)) return null;
-  }
-  return null;
-}
-
 export class Registry {
   private readonly host: ControlHost;
   private readonly socketPath: string;
@@ -67,7 +48,7 @@ export class Registry {
 
   constructor(host: ControlHost) {
     this.host = host;
-    this.tty = host.tty ?? ownTty();
+    this.tty = host.tty ?? callerTty().path;
     this.socketPath = path.join(INSTANCES_DIR, `${host.key}.sock`);
     fs.mkdirSync(INSTANCES_DIR, { recursive: true });
     fs.rmSync(this.socketPath, { force: true });

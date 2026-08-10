@@ -65,6 +65,8 @@ const GLOSSARY = {
     "tree.place": "computing absolute + clipped rects and scroll clamping",
     "tree.paint": "rasterizing a view's tree into its RGBA canvas; see paint.* children",
     "paint.rects": "aggregate of background/border fills across all nodes (arg = count)",
+    "paint.surface": "drawing a browser page's pixels into the frame. A plain copy when the page pixels are already the size they are drawn at, and a full resample of every pixel when they are not; the surface.resampled counter says which happened.",
+    "paint.images": "drawing <Image/> content, which is resized once and cached per size, so this is normally a plain copy",
     "paint.wrap": "aggregate of text line-wrapping during paint",
     "paint.glyphs": "aggregate of glyph blending (arg = glyphs drawn)",
     "paint.selection": "aggregate of input selection highlight fills",
@@ -106,11 +108,18 @@ const GLOSSARY = {
     "drags and window resizes. Labels prefixed '[devtools] ' happened in the devtools " +
     "pane (e.g. starting/stopping the recording), not the app. Correlate an interaction " +
     "with the spans that follow it to see what work it triggered.",
+  logs:
+    "What the engine logged, on the same clock as the spans, so 'at' can be compared " +
+    "directly with a span's start. A log explaining why some work was slow sits next to " +
+    "the span that did the work. 'at' is negative for lines logged before the recording " +
+    "started, which is where anything explaining a condition that held the whole time " +
+    "will be.",
   example_queries: [
     "jq '.summary.byName' profile.json                                   # where did time go",
     "jq '[.spans[] | select(.name==\"frame\") | .dur] | max' profile.json  # worst frame",
     "jq '.spans[] | select(.lane==\"react\" and .self > 1)' profile.json   # slow components",
     "jq '.spans[] | select(.arg==42)' profile.json                       # follow batch 42 across JS and engine",
+    "jq '.logs[] | select(.level!=\"debug\")' profile.json                 # what the engine complained about",
   ],
 };
 
@@ -183,6 +192,15 @@ export function exportProfile(): string | null {
       exportedAt: new Date().toISOString(),
       startEpochMs: round(session.start),
       cpuThrottle: devtoolsStore.get().cpuRate,
+      // A daemon can outlive many rebuilds, so every export says which process
+      // produced it and when that process started.
+      pid: process.pid,
+      processStartedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+      versions: {
+        node: process.versions.node,
+        electron: process.versions.electron ?? null,
+        chrome: process.versions.chrome ?? null,
+      },
       glossary: GLOSSARY,
     },
     summary: summarize(session),
@@ -196,6 +214,13 @@ export function exportProfile(): string | null {
       name: counter.name,
       at: round(counter.at - session.start),
       value: counter.value,
+    })),
+    logs: engineLogs.store.get().rows.map((row) => ({
+      at: round(row.epochMs - session.start),
+      level: row.level,
+      target: row.target,
+      text: row.text,
+      count: row.count,
     })),
   };
   const stamp = new Date()

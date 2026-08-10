@@ -3,8 +3,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/dist-release"
-MANIFEST="$OUT/manifest.json"
 
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) TARGET=darwin-arm64 ;;
+  Linux-x86_64|Linux-amd64) TARGET=linux-x64 ;;
+  Linux-aarch64|Linux-arm64) TARGET=linux-arm64 ;;
+  *) echo "unsupported host: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
+
+MANIFEST="$OUT/manifest-$TARGET.json"
 if [ ! -f "$MANIFEST" ]; then
   echo "nothing built yet — run: pnpm build:dist" >&2
   exit 1
@@ -19,9 +26,7 @@ if [ ! -f "$TARBALL" ]; then
 fi
 
 # the same installer the published one runs, pointed at the build sitting in dist-release
-sed -e "s|__DOWNLOAD_URL__|file://$TARBALL|" \
+sed -e "s|__PLATFORMS__|$TARGET file://$TARBALL $(field sha256) $(field size)|" \
   -e "s|__VERSION__|$(field version)|" \
   -e "s|__CHANNEL__|$(field channel)|" \
-  -e "s|__SHA256__|$(field sha256)|" \
-  -e "s|__SIZE__|$(field size)|" \
   "$ROOT/scripts/install.sh" | bash

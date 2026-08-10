@@ -17,3 +17,8 @@ arboard = { workspace = true }
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["xinput"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }

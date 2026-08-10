@@ -3,8 +3,16 @@ use std::time::Instant;
 
 use super::{DragPhase, Engine, EngineEvent};
 use crate::menu::MenuClick;
+use crate::scroll::profiles::Wheel;
 use crate::terminal::{Mods, Mouse, MouseButton, MouseKind};
 use crate::tree::{HitTarget, NodeId};
+
+/// Chrome on Linux turns one wheel detent into a 120px scroll (X11
+/// kWheelScrollAmount, Wayland axis_value120). A terminal cell is ~20px at
+/// 1x, so six cells lands on the same distance and tracks display scale.
+const WHEEL_TICK_CELLS: f32 = 6.0;
+
+const WHEEL_ECHO_WINDOW: std::time::Duration = std::time::Duration::from_millis(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DragTarget {
@@ -33,6 +41,30 @@ impl Engine {
                 | MouseKind::ScrollLeft
                 | MouseKind::ScrollRight
         );
+        // Some terminals report each physical wheel detent as two identical
+        // events in the same write (seen on Linux: same direction, pixel
+        // position and modifiers, ~0ms apart). Chrome sees one detent from
+        // the compositor, so the echo would double every scroll. Dropping is
+        // a strict toggle -- one echo per accepted tick -- so detent pairs
+        // that batch up behind a slow read still count once each, and real
+        // detents from a fast free-spinning wheel (several ms apart) always
+        // fall outside the window.
+        if scrolling {
+            let echo = !self.wheel_echo_consumed
+                && self.last_wheel_tick.is_some_and(|(at, kind, x, y, mods)| {
+                    kind == mouse.kind
+                        && x == mouse.x
+                        && y == mouse.y
+                        && mods == mouse.mods
+                        && now.duration_since(at) < WHEEL_ECHO_WINDOW
+                });
+            if echo {
+                self.wheel_echo_consumed = true;
+                return Ok(());
+            }
+            self.wheel_echo_consumed = false;
+            self.last_wheel_tick = Some((now, mouse.kind, mouse.x, mouse.y, mouse.mods));
+        }
         if self.use_native && self.native.is_some() {
             self.ingest_native();
             let located = self.pixel_mouse.then_some(point);
@@ -329,9 +361,19 @@ impl Engine {
                 if let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) {
                     let max = area.max_scroll();
                     let node = area.node;
+                    // A live helper streams precise deltas for every trackpad
+                    // gesture, so a tick that fell through here is a real wheel
+                    // detent: scroll it with Chrome's wheel curve. Without the
+                    // helper the tick may be a low-fidelity trackpad stream,
+                    // which keeps the smoothing profile.
+                    let wheel = self.use_native && self.native.is_some();
                     let profile = self.profile;
                     if let Some(state) = self.comp.views[view].tree.scroll_state_mut(node) {
-                        state.tick(profile, delta, max);
+                        if wheel {
+                            state.tick_wheel(&Wheel, delta * WHEEL_TICK_CELLS, max);
+                        } else {
+                            state.tick(profile, delta, max);
+                        }
                     }
                 }
             }

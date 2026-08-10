@@ -114,6 +114,17 @@ export const ghostty: Detect = (env, run) => {
     Boolean(env.GHOSTTY_RESOURCES_DIR);
   if (!looksLikeGhostty) return null;
 
+  if (process.platform !== "darwin") {
+    return {
+      name: "ghostty",
+      async split() {
+        throw new Error(
+          "Ghostty on Linux doesn't support scripted splits. Run without --split, or use tmux, kitty (with config changes), or WezTerm (partial support).",
+        );
+      },
+    };
+  }
+
   const tooOld =
     (env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0;
   if (tooOld) {

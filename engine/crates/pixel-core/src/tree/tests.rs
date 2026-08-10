@@ -24,7 +24,7 @@ fn tree_of(window: (f32, f32), children: Vec<Desc>) -> Tree {
 fn painted(tree: &mut Tree, window: (u32, u32), cursor: Option<(f32, f32)>) -> Canvas {
     let mut canvas = Canvas::new(window.0, window.1);
     tree.flush_layout(&[font()], 16.0);
-    paint(tree, &mut canvas, &[font()], cursor);
+    paint(tree, &mut canvas, &[font()], cursor, None);
     canvas
 }
 

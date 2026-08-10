@@ -40,6 +40,12 @@ import {
 } from "./devtools/stores";
 import type { LogLevel } from "./devtools/store";
 
+/** Puts a line where the devtools log panel and exported profiles will carry it,
+ * so a diagnostic from the app rides along with every profile export. */
+function appLog(level: LogLevel, target: string, text: string): void {
+  engineLogs.push(level, target, text);
+}
+
 export {
   Box,
   Text,
@@ -49,6 +55,7 @@ export {
   Path,
 } from "./components";
 export type { NodeHandle } from "./components";
+export { appLog };
 export { layoutStore, profilerStore } from "./devtools/stores";
 export type { LayoutSnapshot, ProfileSession } from "./devtools/stores";
 export type {
@@ -89,12 +96,19 @@ export type {
   MarkdownRow,
   MarkdownSpan,
   Rgba,
+  SurfacePixmap,
   TerminalColors,
 } from "./native";
-export { HIGHLIGHT_CAPTURES, captureFilmstrip, diff, encodeRecording, highlight, parseMarkdown } from "./native";
+export { HIGHLIGHT_CAPTURES, captureFilmstrip, diff, displayScale, encodeRecording, highlight, parseMarkdown } from "./native";
 export { useTerminalColors } from "./colors";
 export { Surface, SurfaceCapture } from "./surface";
-export type { SurfaceFrame, CaptureStats, CaptureFrameMeta, CaptureIndex } from "./surface";
+export type {
+  SurfaceFrame,
+  SurfaceTexture,
+  CaptureStats,
+  CaptureFrameMeta,
+  CaptureIndex,
+} from "./surface";
 export { Markdown } from "./markdown";
 export type { MarkdownProps, MarkdownTheme } from "./markdown";
 export { openDevtools, closeDevtools, toggleDevtools, requestLayout, engineOp };
@@ -594,7 +608,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
 
   return {
     info,
-    sharedTextures: typeof bridge.engine.updateSurfaceTexture === "function",
+    sharedTextures:
+      typeof bridge.engine.updateSurfaceTexture === "function" ||
+      typeof bridge.engine.updateSurfacePixmap === "function",
     render(element: ReactNode) {
       const wrapped = devtoolsEnabled
         ? createElement(ReactProfiler, { id: "pixel-app", onRender: onAppRender }, element)

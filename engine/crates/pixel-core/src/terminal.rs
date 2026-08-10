@@ -429,7 +429,7 @@ impl Terminal {
     }
 
     fn probe_frame_file(&mut self) -> io::Result<bool> {
-        let path = self.frame_path(FRAME_SLOTS);
+        let path = self.frame_path(FRAME_SLOTS, 0);
         if std::fs::write(&path, [0u8, 0, 0, 255]).is_err() {
             return Ok(false);
         }
@@ -471,9 +471,9 @@ impl Terminal {
         Ok(reply.unwrap_or(false))
     }
 
-    fn frame_path(&self, slot: u64) -> std::path::PathBuf {
+    fn frame_path(&self, slot: u64, generation: u64) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "terminal-browser-{}-{}-{slot}.rgba",
+            "terminal-browser-{}-{}-{generation}-{slot}.rgba",
             std::process::id(),
             self.terminal_id
         ))
@@ -486,9 +486,10 @@ impl Terminal {
             .is_none_or(|file| file.len != data.len())
         {
             self.frame_files.clear();
+            let generation = self.frame_seq;
             for slot in 0..FRAME_SLOTS {
                 self.frame_files
-                    .push(FrameFile::create(self.frame_path(slot), data.len())?);
+                    .push(FrameFile::create(self.frame_path(slot, generation), data.len())?);
             }
         }
         let index = (self.frame_seq % FRAME_SLOTS) as usize;

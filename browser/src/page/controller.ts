@@ -1,5 +1,6 @@
+import fs from "node:fs";
 import { BrowserWindow, screen } from "electron";
-import type { OffscreenSharedTexture } from "electron";
+import { appLog } from "pixel-react";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -15,9 +16,12 @@ import type { DevtoolsDock } from "pixel-store";
 import { FaviconCache } from "./favicon";
 import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
+import { offscreenPreferences } from "./offscreen";
+import { BitmapPresenter, presentPaint } from "./paint";
 import { PopupWindow } from "./popup";
-import { cssSize, damageOf, initialBrowserState, paintedNothing } from "./types";
+import { cssSize, initialBrowserState } from "./types";
 import type { BrowserState, BrowserSurfaceLayout } from "./types";
+import { RENDER_ZOOM, applyRenderZoom, pinSurfacePixels, renderZoomBase, surfaceSize } from "./render-zoom";
 import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
@@ -27,7 +31,7 @@ export class BrowserController {
   private readonly devtoolsSurface: Surface;
   private readonly window: BrowserWindow;
   private readonly onState: (state: BrowserState) => void;
-  private readonly renderScale: number;
+  private renderScale: number;
   private layout: BrowserSurfaceLayout;
   private state: BrowserState;
   private stopped = false;
@@ -51,6 +55,7 @@ export class BrowserController {
   };
   private visible = true;
   private wholeSurfaceNext = true;
+  private readonly bitmaps: BitmapPresenter;
   private lastFrameSize: { width: number; height: number } | null = null;
   onFrameSubmitted: (() => void) | null = null;
   cursorShape = "default";
@@ -79,6 +84,7 @@ export class BrowserController {
     this.partition = partition;
     this.cwd = cwd;
     this.surface = surface;
+    this.bitmaps = new BitmapPresenter(surface);
     this.popupSurface = popupSurface;
     this.devtoolsSurface = devtoolsSurface;
     this.background = background;
@@ -101,11 +107,7 @@ export class BrowserController {
       resizable: false,
       webPreferences: {
         ...(partition ? { partition } : {}),
-        offscreen: {
-          useSharedTexture: true,
-          sharedTexturePixelFormat: "argb",
-          deviceScaleFactor: this.renderScale,
-        },
+        offscreen: offscreenPreferences(this.renderScale),
         sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
@@ -115,7 +117,8 @@ export class BrowserController {
     });
     this.input = new PageInput({
       contents: () => this.window.webContents,
-      scale: () => this.layout.scale,
+      scale: () => (RENDER_ZOOM ? 1 : this.layout.scale),
+      zoomBase: () => renderZoomBase(this.renderScale),
       focus: () => this.focusContent(),
       cdp: async (method, params) => {
         await this.attachCdp();
@@ -123,18 +126,44 @@ export class BrowserController {
       },
     });
     this.window.webContents.setFrameRate(frameRate());
+    void this.attachCdp().catch((error) => {
+      fs.writeSync(2, `cdp attach failed: ${String(error)}\n`);
+    });
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
-    this.window.webContents.on("paint", (event) => {
-      const texture = event.texture;
-      if (!texture) return;
-      this.submitTexture(texture);
+    this.window.webContents.on("paint", (event, dirtyRect, image) => {
+      const size = event.texture
+        ? {
+            width: event.texture.textureInfo.codedSize.width,
+            height: event.texture.textureInfo.codedSize.height,
+          }
+        : image.getSize();
+      const last = this.lastFrameSize;
+      if (last?.width !== size.width || last.height !== size.height) {
+        const wanted = this.contentSize(this.layout);
+        appLog(
+          "info",
+          "scale",
+          `paint ${event.texture ? "texture" : "bitmap"} ${size.width}x${size.height} ` +
+            `(wanted ${wanted.width}x${wanted.height} at ${this.renderScale}x)`,
+        );
+      }
+      const presented = event.texture
+        ? presentPaint(this.surface, event.texture, image, dirtyRect, this.wholeSurfaceNext)
+        : this.bitmaps.push(image, dirtyRect, this.wholeSurfaceNext);
+      if (!presented) return;
+      this.wholeSurfaceNext = false;
+      this.lastFrameSize = size;
+      this.onFrameSubmitted?.();
     });
     this.window.webContents.on("did-start-loading", () => this.updateState({ loading: true }));
     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
+      // The commit just reset the raw factor to the host's stored zoom, so put the
+      // render zoom back before updateNavigation samples it as the user's.
+      this.applyRenderZoom();
       this.updateNavigation(false, url);
     });
     this.window.webContents.on("page-favicon-updated", (_event, favicons) => {
@@ -211,10 +240,13 @@ export class BrowserController {
       return;
     }
     this.layout = layout;
+    this.renderScale = browserRenderScale(layout);
     // why keep frame?
     if (!options?.keepFrame) this.surface.clear();
     const size = this.contentSize(layout);
     this.window.setContentSize(size.width, size.height, false);
+    void this.applyDeviceMetrics();
+    this.applyRenderZoom();
   }
 
   navigate(value: string) {
@@ -239,13 +271,13 @@ export class BrowserController {
   }
 
   zoom(direction: ZoomDirection): number {
-    const factor = stepZoom(this.window.webContents, direction);
+    const factor = stepZoom(this.window.webContents, direction, renderZoomBase(this.renderScale));
     this.updateState({ zoom: factor });
     return factor;
   }
 
   scaleZoom(ratio: number): number {
-    const factor = scaleZoom(this.window.webContents, ratio);
+    const factor = scaleZoom(this.window.webContents, ratio, renderZoomBase(this.renderScale));
     this.updateState({ zoom: factor });
     return factor;
   }
@@ -301,6 +333,27 @@ export class BrowserController {
     await this.cdp("Runtime.addBinding", { name: "__pixelEmit" });
     await this.cdp("Page.enable");
     await this.emulateColorScheme();
+    await this.applyDeviceMetrics();
+    this.applyRenderZoom();
+  }
+
+  // The window's own size decides neither of these reliably: a window cannot be taller
+  // than the screen it sits on, and the offscreen bitmap path ignores the scale it was
+  // handed. Stating both here gets pages drawn at the size and sharpness the pane wants.
+  private async applyDeviceMetrics(): Promise<void> {
+    if (!this.cdpAttached) return;
+    try {
+      await pinSurfacePixels(
+        (method, params) => this.cdp(method, params),
+        this.contentSize(this.layout),
+      );
+    } catch (error) {
+      fs.writeSync(2, `device metrics failed: ${String(error)}\n`);
+    }
+  }
+
+  private applyRenderZoom(): void {
+    applyRenderZoom(this.window.webContents, this.renderScale, this.state.zoom);
   }
 
   async setBackground(background: string): Promise<void> {
@@ -491,24 +544,7 @@ export class BrowserController {
   }
 
   private contentSize(layout: BrowserSurfaceLayout) {
-    return cssSize(layout.width, layout.height, layout.scale);
-  }
-
- 
-  private submitTexture(texture: OffscreenSharedTexture) {
-    try {
-      const info = texture.textureInfo;
-      const handle = info.handle.ioSurface;
-      if (info.widgetType !== "frame" || info.pixelFormat !== "bgra" || !handle) return;
-      if (paintedNothing(info) && !this.wholeSurfaceNext) return;
-      const damage = this.wholeSurfaceNext ? undefined : damageOf(info);
-      this.wholeSurfaceNext = false;
-      this.lastFrameSize = { width: info.codedSize.width, height: info.codedSize.height };
-      this.surface.present({ ioSurface: handle, damage });
-      this.onFrameSubmitted?.();
-    } finally {
-      texture.release();
-    }
+    return surfaceSize(cssSize(layout.width, layout.height, layout.scale), this.renderScale);
   }
 
   frameSize(): { width: number; height: number } | null {
@@ -532,7 +568,7 @@ export class BrowserController {
       loading,
       canGoBack: this.window.webContents.navigationHistory.canGoBack(),
       canGoForward: this.window.webContents.navigationHistory.canGoForward(),
-      zoom: this.window.webContents.getZoomFactor(),
+      zoom: this.window.webContents.getZoomFactor() / renderZoomBase(this.renderScale),
     });
   }
 

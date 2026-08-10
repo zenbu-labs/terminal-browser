@@ -22,16 +22,22 @@ fn offset(rect: Rect, abs: PxRect, visible: PxRect) -> Rect {
 }
 
 impl Engine {
+    /// Converts a producer frame into the surface store and damages every
+    /// view that shows it. `source` says how the bytes must be read; see
+    /// [`crate::surfaces::Source`].
     pub fn draw_surface(
         &mut self,
         surface: u32,
         width: u32,
         height: u32,
-        bgra: &[u8],
-        stride: usize,
+        source: crate::surfaces::Source<'_>,
         damage: Option<Rect>,
     ) -> io::Result<usize> {
         let row_bytes = width as usize * 4;
+        let (bgra, stride) = match &source {
+            crate::surfaces::Source::Cached { bgra, stride }
+            | crate::surfaces::Source::Uncached { bgra, stride } => (*bgra, *stride),
+        };
         if width == 0 || height == 0 || stride < row_bytes || bgra.len() < stride * height as usize
         {
             return Err(io::Error::new(
@@ -40,7 +46,7 @@ impl Engine {
             ));
         }
         let changed = crate::profiler::span("surface.convert", || {
-            crate::surfaces::write(surface, width, height, damage, bgra, stride)
+            crate::surfaces::write(surface, width, height, damage, source)
         });
         crate::profiler::count("surface.rows", u64::from(changed.h));
         self.damage_surface_views(surface, changed);

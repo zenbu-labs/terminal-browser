@@ -235,10 +235,25 @@ fn blit(dst: &mut Canvas, src: &Canvas, origin_x: u32, region: Rect) {
     }
     let cols = (region.w.min(dst.width - dst_x)) as usize * 4;
     let rows = region.h.min(dst.height - region.y) as usize;
-    for row in region.y as usize..region.y as usize + rows {
-        let src_start = (row * src.width as usize + region.x as usize) * 4;
-        let dst_start = (row * dst.width as usize + dst_x as usize) * 4;
-        dst.pixels[dst_start..dst_start + cols]
-            .copy_from_slice(&src.pixels[src_start..src_start + cols]);
-    }
+    let src_stride = src.width as usize * 4;
+    let dst_stride = dst.width as usize * 4;
+    let src_col = region.x as usize * 4;
+    let dst_col = dst_x as usize * 4;
+    let y0 = region.y as usize;
+    let dst_rows = &mut dst.pixels[y0 * dst_stride..(y0 + rows) * dst_stride];
+    crate::parallel::row_bands(
+        dst_rows,
+        dst_stride,
+        rows,
+        1 << 20,
+        |band, first, count| {
+            for r in 0..count {
+                let src_start = (y0 + first + r) * src_stride + src_col;
+                let dst_start = r * dst_stride + dst_col;
+                band[dst_start..dst_start + cols]
+                    .copy_from_slice(&src.pixels[src_start..src_start + cols]);
+            }
+        },
+        |(), ()| (),
+    );
 }

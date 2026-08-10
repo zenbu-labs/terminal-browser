@@ -48,6 +48,7 @@ export class PopupWindow {
     this.input = new PageInput({
       contents: () => this.window.webContents,
       scale,
+      zoomBase: () => 1,
       focus: () => this.focus(),
       cdp: (method, params) => this.cdp(method, params),
     });

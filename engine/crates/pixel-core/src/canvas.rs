@@ -6,6 +6,8 @@ std::thread_local! {
     static GLYPH_CACHE: std::cell::RefCell<GlyphCache> = std::cell::RefCell::new(GlyphCache::new());
     static ADVANCE_CACHE: std::cell::RefCell<std::collections::HashMap<GlyphKey, f32>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    static LAST_RESAMPLE: std::cell::Cell<Option<(u32, u32, u32, u32)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 fn corner_insets(radius: [f32; 4], row: i64, height: i64) -> (i64, i64) {
@@ -58,6 +60,31 @@ pub(crate) fn take_canvas_stats() -> (u64, u64, u64, u64) {
     })
 }
 
+fn subtract_rect(
+    (fx1, fy1, fx2, fy2): (u32, u32, u32, u32),
+    (hx1, hy1, hx2, hy2): (u32, u32, u32, u32),
+    out: &mut Vec<(u32, u32, u32, u32)>,
+) {
+    if hx2 <= fx1 || hx1 >= fx2 || hy2 <= fy1 || hy1 >= fy2 {
+        out.push((fx1, fy1, fx2, fy2));
+        return;
+    }
+    if fy1 < hy1 {
+        out.push((fx1, fy1, fx2, hy1));
+    }
+    if hy2 < fy2 {
+        out.push((fx1, hy2, fx2, fy2));
+    }
+    let my1 = fy1.max(hy1);
+    let my2 = fy2.min(hy2);
+    if fx1 < hx1 {
+        out.push((fx1, my1, hx1, my2));
+    }
+    if hx2 < fx2 {
+        out.push((hx2, my1, fx2, my2));
+    }
+}
+
 fn solid_paint(color: [u8; 4]) -> tiny_skia::Paint<'static> {
     let mut paint = tiny_skia::Paint::default();
     paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
@@ -91,6 +118,12 @@ pub struct Canvas {
     pub height: u32,
     pub pixels: Vec<u8>,
     clip_stack: Vec<(u32, u32, u32, u32)>,
+    // Regions a later paint will fully cover with opaque pixels, so fills inside them
+    // are invisible in the finished frame and can be skipped. Whoever announces a
+    // region must withdraw it just before painting it, or what they paint over stays
+    // unpainted.
+    occluders: Vec<(u32, (f32, f32, f32, f32))>,
+    next_occluder: u32,
     scratch: Vec<u8>,
 }
 
@@ -101,6 +134,8 @@ impl Canvas {
             height,
             pixels: vec![0; (width * height * 4) as usize],
             clip_stack: Vec::new(),
+            occluders: Vec::new(),
+            next_occluder: 0,
             scratch: Vec::new(),
         }
     }
@@ -112,6 +147,8 @@ impl Canvas {
             height,
             pixels,
             clip_stack: Vec::new(),
+            occluders: Vec::new(),
+            next_occluder: 0,
             scratch: Vec::new(),
         }
     }
@@ -127,6 +164,32 @@ impl Canvas {
 
     pub fn pop_clip(&mut self) {
         self.clip_stack.pop();
+    }
+
+    pub fn add_occluder(&mut self, x: f32, y: f32, w: f32, h: f32) -> u32 {
+        let token = self.next_occluder;
+        self.next_occluder += 1;
+        self.occluders.push((token, (x, y, w, h)));
+        token
+    }
+
+    pub fn remove_occluder(&mut self, token: u32) {
+        self.occluders.retain(|(t, _)| *t != token);
+    }
+
+    pub fn clear_occluders(&mut self) {
+        self.occluders.clear();
+    }
+
+    fn occluded(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
+        let inside = self
+            .occluders
+            .iter()
+            .any(|&(_, (ox, oy, ow, oh))| x >= ox && y >= oy && x + w <= ox + ow && y + h <= oy + oh);
+        if inside {
+            tally(|s| &s.boxes_clipped_out);
+        }
+        inside
     }
 
     fn clip_bounds(&self) -> (u32, u32, u32, u32) {
@@ -160,6 +223,33 @@ impl Canvas {
         if x2 <= x1 || y2 <= y1 {
             return;
         }
+        // A fill overlapping a region that opaque pixels will cover only needs the
+        // bands around that region, and big fills usually sit mostly under one.
+        let mut fragments = vec![(x1, y1, x2, y2)];
+        if !self.occluders.is_empty() {
+            let mut split = Vec::new();
+            for &(_, (ox, oy, ow, oh)) in &self.occluders {
+                let hole = (
+                    ox.ceil().max(0.0) as u32,
+                    oy.ceil().max(0.0) as u32,
+                    (ox + ow).floor().max(0.0) as u32,
+                    (oy + oh).floor().max(0.0) as u32,
+                );
+                for fragment in fragments.drain(..) {
+                    subtract_rect(fragment, hole, &mut split);
+                }
+                std::mem::swap(&mut fragments, &mut split);
+            }
+            if fragments != [(x1, y1, x2, y2)] {
+                tally(|s| &s.boxes_clipped_out);
+            }
+        }
+        for (fx1, fy1, fx2, fy2) in fragments {
+            self.fill_rows(fx1, fy1, fx2, fy2, color);
+        }
+    }
+
+    fn fill_rows(&mut self, x1: u32, y1: u32, x2: u32, y2: u32, color: [u8; 4]) {
         let first = ((y1 * self.width + x1) * 4) as usize;
         let row_len = ((x2 - x1) * 4) as usize;
         for px in self.pixels[first..first + row_len].chunks_exact_mut(4) {
@@ -354,20 +444,78 @@ impl Canvas {
     ) -> bool {
         let strip = (max_radius.ceil() * 2.0).max(2.0);
         let whole_pixels = [x, y, w, h].iter().all(|v| (v - v.round()).abs() < 0.01);
-        if color[3] != 255 || !whole_pixels || w * h < 65536.0 || h < strip * 2.0 + 2.0 {
+        if color[3] != 255 || !whole_pixels || w * h < 65536.0 {
             return false;
+        }
+        if h < strip * 2.0 + 2.0 {
+            // Too thin for horizontal strips: antialias only the corner
+            // blocks at either end and fill the middle as a plain rect.
+            if w < strip * 2.0 + 2.0 {
+                return false;
+            }
+            if let Some(path) =
+                rounded_rect_path(x, y, strip, h, [radius[0], 0.0, 0.0, radius[3]])
+            {
+                self.paint_path(&path, color, None);
+            }
+            if let Some(path) =
+                rounded_rect_path(x + w - strip, y, strip, h, [0.0, radius[1], radius[2], 0.0])
+            {
+                self.paint_path(&path, color, None);
+            }
+            let mx1 = (x + strip).round().max(0.0) as u32;
+            let mx2 = (x + w - strip).round().max(0.0) as u32;
+            self.fill_rect(
+                mx1,
+                y.round().max(0.0) as u32,
+                mx2.saturating_sub(mx1),
+                h.round().max(0.0) as u32,
+                color,
+            );
+            return true;
         }
         let top = y + strip;
         let bottom = y + h - strip;
-        if let Some(path) = rounded_rect_path(x, y, w, strip, [radius[0], radius[1], 0.0, 0.0]) {
+        // Only the corner squares need antialiased paths; the rest of each
+        // horizontal strip is a plain rect. Path rasterization across the
+        // whole strip of a pane-sized rect costs milliseconds.
+        let corner = strip.min(w / 2.0);
+        if let Some(path) = rounded_rect_path(x, y, corner * 2.0, strip, [radius[0], 0.0, 0.0, 0.0])
+        {
             self.paint_path(&path, color, None);
         }
-        if let Some(path) = rounded_rect_path(x, bottom, w, strip, [0.0, 0.0, radius[2], radius[3]])
+        if let Some(path) = rounded_rect_path(
+            x + w - corner * 2.0,
+            y,
+            corner * 2.0,
+            strip,
+            [0.0, radius[1], 0.0, 0.0],
+        ) {
+            self.paint_path(&path, color, None);
+        }
+        if let Some(path) = rounded_rect_path(
+            x + w - corner * 2.0,
+            bottom,
+            corner * 2.0,
+            strip,
+            [0.0, 0.0, radius[2], 0.0],
+        ) {
+            self.paint_path(&path, color, None);
+        }
+        if let Some(path) =
+            rounded_rect_path(x, bottom, corner * 2.0, strip, [0.0, 0.0, 0.0, radius[3]])
         {
             self.paint_path(&path, color, None);
         }
         let x1 = x.round().max(0.0) as u32;
         let x2 = (x + w).round().max(0.0) as u32;
+        let cx1 = (x + corner * 2.0).round().max(0.0) as u32;
+        let cx2 = (x + w - corner * 2.0).round().max(0.0) as u32;
+        if cx2 > cx1 {
+            let strip_px = strip.round().max(0.0) as u32;
+            self.fill_rect(cx1, y.round().max(0.0) as u32, cx2 - cx1, strip_px, color);
+            self.fill_rect(cx1, bottom.round().max(0.0) as u32, cx2 - cx1, strip_px, color);
+        }
         self.fill_rect(
             x1,
             top.round().max(0.0) as u32,
@@ -387,7 +535,7 @@ impl Canvas {
         radius: [f32; 4],
         color: [u8; 4],
     ) {
-        if w <= 0.0 || h <= 0.0 || self.clipped_out(x, y, w, h) {
+        if w <= 0.0 || h <= 0.0 || self.clipped_out(x, y, w, h) || self.occluded(x, y, w, h) {
             return;
         }
         let max_radius = radius.iter().fold(0.0f32, |a, &r| a.max(r));
@@ -421,6 +569,43 @@ impl Canvas {
         if self.clipped_out(x - width, y - width, w + width * 2.0, h + width * 2.0) {
             return;
         }
+        // Stroking a pane-sized path makes the rasterizer walk every scanline
+        // of the box for a hairline of coverage. Big strokes split into four
+        // corner arcs and four straight edges blended directly.
+        let corner = radius
+            .iter()
+            .fold(width * 2.0, |a, &r| a.max(r + width))
+            .ceil()
+            + 1.0;
+        if w * h >= 65536.0 && w > corner * 2.0 + 2.0 && h > corner * 2.0 + 2.0 {
+            let inset = width / 2.0;
+            let stroke_radius = radius.map(|r| (r - inset).max(0.0));
+            let clips: [(f32, f32, f32, f32); 4] = [
+                (x, y, corner, corner),
+                (x + w - corner, y, corner, corner),
+                (x + w - corner, y + h - corner, corner, corner),
+                (x, y + h - corner, corner, corner),
+            ];
+            if let Some(path) = rounded_rect_path(
+                x + inset,
+                y + inset,
+                w - width,
+                h - width,
+                stroke_radius,
+            ) {
+                for (cx, cy, cw, ch) in clips {
+                    self.push_clip(cx, cy, cw, ch);
+                    self.paint_path(&path, color, Some(width));
+                    self.pop_clip();
+                }
+            }
+            let edge = width.max(1.0);
+            self.blend_fill(x + corner, y, w - corner * 2.0, edge, color);
+            self.blend_fill(x + corner, y + h - edge, w - corner * 2.0, edge, color);
+            self.blend_fill(x, y + corner, edge, h - corner * 2.0, color);
+            self.blend_fill(x + w - edge, y + corner, edge, h - corner * 2.0, color);
+            return;
+        }
         let inset = width / 2.0;
         if let Some(path) = rounded_rect_path(
             x + inset,
@@ -430,6 +615,36 @@ impl Canvas {
             radius.map(|r| (r - inset).max(0.0)),
         ) {
             self.paint_path(&path, color, Some(width));
+        }
+    }
+
+    /// Alpha-blends a solid rect; opaque colors take the plain fill.
+    fn blend_fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let x1 = x.round().max(0.0) as u32;
+        let y1 = y.round().max(0.0) as u32;
+        let x2 = (x + w).round().max(0.0) as u32;
+        let y2 = (y + h).round().max(0.0) as u32;
+        if color[3] == 255 {
+            self.fill_rect(x1, y1, x2.saturating_sub(x1), y2.saturating_sub(y1), color);
+            return;
+        }
+        let (cx1, cy1, cx2, cy2) = self.clip_bounds();
+        let x1 = x1.clamp(cx1, cx2);
+        let y1 = y1.clamp(cy1, cy2);
+        let x2 = x2.clamp(x1, cx2);
+        let y2 = y2.clamp(y1, cy2);
+        if x2 <= x1 || y2 <= y1 || color[3] == 0 {
+            return;
+        }
+        for row in y1..y2 {
+            let start = ((row * self.width + x1) * 4) as usize;
+            let len = ((x2 - x1) * 4) as usize;
+            for px in self.pixels[start..start + len].chunks_exact_mut(4) {
+                blend_pixel(px, &color, color[3]);
+            }
         }
     }
     pub fn blit_image(&mut self, x: f32, y: f32, image: tiny_skia::PixmapRef<'_>) {
@@ -443,6 +658,19 @@ impl Canvas {
         image: tiny_skia::PixmapRef<'_>,
         radius: [f32; 4],
     ) {
+        self.blit_image_rounded_hint(x, y, image, radius, false);
+    }
+
+    /// `opaque` skips the per-row alpha scan; either way big blits split into
+    /// row bands across a few threads.
+    pub fn blit_image_rounded_hint(
+        &mut self,
+        x: f32,
+        y: f32,
+        image: tiny_skia::PixmapRef<'_>,
+        radius: [f32; 4],
+        opaque: bool,
+    ) {
         let (cx1, cy1, cx2, cy2) = self.clip_bounds();
         let x0 = x.round() as i64;
         let y0 = y.round() as i64;
@@ -455,22 +683,42 @@ impl Canvas {
         }
         let src = image.data();
         let src_stride = image.width() as usize * 4;
+        let src_w = i64::from(image.width());
         let height = i64::from(image.height());
-        for row in y1..y2 {
-            let (inset_l, inset_r) = corner_insets(radius, row - y0, height);
-            let rx1 = x1.max(x0 + inset_l);
-            let rx2 = x2.min(x0 + i64::from(image.width()) - inset_r);
-            if rx2 <= rx1 {
-                continue;
+        let dst_stride = self.width as usize * 4;
+        let rows = (y2 - y1) as usize;
+        let run_rows = |dst_rows: &mut [u8], first_row: i64, count: usize| {
+            for r in 0..count {
+                let row = first_row + r as i64;
+                let (inset_l, inset_r) = corner_insets(radius, row - y0, height);
+                let rx1 = x1.max(x0 + inset_l);
+                let rx2 = x2.min(x0 + src_w - inset_r);
+                if rx2 <= rx1 {
+                    continue;
+                }
+                let col0 = (rx1 - x0) as usize * 4;
+                let col1 = (rx2 - x0) as usize * 4;
+                let src_off = (row - y0) as usize * src_stride;
+                let src_row = &src[src_off + col0..src_off + col1];
+                let dst_off = r * dst_stride + rx1 as usize * 4;
+                let dst_row = &mut dst_rows[dst_off..dst_off + src_row.len()];
+                if opaque {
+                    dst_row.copy_from_slice(src_row);
+                } else {
+                    blend_row(dst_row, src_row);
+                }
             }
-            let col0 = (rx1 - x0) as usize * 4;
-            let col1 = (rx2 - x0) as usize * 4;
-            let src_off = (row - y0) as usize * src_stride;
-            let src_row = &src[src_off + col0..src_off + col1];
-            let dst_off = ((row as u32 * self.width + rx1 as u32) * 4) as usize;
-            let dst_row = &mut self.pixels[dst_off..dst_off + src_row.len()];
-            blend_row(dst_row, src_row);
-        }
+        };
+        let dst_from = y1 as usize * dst_stride;
+        let dst_region = &mut self.pixels[dst_from..y2 as usize * dst_stride];
+        crate::parallel::row_bands(
+            dst_region,
+            dst_stride,
+            rows,
+            1 << 20,
+            |band, first, count| run_rows(band, y1 + first as i64, count),
+            |(), ()| (),
+        );
     }
 
     pub fn blit_opaque_rgba(&mut self, x: f32, y: f32, src: &[u8], src_w: u32, src_h: u32) {
@@ -507,6 +755,33 @@ impl Canvas {
         src_h: u32,
     ) {
         self.blit_scaled_rgba_rounded(x, y, w, h, src, src_w, src_h, [0.0; 4]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn blit_scaled_rgba_rounded_hint(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        src: &[u8],
+        src_w: u32,
+        src_h: u32,
+        radius: [f32; 4],
+        opaque: bool,
+    ) {
+        let dst_w = w.round().max(0.0) as u32;
+        let dst_h = h.round().max(0.0) as u32;
+        if (dst_w, dst_h) == (src_w, src_h)
+            && src_w > 0
+            && src.len() >= src_w as usize * src_h as usize * 4
+        {
+            if let Some(image) = tiny_skia::PixmapRef::from_bytes(src, src_w, src_h) {
+                self.blit_image_rounded_hint(x, y, image, radius, opaque);
+            }
+            return;
+        }
+        self.blit_scaled_rgba_rounded(x, y, w, h, src, src_w, src_h, radius);
     }
     #[allow(clippy::too_many_arguments)]
     pub fn blit_scaled_rgba_rounded(
@@ -545,6 +820,18 @@ impl Canvas {
             return;
         }
         crate::profiler::count("surface.resampled", 1);
+        // Resampling every pixel costs far more than copying them, so say once per new
+        // pair of sizes why the cheap path was missed.
+        LAST_RESAMPLE.with(|last| {
+            let sizes = (src_w, src_h, dst_w, dst_h);
+            if last.get() != Some(sizes) {
+                last.set(Some(sizes));
+                crate::logging::warn(
+                    "paint",
+                    format!("resampling surface {src_w}x{src_h} into {dst_w}x{dst_h}"),
+                );
+            }
+        });
         let src_stride = src_w as usize * 4;
         let dst_stride = self.width as usize * 4;
         let weight = |i: i64, origin: i64, dst_extent: u32, max: u32| {
@@ -832,6 +1119,52 @@ pub(crate) fn char_advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fills_inside_an_occluder_are_skipped_until_it_is_withdrawn() {
+        let mut canvas = Canvas::new(10, 10);
+        canvas.fill([0, 0, 0, 255]);
+        let token = canvas.add_occluder(2.0, 2.0, 6.0, 6.0);
+
+        canvas.fill_rounded_rect(3.0, 3.0, 2.0, 2.0, [0.0; 4], [255, 0, 0, 255]);
+        assert_eq!(canvas.pixels[(3 * 10 + 3) * 4], 0, "fill inside the occluder must be skipped");
+
+        canvas.fill_rounded_rect(0.0, 0.0, 2.0, 2.0, [0.0; 4], [255, 0, 0, 255]);
+        assert_eq!(canvas.pixels[0], 255, "fill outside the occluder must paint");
+
+        canvas.fill_rounded_rect(1.0, 1.0, 4.0, 4.0, [0.0; 4], [0, 255, 0, 255]);
+        assert_eq!(
+            canvas.pixels[(1 * 10 + 1) * 4 + 1],
+            255,
+            "fill straddling the occluder edge must paint"
+        );
+
+        canvas.remove_occluder(token);
+        canvas.fill_rounded_rect(3.0, 3.0, 2.0, 2.0, [0.0; 4], [0, 0, 255, 255]);
+        assert_eq!(
+            canvas.pixels[((3 * 10 + 3) * 4) + 2],
+            255,
+            "after withdrawal the same fill must paint, as a modal above the surface would"
+        );
+    }
+
+    #[test]
+    fn a_fill_straddling_an_occluder_paints_only_the_uncovered_bands() {
+        let mut canvas = Canvas::new(10, 10);
+        canvas.fill([0, 0, 0, 255]);
+        canvas.add_occluder(2.0, 2.0, 6.0, 6.0);
+        canvas.fill_rect(0, 0, 10, 10, [255, 0, 0, 255]);
+
+        assert_eq!(canvas.pixels[0], 255, "outside the occluder the fill paints");
+        assert_eq!(canvas.pixels[(9 * 10 + 9) * 4], 255, "all four bands paint");
+        assert_eq!(
+            canvas.pixels[(5 * 10 + 5) * 4],
+            0,
+            "under the occluder nothing paints"
+        );
+        assert_eq!(canvas.pixels[(2 * 10 + 1) * 4], 255, "the band edge is exact");
+        assert_eq!(canvas.pixels[(2 * 10 + 2) * 4], 0, "the hole edge is exact");
+    }
 
     #[test]
     fn scaled_blit_interpolates_instead_of_dropping_pixels() {

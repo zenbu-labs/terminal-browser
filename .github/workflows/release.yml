@@ -20,15 +20,13 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') && (inputs.bump == '' || inputs.bump == 'none') }}
 
 jobs:
-  build:
-    runs-on: [self-hosted, macOS, ARM64]
+  prepare:
+    runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.v.outputs.channel }}
       version: ${{ steps.v.outputs.version }}
-    env:
-      # The runner checks out into a fresh directory each run; keeping the rust
-      # build outside it means only changed crates recompile.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../cargo-target
+      ref: ${{ steps.v.outputs.ref }}
+      flip: ${{ steps.v.outputs.flip }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,23 +39,95 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             CHANNEL=stable
             VERSION="${GITHUB_REF#refs/tags/}"
+            REF="$VERSION"
           elif [ -n "$BUMP" ] && [ "$BUMP" != none ]; then
             CHANNEL=stable
             VERSION="$(scripts/next-version.sh "$BUMP")"
             git -c user.name="terminal-browser release" -c user.email="release@zenbu.dev" \
               tag -a "$VERSION" -m "terminal-browser $VERSION"
             git push origin "$VERSION"
-          else
+            REF="$VERSION"
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then
             CHANNEL=dev
             VERSION="main-$(git rev-parse --short HEAD)"
+            REF="$GITHUB_SHA"
+          else
+            # A branch build publishes a pinned version anyone can install via
+            # /install/v/<version>, without moving the dev channel.
+            CHANNEL=dev
+            FLIP=false
+            BRANCH="$(printf %s "${GITHUB_REF#refs/heads/}" | tr -c "a-zA-Z0-9._-" "-")"
+            VERSION="$BRANCH-$(git rev-parse --short HEAD)"
+            REF="$GITHUB_SHA"
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "flip=${FLIP:-true}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: [self-hosted, macOS, ARM64]
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      # The runner checks out into a fresh directory each run; keeping the rust
+      # build outside it means only changed crates recompile.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../cargo-target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+
+      - uses: pnpm/action-setup@v4
+        if: runner.os == 'Linux'
+
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'Linux'
 
       - run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: scripts/release.sh "${{ steps.v.outputs.version }}" "${{ steps.v.outputs.channel }}"
+        run: scripts/release.sh "${{ needs.prepare.outputs.version }}" "${{ needs.prepare.outputs.channel }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist-release/terminal-browser-${{ matrix.target }}.tar.gz
+            dist-release/manifest-${{ matrix.target }}.json
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [prepare, build, worker]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist-release
 
       - name: Publish
         id: publish
@@ -65,45 +135,52 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           RELEASE_ORIGIN: ${{ vars.RELEASE_ORIGIN }}
+          FLIP_LATEST: ${{ needs.prepare.outputs.flip }}
         run: |
           scripts/publish-r2.sh | tee /tmp/publish.log
           grep -E '^(pinned|latest)=' /tmp/publish.log >> "$GITHUB_OUTPUT" || true
 
       - name: GitHub release
-        if: steps.v.outputs.channel == 'stable'
+        if: needs.prepare.outputs.channel == 'stable'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.v.outputs.version }}" \
-            --title "${{ steps.v.outputs.version }}" \
-            --notes "$(printf 'Install:\n\n```sh\ncurl -fsSL %s | bash\n```\n\nPinned to this version:\n\n```sh\ncurl -fsSL %s | bash\n```\n' \
-              "${{ steps.publish.outputs.latest }}" "${{ steps.publish.outputs.pinned }}")"
+          VERSION="${{ needs.prepare.outputs.version }}"
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release create "$VERSION" \
+              --title "$VERSION" \
+              --notes "$(printf 'Install:\n\n```sh\ncurl -fsSL %s | bash\n```\n\nPinned to this version:\n\n```sh\ncurl -fsSL %s | bash\n```\n' \
+                "${{ steps.publish.outputs.latest }}" "${{ steps.publish.outputs.pinned }}")"
+          fi
+          gh release upload "$VERSION" dist-release/terminal-browser-*.tar.gz --clobber
 
       - name: Summary
         run: |
           {
-            echo "### terminal-browser \`${{ steps.v.outputs.version }}\` (${{ steps.v.outputs.channel }})"
+            echo "### terminal-browser \`${{ needs.prepare.outputs.version }}\` (${{ needs.prepare.outputs.channel }})"
             echo
             echo "This build:"
             echo '```sh'
             echo "curl -fsSL ${{ steps.publish.outputs.pinned }} | bash"
             echo '```'
-            echo "Always current ${{ steps.v.outputs.channel }}:"
-            echo '```sh'
-            echo "curl -fsSL ${{ steps.publish.outputs.latest }} | bash"
-            echo '```'
+            if [ -n "${{ steps.publish.outputs.latest }}" ]; then
+              echo "Always current ${{ needs.prepare.outputs.channel }}:"
+              echo '```sh'
+              echo "curl -fsSL ${{ steps.publish.outputs.latest }} | bash"
+              echo '```'
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
   worker:
     runs-on: ubuntu-latest
-    needs: build
-    if: needs.build.outputs.channel == 'stable'
+    needs: prepare
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Deploy worker
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (inputs.bump != '' && inputs.bump != 'none')
         working-directory: release-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

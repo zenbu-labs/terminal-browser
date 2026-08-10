@@ -1,10 +1,18 @@
-import type { DamageRect, NativeEngine } from "./native";
+import type { DamageRect, NativeEngine, SurfacePixmap } from "./native";
 
 type Damaged = { damage?: DamageRect };
 
+export type SurfaceTexture = { ioSurface: Buffer } | { pixmap: SurfacePixmap };
+
 export type SurfaceFrame =
   | ({ bgra: Buffer; width: number; height: number } & Damaged) // i think we want to kilt the case of passing the raw pixels to react, there's never a case that I know of
-  | ({ ioSurface: Buffer } & Damaged);
+  | (SurfaceTexture & Damaged & Released);
+
+/** Called once the engine is finished reading the frame's memory (or never
+ * started); the producer keeps the texture alive until then. */
+interface Released {
+  released?: () => void;
+}
 
 export class Surface {
   private readonly id: number;
@@ -17,11 +25,19 @@ export class Surface {
   }
 
   present(frame: SurfaceFrame): void {
-    if (this.closed) return;
+    if (this.closed) {
+      if ("pixmap" in frame) frame.released?.();
+      return;
+    }
     if ("ioSurface" in frame) {
       const submit = this.engine.updateSurfaceTexture;
       if (!submit) throw new Error("IOSurface frames are not supported on this platform");
       submit.call(this.engine, this.id, frame.ioSurface, frame.damage);
+    } else if ("pixmap" in frame) {
+      const submit = this.engine.updateSurfacePixmap;
+      if (!submit) throw new Error("dmabuf frames are not supported on this platform");
+      submit.call(this.engine, this.id, frame.pixmap, frame.damage, frame.released);
+      return;
     } else {
       this.engine.updateSurface(this.id, frame.bgra, frame.width, frame.height, frame.damage);
     }

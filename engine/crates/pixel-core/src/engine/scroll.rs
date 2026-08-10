@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 use super::hover::Verdict;
 use super::{Engine, EngineEvent};
 use crate::logging;
+use crate::scroll::profiles::Wheel;
+use crate::scroll::ScrollProfile;
 use crate::terminal::Mods;
 use crate::tree::NodeId;
 
@@ -279,9 +281,12 @@ impl Engine {
             let tree = &mut self.comp.views[view].tree;
             for id in tree.scroll_nodes() {
                 let max = tree.scroll_max(id);
-                if let Some(state) = tree.scroll_state_mut(id)
-                    && state.step(profile, dt, max)
-                {
+                let stepped = tree.scroll_state_mut(id).is_some_and(|state| {
+                    let profile: &dyn ScrollProfile =
+                        if state.is_wheel() { &Wheel } else { profile };
+                    state.step(profile, dt, max)
+                });
+                if stepped {
                     tree.mark_place();
                     tree.touch_bar(id);
                 }

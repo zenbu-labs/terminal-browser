@@ -22,7 +22,8 @@ export function callerTty(): CallerTty {
     }
     if (!out) return { path: null, denied: hops === 0 };
     const [ppid, tty] = out.split(/\s+/);
-    if (tty && tty !== "??") return { path: `/dev/${tty}`, denied: false };
+    // ps prints "??" on macOS and "?" on linux when a process has no tty
+    if (tty && tty !== "??" && tty !== "?") return { path: `/dev/${tty}`, denied: false };
     pid = Number(ppid);
     if (!Number.isFinite(pid)) return { path: null, denied: false };
   }

@@ -34,5 +34,9 @@ export function cannotOpenPanes(terminal: Terminal | null): string {
   const who = terminal
     ? `${terminal.name} cannot open panes from a command`
     : "terminal-browser does not recognise this terminal";
-  return `${who}. We recommend Ghostty (https://ghostty.org/download).`;
+  const recommendation =
+    process.platform === "darwin"
+      ? "We recommend Ghostty (https://ghostty.org/download)."
+      : "We recommend tmux, kitty (with config changes), or WezTerm (partial support).";
+  return `${who}. ${recommendation}`;
 }

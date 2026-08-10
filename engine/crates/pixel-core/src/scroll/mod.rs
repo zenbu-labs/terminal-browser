@@ -11,18 +11,44 @@ pub struct ScrollState {
     pub target: f32,
     pub velocity: f32,
     idle: f32,
+    wheel: bool,
+    segment: Segment,
+}
+
+/// One in-flight wheel run: a hermite segment from `from` to `to`, entered at
+/// velocity `v0`, `t` seconds into its `dur` second flight.
+#[derive(Debug, Clone, Copy, Default)]
+struct Segment {
+    from: f32,
+    to: f32,
+    v0: f32,
+    dur: f32,
+    t: f32,
 }
 
 impl ScrollState {
     pub fn tick<P: ScrollProfile + ?Sized>(&mut self, profile: &P, delta: f32, max: f32) {
         self.idle = 0.0;
+        self.wheel = false;
         self.target = (self.target + delta).clamp(0.0, max);
         profile.tick(self, delta, max);
+    }
+
+    /// A tick known to be a discrete wheel detent; the node keeps stepping with
+    /// the wheel profile until another driver takes over.
+    pub fn tick_wheel<P: ScrollProfile + ?Sized>(&mut self, profile: &P, delta: f32, max: f32) {
+        self.tick(profile, delta, max);
+        self.wheel = true;
+    }
+
+    pub fn is_wheel(&self) -> bool {
+        self.wheel
     }
 
     pub fn set_target(&mut self, pos: f32) {
         self.target = pos.max(0.0);
         self.velocity = 0.0;
+        self.wheel = false;
     }
 
     pub fn settled(&self) -> bool {

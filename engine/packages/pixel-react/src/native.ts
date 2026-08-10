@@ -5,6 +5,16 @@ export interface DamageRect {
   height: number;
 }
 
+/** One plane of a dmabuf-backed shared texture, as Electron reports it on Linux. */
+export interface SurfacePixmap {
+  fd: number;
+  width: number;
+  height: number;
+  stride: number;
+  offset: number;
+  size: number;
+}
+
 export interface NativeEngine {
   info(): string;
   applyOps(ops: string): void;
@@ -16,6 +26,12 @@ export interface NativeEngine {
     damage?: DamageRect,
   ): void;
   updateSurfaceTexture?(id: number, handle: Buffer, damage?: DamageRect): void;
+  updateSurfacePixmap?(
+    id: number,
+    pixmap: SurfacePixmap,
+    damage?: DamageRect,
+    released?: (...args: unknown[]) => void,
+  ): void;
   removeSurface(id: number): void;
   surfaceStats(): string;
   startSurfaceCapture(surfaceId: number, dir: string): number;
@@ -112,6 +128,7 @@ export interface DiffRow {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const binding = require("../native/pixel.node") as {
   PixelEngine: new (tty?: string, wrapper?: string) => NativeEngine;
+  displayScale(): number | null;
   highlight(source: string, language: string): HighlightSpan[];
   highlightCaptures(): string[];
   diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];
@@ -128,6 +145,10 @@ const binding = require("../native/pixel.node") as {
     height: number,
   ): Promise<Buffer>;
 };
+
+export function displayScale(): number | null {
+  return binding.displayScale();
+}
 
 export function createNativeEngine(tty?: string, wrapper?: string): NativeEngine {
   const pixelEngine =  new binding.PixelEngine(tty, wrapper);

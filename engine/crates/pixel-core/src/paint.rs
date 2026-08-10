@@ -11,6 +11,7 @@ use crate::wrap::wrap_lines;
 #[derive(Default)]
 struct PaintStats {
     rects: f64,
+    surface: f64,
     images: f64,
     wrap: f64,
     glyphs: f64,
@@ -27,6 +28,7 @@ impl PaintStats {
         let mut at = start_ms;
         let buckets = [
             ("paint.rects", self.rects, Some(self.rect_count)),
+            ("paint.surface", self.surface, None),
             ("paint.images", self.images, None),
             ("paint.wrap", self.wrap, None),
             ("paint.glyphs", self.glyphs, Some(self.glyph_count)),
@@ -64,17 +66,29 @@ fn timed<T>(bucket: Option<&mut f64>, work: impl FnOnce() -> T) -> T {
 }
 
 // todo: check why, and verify this statement "Requires `flush_layout` to have run first."
+/// Paints the tree into the canvas. When `clear` carries the damage region
+/// and background color, the region is cleared here rather than by the
+/// caller: occluders are collected first, so the clear never touches pixels
+/// an opaque surface will cover anyway.
 pub fn paint(
     tree: &Tree,
     canvas: &mut Canvas,
     fonts: &[fontdue::Font],
     cursor: Option<(f32, f32)>,
+    clear: Option<(crate::surfaces::Rect, crate::style::Color)>,
 ) {
     assert!(!fonts.is_empty());
     crate::profiler::span("tree.paint", || {
         let start_ms = crate::profiler::now_ms();
         let mut stats = start_ms.map(|_| PaintStats::default());
         let blocks = tree.doc_selection_blocks(fonts);
+        let mut surface_occluders = Vec::new();
+        collect_surface_occluders(tree, tree.root(), None, canvas, &mut surface_occluders);
+        if let Some((region, color)) = clear {
+            crate::profiler::span("canvas.clear", || {
+                canvas.fill_rect(region.x, region.y, region.w, region.h, color);
+            });
+        }
         paint_node(
             tree,
             tree.root(),
@@ -83,12 +97,70 @@ pub fn paint(
             cursor,
             &blocks,
             None,
+            &mut surface_occluders,
             &mut stats,
         );
+        canvas.clear_occluders();
         if let (Some(stats), Some(start_ms)) = (stats, start_ms) {
             stats.emit(start_ms);
         }
     });
+}
+
+/// Finds surfaces whose pixels will fully cover their box, and announces those boxes
+/// to the canvas so everything painted beneath them is skipped. Painting withdraws
+/// each box when it reaches that surface, so anything drawn later, like a modal above
+/// the page, paints normally.
+fn collect_surface_occluders(
+    tree: &Tree,
+    id: NodeId,
+    clip: Option<PxRect>,
+    canvas: &mut Canvas,
+    out: &mut Vec<(NodeId, u32)>,
+) {
+    let Some(node) = tree.get(id) else {
+        return;
+    };
+    if node.hidden {
+        return;
+    }
+    let rect = node.abs;
+    if let Some(surface) = node.surface
+        && crate::surfaces::with(surface, |s| s.opaque && s.width > 0 && s.height > 0)
+            .unwrap_or(false)
+    {
+        // The corners stay uncovered under a corner radius, and an extra pixel absorbs
+        // the rounding between these float rects and the painted ones.
+        let inset = node.style.corner_radius.iter().fold(1.0f32, |a, &r| a.max(r));
+        let mut area = PxRect {
+            x: rect.x + inset,
+            y: rect.y + inset,
+            w: rect.w - inset * 2.0,
+            h: rect.h - inset * 2.0,
+        };
+        if let Some(clip) = clip {
+            area = area.intersect(clip);
+        }
+        if area.w > 0.0 && area.h > 0.0 {
+            let token = canvas.add_occluder(area.x, area.y, area.w, area.h);
+            out.push((id, token));
+        }
+    }
+    let child_clip = if node.style.overflow != Overflow::Visible {
+        Some(clip.map_or(rect, |c| c.intersect(rect)))
+    } else {
+        clip
+    };
+    for &child in &node.children {
+        let skipped = tree.get(child).is_some_and(|n| {
+            (n.slot.is_some() && !n.slot_visible)
+                || (n.mark.is_some() && !n.mark_visible)
+                || n.shape.is_some()
+        });
+        if !skipped {
+            collect_surface_occluders(tree, child, child_clip, canvas, out);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -100,6 +172,7 @@ fn paint_node(
     cursor: Option<(f32, f32)>,
     blocks: &[(NodeId, Vec<PxRect>, Color)],
     enclosing_block: Option<(&[PxRect], Color)>,
+    surface_occluders: &mut Vec<(NodeId, u32)>,
     stats: &mut Option<PaintStats>,
 ) {
     let Some(node) = tree.get(id) else {
@@ -166,9 +239,13 @@ fn paint_node(
         });
     }
     if let Some(surface) = node.surface {
-        timed(stats.as_mut().map(|s| &mut s.images), || {
+        if let Some(at) = surface_occluders.iter().position(|(n, _)| *n == id) {
+            let (_, token) = surface_occluders.swap_remove(at);
+            canvas.remove_occluder(token);
+        }
+        timed(stats.as_mut().map(|s| &mut s.surface), || {
             crate::surfaces::with(surface, |s| {
-                canvas.blit_scaled_rgba_rounded(
+                canvas.blit_scaled_rgba_rounded_hint(
                     rect.x,
                     rect.y,
                     rect.w,
@@ -177,6 +254,7 @@ fn paint_node(
                     s.width,
                     s.height,
                     node.style.corner_radius,
+                    s.opaque,
                 );
             });
         });
@@ -491,6 +569,7 @@ fn paint_node(
             cursor,
             blocks,
             enclosing_block,
+            surface_occluders,
             stats,
         );
     }
@@ -829,7 +908,7 @@ mod tests {
             "height follows aspect once the pixels are ready"
         );
         let mut canvas = Canvas::new(100, 100);
-        paint(&tree, &mut canvas, std::slice::from_ref(&font), None);
+        paint(&tree, &mut canvas, std::slice::from_ref(&font), None, None);
         let center = &canvas.pixels[((10 * 100 + 20) * 4) as usize..][..4];
         assert_eq!(center, &[0, 200, 0, 255]);
         let outside = &canvas.pixels[((50 * 100 + 50) * 4) as usize..][..4];
@@ -856,7 +935,7 @@ mod tests {
         let mut canvas = Canvas::new(300, 100);
 
         crate::profiler::start();
-        paint(&tree, &mut canvas, std::slice::from_ref(&font), None);
+        paint(&tree, &mut canvas, std::slice::from_ref(&font), None, None);
         let data = crate::profiler::stop().unwrap();
         let names: Vec<&str> = data.spans.iter().map(|s| s.name).collect();
         assert!(names.contains(&"tree.paint"));

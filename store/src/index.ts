@@ -1,4 +1,5 @@
 export {
+  APP_DIR_NAME,
   DATA_DIR,
   LOGS_DIR,
   FAVICONS_DIR,

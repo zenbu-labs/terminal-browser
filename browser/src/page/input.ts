@@ -1,10 +1,27 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import { clipboard, nativeImage } from "electron";
 import type { WebContents } from "electron";
 import type { EngineKeyEvent, PastedImage, PointerEvent, WheelEvent } from "pixel-react";
+import { LOGS_DIR } from "pixel-store";
+
+const INPUT_TRACE = process.env.TERMINAL_BROWSER_INPUT_TRACE === "1";
+
+function traceWheel(line: string): void {
+  if (!INPUT_TRACE) return;
+  try {
+    fs.appendFileSync(path.join(LOGS_DIR, "input-trace.log"), `${Date.now()} ${line}\n`);
+  } catch {}
+}
 
 export interface InputTarget {
   contents(): WebContents;
   scale(): number;
+  /** The render-zoom base baked into the page's zoom factor (1 where render
+   * zoom is off). Blink divides wheel deltas by layout zoom before scrolling,
+   * so detents must grow by this base to travel Chrome's visual distance. */
+  zoomBase(): number;
   focus(): void;
   cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
 }
@@ -66,6 +83,10 @@ export class PageInput {
       this.pinch(event);
       return;
     }
+    if (!event.precise) {
+      this.wheelTick(event);
+      return;
+    }
     const scale = this.target.scale();
     this.wheelRemainderX += -event.deltaX / scale;
     this.wheelRemainderY += -event.deltaY / scale;
@@ -74,15 +95,45 @@ export class PageInput {
     this.wheelRemainderX -= deltaX;
     this.wheelRemainderY -= deltaY;
     if (deltaX === 0 && deltaY === 0) return;
+    traceWheel(`precise dy=${deltaY} zoomFactor=${this.target.contents().getZoomFactor()}`);
     this.target.contents().sendInputEvent({
       type: "mouseWheel",
       x: this.lastX,
       y: this.lastY,
       deltaX,
       deltaY,
-      wheelTicksX: event.precise ? deltaX / 40 : Math.sign(deltaX),
-      wheelTicksY: event.precise ? deltaY / 40 : Math.sign(deltaY),
-      hasPreciseScrollingDeltas: event.precise,
+      wheelTicksX: deltaX / 40,
+      wheelTicksY: deltaY / 40,
+      hasPreciseScrollingDeltas: true,
+      canScroll: true,
+      modifiers: this.modifiers(event.mods),
+    });
+  }
+
+  /** An imprecise event is a wheel detent, and its engine delta (one terminal
+   * cell) says nothing about how far a page expects to travel. Chrome on
+   * Linux turns one detent into a 120px non-precise delta (X11
+   * kWheelScrollAmount / Wayland axis_value120), and Blink animates
+   * non-precise deltas with its smooth-scroll curve. Handing Chromium the
+   * exact event Chrome would build makes the page scroll identically. */
+  private wheelTick(event: WheelEvent) {
+    const ticksX = -Math.sign(event.deltaX);
+    const ticksY = -Math.sign(event.deltaY);
+    if (ticksX === 0 && ticksY === 0) return;
+    const step = WHEEL_DETENT_PX * this.target.zoomBase();
+    traceWheel(
+      `tick dy=${event.deltaY} step=${step} zoomBase=${this.target.zoomBase()} ` +
+        `zoomFactor=${this.target.contents().getZoomFactor()}`,
+    );
+    this.target.contents().sendInputEvent({
+      type: "mouseWheel",
+      x: this.lastX,
+      y: this.lastY,
+      deltaX: ticksX * step,
+      deltaY: ticksY * step,
+      wheelTicksX: ticksX,
+      wheelTicksY: ticksY,
+      hasPreciseScrollingDeltas: false,
       canScroll: true,
       modifiers: this.modifiers(event.mods),
     });
@@ -110,7 +161,7 @@ export class PageInput {
       void this.dispatchEnter(event).catch(() => {});
       return;
     }
-    const commands = editingCommands(event);
+    const commands = process.platform === "darwin" ? editingCommands(event) : null;
     if (commands) {
       void this.dispatchEditing(event, commands).catch(() => {});
       return;
@@ -271,6 +322,8 @@ const SELECTION_SNIPPET = `(() => {
   } catch {}
   return String(getSelection() ?? "");
 })()`;
+
+const WHEEL_DETENT_PX = 120;
 
 function wholeDelta(value: number) {
   return value < 0 ? Math.ceil(value) : Math.floor(value);

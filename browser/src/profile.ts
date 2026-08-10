@@ -3,12 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { app } from "electron";
+import { APP_DIR_NAME } from "pixel-store";
 
 // er i don't think this is necessary anymore given our daemon but i guess it doesn't hurt to be explicit 
 export function claimProfile() {
   const appData = process.env.TERMINAL_BROWSER_APPDATA ?? app.getPath("appData");
   for (let i = 0; i < 32; i++) {
-    const dir = path.join(appData, i === 0 ? "terminal-browser" : `terminal-browser-${i + 1}`);
+    const dir = path.join(appData, i === 0 ? APP_DIR_NAME : `${APP_DIR_NAME}-${i + 1}`);
     const lock = path.join(dir, "terminal-browser.lock");
     try {
       fs.mkdirSync(dir, { recursive: true });

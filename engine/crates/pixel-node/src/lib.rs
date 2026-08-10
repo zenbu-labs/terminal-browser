@@ -8,6 +8,8 @@ mod markdown;
 mod mend;
 mod ops;
 mod record;
+#[cfg(target_os = "linux")]
+mod pixmap;
 mod surface;
 
 use std::sync::Arc;
@@ -121,42 +123,119 @@ pub fn encode_recording(
     Ok(AsyncTask::new(EncodeRecordingTask { job_json, progress }))
 }
 
+/// TERMINAL_BROWSER_AUTOPROFILE_MS=<n>: records engine spans from boot for n
+/// milliseconds and writes profiles/profile-<stamp>.json, so a headless
+/// harness gets a full profile without the devtools UI.
+struct Autoprofile {
+    stop_at: Option<std::time::Instant>,
+}
+
+impl Autoprofile {
+    fn from_env(engine: &mut Engine) -> Self {
+        let stop_at = std::env::var("TERMINAL_BROWSER_AUTOPROFILE_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+        if stop_at.is_some() {
+            engine.profile_start();
+        }
+        Self { stop_at }
+    }
+
+    fn tick(&mut self, engine: &mut Engine) {
+        if self
+            .stop_at
+            .is_some_and(|at| std::time::Instant::now() >= at)
+        {
+            self.stop_at = None;
+            if let Ok(Some(path)) = engine.profiler.toggle() {
+                pixel_core::logging::info(
+                    "profiler",
+                    format!("autoprofile written to {}", path.display()),
+                );
+            }
+        }
+    }
+}
+
 fn draw_frame(
     engine: &mut Engine,
     frame: &surface::SurfaceFrame,
 ) -> std::result::Result<u32, String> {
     match &frame.pixels {
+        // macOS: the frame is an IOSurface whose locked pages read at normal
+        // memory speed.
         #[cfg(target_os = "macos")]
-        SurfacePixels::Texture(texture) => {
-            let locked = texture.lock()?;
+        SurfacePixels::IoSurface(surface) => {
+            let locked = surface.lock()?;
+            draw_pixels(
+                engine,
+                frame,
+                locked.width,
+                locked.height,
+                locked.pixels(),
+                locked.stride,
+            )
+        }
+        // Linux: the frame is a GPU dmabuf whose CPU mapping is uncached.
+        #[cfg(target_os = "linux")]
+        SurfacePixels::Pixmap(surface) => {
+            let locked = surface.lock()?;
+            let len = locked.stride * locked.height as usize;
             engine
                 .draw_surface(
                     frame.id,
                     locked.width,
                     locked.height,
-                    locked.pixels(),
-                    locked.stride,
+                    pixel_core::surfaces::Source::Uncached {
+                        bgra: &locked.pixels()[..len],
+                        stride: locked.stride,
+                    },
                     frame.damage,
                 )
                 .map(|_| locked.height)
                 .map_err(|error| error.to_string())
         }
+        // Both platforms: bitmap mode, pixels already copied into our memory.
         SurfacePixels::Owned {
             bgra,
             width,
             height,
-        } => engine
-            .draw_surface(
-                frame.id,
-                *width,
-                *height,
-                bgra,
-                *width as usize * 4,
-                frame.damage,
-            )
-            .map(|_| *height)
-            .map_err(|error| error.to_string()),
+        } => draw_pixels(engine, frame, *width, *height, bgra, *width as usize * 4),
     }
+}
+
+fn draw_pixels(
+    engine: &mut Engine,
+    frame: &surface::SurfaceFrame,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    stride: usize,
+) -> std::result::Result<u32, String> {
+    engine
+        .draw_surface(
+            frame.id,
+            width,
+            height,
+            pixel_core::surfaces::Source::Cached { bgra: pixels, stride },
+            frame.damage,
+        )
+        .map(|_| height)
+        .map_err(|error| error.to_string())
+}
+
+/// One plane of a dmabuf-backed shared texture, as Electron reports it on
+/// Linux. Offsets and sizes are in bytes.
+#[cfg(target_os = "linux")]
+#[napi(object)]
+pub struct SurfacePixmap {
+    pub fd: i32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub offset: u32,
+    pub size: u32,
 }
 
 #[napi(object)]
@@ -217,6 +296,11 @@ pub(crate) fn colors_json(colors: &TerminalColors) -> serde_json::Value {
         "background": colors.background,
         "palette": colors.palette,
     })
+}
+
+#[napi]
+pub fn display_scale() -> Option<f64> {
+    pixel_core::display_scale().map(f64::from)
 }
 
 #[napi]
@@ -327,34 +411,6 @@ impl PixelEngine {
             },
             damage,
         );
-        self.waker.wake();
-        Ok(())
-    }
-
-    #[cfg(target_os = "macos")]
-    #[napi]
-    pub fn update_surface_texture(
-        &self,
-        id: u32,
-        handle: Buffer,
-        damage: Option<DamageRect>,
-    ) -> Result<()> {
-        let surface =
-            iosurface::RetainedSurface::from_handle(handle.as_ref()).map_err(Error::from_reason)?;
-        let damage = damage.map(DamageRect::into_rect);
-        if self.captures.wants(id) {
-            let locked = surface.lock().map_err(Error::from_reason)?;
-            self.captures.capture(
-                id,
-                locked.pixels(),
-                locked.stride,
-                locked.width,
-                locked.height,
-                damage,
-            );
-        }
-        self.surfaces
-            .submit(id, SurfacePixels::Texture(surface), damage);
         self.waker.wake();
         Ok(())
     }
@@ -471,11 +527,13 @@ impl PixelEngine {
             let mut ids: Vec<IdMap> = (0..engine.comp.views.len())
                 .map(|view| IdMap::new(engine.comp.views[view].tree.root()))
                 .collect();
+            let mut autoprofile = Autoprofile::from_env(&mut engine);
             let exit_error = loop {
                 let events = match engine.pump(None) {
                     Ok(events) => events,
                     Err(e) => break Some(e.to_string()),
                 };
+                autoprofile.tick(&mut engine);
                 if stop.load(Ordering::Relaxed) {
                     break None;
                 }
@@ -491,6 +549,11 @@ impl PixelEngine {
                     }
                     for reply in outcome.replies {
                         dispatch_to_node.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                }
+                for event in &events {
+                    if let Some(json) = event_json(event, &engine, &ids) {
+                        dispatch_to_node.call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
                 let mut surface_error = None;
@@ -517,11 +580,6 @@ impl PixelEngine {
                 if surface_error.is_some() {
                     break surface_error;
                 }
-                for event in &events {
-                    if let Some(json) = event_json(event, &engine, &ids) {
-                        dispatch_to_node.call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
-                    }
-                }
             };
             drop(engine);
             if !stop.load(Ordering::Relaxed) {
@@ -545,3 +603,93 @@ impl PixelEngine {
         self.engine = None;
     }
 }
+
+// Zero-copy frame submission is per-platform: each platform exports the method
+// shaped after the handle Electron produces there, and the JS side
+// feature-detects which one exists. The cfg has to gate whole impl blocks —
+// napi registers every method in a block, even ones cfg strips out.
+#[cfg(target_os = "macos")]
+#[napi]
+impl PixelEngine {
+    #[napi]
+    pub fn update_surface_texture(
+        &self,
+        id: u32,
+        handle: Buffer,
+        damage: Option<DamageRect>,
+    ) -> Result<()> {
+        let surface =
+            iosurface::RetainedSurface::from_handle(handle.as_ref()).map_err(Error::from_reason)?;
+        let damage = damage.map(DamageRect::into_rect);
+        if self.captures.wants(id) {
+            let locked = surface.lock().map_err(Error::from_reason)?;
+            self.captures.capture(
+                id,
+                locked.pixels(),
+                locked.stride,
+                locked.width,
+                locked.height,
+                damage,
+            );
+        }
+        self.surfaces
+            .submit(id, SurfacePixels::IoSurface(surface), damage);
+        self.waker.wake();
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[napi]
+impl PixelEngine {
+    #[napi]
+    pub fn update_surface_pixmap(
+        &self,
+        id: u32,
+        pixmap: SurfacePixmap,
+        damage: Option<DamageRect>,
+        released: Option<ThreadsafeFunction<u32>>,
+    ) -> Result<()> {
+        let release_hook = released.map(|tsfn| {
+            Box::new(move || {
+                tsfn.call(Ok(0), ThreadsafeFunctionCallMode::NonBlocking);
+            }) as Box<dyn FnOnce() + Send>
+        });
+        let mut surface = match pixmap::PixmapSurface::from_plane(
+            pixmap.fd,
+            pixmap.width,
+            pixmap.height,
+            pixmap.stride,
+            pixmap.offset,
+            pixmap.size,
+        ) {
+            Ok(surface) => surface,
+            Err(error) => {
+                if let Some(hook) = release_hook {
+                    hook();
+                }
+                return Err(Error::from_reason(error));
+            }
+        };
+        if let Some(hook) = release_hook {
+            surface.set_on_drop(hook);
+        }
+        let damage = damage.map(DamageRect::into_rect);
+        if self.captures.wants(id) {
+            let locked = surface.lock().map_err(Error::from_reason)?;
+            self.captures.capture(
+                id,
+                locked.pixels(),
+                locked.stride,
+                locked.width,
+                locked.height,
+                damage,
+            );
+        }
+        self.surfaces
+            .submit(id, SurfacePixels::Pixmap(surface), damage);
+        self.waker.wake();
+        Ok(())
+    }
+}
+
