@@ -276,6 +276,7 @@ class Session {
         },
         onPageMenu: (params) => this.openPageMenu(params),
         onTabOpened: (opener, url) => this.records.get(opener)?.linkOpened(url),
+        onTabClosed: (id) => this.closeOrShutdown(id),
         tabSwitchAllowed: () => !this.activeRecord()?.reviewing,
         onTabsChanged: () => {
           this.registry?.update();
@@ -456,6 +457,11 @@ class Session {
     else if (process.platform === "linux") this.showToast("ctrl+q to quit", "alert");
   }
 
+  private closeOrShutdown(id: number) {
+    if (this.tabs.count <= 1) this.shutdown();
+    else this.tabs.close(id);
+  }
+
   shutdown(code = 0) {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
@@ -631,7 +637,7 @@ class Session {
     paletteRun: (index) => this.runPalette(index),
     paletteClose: () => this.closePalette(),
     tabSwitch: (id) => this.tabs.activate(id),
-    tabClose: (id) => (this.tabs.count <= 1 ? this.shutdown() : this.tabs.close(id)),
+    tabClose: (id) => this.closeOrShutdown(id),
     tabNew: () => this.openNewTabModal(),
     newTabQuery: (text) => this.newTabQuery(text),
     newTabSubmit: (text) => {

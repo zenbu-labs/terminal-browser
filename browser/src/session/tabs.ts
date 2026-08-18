@@ -36,6 +36,7 @@ export interface TabHost {
   onPageMenu(params: Electron.ContextMenuParams): void;
   onTabsChanged(): void;
   onTabOpened(opener: BrowserController, url: string): void;
+  onTabClosed(id: number): void;
   tabSwitchAllowed(): boolean;
   requestRender(): void;
 }
@@ -93,6 +94,7 @@ export class TabManager {
       this.host.onTabOpened(tab.controller, openUrl);
     };
     tab.controller.onPopupChange = () => this.host.requestRender();
+    tab.controller.onClosed = () => this.host.onTabClosed(tab.id);
     tab.controller.onDevtoolsChange = () => {
       if (tab.id === this.activeId) this.host.onDevtoolsChanged();
       else this.host.requestRender();

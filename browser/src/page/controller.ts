@@ -72,6 +72,7 @@ export class BrowserController {
   onDevtoolsChange: (() => void) | null = null;
   onDevtoolsAction: ((action: DevtoolsAction) => void) | null = null;
   onContextMenu: ((params: Electron.ContextMenuParams) => void) | null = null;
+  onClosed: (() => void) | null = null;
 
   constructor(
     surface: Surface,
@@ -139,6 +140,7 @@ export class BrowserController {
       },
     });
     this.window.webContents.setFrameRate(frameRate());
+    this.window.on("closed", this.onWindowClosed);
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
@@ -378,6 +380,7 @@ export class BrowserController {
   }
 
   focusContent(): Promise<void> | undefined {
+    if (this.stopped) return;
     this.blurDevtools();
     if (this.contentFocused) return;
     this.window.focus();
@@ -451,14 +454,17 @@ export class BrowserController {
   }
 
   pointer(event: PointerEvent) {
+    if (this.stopped) return;
     this.input.pointer(event);
   }
 
   wheel(event: WheelEvent) {
+    if (this.stopped) return;
     this.input.wheel(event);
   }
 
   key(event: EngineKeyEvent) {
+    if (this.stopped) return;
     this.input.key(event);
   }
 
@@ -490,14 +496,25 @@ export class BrowserController {
   stop() {
     if (this.stopped) return;
     this.stopped = true;
+    this.teardown();
+    this.window.destroy();
+  }
+
+  private teardown() {
     for (const popup of [...this.popups]) popup.close();
     this.devtools?.close();
     screen.off("display-added", this.onDisplayChange);
     screen.off("display-removed", this.onDisplayChange);
     screen.off("display-metrics-changed", this.onDisplayChange);
     this.surface.close();
-    this.window.destroy();
   }
+
+  private readonly onWindowClosed = () => {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.teardown();
+    this.onClosed?.();
+  };
 
   setVisible(visible: boolean) {
     if (this.visible === visible) return;
