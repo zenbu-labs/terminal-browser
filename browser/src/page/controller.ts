@@ -211,6 +211,7 @@ export class BrowserController {
   }
 
   resize(layout: BrowserSurfaceLayout, options?: { keepFrame?: boolean }) {
+    if (this.stopped) return;
     if (
       this.layout.x === layout.x &&
       this.layout.y === layout.y &&
@@ -517,6 +518,7 @@ export class BrowserController {
   };
 
   setVisible(visible: boolean) {
+    if (this.stopped) return;
     if (this.visible === visible) return;
     this.visible = visible;
     this.popup?.setVisible(visible);
@@ -534,6 +536,7 @@ export class BrowserController {
   }
 
   invalidate(): void {
+    if (this.stopped) return;
     this.wholeSurfaceNext = true;
     this.window.webContents.invalidate();
   }
@@ -563,6 +566,12 @@ export class BrowserController {
     { url, disposition, features }: Electron.HandlerDetails,
     opener: Electron.WebContents,
   ): Electron.WindowOpenHandlerResponse {
+    if (url.startsWith("terminal-browser://quit")) {
+      setImmediate(() => {
+        if (!this.stopped) this.window.close();
+      });
+      return { action: "deny" };
+    }
     const wantsTab = disposition === "foreground-tab" || disposition === "background-tab";
     if (wantsTab && !this.tabsAsPopups && this.onOpenTab) {
       this.onOpenTab(url, disposition === "foreground-tab");
