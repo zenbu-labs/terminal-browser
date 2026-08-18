@@ -42,7 +42,13 @@ export const herdr: Detect = (env, run) => {
   const herdr = (args: string[]) => run(bin, args);
 
   async function splitPane(args: string[]): Promise<HerdrPaneSplitResult> {
-    return JSON.parse(await herdr(["pane", "split", ...args, "--right-click", "pane"]));
+    try {
+      return JSON.parse(await herdr(["pane", "split", ...args, "--right-click", "pane"]));
+    } catch (error) {
+      const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "") : "";
+      if (!stderr.includes("--right-click")) throw error;
+      return JSON.parse(await herdr(["pane", "split", ...args]));
+    }
   }
 
   async function prepare(): Promise<void> {
