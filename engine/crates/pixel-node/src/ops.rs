@@ -107,6 +107,9 @@ enum Op {
     SetDefaultMenu {
         on: bool,
     },
+    SetInspectMenu {
+        on: bool,
+    },
     Highlight {
         view: usize,
         id: Option<u32>,
@@ -774,6 +777,7 @@ fn apply_op(
             engine.set_inspect_mode(on);
         }
         Op::SetDefaultMenu { on } => engine.set_default_menu(on),
+        Op::SetInspectMenu { on } => engine.set_inspect_menu(on),
         Op::Highlight {
             view: target_view,
             id,

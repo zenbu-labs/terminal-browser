@@ -52,8 +52,6 @@ export interface ImportHintView {
   open: boolean;
   /** Already formatted by the session, e.g. "Detected: Google Chrome, Brave, +2 more." */
   summary: string;
-  /** False once the operator has hidden the hint or already imported. */
-  offered: boolean;
 }
 
 export interface ProfileMenuView {
@@ -102,7 +100,6 @@ export interface ChromeActions {
   screenshotPage(): void;
   devtoolsToggle(): void;
   importHintToggle(): void;
-  importHintDismiss(): void;
   importRun(): void;
   profileMenuToggle(): void;
   profileSwitch(slug: string): void;

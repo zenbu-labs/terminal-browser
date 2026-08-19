@@ -92,12 +92,7 @@ export function Chrome({
       : activeName;
   const fit =
     layout.toolbarHeight > 0 && !record?.stopped
-      ? clusterFit(layout, {
-          nav: state.canGoBack || state.canGoForward,
-          pill: record !== null,
-          offered: importHint.offered,
-          label,
-        })
+      ? clusterFit(layout, { pill: record !== null, label })
       : CLUSTER_HIDDEN;
   const chipLabel = fit.profileName ? label : null;
   // the hint's right edge meets the import chip's, so it clears everything sitting to that chip's right
@@ -166,7 +161,7 @@ export function Chrome({
       {pageMenu && (
         <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
       )}
-      {importHint.open && fit.importChip !== "hidden" && (
+      {importHint.open && fit.shown && (
         <ImportHintPopover
           view={importHint}
           actions={actions}
@@ -238,24 +233,20 @@ function Toolbar({
         padding: { left: rem * 0.4, right: rem * 0.4 },
       }}
     >
-      {(state.canGoBack || state.canGoForward) && (
-        <>
-          <ToolbarButton
-            icon="back"
-            enabled={state.canGoBack}
-            rem={rem}
-            theme={theme}
-            onClick={actions.back}
-          />
-          <ToolbarButton
-            icon="forward"
-            enabled={state.canGoForward}
-            rem={rem}
-            theme={theme}
-            onClick={actions.forward}
-          />
-        </>
-      )}
+      <ToolbarButton
+        icon="back"
+        enabled={state.canGoBack}
+        rem={rem}
+        theme={theme}
+        onClick={actions.back}
+      />
+      <ToolbarButton
+        icon="forward"
+        enabled={state.canGoForward}
+        rem={rem}
+        theme={theme}
+        onClick={actions.forward}
+      />
       <ToolbarButton
         icon={state.loading ? "close" : "reload"}
         enabled
@@ -267,15 +258,13 @@ function Toolbar({
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
       {fit.shown && (
         <>
-          {fit.importChip !== "hidden" && (
-            <ImportChip
-              labelled={fit.importChip === "labelled"}
-              open={importHint.open}
-              rem={rem}
-              theme={theme}
-              onClick={actions.importHintToggle}
-            />
-          )}
+          <ImportChip
+            labelled={fit.importLabelled}
+            open={importHint.open}
+            rem={rem}
+            theme={theme}
+            onClick={actions.importHintToggle}
+          />
           <ToolbarButton
             icon="keyboard"
             enabled
@@ -503,45 +492,38 @@ function ToolbarButton({
 interface ClusterFit {
   /** whether the right-hand cluster fits at all */
   shown: boolean;
-  importChip: "labelled" | "icon" | "hidden";
+  /** the import chip is always offered, so this is only whether its label fits */
+  importLabelled: boolean;
   /** whether the active profile's name fits beside the person glyph */
   profileName: boolean;
 }
 
-const CLUSTER_HIDDEN: ClusterFit = { shown: false, importChip: "hidden", profileName: false };
+const CLUSTER_HIDDEN: ClusterFit = { shown: false, importLabelled: false, profileName: false };
 
 /**
  * How much of the right-hand cluster fits. Widths are in rem units: the row's own padding, the
- * navigation buttons, the record pill, the four icon buttons at rem*1.5 plus their rem*0.25 gaps,
- * and the narrowest tab strip still worth keeping. What is left buys the import chip's label first,
- * then the active profile's name beside the person glyph.
+ * three navigation buttons, the record pill, the four icon buttons at rem*1.5 plus their rem*0.25
+ * gaps, and the narrowest tab strip still worth keeping. What is left buys the import chip's label
+ * first, then the active profile's name beside the person glyph.
  */
 function clusterFit(
   layout: ChromeLayout,
-  row: { nav: boolean; pill: boolean; offered: boolean; label: string | null },
+  row: { pill: boolean; label: string | null },
 ): ClusterFit {
   const free =
     layout.width / layout.rem -
     0.8 -
-    (row.nav ? 3 : 1) * 1.75 -
+    3 * 1.75 -
     (row.pill ? 7.5 : 0) -
-    4 * 1.75 -
+    5 * 1.75 -
     8;
   if (free < 0) return CLUSTER_HIDDEN;
-  const importChip = !row.offered
-    ? "hidden"
-    : free >= 4.7
-      ? "labelled"
-      : free >= 1.75
-        ? "icon"
-        : "hidden";
-  // an offered hint holds its widest claim whatever tier it lands on, so the name never flickers
-  // back and forth as the pane grows and the Import label appears
+  const importLabelled = free >= 3;
   const name = row.label === null ? 0 : profileChipRem(row.label) - 1.5;
   return {
     shown: true,
-    importChip,
-    profileName: name > 0 && free - (row.offered ? 4.7 : 0) >= name,
+    importLabelled,
+    profileName: name > 0 && free - (importLabelled ? 3 : 0) >= name,
   };
 }
 
@@ -634,12 +616,6 @@ function ImportHintPopover({
       </Text>
       <Box style={{ alignItems: "center", gap: rem * 0.35, margin: { top: rem * 0.15 } }}>
         <HintButton label="Import…" primary rem={rem} theme={theme} onClick={actions.importRun} />
-        <HintButton
-          label="Hide Hint"
-          rem={rem}
-          theme={theme}
-          onClick={actions.importHintDismiss}
-        />
       </Box>
     </Box>
   );

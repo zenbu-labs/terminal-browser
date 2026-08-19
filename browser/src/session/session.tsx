@@ -31,7 +31,7 @@ import {
   resolveProfile,
 } from "../profiles";
 import type { BrowserProfile } from "../profiles";
-import { hideImportHint, importHintHidden, lastUrl, setLastUrl, settings, store } from "pixel-store";
+import { lastUrl, setLastUrl, settings, store } from "pixel-store";
 import type { DevtoolsDock, InstanceRow } from "pixel-store";
 
 import { RecordSession } from "../record/session";
@@ -279,8 +279,6 @@ class Session {
   private shownRecord: RecordSession | null = null;
   private recordStarting = false;
   private importHintOpen = false;
-  private importHintDismissed = false;
-  private importDone = false;
   private importSummary = "No supported browsers detected.";
   private profileMenuOpen = false;
   private profilePrompt: { kind: "create" | "rename"; text: string } | null = null;
@@ -369,6 +367,9 @@ class Session {
       wrapper: this.terminal?.wrapper,
       sessionEnv: this.ctx.env,
       keyEventTypes: true,
+      // The engine's devtools inspect this chrome's own layout tree, which is not what a person
+      // clicking "devtools" in a browser is asking for. Kept for whoever works on the chrome.
+      devtools: process.env.TERMINAL_BROWSER_ENGINE_DEVTOOLS === "1",
       onKey: (event) => this.handleKey(event),
       onPaste: (text) => {
         const browser = this.tabs.activeController;
@@ -781,7 +782,6 @@ class Session {
     screenshotPage: () => void this.copyPageScreenshot(),
     devtoolsToggle: () => this.toggleDevtools(),
     importHintToggle: () => this.toggleImportHint(),
-    importHintDismiss: () => this.dismissImportHint(),
     importRun: () => this.importFromHint(),
     profileMenuToggle: () => {
       this.profileMenuOpen = !this.profileMenuOpen;
@@ -1179,7 +1179,6 @@ class Session {
   /** One filesystem scan per session: detection walks every supported browser's profile dirs. */
   private loadImportHint() {
     try {
-      this.importHintDismissed = importHintHidden();
       this.importSummary = cookieSourceSummary(listCookieSources());
     } catch { }
   }
@@ -1188,7 +1187,6 @@ class Session {
     return {
       open: this.importHintOpen,
       summary: this.importSummary,
-      offered: !this.importHintDismissed && !this.importDone,
     };
   }
 
@@ -1197,14 +1195,6 @@ class Session {
     this.render();
   }
 
-  private dismissImportHint() {
-    this.importHintOpen = false;
-    this.importHintDismissed = true;
-    try {
-      hideImportHint();
-    } catch { }
-    this.render();
-  }
 
   private importFromHint() {
     this.importHintOpen = false;
@@ -1215,7 +1205,6 @@ class Session {
   private importCookies() {
     void this.runCookieImport({})
       .then((report) => {
-        this.importDone = true;
         this.showToast(
           `imported ${report.imported} cookies from ${report.browser} (${report.profileName})`,
           report.warnings.length > 0 ? "alert" : "done",

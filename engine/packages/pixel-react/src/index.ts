@@ -278,6 +278,8 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   const info = JSON.parse(bridge.engine.info()) as EngineInfo;
   applyColors(info.colors);
   bridge.engine.setKeyEventTypes(!!options.keyEventTypes);
+  // Without the devtools the right-click entry that opens them would do nothing, so drop it.
+  if (!devtoolsEnabled) bridge.push(APP_VIEW, { op: "setInspectMenu", on: false });
   const container: Container = { bridge, view: APP_VIEW, children: [] };
   bridge.containers[APP_VIEW] = container;
   const root = reconciler.createContainer(

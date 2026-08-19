@@ -17,8 +17,6 @@ export type { DevtoolsDock, InstanceRow, NewInstanceRow, SettingsRow } from "./s
 export { listInstances, liveInstanceProfiles, removeInstance, upsertInstance } from "./instances";
 export type { InstanceProfile } from "./instances";
 export {
-  hideImportHint,
-  importHintHidden,
   lastUrl,
   setLastUrl,
   setStoredLastUsedProfile,

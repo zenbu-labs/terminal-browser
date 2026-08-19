@@ -469,7 +469,7 @@ impl Engine {
             (size.0 as f32, size.1 as f32),
             self.base_px,
             &self.fonts[0],
-            view == self.inspect_view,
+            self.inspect_menu && view == self.inspect_view,
             &style,
         );
         if let Some(id) = focus {

@@ -24,13 +24,6 @@ export function setLastUrl(url: string): void {
   setAppState("last-url", url);
 }
 
-export function importHintHidden(): boolean {
-  return getAppState("import-hint-hidden") === "1";
-}
-
-export function hideImportHint(): void {
-  setAppState("import-hint-hidden", "1");
-}
 
 export interface StoredProfile {
   slug: string;
