@@ -59,6 +59,8 @@ export interface ProfileMenuView {
   activeSlug: string;
   activeName: string;
   items: { slug: string; name: string; active: boolean }[];
+  /** The row whose right-click menu is open, if any. */
+  contextSlug: string | null;
   /** Set while a name is being typed; null when no prompt is up. */
   prompt: { kind: "create" | "rename"; text: string } | null;
 }
@@ -106,6 +108,9 @@ export interface ChromeActions {
   /** No name opens the prompt; a name commits it. */
   profileCreate(name?: string): void;
   profileRename(name?: string): void;
+  /** Opens a row's right-click menu, or closes whichever is open. */
+  profileContext(slug: string | null): void;
+  profileDelete(slug: string): void;
   record: RecordActions;
 }
 

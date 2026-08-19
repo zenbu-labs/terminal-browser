@@ -289,7 +289,6 @@ pub struct Engine {
     menu: MenuController,
     inspect_mode: bool,
     inspect_view: usize,
-    inspect_menu: bool,
     inspect_hover: Option<NodeId>,
     highlight: Option<(usize, NodeId, HighlightArea)>,
     hover_target: Option<(usize, NodeId)>,
@@ -395,7 +394,6 @@ impl Engine {
             menu: MenuController::default(),
             inspect_mode: false,
             inspect_view: 0,
-            inspect_menu: true,
             inspect_hover: None,
             highlight: None,
             hover_target: None,
@@ -457,11 +455,6 @@ impl Engine {
         }
     }
 
-    /// Whether a right-click offers the engine's own devtools. An app that ships its own
-    /// developer tools turns this off so the two do not both claim the name.
-    pub fn set_inspect_menu(&mut self, enabled: bool) {
-        self.inspect_menu = enabled;
-    }
 
     pub fn set_clear_color(&mut self, view: usize, color: Color) {
         let Some(v) = self.comp.views.get_mut(view) else {

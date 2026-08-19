@@ -281,6 +281,7 @@ class Session {
   private importHintOpen = false;
   private importSummary = "No supported browsers detected.";
   private profileMenuOpen = false;
+  private profileContext: string | null = null;
   private profilePrompt: { kind: "create" | "rename"; text: string } | null = null;
 
   constructor(ctx: SessionContext) {
@@ -786,6 +787,22 @@ class Session {
     profileMenuToggle: () => {
       this.profileMenuOpen = !this.profileMenuOpen;
       this.profilePrompt = null;
+      this.profileContext = null;
+      this.render();
+    },
+    profileContext: (slug) => {
+      // A profile in use cannot be deleted, so its row has nothing to offer.
+      this.profileContext = slug === this.profile?.slug ? null : slug;
+      this.render();
+    },
+    profileDelete: (slug) => {
+      this.profileContext = null;
+      try {
+        deleteProfile(slug);
+        this.showToast(`deleted browser profile ${slug}`, "done");
+      } catch (error) {
+        this.showProfileFailure(error);
+      }
       this.render();
     },
     profileSwitch: (slug) => {
@@ -1240,6 +1257,7 @@ class Session {
         name: profile.name,
         active: profile.slug === this.profile?.slug,
       })),
+      contextSlug: this.profileContext,
       prompt: this.profilePrompt,
     };
   }

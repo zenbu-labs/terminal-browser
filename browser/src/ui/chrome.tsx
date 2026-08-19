@@ -744,8 +744,10 @@ function ProfileMenuPopover({
           <ProfileRow
             key={item.slug}
             item={item}
+            contextOpen={view.contextSlug === item.slug}
             rem={rem}
             theme={theme}
+            actions={actions}
             onClick={() => actions.profileSwitch(item.slug)}
           />
         ))}
@@ -783,13 +785,17 @@ function ProfileMenuPopover({
 
 function ProfileRow({
   item,
+  contextOpen,
   rem,
   theme,
+  actions,
   onClick,
 }: {
   item: ProfileMenuView["items"][number];
+  contextOpen: boolean;
   rem: number;
   theme: Theme;
+  actions: ChromeActions;
   onClick(): void;
 }) {
   return (
@@ -800,11 +806,16 @@ function ProfileRow({
         gap: rem * 0.45,
         padding: { left: rem * 0.35, right: rem * 0.35 },
         cornerRadius: rem * 0.25,
-        background: item.active ? theme.field : undefined,
+        background: item.active || contextOpen ? theme.field : undefined,
         hoverBackground: theme.hover,
         flexShrink: 0,
       }}
       onClick={onClick}
+      onPointer={(event) => {
+        // the built-in default cannot be deleted, so it has nothing to offer here
+        if (event.kind !== "down" || event.button !== "right") return;
+        actions.profileContext(item.slug === "default" ? null : item.slug);
+      }}
     >
       {item.active ? (
         <Icon icon="record" size={rem * 0.5} color={theme.accent} weight={5} />
@@ -824,6 +835,32 @@ function ProfileRow({
       >
         {item.name}
       </Text>
+      {contextOpen && (
+        <Box
+          style={{
+            height: rem * 1.15,
+            alignItems: "center",
+            padding: { left: rem * 0.4, right: rem * 0.4 },
+            cornerRadius: rem * 0.25,
+            background: theme.bg,
+            border: { width: 1, color: theme.fieldBorder },
+            hoverBackground: theme.hover,
+            flexShrink: 0,
+          }}
+          onClick={() => actions.profileDelete(item.slug)}
+        >
+          <Text
+            style={{
+              fontSize: rem * 0.72,
+              color: theme.red,
+              wrap: false,
+              selectable: false,
+            }}
+          >
+            Delete
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }
