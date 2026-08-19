@@ -27,6 +27,7 @@ export interface ControlHost {
   closeTab(id: number): boolean;
   tabs(): unknown;
   targets(): Promise<unknown>;
+  importCookies(request: { profile?: string; domain?: string }): Promise<unknown>;
   viewport(): { width: number; height: number } | null;
 }
 
@@ -35,6 +36,8 @@ interface ControlRequest {
   url?: string;
   cwd?: string;
   tab?: number;
+  profile?: string;
+  domain?: string;
 }
 
 export class Registry {
@@ -141,6 +144,8 @@ export class Registry {
         if (!this.host.closeTab(request.tab)) throw new Error(`no tab ${request.tab}`);
         return { ...this.record(), tabs: await this.host.targets() };
       }
+      case "import-cookies":
+        return this.host.importCookies({ profile: request.profile, domain: request.domain });
       default:
         throw new Error(`unknown command: ${request.cmd}`);
     }

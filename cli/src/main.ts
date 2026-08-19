@@ -391,6 +391,42 @@ function currentTerminal(): Promise<TerminalCheck> {
   return asked;
 }
 
+interface ImportCookiesOptions {
+  browserKey?: string;
+  profile?: string;
+  domain?: string;
+  from?: string;
+}
+
+async function importCookiesCommand(options: ImportCookiesOptions): Promise<number> {
+  if (options.from && options.from !== "chrome") {
+    fail(`--from ${options.from} is not supported yet — only chrome`);
+  }
+  const check = await currentTerminal();
+  const found = await browsers(check.terminal);
+  const here = options.browserKey
+    ? found.filter((browser) => recordKey(browser) === options.browserKey)
+    : found.filter((browser) => browser.inCurrentTab);
+  const list = (list: Browser[]) => list.map((browser) => `  ${describe(browser)}`).join("\n");
+  if (found.length === 0) {
+    fail("no terminal browser is running — open one first, then import into it");
+  }
+  if (here.length === 0) {
+    fail(`no browser in this tab. Running:\n${list(found)}\n\nPick one with --browser`);
+  }
+  if (here.length > 1) {
+    fail(`${here.length} browsers in this tab, so say which with --browser:\n${list(here)}`);
+  }
+  print(
+    await control(here[0].socket, {
+      cmd: "import-cookies",
+      profile: options.profile,
+      domain: options.domain,
+    }, 120_000),
+  );
+  return 0;
+}
+
 async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
   const check = await currentTerminal();
   const found = await browsers(check.terminal);
@@ -560,6 +596,15 @@ async function main(): Promise<number> {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");
     return newTabCommand(args.find((arg) => !arg.startsWith("-")), key);
+  }
+  if (command === "import-cookies") {
+    requirePaneAccess();
+    return importCookiesCommand({
+      browserKey: takeFlag(args, "--browser"),
+      profile: takeFlag(args, "--profile"),
+      domain: takeFlag(args, "--domain"),
+      from: takeFlag(args, "--from"),
+    });
   }
   if (command === "action") {
     requirePaneAccess();

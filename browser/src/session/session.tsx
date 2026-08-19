@@ -9,6 +9,7 @@ import type { DragEvent, EngineKeyEvent, PixelRoot, Surface } from "pixel-react"
 import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
+import { importChromeCookies } from "../cookies";
 import { browserSession, configureBrowserSession } from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
@@ -379,6 +380,7 @@ class Session {
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),
       targets: () => this.tabs.targets(),
+      importCookies: (request) => importChromeCookies(request),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
@@ -1337,6 +1339,24 @@ class Session {
 
   private paletteActions(): PaletteAction[] {
     return [
+      {
+        id: "import-cookies",
+        label: "import chrome cookies (sign in as your chrome profile)",
+        shortcut: "",
+        run: () => {
+          void importChromeCookies()
+            .then((result) => {
+              this.showToast(
+                `imported ${result.imported} cookies from Chrome ${result.profile}`,
+                "done",
+                result.undecryptable > 0 ? `${result.undecryptable} unreadable` : undefined,
+              );
+            })
+            .catch((error: unknown) => {
+              this.showToast("chrome cookie import failed", "failed", error instanceof Error ? error.message : String(error));
+            });
+        },
+      },
       {
         id: "find",
         label: "find in page",

@@ -96,6 +96,33 @@ Examples:
   terminal-browser new-tab --browser 90107-1 localhost:3000
 `,
   },
+  "import-cookies": {
+    summary: "Copy your Chrome logins into a running browser",
+    usage: "terminal-browser import-cookies [options]",
+    body: `
+Reads the cookies out of a Chrome profile on this machine and puts them into a
+browser you already have open, so pages come up already signed in. Chrome's own
+profile is only ever read, never written, and Chrome can stay open while this
+runs.
+
+On macOS the cookie values are encrypted with a key held in your login keychain,
+so the first run asks for keychain permission. Deny it and nothing is imported.
+
+Cookies only: no history, no bookmarks, no saved passwords. Sites that keep
+their login in local storage rather than a cookie will still ask you to sign in.
+
+Options:
+  --from <browser>    Source browser, only chrome for now (default: chrome)
+  --profile <name>    Chrome profile directory, e.g. Default or "Profile 1"
+  --domain <domain>   Only import cookies for this domain and its subdomains
+  --browser <key>     A browser key from terminal-browser ls
+
+Examples:
+  terminal-browser import-cookies
+  terminal-browser import-cookies --profile Default
+  terminal-browser import-cookies --domain github.com
+`,
+  },
   shutdown: {
     summary: "Stop the daemon",
     usage: "terminal-browser shutdown",
