@@ -62,11 +62,17 @@ function keychainSecret(): Buffer {
     // Chrome on Linux encrypts with a fixed passphrase when no keyring is present.
     return Buffer.from("peanuts", "utf8");
   }
-  const found = execFileSync(
-    "security",
-    ["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
+  let found: string;
+  try {
+    found = execFileSync(
+      "security",
+      ["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch {
+    // The thrown error carries the captured stdout, which is the secret itself.
+    throw new Error("could not read the Chrome Safe Storage keychain item");
+  }
   const secret = found.trim();
   if (!secret) throw new Error("the Chrome Safe Storage keychain item is empty");
   return Buffer.from(secret, "utf8");
@@ -130,7 +136,17 @@ function sameSite(value: number): "unspecified" | "no_restriction" | "lax" | "st
   }
 }
 
+function sweepStaleScratch(): void {
+  const root = os.tmpdir();
+  for (const name of fs.readdirSync(root)) {
+    if (!name.startsWith("terminal-browser-cookies-")) continue;
+    fs.rmSync(path.join(root, name), { recursive: true, force: true });
+  }
+}
+
 function readRows(cookiesPath: string): ChromeCookieRow[] {
+  // A kill between the copy and the cleanup below would otherwise leave the host list on disk.
+  sweepStaleScratch();
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-cookies-"));
   const copy = path.join(scratch, "Cookies");
   try {
@@ -159,6 +175,14 @@ function readRows(cookiesPath: string): ChromeCookieRow[] {
   }
 }
 
+export function normalizeDomain(domain: string): string {
+  const bare = domain.trim().toLowerCase().replace(/^\.+/, "");
+  if (!bare.includes(".")) {
+    throw new Error(`--domain ${domain} is not a hostname — use something like github.com`);
+  }
+  return bare;
+}
+
 function matchesDomain(host: string, domain: string): boolean {
   const bare = host.startsWith(".") ? host.slice(1) : host;
   return bare === domain || bare.endsWith(`.${domain}`);
@@ -177,7 +201,10 @@ export async function importChromeCookies(
     throw new Error(`no Chrome profile ${profile} — found ${profiles.join(", ")}`);
   }
 
-  const key = deriveKey(keychainSecret());
+  const domain = request.domain ? normalizeDomain(request.domain) : undefined;
+  const secret = keychainSecret();
+  const key = deriveKey(secret);
+  secret.fill(0);
   const rows = readRows(path.join(root, profile, "Cookies"));
   const store = session.defaultSession.cookies;
 
@@ -191,7 +218,7 @@ export async function importChromeCookies(
   };
 
   for (const row of rows) {
-    if (request.domain && !matchesDomain(row.host_key, request.domain)) continue;
+    if (domain && !matchesDomain(row.host_key, domain)) continue;
     result.read += 1;
 
     const value =
@@ -212,7 +239,9 @@ export async function importChromeCookies(
         url: `${scheme}://${bare}${row.path || "/"}`,
         name: row.name,
         value,
-        domain: row.host_key,
+        // A dotless host_key is host-only in Chrome. Sending domain at all would widen it to
+        // subdomains, so let Electron derive host-only scope from the url instead.
+        ...(row.host_key.startsWith(".") ? { domain: row.host_key } : {}),
         path: row.path || "/",
         secure: Boolean(row.is_secure),
         httpOnly: Boolean(row.is_httponly),
@@ -223,7 +252,7 @@ export async function importChromeCookies(
       });
       result.imported += 1;
     } catch {
-      // A cookie Chrome accepted can still be rejected here, e.g. __Host- prefixed on a bare domain.
+      // Chrome can hold cookies Electron refuses, e.g. an oversized value.
       result.rejected += 1;
     }
   }

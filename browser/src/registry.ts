@@ -53,11 +53,17 @@ export class Registry {
     this.host = host;
     this.tty = host.tty ?? callerTty().path;
     this.socketPath = path.join(INSTANCES_DIR, `${host.key}.sock`);
-    fs.mkdirSync(INSTANCES_DIR, { recursive: true });
+    // This socket can drive the browser and hand out its cookies, so keep it to this user.
+    fs.mkdirSync(INSTANCES_DIR, { recursive: true, mode: 0o700 });
+    fs.chmodSync(INSTANCES_DIR, 0o700);
     fs.rmSync(this.socketPath, { force: true });
     this.server = net.createServer((connection) => this.serve(connection));
     this.server.on("error", () => {});
-    this.server.listen(this.socketPath);
+    this.server.listen(this.socketPath, () => {
+      try {
+        fs.chmodSync(this.socketPath, 0o600);
+      } catch {}
+    });
     this.write();
   }
 

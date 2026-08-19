@@ -396,11 +396,21 @@ interface ImportCookiesOptions {
   profile?: string;
   domain?: string;
   from?: string;
+  confirmed: boolean;
+  leftover: string[];
 }
 
 async function importCookiesCommand(options: ImportCookiesOptions): Promise<number> {
+  if (options.leftover.length > 0) fail(`unexpected ${options.leftover[0]}`);
   if (options.from && options.from !== "chrome") {
     fail(`--from ${options.from} is not supported yet — only chrome`);
+  }
+  if (!options.confirmed) {
+    fail(
+      "import-cookies copies live login cookies out of Chrome into this browser.\n" +
+        "Anything that can reach this browser can then use those logins.\n" +
+        "Re-run with -y (or --yes) to confirm.",
+    );
   }
   const check = await currentTerminal();
   const found = await browsers(check.terminal);
@@ -599,11 +609,18 @@ async function main(): Promise<number> {
   }
   if (command === "import-cookies") {
     requirePaneAccess();
+    const browserKey = takeFlag(args, "--browser");
+    const profile = takeFlag(args, "--profile");
+    const domain = takeFlag(args, "--domain");
+    const from = takeFlag(args, "--from");
+    const confirmed = takeBoolFlag(args, "-y") || takeBoolFlag(args, "--yes");
     return importCookiesCommand({
-      browserKey: takeFlag(args, "--browser"),
-      profile: takeFlag(args, "--profile"),
-      domain: takeFlag(args, "--domain"),
-      from: takeFlag(args, "--from"),
+      browserKey,
+      profile,
+      domain,
+      from,
+      confirmed,
+      leftover: args,
     });
   }
   if (command === "action") {

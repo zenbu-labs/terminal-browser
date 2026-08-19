@@ -105,13 +105,20 @@ browser you already have open, so pages come up already signed in. Chrome's own
 profile is only ever read, never written, and Chrome can stay open while this
 runs.
 
+Requires -y, because afterwards anything that can reach this browser can use
+those logins.
+
 On macOS the cookie values are encrypted with a key held in your login keychain,
-so the first run asks for keychain permission. Deny it and nothing is imported.
+read here by running /usr/bin/security. macOS attributes that request to the
+security tool rather than to terminal-browser, so choosing "Always Allow"
+grants every program you run unattended access to Chrome's cookie key from then
+on. Choose "Allow" for a single import if you would rather not spend that.
 
 Cookies only: no history, no bookmarks, no saved passwords. Sites that keep
 their login in local storage rather than a cookie will still ask you to sign in.
 
 Options:
+  -y, --yes           Confirm the copy (required)
   --from <browser>    Source browser, only chrome for now (default: chrome)
   --profile <name>    Chrome profile directory, e.g. Default or "Profile 1"
   --domain <domain>   Only import cookies for this domain and its subdomains
