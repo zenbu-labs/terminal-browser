@@ -230,6 +230,7 @@ pub struct Terminal {
     last_frame_size: Option<(u32, u32)>,
     mouse_pixels: bool,
     focused: bool,
+    mouse_tracking: bool,
     cell: Option<(u32, u32)>,
     cell_query_unsupported: bool,
     pending: Vec<u8>,
@@ -368,6 +369,7 @@ impl Terminal {
             last_frame_size: None,
             mouse_pixels: false,
             focused: true,
+            mouse_tracking: true,
             cell: None,
             cell_query_unsupported: false,
             pending: Vec::new(),
@@ -687,6 +689,9 @@ impl Terminal {
                     RawEvent::Paste(text) => Event::Paste(text),
                     RawEvent::Focus(focused) => {
                         self.focused = focused;
+                        // Any-event tracking streams every motion, so an unfocused pane holding it
+                        // makes the multiplexer share the mouse with an app that cannot use it.
+                        self.set_mouse_tracking(focused)?;
                         Event::Focus(focused)
                     }
                     RawEvent::WindowSize(ws) => Event::WindowSize(ws),
@@ -940,6 +945,19 @@ impl Terminal {
         self.io.out().write_all(b"\x1b[?u")?;
         self.io.out().flush()?;
         Ok(self.read_report(150, parse_kitty_keyboard)?.unwrap_or(false))
+    }
+
+    /// Turns any-event mouse tracking on or off, leaving the SGR and pixel encodings alone so the
+    /// stream comes back in the same shape it left in. Writes only when the state actually changes.
+    fn set_mouse_tracking(&mut self, on: bool) -> io::Result<()> {
+        if self.mouse_tracking == on {
+            return Ok(());
+        }
+        self.mouse_tracking = on;
+        self.io
+            .out()
+            .write_all(if on { b"\x1b[?1003h" } else { b"\x1b[?1003l" })?;
+        self.io.out().flush()
     }
 
     fn probe_mouse_pixels(&mut self) -> io::Result<bool> {

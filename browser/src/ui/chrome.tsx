@@ -744,7 +744,6 @@ function ProfileMenuPopover({
           <ProfileRow
             key={item.slug}
             item={item}
-            contextOpen={view.contextSlug === item.slug}
             rem={rem}
             theme={theme}
             actions={actions}
@@ -785,19 +784,20 @@ function ProfileMenuPopover({
 
 function ProfileRow({
   item,
-  contextOpen,
   rem,
   theme,
   actions,
   onClick,
 }: {
   item: ProfileMenuView["items"][number];
-  contextOpen: boolean;
   rem: number;
   theme: Theme;
   actions: ChromeActions;
   onClick(): void;
 }) {
+  const [hovering, setHovering] = useState(false);
+  // The default cannot be deleted, and neither can the profile this pane is browsing with.
+  const deletable = item.slug !== "default" && !item.active;
   return (
     <Box
       style={{
@@ -806,16 +806,13 @@ function ProfileRow({
         gap: rem * 0.45,
         padding: { left: rem * 0.35, right: rem * 0.35 },
         cornerRadius: rem * 0.25,
-        background: item.active || contextOpen ? theme.field : undefined,
+        background: item.active ? theme.field : undefined,
         hoverBackground: theme.hover,
         flexShrink: 0,
       }}
       onClick={onClick}
-      onPointer={(event) => {
-        // the built-in default cannot be deleted, so it has nothing to offer here
-        if (event.kind !== "down" || event.button !== "right") return;
-        actions.profileContext(item.slug === "default" ? null : item.slug);
-      }}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
     >
       {item.active ? (
         <Icon icon="record" size={rem * 0.5} color={theme.accent} weight={5} />
@@ -835,30 +832,20 @@ function ProfileRow({
       >
         {item.name}
       </Text>
-      {contextOpen && (
+      {deletable && hovering && (
         <Box
           style={{
-            height: rem * 1.15,
+            width: rem * 1.1,
+            height: rem * 1.1,
             alignItems: "center",
-            padding: { left: rem * 0.4, right: rem * 0.4 },
+            justifyContent: "center",
             cornerRadius: rem * 0.25,
-            background: theme.bg,
-            border: { width: 1, color: theme.fieldBorder },
-            hoverBackground: theme.hover,
+            hoverBackground: mix(theme.bg, theme.red, 0.35),
             flexShrink: 0,
           }}
           onClick={() => actions.profileDelete(item.slug)}
         >
-          <Text
-            style={{
-              fontSize: rem * 0.72,
-              color: theme.red,
-              wrap: false,
-              selectable: false,
-            }}
-          >
-            Delete
-          </Text>
+          <Icon icon="close" size={rem * 0.7} color={theme.red} />
         </Box>
       )}
     </Box>
