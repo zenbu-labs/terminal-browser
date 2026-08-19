@@ -43,6 +43,7 @@ export const ICONS = {
     "M 4 8.2 L 8.3 8.2 L 9.8 6 L 14.2 6 L 15.7 8.2 L 20 8.2 L 20 18 L 4 18 Z " +
     arcPath(12, 12.9, 3.1, 0, 360),
   pause: "M 9.2 6.8 L 9.2 17.2 M 14.8 6.8 L 14.8 17.2",
+  shield: "M 12 3.5 L 19 6.3 L 19 11.6 C 19 15.7 16.1 18.9 12 20.5 C 7.9 18.9 5 15.7 5 11.6 L 5 6.3 Z",
 };
 
 export type IconName = keyof typeof ICONS;
