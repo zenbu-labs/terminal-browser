@@ -112,6 +112,29 @@ export class TabManager {
     });
   }
 
+  /**
+   * Captures where every tab sits, then stops every view. A view's session is fixed when it is
+   * built, so a pane changes profile by handing these urls to `restore`.
+   */
+  teardown(): string[] {
+    const urls = this.tabs.map((tab) => tab.state.url);
+    for (const tab of this.tabs) tab.controller.stop();
+    return urls;
+  }
+
+  /** Builds one replacement view per tab against whatever session the host hands out now. */
+  restore(urls: string[]) {
+    for (const [at, tab] of this.tabs.entries()) {
+      const url = urls[at] ?? this.fallbackUrl;
+      tab.state = initialBrowserState(url);
+      this.attachController(tab, url, tab.id === this.activeId);
+    }
+    this.active?.controller.focusContent();
+    this.host.onTabsChanged();
+    this.host.onActivated();
+    this.host.requestRender();
+  }
+
   activate(id: number) {
     const tab = this.tabs.find((t) => t.id === id);
     if (!tab || (id !== this.activeId && !this.host.tabSwitchAllowed())) return;

@@ -460,6 +460,7 @@ function currentTerminal(): Promise<TerminalCheck> {
 interface ImportCookiesOptions {
   browserKey?: string;
   profile?: string;
+  toProfile?: string;
   domain?: string;
   from?: string;
   confirmed: boolean;
@@ -477,6 +478,7 @@ interface CookieImportReport {
   browser: string;
   profile: string;
   profileName: string;
+  toProfile: string;
   domains: string[];
   warnings: string[];
   imported: number;
@@ -495,6 +497,16 @@ function renderSources(sources: CookieSourceRow[]): string {
       return `  ${source.displayName}  ${profiles}\n`;
     })
     .join("");
+}
+
+async function confirm(question: string): Promise<boolean> {
+  const answered = Promise.withResolvers<string>();
+  const ask = readline.createInterface({ input: process.stdin, output: process.stderr });
+  ask.question(question, (answer) => answered.resolve(answer));
+  ask.on("close", () => answered.resolve("n"));
+  const answer = await answered.promise;
+  ask.close();
+  return /^(y|yes)$/i.test(answer.trim());
 }
 
 async function confirmImport(
@@ -518,18 +530,14 @@ async function confirmImport(
   if (!options.from && sources.length > 1) {
     process.stderr.write("Pass --from to copy out of one of the others instead.\n");
   }
-  const ask = readline.createInterface({ input: process.stdin, output: process.stderr });
-  const answer = await new Promise<string>((resolve) => {
-    ask.question("copy them? [y/N] ", resolve);
-    ask.on("close", () => resolve("n"));
-  });
-  ask.close();
-  return /^(y|yes)$/i.test(answer.trim());
+  return confirm("copy them? [y/N] ");
 }
 
 function renderImport(report: CookieImportReport): string {
   const profile = report.profileName === report.profile ? report.profile : `${report.profileName}, ${report.profile}`;
-  const lines = [`Imported ${report.imported} cookies from ${report.browser} (${profile}).`];
+  const lines = [
+    `Imported ${report.imported} cookies from ${report.browser} (${profile}) into browser profile ${report.toProfile}.`,
+  ];
   if (report.domains.length > 0) lines.push(`Limited to ${report.domains.join(", ")} and subdomains.`);
   if (report.warnings.length > 0) {
     lines.push("", "Warnings:", ...report.warnings.map((warning) => `- ${warning}`));
@@ -565,14 +573,21 @@ async function importCookiesCommand(options: ImportCookiesOptions): Promise<numb
       );
       return [];
     })) as CookieSourceRow[];
-    if (!(await confirmImport(sources, describe(target), options))) {
+    const into = `${describe(target)}, on browser profile "${options.toProfile ?? target.profile}"`;
+    if (!(await confirmImport(sources, into, options))) {
       process.stderr.write("terminal-browser: cancelled, nothing was copied\n");
       return 1;
     }
   }
   const report = (await control(
     target.socket,
-    { cmd: "import-cookies", from: options.from, profile: options.profile, domain: options.domain },
+    {
+      cmd: "import-cookies",
+      from: options.from,
+      profile: options.profile,
+      toProfile: options.toProfile,
+      domain: options.domain,
+    },
     120_000,
   )) as CookieImportReport;
   if (options.json) {
@@ -583,7 +598,160 @@ async function importCookiesCommand(options: ImportCookiesOptions): Promise<numb
   return 0;
 }
 
-async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
+interface ProfileRow {
+  slug: string;
+  name: string;
+  createdAt: number;
+  builtIn: boolean;
+  active?: boolean;
+}
+
+interface ProfileList {
+  profiles: ProfileRow[];
+  activeSlug: string;
+  activeName: string;
+}
+
+interface ProfileReply {
+  profile: ProfileRow;
+}
+
+const PROFILE_VERBS: Record<string, string> = {
+  ls: "list",
+  add: "create",
+  new: "create",
+  remove: "delete",
+  rm: "delete",
+};
+
+function profileLine(profile: ProfileRow): string {
+  const markers = [...(profile.active ? ["active"] : []), ...(profile.builtIn ? ["default"] : [])];
+  const suffix = markers.length > 0 ? ` (${markers.join(", ")})` : "";
+  return `${profile.slug}\t${profile.name}${suffix}`;
+}
+
+function renderProfiles(list: ProfileList): string {
+  if (list.profiles.length === 0) return "no browser profiles\n";
+  return `${list.profiles.map(profileLine).join("\n")}\n`;
+}
+
+/** Profiles are one registry for the whole browser process, so any running browser answers alike. */
+async function profileHost(): Promise<string> {
+  const records = await instances();
+  const host = records[0];
+  if (!host) fail("no terminal browser is running — open one first, then manage its profiles");
+  return host.socket;
+}
+
+function takeSelector(args: string[], verb: string): string {
+  const flagged = takeFlag(args, "--profile");
+  const at = flagged === undefined ? args.findIndex((arg) => !arg.startsWith("-")) : -1;
+  const selector = (flagged ?? (at >= 0 ? args.splice(at, 1)[0] : "")).trim();
+  if (!selector) fail(`profile ${verb} requires a profile name or slug`);
+  return selector;
+}
+
+function takeOnlySelector(args: string[], verb: string): string {
+  const selector = takeSelector(args, verb);
+  if (args.length > 0) fail(`unexpected ${args[0]} (terminal-browser profile ${verb} takes one profile)`);
+  return selector;
+}
+
+function takeWords(args: string[]): string {
+  const stray = args.find((arg) => arg.startsWith("-"));
+  if (stray) fail(`unexpected ${stray} (terminal-browser profile --help)`);
+  return args.join(" ").trim();
+}
+
+function takeName(args: string[], verb: string, what: string): string {
+  const flagged = takeFlag(args, "--name");
+  const words = takeWords(args);
+  if (flagged !== undefined && words) fail(`unexpected ${words} (--name already gave the ${what})`);
+  const name = (flagged ?? words).trim();
+  if (!name) fail(`profile ${verb} requires a ${what}`);
+  return name;
+}
+
+/**
+ * Losing a profile's logins is unrecoverable, so it is refused unattended unless -y says
+ * otherwise, the same bargain import-cookies strikes over copying them in.
+ */
+async function confirmProfileLoss(verb: "delete" | "clear", selector: string, confirmed: boolean): Promise<boolean> {
+  if (confirmed) return true;
+  if (!process.stdin.isTTY) {
+    fail(`profile ${verb} throws data away and there is no terminal to ask in — re-run with -y`);
+  }
+  if (!process.stderr.isTTY) {
+    fail(`stderr is redirected, so the confirmation cannot be shown — re-run with -y to ${verb} without asking`);
+  }
+  const loses = "its cookies, local storage and history";
+  const consequence =
+    verb === "delete"
+      ? `Deleting browser profile "${selector}" takes it off the list and discards ${loses}.`
+      : `Clearing browser profile "${selector}" signs it out of every site it is signed into: ${loses} all go.`;
+  process.stderr.write(`${consequence}\nNothing brings them back; those sites will ask you to sign in again.\n`);
+  if (await confirm(`${verb} it? [y/N] `)) return true;
+  process.stderr.write("terminal-browser: cancelled, the profile is untouched\n");
+  return false;
+}
+
+async function profileCommand(args: string[]): Promise<number> {
+  const json = takeBoolFlag(args, "--json");
+  const confirmed = takeBoolFlag(args, "-y") || takeBoolFlag(args, "--yes");
+  const verb = (args[0] ?? "list").toLowerCase();
+  const rest = args.slice(1);
+  switch (PROFILE_VERBS[verb] ?? verb) {
+    case "list": {
+      if (rest.length > 0) fail(`unexpected ${rest[0]} (terminal-browser profile --help)`);
+      const list = (await control(await profileHost(), { cmd: "profiles" })) as ProfileList;
+      if (json) print(list);
+      else process.stdout.write(renderProfiles(list));
+      return 0;
+    }
+    case "create": {
+      const name = takeName(rest, verb, "name");
+      const reply = (await control(await profileHost(), { cmd: "profile-create", name })) as ProfileReply;
+      if (json) print(reply);
+      else process.stdout.write(`Created browser profile ${profileLine(reply.profile)}\n`);
+      return 0;
+    }
+    case "rename": {
+      const selector = takeSelector(rest, verb);
+      const name = takeName(rest, verb, "new name");
+      const request = { cmd: "profile-rename", selector, name };
+      const reply = (await control(await profileHost(), request)) as ProfileReply;
+      if (json) print(reply);
+      else process.stdout.write(`Renamed browser profile to ${reply.profile.name}.\n`);
+      return 0;
+    }
+    case "delete": {
+      const selector = takeOnlySelector(rest, verb);
+      const socket = await profileHost();
+      if (!(await confirmProfileLoss("delete", selector, confirmed))) return 1;
+      const reply = (await control(socket, { cmd: "profile-delete", selector }, 120_000)) as ProfileReply;
+      if (json) print(reply);
+      else process.stdout.write(`Deleted browser profile ${reply.profile.name}.\n`);
+      return 0;
+    }
+    case "clear": {
+      const selector = takeOnlySelector(rest, verb);
+      const socket = await profileHost();
+      if (!(await confirmProfileLoss("clear", selector, confirmed))) return 1;
+      const reply = (await control(socket, { cmd: "profile-clear", selector }, 120_000)) as ProfileReply;
+      if (json) print(reply);
+      else process.stdout.write(`Cleared browser profile ${reply.profile.name}.\n`);
+      return 0;
+    }
+    default:
+      fail(`unsupported profile subcommand: ${verb} (list, create, rename, delete, clear)`);
+  }
+}
+
+async function newTabCommand(
+  url: string | undefined,
+  key: string | undefined,
+  profile: string | undefined,
+): Promise<number> {
   const check = await currentTerminal();
   const found = await browsers(check.terminal);
   const here = key
@@ -596,15 +764,18 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
   }
   const target = here[0];
   if (target) {
+    // A pane holds one profile's session, so the tab can only land on it after the pane moves.
+    if (profile) await control(target.socket, { cmd: "profile-switch", selector: profile });
     const where = url ? { cmd: "open-tab", url, cwd: process.cwd() } : { cmd: "open-tab" };
     print(await control(target.socket, where));
     return 0;
   }
   await requireGraphics(check);
-  const argv = url ? [url] : [];
+  const flags = profile ? [`--profile=${profile}`] : [];
+  const argv = url ? [url, ...flags] : flags;
   if (interactiveTty()) return openHere(argv);
   if (!canSplit(check.terminal)) fail(cannotOpenPanes(check.terminal));
-  const split = url && fs.existsSync(url) ? [path.resolve(url)] : argv;
+  const split = url && fs.existsSync(url) ? [path.resolve(url), ...flags] : argv;
   split.push("--split-dir=right");
   const tty = ownTtyPath() ?? callerTty().path;
   if (tty) split.push(`--parent-tty=${tty}`);
@@ -648,6 +819,20 @@ function rejectUnknownFlags(args: string[]) {
   }
 }
 
+/** Takes both spellings, because the browser itself reads the `--profile=<selector>` form. */
+function takeProfileFlag(args: string[]): string | undefined {
+  const at = args.findIndex((arg) => arg === "--profile" || arg.startsWith("--profile="));
+  if (at < 0) return undefined;
+  const inline = args[at].startsWith("--profile=");
+  const raw = inline ? args[at].slice("--profile=".length) : (args[at + 1] ?? "");
+  args.splice(at, inline ? 1 : 2);
+  const selector = raw.trim();
+  if (!selector || selector.startsWith("-")) {
+    fail("--profile requires a non-empty profile name or slug (terminal-browser profile lists them)");
+  }
+  return selector;
+}
+
 function requirePaneAccess(): void {
   const refusal = sandboxRefusal();
   if (refusal) fail(refusal);
@@ -657,8 +842,10 @@ async function openCommand(args: string[]) {
   requirePaneAccess();
   const split = takeSplitFlag(args);
   const size = takeSizeFlag(args);
+  const profile = takeProfileFlag(args);
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
   rejectUnknownFlags(args);
+  if (profile) args.push(`--profile=${profile}`);
   const positionals = args.filter((arg) => !arg.startsWith("-"));
   if (positionals.length > 1) {
     fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
@@ -716,7 +903,8 @@ function helpCommand(topic: string | undefined): number {
 }
 
 async function main(): Promise<number> {
-  const [command, ...args] = process.argv.slice(2);
+  const [named, ...args] = process.argv.slice(2);
+  const command = named === "profiles" ? "profile" : named;
   if (command === "--help" || command === "-h") {
     process.stdout.write(rootHelp());
     return 0;
@@ -748,15 +936,18 @@ async function main(): Promise<number> {
   }
   if (command === "upgrade") return upgradeCommand();
   if (command === "shutdown") return shutdownDaemon();
+  if (command === "profile") return profileCommand(args);
   if (command === "new-tab") {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");
-    return newTabCommand(args.find((arg) => !arg.startsWith("-")), key);
+    const profile = takeProfileFlag(args);
+    return newTabCommand(args.find((arg) => !arg.startsWith("-")), key, profile);
   }
   if (command === "import-cookies") {
     requirePaneAccess();
     const browserKey = takeFlag(args, "--browser");
     const profile = takeFlag(args, "--profile");
+    const toProfile = takeFlag(args, "--to-profile");
     // A repeated --domain is as natural as one comma-separated list, so accept both.
     const domains = takeFlags(args, "--domain");
     const from = takeFlag(args, "--from");
@@ -765,6 +956,7 @@ async function main(): Promise<number> {
     return importCookiesCommand({
       browserKey,
       profile,
+      toProfile,
       domain: domains.length > 0 ? domains.join(",") : undefined,
       from,
       confirmed,

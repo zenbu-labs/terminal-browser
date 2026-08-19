@@ -8,6 +8,7 @@ import type { InstanceRow } from "pixel-store";
 
 import type { BrowserState } from "./page/types";
 import type { CookieImportRequest, CookieSource } from "./cookies";
+import type { BrowserProfile } from "./profiles";
 import {
   PRE_AUTH_MAX_BYTES,
   PRE_AUTH_TIMEOUT_MS,
@@ -29,12 +30,20 @@ export interface Where {
   pane: string | null;
 }
 
+export interface ProfileListing {
+  profiles: (BrowserProfile & { active: boolean })[];
+  /** Empty for a pane pinned to an explicit --partition, which is on no profile. */
+  activeSlug: string;
+  activeName: string;
+}
+
 export interface ControlHost {
   key: string;
   tty: string | null;
   where(): Promise<Where>;
   splitDir: InstanceRow["splitDir"];
   parentTty: string | null;
+  profile(): string | null;
   state(): BrowserState;
   openTab(url?: string, cwd?: string): number;
   activateTab(id: number): boolean;
@@ -43,6 +52,12 @@ export interface ControlHost {
   targets(): Promise<unknown>;
   importCookies(request: CookieImportRequest): Promise<unknown>;
   cookieSources(): CookieSource[];
+  profiles(): ProfileListing;
+  createProfile(name: string): BrowserProfile;
+  renameProfile(selector: string, name: string): BrowserProfile;
+  deleteProfile(selector: string): BrowserProfile;
+  clearProfile(selector: string): Promise<BrowserProfile>;
+  switchProfile(selector: string): { profile: BrowserProfile; url: string };
   viewport(): { width: number; height: number } | null;
 }
 
@@ -53,6 +68,9 @@ interface ControlRequest {
   tab?: number;
   from?: string;
   profile?: string;
+  name?: string;
+  selector?: string;
+  toProfile?: string;
   domain?: string;
 }
 
@@ -101,6 +119,7 @@ export class Registry {
       tty: this.tty,
       splitDir: this.host.splitDir,
       parentTty: this.host.parentTty,
+      profile: this.host.profile(),
       socket: this.socketPath,
       cdpPort: this.cdpPort,
       startedAt: this.startedAt,
@@ -206,20 +225,44 @@ export class Registry {
         return this.host.cookieSources();
       case "import-cookies":
         return this.importCookies(request);
+      case "profiles":
+        return this.host.profiles();
+      case "profile-create": {
+        if (!request.name) throw new Error("profile-create needs a name");
+        return { profile: this.host.createProfile(request.name) };
+      }
+      case "profile-rename": {
+        if (!request.selector) throw new Error("profile-rename needs a profile");
+        if (!request.name) throw new Error("profile-rename needs a new name");
+        return { profile: this.host.renameProfile(request.selector, request.name) };
+      }
+      case "profile-delete": {
+        if (!request.selector) throw new Error("profile-delete needs a profile");
+        return { profile: this.host.deleteProfile(request.selector) };
+      }
+      case "profile-clear": {
+        if (!request.selector) throw new Error("profile-clear needs a profile");
+        return { profile: await this.host.clearProfile(request.selector) };
+      }
+      case "profile-switch": {
+        if (!request.selector) throw new Error("profile-switch needs a profile");
+        return this.host.switchProfile(request.selector);
+      }
       default:
         throw new Error(`unknown command: ${request.cmd}`);
     }
   }
 
   /**
-   * One copy at a time: each import rederives a key per row and rewrites the whole cookie
-   * store, so concurrent requests would multiply that work against the same store.
+   * One copy at a time: each import rederives a key per row and rewrites a whole cookie store,
+   * so concurrent requests would only multiply that work.
    */
   private importCookies(request: ControlRequest): Promise<unknown> {
     const done = (this.importing ?? Promise.resolve()).then(() =>
       this.host.importCookies({
         from: request.from,
         profile: request.profile,
+        toProfile: request.toProfile,
         domain: request.domain,
       }),
     );

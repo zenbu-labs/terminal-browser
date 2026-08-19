@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { session } from "electron";
 import { keychainGenericPassword } from "pixel-react";
+
+import { browserSession } from "./page/browser-session";
+import { defaultProfile, partitionFor, resolveProfile } from "./profiles";
 
 const SALT = "saltysalt";
 const ITERATIONS = 1003;
@@ -189,7 +191,10 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
 
 export interface CookieImportRequest {
   from?: string;
+  /** The Chrome-side profile directory the cookies are read from. */
   profile?: string;
+  /** Our browser profile the cookies are written into; the built-in default when absent. */
+  toProfile?: string;
   domain?: string;
 }
 
@@ -198,6 +203,8 @@ export interface CookieImportResult {
   slug: string;
   profile: string;
   profileName: string;
+  /** Slug of the profile that was written to. */
+  toProfile: string;
   domains: string[];
   available: string[];
   warnings: string[];
@@ -638,6 +645,9 @@ export async function importChromeCookies(
   const { descriptor, source, available } = resolveCookieSource(request.from);
   const profile = resolveCookieProfile(source, request.profile);
   const domains = request.domain ? parseDomainFilters(request.domain) : [];
+  // Resolved before the keychain is touched: a whole cookie store landing in the wrong profile is
+  // worse than a refused import.
+  const destination = request.toProfile ? resolveProfile(request.toProfile) : defaultProfile();
 
   const warnings: string[] = [];
   if (!request.from && available.length > 1) {
@@ -653,13 +663,14 @@ export async function importChromeCookies(
   const key = deriveKey(secret);
   secret.fill(0);
   const rows = readRows(profile.cookiesPath);
-  const store = session.defaultSession.cookies;
+  const store = browserSession(partitionFor(destination.slug)).cookies;
 
   const result: CookieImportResult = {
     browser: source.displayName,
     slug: source.slug,
     profile: profile.directory,
     profileName: profile.name,
+    toProfile: destination.slug,
     domains,
     available: available.map((entry) => entry.displayName),
     warnings,

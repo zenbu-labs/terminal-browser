@@ -19,12 +19,25 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
+import {
+  clearProfileData,
+  createProfile,
+  deleteProfile,
+  listProfiles,
+  noteProfileUsed,
+  partitionFor,
+  profileForNewPane,
+  renameProfile,
+  resolveProfile,
+} from "../profiles";
+import type { BrowserProfile } from "../profiles";
 import { hideImportHint, importHintHidden, lastUrl, setLastUrl, settings, store } from "pixel-store";
 import type { DevtoolsDock, InstanceRow } from "pixel-store";
 
 import { RecordSession } from "../record/session";
 import type { RecordActions } from "../record/types";
 import { Registry } from "../registry";
+import type { ProfileListing } from "../registry";
 import { Chrome } from "../ui/chrome";
 import { ICONS } from "../ui/icons";
 import type {
@@ -35,6 +48,7 @@ import type {
   PageMenuItem,
   PageMenuView,
   PopupView,
+  ProfileMenuView,
 } from "../ui/types";
 import { normalizeUrl, searchOrUrl } from "../url";
 import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
@@ -175,8 +189,8 @@ function cookieSourceSummary(sources: CookieSource[]): string {
   return rest > 0 ? `Detected: ${named}, +${rest} more.` : `Detected: ${named}.`;
 }
 
-// Every pane in this process imports into the same default cookie store, so one
-// import at a time across all of them, not one per session.
+// Each import decrypts row by row and rewrites a whole cookie store, so every pane in this
+// process waits its turn rather than multiplying that work.
 let importingCookies = false;
 
 class Session {
@@ -194,7 +208,9 @@ class Session {
   private readonly noFrame: boolean;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
-  private readonly partition: string | null;
+  /** --partition pins this pane's storage directly, which puts it on no profile at all. */
+  private readonly explicitPartition: string | null;
+  private profile: BrowserProfile | null;
   private readonly preload: string | null;
   private readonly mainScript: string | null;
   private readonly onThemeRequest = (event: IpcMainEvent) => {
@@ -266,6 +282,8 @@ class Session {
   private importHintDismissed = false;
   private importDone = false;
   private importSummary = "No supported browsers detected.";
+  private profileMenuOpen = false;
+  private profilePrompt: { kind: "create" | "rename"; text: string } | null = null;
 
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
@@ -279,11 +297,15 @@ class Session {
     this.noFrame = this.argv.includes("--no-frame");
     this.tabsAsPopups = this.argv.includes("--open-tabs-in-popup-stack");
     this.clipboardRead = this.argv.includes("--allow-clipboard-read");
-    this.partition = flagValue(this.argv, "--partition");
+    this.explicitPartition = flagValue(this.argv, "--partition");
+    this.profile = this.explicitPartition
+      ? null
+      : profileForNewPane(flagValue(this.argv, "--profile"), flagValue(this.argv, "--parent-tty"));
+    if (this.profile) noteProfileUsed(this.profile.slug);
     this.preload = flagValue(this.argv, "--preload");
     this.mainScript = flagValue(this.argv, "--main-script");
     this.fallbackState = initialBrowserState(this.initialUrl());
-    configureBrowserSession(this.partition, (progress) => this.showDownload(progress));
+    configureBrowserSession(this.sessionPartition(), (progress) => this.showDownload(progress));
     this.tabs = new TabManager(
       {
         createController: (url, visible, onState) =>
@@ -296,7 +318,7 @@ class Session {
             this.ctx.cwd,
             this.windowBg,
             visible,
-            this.partition,
+            this.sessionPartition(),
             this.tabsAsPopups,
             this.clipboardRead,
             this.ctx.key,
@@ -405,6 +427,7 @@ class Session {
       },
       splitDir: splitDirection(flagValue(this.argv, "--split-dir")),
       parentTty: flagValue(this.argv, "--parent-tty"),
+      profile: () => this.profile?.slug ?? null,
       state: () => this.tabs.activeState ?? this.fallbackState,
       openTab: (url, cwd) => this.tabs.create(url ? normalizeUrl(url, cwd) : DEFAULT_URL).id,
       activateTab: (id) => {
@@ -423,6 +446,16 @@ class Session {
       targets: () => this.tabs.targets(),
       importCookies: (request) => this.runCookieImport(request),
       cookieSources: () => listCookieSources(),
+      profiles: () => this.profileListing(),
+      createProfile: (name) => {
+        const created = createProfile(name);
+        this.render();
+        return created;
+      },
+      renameProfile: (selector, name) => this.renameBySelector(selector, name),
+      deleteProfile: (selector) => this.deleteBySelector(selector),
+      clearProfile: (selector) => this.clearBySelector(selector),
+      switchProfile: (selector) => this.switchProfile(selector),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
@@ -518,7 +551,7 @@ class Session {
       this.root?.setPointerShape("text");
     } catch { }
     try {
-      browserSession(this.partition).flushStorageData();
+      browserSession(this.sessionPartition()).flushStorageData();
     } catch { }
     this.registry?.dispose();
     this.registry = null;
@@ -574,11 +607,7 @@ class Session {
     if (!this.preload && !this.mainScript) return;
     ipcMain.on("terminal-browser:theme-request", this.onThemeRequest);
     ipcMain.on("terminal-browser:quit", this.onQuitRequest);
-    if (this.preload) {
-      const ses = browserSession(this.partition);
-      registerPreloadOnce(ses, apiPreloadPath());
-      registerPreloadOnce(ses, path.resolve(this.ctx.cwd, this.preload));
-    }
+    this.registerPreloads();
     if (this.mainScript) {
       const file = path.resolve(this.ctx.cwd, this.mainScript);
       try {
@@ -634,6 +663,7 @@ class Session {
         }
         pageMenu={this.pageMenuView()}
         importHint={this.importHintView()}
+        profiles={this.profileMenuView()}
         focusMode={this.noShortcuts}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
@@ -753,6 +783,61 @@ class Session {
     importHintToggle: () => this.toggleImportHint(),
     importHintDismiss: () => this.dismissImportHint(),
     importRun: () => this.importFromHint(),
+    profileMenuToggle: () => {
+      this.profileMenuOpen = !this.profileMenuOpen;
+      this.profilePrompt = null;
+      this.render();
+    },
+    profileSwitch: (slug) => {
+      this.profileMenuOpen = false;
+      this.profilePrompt = null;
+      // Picking the row the pane is already on just closes the menu; only a real move rebuilds.
+      if (slug === this.profile?.slug) {
+        this.render();
+        return;
+      }
+      this.applyProfileSwitch(slug);
+    },
+    profileCreate: (name) => {
+      if (name === undefined) {
+        this.profilePrompt = { kind: "create", text: "" };
+        this.render();
+        return;
+      }
+      try {
+        // A profile made here is one the operator wants to be on, so move in the same gesture.
+        const created = createProfile(name);
+        this.profilePrompt = null;
+        this.profileMenuOpen = false;
+        this.applyProfileSwitch(created.slug);
+      } catch (error) {
+        this.showProfileFailure(error);
+      }
+    },
+    profileRename: (name) => {
+      const current = this.profile;
+      if (!current) {
+        // A pinned pane has no profile to hide this row, so say why instead of doing nothing.
+        this.showProfileFailure(
+          new Error(`this browser is pinned to --partition=${this.explicitPartition}`),
+        );
+        return;
+      }
+      if (current.builtIn) return;
+      if (name === undefined) {
+        this.profilePrompt = { kind: "rename", text: current.name };
+        this.render();
+        return;
+      }
+      try {
+        this.profile = renameProfile(current.slug, name);
+        this.profilePrompt = null;
+        this.profileMenuOpen = false;
+        this.render();
+      } catch (error) {
+        this.showProfileFailure(error);
+      }
+    },
     record: this.recordActions(),
   };
 
@@ -1080,7 +1165,11 @@ class Session {
     }
     importingCookies = true;
     try {
-      const result = await importChromeCookies(request);
+      // An import run from this pane signs this pane's own profile in, unless one was named.
+      const result = await importChromeCookies({
+        ...request,
+        toProfile: request.toProfile ?? this.profile?.slug,
+      });
       return { ...result, warnings: cookieImportWarnings(result) };
     } finally {
       importingCookies = false;
@@ -1137,6 +1226,114 @@ class Session {
       .catch((error: unknown) => {
         this.showToast("cookie import failed", "failed", error instanceof Error ? error.message : String(error));
       });
+  }
+
+  private sessionPartition(): string | null {
+    if (this.explicitPartition) return this.explicitPartition;
+    return this.profile ? partitionFor(this.profile.slug) : null;
+  }
+
+  /** Preloads are registered per session, so a pane that switches profile needs them again. */
+  private registerPreloads(): void {
+    if (!this.preload) return;
+    const ses = browserSession(this.sessionPartition());
+    registerPreloadOnce(ses, apiPreloadPath());
+    registerPreloadOnce(ses, path.resolve(this.ctx.cwd, this.preload));
+  }
+
+  private profileMenuView(): ProfileMenuView {
+    return {
+      open: this.profileMenuOpen,
+      activeSlug: this.profile?.slug ?? "",
+      activeName: this.profile?.name ?? `partition ${this.explicitPartition}`,
+      items: listProfiles().map((profile) => ({
+        slug: profile.slug,
+        name: profile.name,
+        active: profile.slug === this.profile?.slug,
+      })),
+      prompt: this.profilePrompt,
+    };
+  }
+
+  private profileListing(): ProfileListing {
+    return {
+      profiles: listProfiles().map((profile) => ({
+        ...profile,
+        active: profile.slug === this.profile?.slug,
+      })),
+      activeSlug: this.profile?.slug ?? "",
+      activeName: this.profile?.name ?? "",
+    };
+  }
+
+  private renameBySelector(selector: string, name: string): BrowserProfile {
+    const renamed = renameProfile(resolveProfile(selector).slug, name);
+    if (this.profile?.slug === renamed.slug) this.profile = renamed;
+    this.render();
+    return renamed;
+  }
+
+  private deleteBySelector(selector: string): BrowserProfile {
+    const target = resolveProfile(selector);
+    deleteProfile(target.slug);
+    this.render();
+    return target;
+  }
+
+  private async clearBySelector(selector: string): Promise<BrowserProfile> {
+    const target = resolveProfile(selector);
+    await clearProfileData(target.slug);
+    this.render();
+    return target;
+  }
+
+  /**
+   * A view's session is fixed when it is built, so the pane changes profile by replacing its
+   * views: capture the urls, drop the old views, flip identity while none exists, build again.
+   */
+  private switchProfile(selector: string): { profile: BrowserProfile; url: string } {
+    if (this.explicitPartition) {
+      throw new Error(`this browser is pinned to --partition=${this.explicitPartition}`);
+    }
+    const target = resolveProfile(selector);
+    const url = this.tabs.activeState?.url ?? this.fallbackState.url;
+    if (target.slug === this.profile?.slug) {
+      noteProfileUsed(target.slug);
+      throw new Error(`already on browser profile ${target.slug}`);
+    }
+    this.findOpen = false;
+    this.urlEditOpen = false;
+    this.pageMenu = null;
+    this.newTab = null;
+    for (const record of this.records.values()) record.dispose();
+    this.records.clear();
+    this.shownRecord = null;
+    const urls = this.tabs.teardown();
+    this.profile = target;
+    noteProfileUsed(target.slug);
+    configureBrowserSession(this.sessionPartition(), (progress) => this.showDownload(progress));
+    this.registerPreloads();
+    this.tabs.restore(urls);
+    this.registry?.update();
+    this.render();
+    return { profile: target, url };
+  }
+
+  private applyProfileSwitch(slug: string) {
+    try {
+      this.switchProfile(slug);
+    } catch (error) {
+      this.showProfileFailure(error);
+    }
+  }
+
+  private showProfileFailure(error: unknown) {
+    this.showToast(
+      "profile failed",
+      "failed",
+      error instanceof Error ? error.message : String(error),
+    );
+    this.render();
   }
 
   private showToast(text: string, state: "done" | "failed" | "alert", detail?: string) {

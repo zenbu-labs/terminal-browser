@@ -18,6 +18,11 @@ The url can be a normal url, a localhost port, or a path to an html file.
 Options:
   --split <direction>   Open in a new pane: right, left, down, up
   --size <fraction>     How much of the space the split takes (0.2 to 0.95)
+  --profile <name>      Which of our browser profiles to open on, by slug or by
+                        display name (terminal-browser profile lists them). The
+                        cookies, local storage and history of one profile are
+                        invisible to every other, so the same site can be signed
+                        in twice at once. Default: the profile last used here
   --preload=<path>      Run a script inside the context of a web page before it loads (uses electron's preload feature under the hood, runs in an isolated world).
                         terminal-browser specific api's are exposed on globalThis.terminalBrowser
                         {
@@ -44,14 +49,17 @@ Examples:
   terminal-browser open localhost:3000
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
+  terminal-browser open github.com --profile work
 `,
   },
   ls: {
     summary: "List running browsers and their tabs",
     usage: "terminal-browser ls [options]",
     body: `
-Lists the browsers running in this terminal tab, each with its tabs. The tab
-ids it prints are what --tab takes in terminal-browser action.
+Lists the browsers running in this terminal tab, each with the browser profile
+it is on and its tabs. The tab ids it prints are what --tab takes in
+terminal-browser action, and the profile is what --profile takes in
+terminal-browser open.
 
 Options:
   --all               Every browser, not just this terminal tab
@@ -90,10 +98,16 @@ terminal-browser ls)
 
 Options:
   --browser <key>     A browser key from terminal-browser ls
+  --profile <name>    Which of our browser profiles the tab lands on, by slug or
+                      display name. A browser pane holds one profile at a time,
+                      so this moves that browser onto the profile first, which
+                      reloads the pages it already has open. When there is no
+                      browser yet, the new one starts on that profile
 
 Examples:
   terminal-browser new-tab github.com
   terminal-browser new-tab --browser 90107-1 localhost:3000
+  terminal-browser new-tab github.com --profile work
 `,
   },
   "import-cookies": {
@@ -127,8 +141,12 @@ Options:
   --from <browser>    Source browser, by slug, display name or alias: chrome,
                       brave, edge, arc, opera, vivaldi, chromium and the rest
                       (default: Chrome, or whichever one is installed)
-  --profile <name>    Source profile, by directory ("Profile 1") or by the name
-                      you gave it in that browser ("Work")
+  --profile <name>    Source profile in that browser, by directory ("Profile 1")
+                      or by the name you gave it there ("Work")
+  --to-profile <name> Which of OUR browser profiles the cookies go into, by slug
+                      or display name (terminal-browser profile lists them).
+                      Default: the profile that browser is already on. An unknown
+                      or ambiguous name copies nothing
   --domain <list>     Only these domains and their subdomains. Comma, semicolon
                       or space separated, *.example.com and .example.com both
                       work, and the flag can be repeated
@@ -140,6 +158,55 @@ Examples:
   terminal-browser import-cookies --profile Default
   terminal-browser import-cookies --domain github.com --json
   terminal-browser import-cookies --domain "github.com, *.slack.com"
+  terminal-browser import-cookies --profile Work --to-profile work
+`,
+  },
+  profile: {
+    summary: "Manage the browser profiles that hold your logins",
+    usage: "terminal-browser profile [list|create|rename|delete|clear] [options]",
+    body: `
+A profile is a separate box for cookies, local storage and history. Pages opened
+on one profile know nothing about pages opened on another, so you can be signed
+into the same site twice at once. Every browser starts on the default profile,
+which is the one already holding the logins you have now.
+
+The profiles are one list shared by every browser running here, so any of them
+can answer. With no subcommand this lists them. "profiles" is the same command.
+
+Subcommands:
+  list                Every profile, one per line: slug, then display name, then
+                      (active) and (default) markers. Alias: ls
+  create <name>       Make a profile. Aliases: add, new
+  rename <profile> <name>
+                      Give a profile a new display name
+  delete <profile>    Take a profile off the list and discard its data.
+                      Aliases: remove, rm
+  clear <profile>     Keep the profile but empty it, signing it out of every site
+
+A <profile> is a slug or a display name, matched ignoring case and surrounding
+space. A display name that fits more than one profile is refused rather than
+guessed at, and so is one that fits none; both name what you typed.
+
+Options:
+  --name <name>       The name, instead of the words after the subcommand
+  --profile <name>    The profile to act on, instead of the first word
+  -y, --yes           Delete or clear without asking
+  --json              Print the result as JSON instead of a sentence
+
+delete and clear both throw logins away for good, so in a terminal they say what
+goes and ask first. Answer anything but y and nothing happens. Unlike
+import-cookies, having no terminal to ask in is not consent: without one they
+refuse unless -y is there, so a script or an agent has to say so outright.
+
+To open on a profile rather than manage one, terminal-browser open --profile
+<name>. To see which profile each running browser is on, terminal-browser ls.
+
+Examples:
+  terminal-browser profile
+  terminal-browser profile create Work
+  terminal-browser profile rename Work "Work (EU)"
+  terminal-browser profile clear work -y
+  terminal-browser profile delete work
 `,
   },
   shutdown: {

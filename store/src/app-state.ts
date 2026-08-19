@@ -31,3 +31,41 @@ export function importHintHidden(): boolean {
 export function hideImportHint(): void {
   setAppState("import-hint-hidden", "1");
 }
+
+export interface StoredProfile {
+  slug: string;
+  name: string;
+  createdAt: number;
+}
+
+export function storedProfiles(): StoredProfile[] {
+  const raw = getAppState("browser-profiles-v1");
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const profiles: StoredProfile[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object") continue;
+    const { slug, name, createdAt } = entry as Partial<StoredProfile>;
+    if (typeof slug !== "string" || !slug || typeof name !== "string") continue;
+    profiles.push({ slug, name, createdAt: typeof createdAt === "number" ? createdAt : 0 });
+  }
+  return profiles;
+}
+
+export function setStoredProfiles(profiles: StoredProfile[]): void {
+  setAppState("browser-profiles-v1", JSON.stringify(profiles));
+}
+
+export function storedLastUsedProfile(): string | null {
+  return getAppState("browser-profiles-last-used");
+}
+
+export function setStoredLastUsedProfile(slug: string): void {
+  setAppState("browser-profiles-last-used", slug);
+}

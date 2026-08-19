@@ -56,6 +56,15 @@ export interface ImportHintView {
   offered: boolean;
 }
 
+export interface ProfileMenuView {
+  open: boolean;
+  activeSlug: string;
+  activeName: string;
+  items: { slug: string; name: string; active: boolean }[];
+  /** Set while a name is being typed; null when no prompt is up. */
+  prompt: { kind: "create" | "rename"; text: string } | null;
+}
+
 export interface ChromeActions {
   back(): void;
   forward(): void;
@@ -95,6 +104,11 @@ export interface ChromeActions {
   importHintToggle(): void;
   importHintDismiss(): void;
   importRun(): void;
+  profileMenuToggle(): void;
+  profileSwitch(slug: string): void;
+  /** No name opens the prompt; a name commits it. */
+  profileCreate(name?: string): void;
+  profileRename(name?: string): void;
   record: RecordActions;
 }
 

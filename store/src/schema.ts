@@ -24,6 +24,7 @@ export const instances = sqliteTable("instances", {
   } | null>(),
   splitDir: text("split_dir", { enum: ["right", "left", "down", "up"] }),
   parentTty: text("parent_tty"),
+  profile: text("profile"),
   startedAt: integer("started_at").notNull(),
 });
 
