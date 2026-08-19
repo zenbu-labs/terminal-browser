@@ -97,7 +97,15 @@ export type {
   SurfaceShm,
   TerminalColors,
 } from "./native";
-export { HIGHLIGHT_CAPTURES, captureFilmstrip, diff, encodeRecording, highlight, parseMarkdown } from "./native";
+export {
+  HIGHLIGHT_CAPTURES,
+  captureFilmstrip,
+  diff,
+  encodeRecording,
+  highlight,
+  keychainGenericPassword,
+  parseMarkdown,
+} from "./native";
 export { useTerminalColors } from "./colors";
 export { Surface, SurfaceCapture } from "./surface";
 export type {

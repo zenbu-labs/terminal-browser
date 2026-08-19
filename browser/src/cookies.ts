@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { session } from "electron";
+import { keychainGenericPassword } from "pixel-react";
 
 const SALT = "saltysalt";
 const ITERATIONS = 1003;
@@ -62,18 +62,12 @@ function keychainSecret(): Buffer {
     // Chrome on Linux encrypts with a fixed passphrase when no keyring is present.
     return Buffer.from("peanuts", "utf8");
   }
-  let found: string;
+  let secret: string;
   try {
-    found = execFileSync(
-      "security",
-      ["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+    secret = keychainGenericPassword("Chrome Safe Storage", "Chrome");
   } catch {
-    // The thrown error carries the captured stdout, which is the secret itself.
     throw new Error("could not read the Chrome Safe Storage keychain item");
   }
-  const secret = found.trim();
   if (!secret) throw new Error("the Chrome Safe Storage keychain item is empty");
   return Buffer.from(secret, "utf8");
 }
@@ -107,10 +101,14 @@ export function decryptCookieValue(
     return null;
   }
 
+  // Reject a bad pad rather than truncating blindly: without a MAC it is the only
+  // signal that the ciphertext or key was wrong.
   const padding = plain[plain.length - 1] ?? 0;
-  if (padding > 0 && padding <= BLOCK_SIZE && padding <= plain.length) {
-    plain = plain.subarray(0, plain.length - padding);
+  if (padding < 1 || padding > BLOCK_SIZE || padding > plain.length) return null;
+  for (let at = plain.length - padding; at < plain.length; at += 1) {
+    if (plain[at] !== padding) return null;
   }
+  plain = plain.subarray(0, plain.length - padding);
 
   // Chrome 130+ prepends sha256(host) to the plaintext; older versions do not.
   if (plain.length >= DOMAIN_HASH_LENGTH) {
