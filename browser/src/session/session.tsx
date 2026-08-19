@@ -34,6 +34,7 @@ import type {
   PopupView,
 } from "../ui/types";
 import { normalizeUrl, searchOrUrl } from "../url";
+import { closeAction, ownsSender, resolveSessionOptions } from "./contract";
 import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
 import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight } from "./layout";
@@ -71,16 +72,6 @@ export function createSession(ctx: SessionContext): SessionHandle {
 }
 
 const DEFAULT_URL = "https://github.com/zenbu-labs";
-
-const APP_MODE_FLAGS = [
-  "--no-toolbar",
-  "--no-shortcuts",
-  "--no-context-menu",
-  "--no-overlays",
-  "--no-frame",
-  "--allow-clipboard-read",
-  "--open-tabs-in-popup-stack",
-];
 
 const FONT_FILE = path.join("assets", "fonts", "JetBrainsMono-Regular.ttf");
 
@@ -158,6 +149,7 @@ class Session {
   private readonly noFrame: boolean;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
+  private readonly allowQuitUrl: boolean;
   private readonly partition: string | null;
   private readonly preload: string | null;
   private readonly mainScript: string | null;
@@ -231,7 +223,9 @@ class Session {
     this.ctx = ctx;
     this.terminal = detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
-    this.argv = ctx.argv.includes("--app-mode") ? [...ctx.argv, ...APP_MODE_FLAGS] : ctx.argv;
+    const options = resolveSessionOptions(ctx.argv);
+    this.argv = options.argv;
+    this.allowQuitUrl = options.allowQuitUrl;
     this.hideToolbar = this.argv.includes("--no-toolbar");
     this.noShortcuts = this.argv.includes("--no-shortcuts");
     this.noContextMenu = this.argv.includes("--no-context-menu");
@@ -259,6 +253,7 @@ class Session {
             this.partition,
             this.tabsAsPopups,
             this.clipboardRead,
+            this.allowQuitUrl,
             this.ctx.key,
             onState,
           ),
@@ -459,7 +454,7 @@ class Session {
   }
 
   private closeOrShutdown(id: number) {
-    if (this.tabs.count <= 1) this.shutdown();
+    if (closeAction(this.tabs.count) === "shutdown") this.shutdown();
     else this.tabs.close(id);
   }
 
@@ -510,12 +505,13 @@ class Session {
   }
 
   private ownsSender(event: IpcMainEvent): boolean {
-    if (event.senderFrame !== event.sender.mainFrame) return false;
-    let mine = false;
-    this.tabs.eachController((controller) => {
-      if (controller.hasContents(event.sender.id)) mine = true;
+    return ownsSender(event.senderFrame, event.sender.mainFrame, event.sender.id, (id) => {
+      let mine = false;
+      this.tabs.eachController((controller) => {
+        if (controller.hasContents(id)) mine = true;
+      });
+      return mine;
     });
-    return mine;
   }
 
   private broadcastTheme(): void {
@@ -1497,4 +1493,3 @@ function rememberUrl(url: string) {
     setLastUrl(url);
   } catch { }
 }
-
