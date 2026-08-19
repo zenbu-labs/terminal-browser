@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from "electron";
+import { BrowserWindow, screen, webContents } from "electron";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -18,6 +18,8 @@ import { PageInput } from "./input";
 import { offscreenPreferences } from "./offscreen";
 import { BitmapPresenter, presentPaint, shmFrameOf } from "./paint";
 import { PopupWindow } from "./popup";
+import { QuitUrlPolicy, registerQuitUrlNavigationHandlers } from "./quit-url";
+import type { QuitUrlRequest } from "./quit-url";
 import { cssSize, initialBrowserState } from "./types";
 import type { BrowserState, BrowserSurfaceLayout } from "./types";
 import { scaleZoom, stepZoom } from "./zoom";
@@ -38,6 +40,7 @@ export class BrowserController {
   private readonly partition: string | null;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
+  private readonly quitUrlPolicy: QuitUrlPolicy;
   private readonly sessionKey: string;
   private readonly cwd: string;
   private background: string;
@@ -86,6 +89,7 @@ export class BrowserController {
     partition: string | null,
     tabsAsPopups: boolean,
     clipboardRead: boolean,
+    allowQuitUrl: boolean,
     sessionKey: string,
     onState: (state: BrowserState) => void,
   ) {
@@ -129,6 +133,7 @@ export class BrowserController {
         additionalArguments: [`--terminal-browser-session=${this.sessionKey}`],
       },
     });
+    this.quitUrlPolicy = new QuitUrlPolicy(allowQuitUrl, this.window.webContents.id);
     if (clipboardRead) allowClipboardRead(this.window.webContents);
     this.input = new PageInput({
       contents: () => this.window.webContents,
@@ -141,9 +146,12 @@ export class BrowserController {
     });
     this.window.webContents.setFrameRate(frameRate());
     this.window.on("closed", this.onWindowClosed);
-    this.window.webContents.on("will-navigate", (event, url) => {
-      if (this.quitLink(url)) event.preventDefault();
-    });
+    registerQuitUrlNavigationHandlers(
+      this.window.webContents,
+      (frame) => webContents.fromFrame(frame),
+      (url, request, targetContentsId, initiatorContentsId) =>
+        this.quitLink(url, targetContentsId, request, initiatorContentsId),
+    );
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
@@ -567,11 +575,24 @@ export class BrowserController {
     this.onState(this.state);
   }
 
-  private quitLink(url: string): boolean {
-    if (!url.startsWith("terminal-browser://quit")) return false;
-    setImmediate(() => {
-      if (!this.stopped) this.window.close();
-    });
+  private quitLink(
+    url: string,
+    requesterContentsId: number | undefined,
+    request: QuitUrlRequest,
+    initiatorContentsId?: number,
+  ): boolean {
+    const action = this.quitUrlPolicy.request(
+      url,
+      requesterContentsId,
+      request,
+      initiatorContentsId,
+    );
+    if (action === "ignore") return false;
+    if (action === "close") {
+      setImmediate(() => {
+        if (!this.stopped) this.window.close();
+      });
+    }
     return true;
   }
 
@@ -579,7 +600,7 @@ export class BrowserController {
     { url, disposition, features }: Electron.HandlerDetails,
     opener: Electron.WebContents,
   ): Electron.WindowOpenHandlerResponse {
-    if (this.quitLink(url)) return { action: "deny" };
+    if (this.quitLink(url, opener.id, "window-open")) return { action: "deny" };
     const wantsTab = disposition === "foreground-tab" || disposition === "background-tab";
     if (wantsTab && !this.tabsAsPopups && this.onOpenTab) {
       this.onOpenTab(url, disposition === "foreground-tab");
@@ -618,6 +639,12 @@ export class BrowserController {
   }
 
   private adoptPopup(child: Electron.BrowserWindow) {
+    registerQuitUrlNavigationHandlers(
+      child.webContents,
+      (frame) => webContents.fromFrame(frame),
+      (url, request, targetContentsId, initiatorContentsId) =>
+        this.quitLink(url, targetContentsId, request, initiatorContentsId),
+    );
     if (this.clipboardRead) allowClipboardRead(child.webContents);
     if (!this.tabsAsPopups) this.popup?.close();
     const size = this.pendingPopupSize ?? { width: 480, height: 360 };
@@ -642,7 +669,11 @@ export class BrowserController {
       },
       this.tabsAsPopups
         ? (details) => this.handleWindowOpen(details, child.webContents)
-        : undefined,
+        : ({ url }) => {
+            if (this.quitLink(url, child.webContents.id, "window-open")) return { action: "deny" };
+            void child.webContents.loadURL(url);
+            return { action: "deny" };
+          },
     );
     popup.onCursorChange = () => {
       if (this.popup === popup) this.onCursorChange?.(popup.cursorShape);
@@ -685,4 +716,3 @@ function browserRenderScale(layout: BrowserSurfaceLayout) {
   const cssPixels = layout.width * layout.height / (layout.scale * layout.scale);
   return Math.max(0.5, Math.min(layout.scale, Math.sqrt(maxPixels / cssPixels)));
 }
-
