@@ -43,6 +43,11 @@ export const ICONS = {
     "M 4 8.2 L 8.3 8.2 L 9.8 6 L 14.2 6 L 15.7 8.2 L 20 8.2 L 20 18 L 4 18 Z " +
     arcPath(12, 12.9, 3.1, 0, 360),
   pause: "M 9.2 6.8 L 9.2 17.2 M 14.8 6.8 L 14.8 17.2",
+  keyboard:
+    "M 3.8 7.2 L 20.2 7.2 L 20.2 16.8 L 3.8 16.8 Z " +
+    "M 7 10.8 L 8.6 10.8 M 11.2 10.8 L 12.8 10.8 M 15.4 10.8 L 17 10.8 " +
+    "M 8.6 13.9 L 15.4 13.9",
+  wrench: `${arcPath(15.5, 8, 4, -10, 280)} M 12.67 10.83 L 5.2 18.3`,
 };
 
 export type IconName = keyof typeof ICONS;

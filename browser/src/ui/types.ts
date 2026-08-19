@@ -48,6 +48,14 @@ export interface PageMenuView {
   items: PageMenuItem[];
 }
 
+export interface ImportHintView {
+  open: boolean;
+  /** Already formatted by the session, e.g. "Detected: Google Chrome, Brave, +2 more." */
+  summary: string;
+  /** False once the operator has hidden the hint or already imported. */
+  offered: boolean;
+}
+
 export interface ChromeActions {
   back(): void;
   forward(): void;
@@ -81,6 +89,12 @@ export interface ChromeActions {
   devtoolsDividerHover(hovering: boolean): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
+  focusModeToggle(): void;
+  screenshotPage(): void;
+  devtoolsToggle(): void;
+  importHintToggle(): void;
+  importHintDismiss(): void;
+  importRun(): void;
   record: RecordActions;
 }
 

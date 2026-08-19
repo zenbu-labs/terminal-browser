@@ -16,13 +16,14 @@ import {
   ReviewToolbar,
 } from "./record-bar";
 import { TabStrip } from "./tab-strip";
-import { makeTheme } from "./theme";
+import { makeTheme, mix } from "./theme";
 import type { Theme } from "./theme";
 import type { RecordView } from "../record/types";
 import type {
   ChromeActions,
   ChromeLayout,
   DownloadView,
+  ImportHintView,
   NewTabView,
   PageMenuView,
   PaletteView,
@@ -46,6 +47,8 @@ export function Chrome({
   download,
   toast,
   pageMenu,
+  importHint,
+  focusMode,
   dividerEngaged,
   record,
   recordSurface,
@@ -68,6 +71,8 @@ export function Chrome({
   download: DownloadView | null;
   toast: { text: string; detail?: string; failed: boolean; alert: boolean } | null;
   pageMenu: PageMenuView | null;
+  importHint: ImportHintView;
+  focusMode: boolean;
   dividerEngaged: boolean;
   record: RecordView | null;
   recordSurface: Surface | null;
@@ -76,6 +81,14 @@ export function Chrome({
   devtoolsSurface: Surface;
 }) {
   const theme = useMemo(() => makeTheme(colors), [colors]);
+  const fit =
+    layout.toolbarHeight > 0 && !record?.stopped
+      ? clusterFit(layout, {
+          nav: state.canGoBack || state.canGoForward,
+          pill: record !== null,
+          offered: importHint.offered,
+        })
+      : "none";
   return (
     <Box
       style={{
@@ -99,6 +112,9 @@ export function Chrome({
             theme={theme}
             tabs={tabs}
             record={record}
+            fit={fit}
+            importHint={importHint}
+            focusMode={focusMode}
           />
         ))}
       <BrowserTabContents
@@ -135,6 +151,9 @@ export function Chrome({
       {pageMenu && (
         <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
       )}
+      {importHint.open && (fit === "labelled" || fit === "chip") && (
+        <ImportHintPopover view={importHint} actions={actions} layout={layout} theme={theme} />
+      )}
       {findOpen && (
         <FindBar state={state} actions={actions} layout={layout} theme={theme} />
       )}
@@ -166,6 +185,9 @@ function Toolbar({
   theme,
   tabs,
   record,
+  fit,
+  importHint,
+  focusMode,
 }: {
   state: BrowserState;
   actions: ChromeActions;
@@ -173,6 +195,9 @@ function Toolbar({
   theme: Theme;
   tabs: TabRow[];
   record: RecordView | null;
+  fit: ClusterFit;
+  importHint: ImportHintView;
+  focusMode: boolean;
 }) {
   const rem = layout.rem;
   return (
@@ -212,6 +237,42 @@ function Toolbar({
       />
       <TabStrip tabs={tabs} state={state} actions={actions} rem={rem} theme={theme} />
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
+      {fit !== "none" && (
+        <>
+          {fit !== "buttons" && (
+            <ImportChip
+              labelled={fit === "labelled"}
+              open={importHint.open}
+              rem={rem}
+              theme={theme}
+              onClick={actions.importHintToggle}
+            />
+          )}
+          <ToolbarButton
+            icon="keyboard"
+            enabled
+            active={focusMode}
+            rem={rem}
+            theme={theme}
+            onClick={actions.focusModeToggle}
+          />
+          <ToolbarButton
+            icon="camera"
+            enabled
+            rem={rem}
+            theme={theme}
+            onClick={actions.screenshotPage}
+          />
+          <ToolbarButton
+            icon="wrench"
+            enabled
+            active={layout.devtools !== null}
+            rem={rem}
+            theme={theme}
+            onClick={actions.devtoolsToggle}
+          />
+        </>
+      )}
     </Box>
   );
 }
@@ -368,12 +429,14 @@ function DevtoolsPane({
 function ToolbarButton({
   icon,
   enabled,
+  active = false,
   rem,
   theme,
   onClick,
 }: {
   icon: IconName;
   enabled: boolean;
+  active?: boolean;
   rem: number;
   theme: Theme;
   onClick(): void;
@@ -386,13 +449,176 @@ function ToolbarButton({
         alignItems: "center",
         justifyContent: "center",
         cornerRadius: rem * 0.3,
+        background: active ? theme.field : undefined,
         hoverBackground: enabled ? theme.hover : undefined,
         flexShrink: 0,
       }}
       onClick={enabled ? onClick : undefined}
     >
-      <Icon icon={icon} size={rem * 1.1} color={enabled ? theme.muted : theme.disabled} />
+      <Icon
+        icon={icon}
+        size={rem * 1.1}
+        color={!enabled ? theme.disabled : active ? theme.fg : theme.muted}
+      />
     </Box>
   );
 }
 
+type ClusterFit = "labelled" | "chip" | "buttons" | "none";
+
+/**
+ * How much of the right-hand cluster fits. Widths are in rem units: the row's own padding, the
+ * navigation buttons, the record pill, the three icon buttons at rem*1.5 plus their rem*0.25 gaps,
+ * and the narrowest tab strip still worth keeping. What is left decides how much of the chip survives.
+ */
+function clusterFit(
+  layout: ChromeLayout,
+  row: { nav: boolean; pill: boolean; offered: boolean },
+): ClusterFit {
+  const free =
+    layout.width / layout.rem -
+    0.8 -
+    (row.nav ? 3 : 1) * 1.75 -
+    (row.pill ? 7.5 : 0) -
+    3 * 1.75 -
+    8;
+  if (free < 0) return "none";
+  if (!row.offered) return "buttons";
+  if (free >= 4.7) return "labelled";
+  return free >= 1.75 ? "chip" : "buttons";
+}
+
+function ImportChip({
+  labelled,
+  open,
+  rem,
+  theme,
+  onClick,
+}: {
+  labelled: boolean;
+  open: boolean;
+  rem: number;
+  theme: Theme;
+  onClick(): void;
+}) {
+  // while the popover is open its outside-click dismissal closes it, so the chip must not re-toggle
+  const click = open ? undefined : onClick;
+  return (
+    <Box
+      style={{
+        width: labelled ? undefined : rem * 1.5,
+        height: rem * 1.5,
+        alignItems: "center",
+        justifyContent: "center",
+        gap: labelled ? rem * 0.35 : 0,
+        padding: labelled ? { left: rem * 0.4, right: rem * 0.4 } : undefined,
+        cornerRadius: rem * 0.3,
+        background: open ? theme.field : undefined,
+        hoverBackground: theme.hover,
+        flexShrink: 0,
+      }}
+      onClick={click}
+    >
+      <Icon icon="download" size={rem * 0.95} color={theme.muted} />
+      {labelled && (
+        <Text style={{ fontSize: rem * 0.72, color: theme.fg, wrap: false, selectable: false }}>
+          Import
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+function ImportHintPopover({
+  view,
+  actions,
+  layout,
+  theme,
+}: {
+  view: ImportHintView;
+  actions: ChromeActions;
+  layout: ChromeLayout;
+  theme: Theme;
+}) {
+  const rem = layout.rem;
+  // right edge meets the chip's: the three icon buttons, their gaps, and the row's right padding
+  const gutter = rem * 5.65;
+  const width = Math.min(rem * 17, layout.width - gutter - rem * 0.8);
+  return (
+    <Box
+      style={{
+        position: "absolute",
+        inset: { top: layout.toolbarHeight + rem * 0.15, right: gutter },
+        width,
+        flexDirection: "column",
+        padding: rem * 0.55,
+        gap: rem * 0.3,
+        background: mix(theme.bg, [0, 0, 0, 255], 0.25),
+        cornerRadius: rem * 0.35,
+        border: { width: 1, color: theme.fieldBorder },
+      }}
+      onClickOutside={actions.importHintToggle}
+    >
+      <Text style={{ fontSize: rem * 0.8, color: theme.fg, wrap: false, selectable: false }}>
+        Import browser data
+      </Text>
+      <Text style={{ fontSize: rem * 0.72, color: theme.muted, selectable: false }}>
+        {view.summary}
+      </Text>
+      <Text style={{ fontSize: rem * 0.64, color: theme.disabled, selectable: false }}>
+        You can always find this in the command palette.
+      </Text>
+      <Box style={{ alignItems: "center", gap: rem * 0.35, margin: { top: rem * 0.15 } }}>
+        <HintButton label="Import…" primary rem={rem} theme={theme} onClick={actions.importRun} />
+        <HintButton
+          label="Hide Hint"
+          rem={rem}
+          theme={theme}
+          onClick={actions.importHintDismiss}
+        />
+      </Box>
+    </Box>
+  );
+}
+
+function HintButton({
+  label,
+  primary = false,
+  rem,
+  theme,
+  onClick,
+}: {
+  label: string;
+  primary?: boolean;
+  rem: number;
+  theme: Theme;
+  onClick(): void;
+}) {
+  return (
+    <Box
+      style={{
+        height: rem * 1.4,
+        alignItems: "center",
+        justifyContent: "center",
+        padding: { left: rem * 0.5, right: rem * 0.5 },
+        cornerRadius: rem * 0.25,
+        background: primary ? theme.field : undefined,
+        border: primary ? { width: 1, color: theme.fieldBorder } : undefined,
+        hoverBackground: theme.hover,
+        flexShrink: 0,
+      }}
+      onClick={onClick}
+    >
+      <Text
+        style={{
+          fontSize: rem * 0.72,
+          color: primary ? theme.fg : theme.muted,
+          wrap: false,
+          selectable: false,
+        }}
+      >
+        {label}
+      </Text>
+    </Box>
+  );
+}

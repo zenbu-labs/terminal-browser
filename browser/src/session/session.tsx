@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app, ipcMain, screen } from "electron";
+import { app, clipboard, ipcMain, nativeImage, screen } from "electron";
 import { createRequire } from "node:module";
 import type { IpcMainEvent, Session as ElectronSession } from "electron";
 import { createRoot } from "pixel-react";
@@ -10,7 +10,7 @@ import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
 import { importChromeCookies, listCookieSources } from "../cookies";
-import type { CookieImportRequest, CookieImportResult } from "../cookies";
+import type { CookieImportRequest, CookieImportResult, CookieSource } from "../cookies";
 import { browserSession, configureBrowserSession } from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
@@ -19,7 +19,7 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
-import { lastUrl, setLastUrl, settings, store } from "pixel-store";
+import { hideImportHint, importHintHidden, lastUrl, setLastUrl, settings, store } from "pixel-store";
 import type { DevtoolsDock, InstanceRow } from "pixel-store";
 
 import { RecordSession } from "../record/session";
@@ -31,6 +31,7 @@ import type {
   ChromeActions,
   ChromeLayout,
   DownloadView,
+  ImportHintView,
   PageMenuItem,
   PageMenuView,
   PopupView,
@@ -165,6 +166,15 @@ function cookieImportWarnings(result: CookieImportResult): string[] {
   return warnings;
 }
 
+const IMPORT_SUMMARY_NAMES = 4;
+
+function cookieSourceSummary(sources: CookieSource[]): string {
+  if (sources.length === 0) return "No supported browsers detected.";
+  const named = sources.slice(0, IMPORT_SUMMARY_NAMES).map((source) => source.displayName).join(", ");
+  const rest = sources.length - IMPORT_SUMMARY_NAMES;
+  return rest > 0 ? `Detected: ${named}, +${rest} more.` : `Detected: ${named}.`;
+}
+
 // Every pane in this process imports into the same default cookie store, so one
 // import at a time across all of them, not one per session.
 let importingCookies = false;
@@ -177,7 +187,8 @@ class Session {
   private finding: Promise<Pane | null> | null = null;
   private readonly argv: string[];
   private readonly hideToolbar: boolean;
-  private readonly noShortcuts: boolean;
+  /** --no-shortcuts at launch, and the focus-mode toggle at runtime: every key goes to the page. */
+  private noShortcuts: boolean;
   private readonly noContextMenu: boolean;
   private readonly noOverlays: boolean;
   private readonly noFrame: boolean;
@@ -251,6 +262,10 @@ class Session {
   private records = new Map<BrowserController, RecordSession>();
   private shownRecord: RecordSession | null = null;
   private recordStarting = false;
+  private importHintOpen = false;
+  private importHintDismissed = false;
+  private importDone = false;
+  private importSummary = "No supported browsers detected.";
 
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
@@ -324,6 +339,7 @@ class Session {
   async start(): Promise<void> {
     if (process.platform === "darwin") app.dock?.hide();
     await this.loadDevtoolsSettings();
+    this.loadImportHint();
     if (!this.ctx.tty) process.stdout.write(`\x1b]2;${this.marker}\x07`);
     this.displayScale = this.hostDisplayScale();
     this.root = createRoot({
@@ -617,6 +633,8 @@ class Session {
             : null
         }
         pageMenu={this.pageMenuView()}
+        importHint={this.importHintView()}
+        focusMode={this.noShortcuts}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
@@ -729,6 +747,12 @@ class Session {
     },
     pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
+    focusModeToggle: () => this.toggleFocusMode(),
+    screenshotPage: () => void this.copyPageScreenshot(),
+    devtoolsToggle: () => this.toggleDevtools(),
+    importHintToggle: () => this.toggleImportHint(),
+    importHintDismiss: () => this.dismissImportHint(),
+    importRun: () => this.importFromHint(),
     record: this.recordActions(),
   };
 
@@ -1063,6 +1087,58 @@ class Session {
     }
   }
 
+  /** One filesystem scan per session: detection walks every supported browser's profile dirs. */
+  private loadImportHint() {
+    try {
+      this.importHintDismissed = importHintHidden();
+      this.importSummary = cookieSourceSummary(listCookieSources());
+    } catch { }
+  }
+
+  private importHintView(): ImportHintView {
+    return {
+      open: this.importHintOpen,
+      summary: this.importSummary,
+      offered: !this.importHintDismissed && !this.importDone,
+    };
+  }
+
+  private toggleImportHint() {
+    this.importHintOpen = !this.importHintOpen;
+    this.render();
+  }
+
+  private dismissImportHint() {
+    this.importHintOpen = false;
+    this.importHintDismissed = true;
+    try {
+      hideImportHint();
+    } catch { }
+    this.render();
+  }
+
+  private importFromHint() {
+    this.importHintOpen = false;
+    this.importCookies();
+    this.render();
+  }
+
+  private importCookies() {
+    void this.runCookieImport({})
+      .then((report) => {
+        this.importDone = true;
+        this.showToast(
+          `imported ${report.imported} cookies from ${report.browser} (${report.profileName})`,
+          report.warnings.length > 0 ? "alert" : "done",
+          report.warnings.join("\n") || undefined,
+        );
+        this.render();
+      })
+      .catch((error: unknown) => {
+        this.showToast("cookie import failed", "failed", error instanceof Error ? error.message : String(error));
+      });
+  }
+
   private showToast(text: string, state: "done" | "failed" | "alert", detail?: string) {
     if (this.noOverlays) return;
     this.toast = { text, detail, failed: state === "failed", alert: state === "alert" };
@@ -1113,6 +1189,35 @@ class Session {
     if (this.devtoolsWasFocused && browser?.devtools) browser.focusDevtools();
     else browser?.focusContent();
     this.syncCursor();
+  }
+
+  private toggleFocusMode() {
+    this.noShortcuts = !this.noShortcuts;
+    this.showToast(
+      this.noShortcuts ? "focus mode on — every key goes to the page" : "focus mode off",
+      "done",
+    );
+    this.render();
+  }
+
+  private async copyPageScreenshot() {
+    const browser = this.tabs.activeController;
+    if (!browser) return;
+    try {
+      await browser.attachCdp();
+      const shot = await browser.cdp("Page.captureScreenshot", { format: "png" });
+      const encoded = typeof shot.data === "string" ? shot.data : "";
+      const image = nativeImage.createFromBuffer(Buffer.from(encoded, "base64"));
+      if (image.isEmpty()) throw new Error("the page returned an empty frame");
+      clipboard.writeImage(image);
+      this.showToast("screenshot copied to clipboard", "done");
+    } catch (error) {
+      this.showToast(
+        "screenshot failed",
+        "failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   private toggleDevtools() {
@@ -1382,19 +1487,13 @@ class Session {
         id: "import-cookies",
         label: "import cookies (sign in as your everyday browser profile)",
         shortcut: "",
-        run: () => {
-          void this.runCookieImport({})
-            .then((report) => {
-              this.showToast(
-                `imported ${report.imported} cookies from ${report.browser} (${report.profileName})`,
-                report.warnings.length > 0 ? "alert" : "done",
-                report.warnings.join("\n") || undefined,
-              );
-            })
-            .catch((error: unknown) => {
-              this.showToast("cookie import failed", "failed", error instanceof Error ? error.message : String(error));
-            });
-        },
+        run: () => this.importCookies(),
+      },
+      {
+        id: "screenshot",
+        label: "copy a screenshot of the page to the clipboard",
+        shortcut: "",
+        run: () => void this.copyPageScreenshot(),
       },
       {
         id: "find",

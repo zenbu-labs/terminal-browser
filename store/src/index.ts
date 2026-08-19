@@ -15,5 +15,5 @@ export type { Store } from "./client";
 export { appState, instances, settings } from "./schema";
 export type { DevtoolsDock, InstanceRow, NewInstanceRow, SettingsRow } from "./schema";
 export { listInstances, removeInstance, upsertInstance } from "./instances";
-export { lastUrl, setLastUrl } from "./app-state";
+export { hideImportHint, importHintHidden, lastUrl, setLastUrl } from "./app-state";
 export { readSocketControlSecret, writeSocketControlSecret } from "./secret";
