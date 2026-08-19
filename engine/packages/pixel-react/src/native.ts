@@ -145,7 +145,7 @@ const binding = require("../native/pixel.node") as {
     width: number,
     height: number,
   ): Promise<Buffer>;
-  keychainGenericPassword(service: string, account: string): string;
+  keychainGenericPassword(service: string, account: string): string | null;
 };
 
 export function createNativeEngine(
@@ -202,6 +202,6 @@ export function parseMarkdown(source: string, streaming?: boolean): MarkdownBloc
   return binding.parseMarkdown(source, streaming);
 }
 
-export function keychainGenericPassword(service: string, account: string): string {
+export function keychainGenericPassword(service: string, account: string): string | null {
   return binding.keychainGenericPassword(service, account);
 }

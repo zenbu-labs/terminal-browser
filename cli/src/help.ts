@@ -97,37 +97,49 @@ Examples:
 `,
   },
   "import-cookies": {
-    summary: "Copy your Chrome logins into a running browser",
+    summary: "Copy your browser logins into a running browser",
     usage: "terminal-browser import-cookies [options]",
     body: `
-Reads the cookies out of a Chrome profile on this machine and puts them into a
-browser you already have open, so pages come up already signed in. Chrome's own
-profile is only ever read, never written, and Chrome can stay open while this
-runs.
+Reads the cookies out of a Chromium-family profile on this machine and puts them
+into a browser you already have open, so pages come up already signed in. Chrome,
+Chromium, Brave, Microsoft Edge, Arc, Opera, Opera GX, Vivaldi, Dia, Perplexity
+Comet, SigmaOS, Sidekick, Helium and Atlas are all read the same way; Firefox and
+Safari are not supported yet. The source profile is only ever read, never
+written, and the browser it belongs to can stay open while this runs.
 
-Requires -y, because afterwards anything that can reach this browser can use
-those logins.
+In a terminal it lists what it found and asks before copying anything, because
+afterwards anything that can reach this browser can use those logins. Answer
+anything but y and nothing is copied. With -y, or when stdin is not a terminal,
+it copies straight away, which is the shape a script or an agent wants. The
+question goes to stderr, so redirecting stderr from a terminal stops the command
+rather than asking something you would never see.
 
 On macOS the cookie values are encrypted with a key held in your login keychain,
-read here by running /usr/bin/security. macOS attributes that request to the
-security tool rather than to terminal-browser, so choosing "Always Allow"
-grants every program you run unattended access to Chrome's cookie key from then
-on. Choose "Allow" for a single import if you would rather not spend that.
+read in-process, so macOS attributes the request to terminal-browser itself and
+"Always Allow" grants it to this browser rather than to everything you run.
 
 Cookies only: no history, no bookmarks, no saved passwords. Sites that keep
 their login in local storage rather than a cookie will still ask you to sign in.
 
 Options:
-  -y, --yes           Confirm the copy (required)
-  --from <browser>    Source browser, only chrome for now (default: chrome)
-  --profile <name>    Chrome profile directory, e.g. Default or "Profile 1"
-  --domain <domain>   Only import cookies for this domain and its subdomains
+  -y, --yes           Copy without asking
+  --json              Print the result as JSON instead of a sentence
+  --from <browser>    Source browser, by slug, display name or alias: chrome,
+                      brave, edge, arc, opera, vivaldi, chromium and the rest
+                      (default: Chrome, or whichever one is installed)
+  --profile <name>    Source profile, by directory ("Profile 1") or by the name
+                      you gave it in that browser ("Work")
+  --domain <list>     Only these domains and their subdomains. Comma, semicolon
+                      or space separated, *.example.com and .example.com both
+                      work, and the flag can be repeated
   --browser <key>     A browser key from terminal-browser ls
 
 Examples:
   terminal-browser import-cookies
+  terminal-browser import-cookies -y --from brave
   terminal-browser import-cookies --profile Default
-  terminal-browser import-cookies --domain github.com
+  terminal-browser import-cookies --domain github.com --json
+  terminal-browser import-cookies --domain "github.com, *.slack.com"
 `,
   },
   shutdown: {

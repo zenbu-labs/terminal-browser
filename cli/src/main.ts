@@ -3,8 +3,9 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import readline from "node:readline";
 
-import { DAEMON_SOCKET, LOGS_DIR, ensureDataDir } from "pixel-store";
+import { DAEMON_SOCKET, LOGS_DIR, ensureDataDir, readSocketControlSecret } from "pixel-store";
 import {
   callerTty,
   canSplit,
@@ -45,6 +46,14 @@ function takeFlag(args: string[], name: string): string | undefined {
   if (value === undefined) fail(`${name} requires a value`);
   args.splice(at, 2);
   return value;
+}
+
+function takeFlags(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let value = takeFlag(args, name); value !== undefined; value = takeFlag(args, name)) {
+    values.push(value);
+  }
+  return values;
 }
 
 function takeBoolFlag(args: string[], name: string): boolean {
@@ -140,12 +149,59 @@ function browserBuildStamp(): string {
   }
 }
 
-function connectDaemon(): Promise<net.Socket> {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect(DAEMON_SOCKET);
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", reject);
-  });
+function dialDaemon(): Promise<net.Socket> {
+  const { promise, resolve, reject } = Promise.withResolvers<net.Socket>();
+  const socket = net.connect(DAEMON_SOCKET);
+  socket.once("connect", () => resolve(socket));
+  socket.once("error", reject);
+  return promise;
+}
+
+/** The daemon dispatches nothing until this line proves the secret it holds too. */
+function handshake(socket: net.Socket): Promise<void> {
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const secret = readSocketControlSecret();
+  if (!secret) {
+    reject(new Error("no browser control secret yet; start the browser first"));
+    return promise;
+  }
+  function finish(settle: () => void) {
+    clearTimeout(timer);
+    socket.off("data", onData);
+    socket.off("close", onClose);
+    settle();
+  }
+  let buffer = "";
+  const timer = setTimeout(
+    () => finish(() => reject(new Error("the daemon did not answer the handshake"))),
+    5000,
+  );
+  const onData = (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    const newline = buffer.indexOf("\n");
+    if (newline < 0) return;
+    const line = buffer.slice(0, newline);
+    const rest = buffer.slice(newline + 1);
+    finish(() => {
+      // Nothing else is sent before the first command, but put back whatever did arrive
+      // so the caller's own reader still sees it.
+      if (rest) socket.unshift(Buffer.from(rest, "utf8"));
+      let reply: DaemonReply;
+      try {
+        reply = JSON.parse(line) as DaemonReply;
+      } catch {
+        reject(new Error("the daemon answered the handshake with something other than json"));
+        return;
+      }
+      if (reply.ok) resolve();
+      else reject(new Error(reply.error ?? "the daemon refused the handshake"));
+    });
+  };
+  const onClose = () => finish(() => reject(new Error("daemon closed the connection")));
+  socket.on("data", onData);
+  socket.once("close", onClose);
+  socket.write(`${JSON.stringify({ cmd: "auth", secret })}\n`);
+  return promise;
 }
 
 function spawnDaemon() {
@@ -155,19 +211,25 @@ function spawnDaemon() {
 }
 
 async function daemonSocket(): Promise<net.Socket> {
-  try {
-    return await connectDaemon();
-  } catch {}
-  spawnDaemon();
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    try {
-      return await connectDaemon();
-    } catch {
+  let socket = await dialDaemon().catch(() => null);
+  if (!socket) {
+    spawnDaemon();
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      socket = await dialDaemon().catch(() => null);
+      if (socket) break;
       await sleep(200);
     }
+    if (!socket) throw new Error("daemon did not start");
   }
-  throw new Error("daemon did not start");
+  // A refused handshake is not a missing daemon: respawning cannot fix a wrong secret.
+  try {
+    await handshake(socket);
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
+  return socket;
 }
 
 interface DaemonReply {
@@ -256,8 +318,12 @@ async function gone(pid: number, within: number): Promise<boolean> {
 async function shutdownDaemon(): Promise<number> {
   let socket: net.Socket | null = null;
   try {
-    socket = await connectDaemon();
-  } catch {}
+    socket = await dialDaemon();
+    await handshake(socket);
+  } catch {
+    socket?.destroy();
+    socket = null;
+  }
   const pid = await daemonPid();
   if (!socket) {
     if (pid === null) {
@@ -397,21 +463,82 @@ interface ImportCookiesOptions {
   domain?: string;
   from?: string;
   confirmed: boolean;
+  json: boolean;
   leftover: string[];
+}
+
+interface CookieSourceRow {
+  slug: string;
+  displayName: string;
+  profiles: { directory: string; name: string }[];
+}
+
+interface CookieImportReport {
+  browser: string;
+  profile: string;
+  profileName: string;
+  domains: string[];
+  warnings: string[];
+  imported: number;
+  undecryptable: number;
+  rejected: number;
+}
+
+function renderSources(sources: CookieSourceRow[]): string {
+  return sources
+    .map((source) => {
+      const profiles = source.profiles
+        .map((profile) =>
+          profile.name === profile.directory ? profile.directory : `${profile.name} (${profile.directory})`,
+        )
+        .join(", ");
+      return `  ${source.displayName}  ${profiles}\n`;
+    })
+    .join("");
+}
+
+async function confirmImport(
+  sources: CookieSourceRow[],
+  target: string,
+  options: ImportCookiesOptions,
+): Promise<boolean> {
+  if (sources.length > 0) {
+    process.stderr.write(`Browsers on this machine with cookies to copy:\n${renderSources(sources)}\n`);
+  }
+  const scope = options.domain ? `cookies for ${options.domain} and its subdomains` : "login cookies";
+  const profile = options.profile ? ` (${options.profile})` : "";
+  // The daemon reads Chrome when it is installed, otherwise the first browser it found: name that one.
+  const picked = sources.find((source) => source.slug === "google-chrome") ?? sources[0];
+  const named = options.from ?? picked?.displayName;
+  const origin = named ? `out of ${named}${profile}` : `out of whichever browser it finds${profile}`;
+  process.stderr.write(
+    `Copying ${scope} ${origin} into ${target}.\n` +
+      "These are your real sessions: afterwards anything that can reach that browser is signed in as you.\n",
+  );
+  if (!options.from && sources.length > 1) {
+    process.stderr.write("Pass --from to copy out of one of the others instead.\n");
+  }
+  const ask = readline.createInterface({ input: process.stdin, output: process.stderr });
+  const answer = await new Promise<string>((resolve) => {
+    ask.question("copy them? [y/N] ", resolve);
+    ask.on("close", () => resolve("n"));
+  });
+  ask.close();
+  return /^(y|yes)$/i.test(answer.trim());
+}
+
+function renderImport(report: CookieImportReport): string {
+  const profile = report.profileName === report.profile ? report.profile : `${report.profileName}, ${report.profile}`;
+  const lines = [`Imported ${report.imported} cookies from ${report.browser} (${profile}).`];
+  if (report.domains.length > 0) lines.push(`Limited to ${report.domains.join(", ")} and subdomains.`);
+  if (report.warnings.length > 0) {
+    lines.push("", "Warnings:", ...report.warnings.map((warning) => `- ${warning}`));
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 async function importCookiesCommand(options: ImportCookiesOptions): Promise<number> {
   if (options.leftover.length > 0) fail(`unexpected ${options.leftover[0]}`);
-  if (options.from && options.from !== "chrome") {
-    fail(`--from ${options.from} is not supported yet — only chrome`);
-  }
-  if (!options.confirmed) {
-    fail(
-      "import-cookies copies live login cookies out of Chrome into this browser.\n" +
-        "Anything that can reach this browser can then use those logins.\n" +
-        "Re-run with -y (or --yes) to confirm.",
-    );
-  }
   const check = await currentTerminal();
   const found = await browsers(check.terminal);
   const here = options.browserKey
@@ -427,13 +554,32 @@ async function importCookiesCommand(options: ImportCookiesOptions): Promise<numb
   if (here.length > 1) {
     fail(`${here.length} browsers in this tab, so say which with --browser:\n${list(here)}`);
   }
-  print(
-    await control(here[0].socket, {
-      cmd: "import-cookies",
-      profile: options.profile,
-      domain: options.domain,
-    }, 120_000),
-  );
+  const target = here[0];
+  if (!options.confirmed && process.stdin.isTTY) {
+    if (!process.stderr.isTTY) {
+      fail("stderr is redirected, so the confirmation cannot be shown — re-run with -y to copy without asking");
+    }
+    const sources = (await control(target.socket, { cmd: "cookie-sources" }).catch((error: unknown) => {
+      process.stderr.write(
+        `terminal-browser: could not list source browsers: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      return [];
+    })) as CookieSourceRow[];
+    if (!(await confirmImport(sources, describe(target), options))) {
+      process.stderr.write("terminal-browser: cancelled, nothing was copied\n");
+      return 1;
+    }
+  }
+  const report = (await control(
+    target.socket,
+    { cmd: "import-cookies", from: options.from, profile: options.profile, domain: options.domain },
+    120_000,
+  )) as CookieImportReport;
+  if (options.json) {
+    print(report);
+    return 0;
+  }
+  process.stdout.write(renderImport(report));
   return 0;
 }
 
@@ -611,15 +757,18 @@ async function main(): Promise<number> {
     requirePaneAccess();
     const browserKey = takeFlag(args, "--browser");
     const profile = takeFlag(args, "--profile");
-    const domain = takeFlag(args, "--domain");
+    // A repeated --domain is as natural as one comma-separated list, so accept both.
+    const domains = takeFlags(args, "--domain");
     const from = takeFlag(args, "--from");
     const confirmed = takeBoolFlag(args, "-y") || takeBoolFlag(args, "--yes");
+    const json = takeBoolFlag(args, "--json");
     return importCookiesCommand({
       browserKey,
       profile,
-      domain,
+      domain: domains.length > 0 ? domains.join(",") : undefined,
       from,
       confirmed,
+      json,
       leftover: args,
     });
   }
