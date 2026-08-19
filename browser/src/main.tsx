@@ -8,6 +8,7 @@ import { runDaemon } from "./daemon";
 import { LOGS_DIR, ensureDataDir } from "pixel-store";
 import { appLog } from "pixel-react";
 import { claimProfile } from "./profile";
+import { applyUserAgentPolicy } from "./user-agent";
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
@@ -23,7 +24,7 @@ app.commandLine.appendSwitch("enable-logging", "file");
 app.commandLine.appendSwitch("log-file", path.join(LOGS_DIR, "chromium.log"));
 app.setName("terminal-browser");
 claimProfile();
-
+applyUserAgentPolicy();
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {

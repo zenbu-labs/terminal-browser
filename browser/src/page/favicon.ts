@@ -5,6 +5,7 @@ import path from "node:path";
 import { net, nativeImage } from "electron";
 
 import { FAVICONS_DIR } from "pixel-store";
+import { browserUserAgent } from "../user-agent";
 
 export class FaviconCache {
   constructor(private readonly dir: string = FAVICONS_DIR) {}
@@ -18,7 +19,7 @@ export class FaviconCache {
     );
     const cached = [`${stem}.png`, `${stem}.ico`].find((file) => fs.existsSync(file));
     if (cached) return cached;
-    const response = await net.fetch(url);
+    const response = await net.fetch(url, { headers: { "User-Agent": browserUserAgent() } });
     if (!response.ok) return null;
     const data = Buffer.from(await response.arrayBuffer());
     if (data.length === 0) return null;
