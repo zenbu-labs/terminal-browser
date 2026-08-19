@@ -1,17 +1,33 @@
 id = "zenbu-labs.terminal-browser"
 name = "Terminal Browser"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.8.0"
 description = "Open a real browser split next to your herdr panes"
 platforms = ["linux", "macos"]
 
-[[build]]
-command = ["bash", "-c", "set -o pipefail; curl -fsSL https://terminal-browser.sh/install | bash"]
-platforms = ["linux", "macos"]
+[[panes]]
+id = "browser"
+title = "Terminal Browser"
+description = "A browser pane rendered by terminal-browser"
+placement = "split"
+command = ["/bin/sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/pane.sh"']
 
 [[actions]]
 id = "open-split"
 title = "Open terminal-browser (right split)"
 description = "Split the focused pane and open terminal-browser in it"
 contexts = ["global"]
-command = ["bash", "open-split.sh"]
+command = ["/bin/sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/open-split.sh"']
+
+[[actions]]
+id = "open-url"
+title = "Open in Terminal Browser"
+description = "Open a clicked URL in a terminal-browser pane"
+contexts = ["global", "pane", "selection"]
+command = ["/bin/sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/open-url.sh"']
+
+[[link_handlers]]
+id = "http"
+title = "Open in Terminal Browser"
+pattern = "^https?://"
+action = "open-url"
