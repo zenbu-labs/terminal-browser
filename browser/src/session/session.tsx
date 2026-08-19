@@ -226,6 +226,9 @@ class Session {
   private findBinding: KeyBinding[] = [];
   private devtoolsBinding: KeyBinding[] = [];
   private consoleBinding: KeyBinding[] = [];
+  private screenshotBinding: KeyBinding[] = [];
+  private profilesBinding: KeyBinding[] = [];
+  private focusBinding: KeyBinding[] = [];
   private noSuper = false;
   private readonly tabs: TabManager;
   private readonly fallbackState: BrowserState;
@@ -486,6 +489,9 @@ class Session {
     // we should use 2 shortcuts for console, also not sure if console actually works as expected
     this.devtoolsBinding = binding("--devtools-key", defaultKeys.devtools);
     this.consoleBinding = binding("--console-key", defaultKeys.console);
+    this.screenshotBinding = binding("--screenshot-key", defaultKeys.screenshot);
+    this.profilesBinding = binding("--profiles-key", defaultKeys.profiles);
+    this.focusBinding = binding("--focus-key", defaultKeys.focus);
   }
 
   private cmdHeld(event: EngineKeyEvent): boolean {
@@ -1026,7 +1032,23 @@ class Session {
         return;
       }
       if (!this.findOpen && this.activeRecord()?.handleKey(event)) return;
+      // Outside the gate below on purpose: focus mode sends every other key to the page, so the
+      // key that turns it off has to keep working while it is on.
+      if (matchesBinding(event, this.focusBinding)) {
+        this.toggleFocusMode();
+        return;
+      }
       if (!this.noShortcuts) {
+        if (matchesBinding(event, this.screenshotBinding)) {
+          void this.copyPageScreenshot();
+          return;
+        }
+        if (matchesBinding(event, this.profilesBinding)) {
+          this.profileMenuOpen = !this.profileMenuOpen;
+          this.profilePrompt = null;
+          this.render();
+          return;
+        }
         if (isRecordKey(event)) {
           if (!this.activeRecord()) void this.startRecording();
           return;
@@ -1687,7 +1709,7 @@ class Session {
       {
         id: "screenshot",
         label: "copy a screenshot of the page to the clipboard",
-        shortcut: "",
+        shortcut: bindingLabel(this.screenshotBinding),
         run: () => void this.copyPageScreenshot(),
       },
       {

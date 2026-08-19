@@ -4,8 +4,24 @@ export type KeyBinding = KeyMods & { key: string };
 
 export const defaultKeys =
   process.platform === "darwin"
-    ? { palette: "super+p", find: "super+shift+f", devtools: "super+shift+i", console: "super+alt+j" }
-    : { palette: "ctrl+k alt+k", find: "ctrl+shift+f", devtools: "ctrl+shift+i", console: "ctrl+alt+j" };
+    ? {
+        palette: "super+p",
+        find: "super+shift+f",
+        devtools: "super+shift+i",
+        console: "super+alt+j",
+        screenshot: "super+shift+s",
+        profiles: "super+shift+p",
+        focus: "super+shift+k",
+      }
+    : {
+        palette: "ctrl+k alt+k",
+        find: "ctrl+shift+f",
+        devtools: "ctrl+shift+i",
+        console: "ctrl+alt+j",
+        screenshot: "ctrl+shift+s",
+        profiles: "ctrl+shift+p",
+        focus: "ctrl+shift+k",
+      };
 
 export const recordKeyLabel = process.platform === "darwin" ? "ctrl+r" : "ctrl+shift+r";
 
