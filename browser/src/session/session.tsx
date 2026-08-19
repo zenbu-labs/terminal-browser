@@ -1308,12 +1308,12 @@ class Session {
     for (const record of this.records.values()) record.dispose();
     this.records.clear();
     this.shownRecord = null;
-    const urls = this.tabs.teardown();
+    const carried = this.tabs.teardown();
     this.profile = target;
     noteProfileUsed(target.slug);
     configureBrowserSession(this.sessionPartition(), (progress) => this.showDownload(progress));
     this.registerPreloads();
-    this.tabs.restore(urls);
+    this.tabs.restore(carried);
     this.registry?.update();
     this.render();
     return { profile: target, url };

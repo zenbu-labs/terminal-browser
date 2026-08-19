@@ -113,24 +113,26 @@ export class TabManager {
   }
 
   /**
-   * Captures where every tab sits, then stops every view. A view's session is fixed when it is
-   * built, so a pane changes profile by handing these urls to `restore`.
+   * Captures where every tab sits, then drops them. A view's session is fixed when it is built, so
+   * a pane changes profile by handing this back to `restore`.
    */
-  teardown(): string[] {
+  teardown(): { urls: string[]; activeAt: number } {
     const urls = this.tabs.map((tab) => tab.state.url);
+    const activeAt = Math.max(0, this.tabs.findIndex((tab) => tab.id === this.activeId));
     for (const tab of this.tabs) tab.controller.stop();
-    return urls;
+    this.tabs = [];
+    this.activeId = 0;
+    return { urls, activeAt };
   }
 
-  /** Builds one replacement view per tab against whatever session the host hands out now. */
-  restore(urls: string[]) {
-    for (const [at, tab] of this.tabs.entries()) {
-      const url = urls[at] ?? this.fallbackUrl;
-      tab.state = initialBrowserState(url);
-      this.attachController(tab, url, tab.id === this.activeId);
-    }
+  /**
+   * Rebuilds the tabs against whatever session the host hands out now. Each one gets a fresh id,
+   * because a tab that keeps its id keeps the render tree's surface for the view we just stopped.
+   */
+  restore({ urls, activeAt }: { urls: string[]; activeAt: number }) {
+    const restoring = urls.length > 0 ? urls : [this.fallbackUrl];
+    for (const [at, url] of restoring.entries()) this.create(url, at === activeAt);
     this.active?.controller.focusContent();
-    this.host.onTabsChanged();
     this.host.onActivated();
     this.host.requestRender();
   }

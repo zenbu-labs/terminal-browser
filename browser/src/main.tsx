@@ -26,6 +26,10 @@ app.setName("terminal-browser");
 claimProfile();
 applyUserAgentPolicy();
 
+// Every page is an offscreen window, so a pane rebuilding its views leaves the app with none for a
+// moment. Electron's default is to quit at that point, which would take the whole daemon with it.
+app.on("window-all-closed", () => {});
+
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();

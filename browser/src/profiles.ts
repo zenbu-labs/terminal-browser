@@ -124,7 +124,6 @@ export function createProfile(name: string): BrowserProfile {
     builtIn: false,
   };
   persist([...load(), profile]);
-  noteProfileUsed(profile.slug);
   return profile;
 }
 
