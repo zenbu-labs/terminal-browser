@@ -11,6 +11,8 @@ import { claimProfile } from "./profile";
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+// offscreen rendering never delivers mouse input to cross-process iframes, so keep them in-process
+app.commandLine.appendSwitch("disable-site-isolation-trials");
 
 if (process.env.TERMINAL_BROWSER_DISABLE_GPU === "1") {
   app.commandLine.appendSwitch("disable-gpu");
