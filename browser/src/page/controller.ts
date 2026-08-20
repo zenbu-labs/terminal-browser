@@ -257,6 +257,10 @@ export class BrowserController {
     else this.window.webContents.reload();
   }
 
+  hardReload() {
+    this.window.webContents.reloadIgnoringCache();
+  }
+
   zoom(direction: ZoomDirection): number {
     const factor = stepZoom(this.window.webContents, direction);
     this.updateState({ zoom: factor });

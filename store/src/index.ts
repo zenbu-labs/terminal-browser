@@ -7,6 +7,7 @@ export {
   AGENT_SOCKETS_DIR,
   DAEMON_SOCKET,
   DB_FILE,
+  KEYBINDINGS_FILE,
   PROFILES_FILE,
   ensureDataDir,
 } from "./paths";
@@ -42,3 +43,12 @@ export {
   searchEngineFromTemplate,
 } from "./search-engines";
 export type { SearchEngineDefinition } from "./search-engines";
+export {
+  keybindingConflicts,
+  keybindingSetting,
+  listKeybindings,
+  normalizeKeybinding,
+  resetKeybinding,
+  setKeybinding,
+} from "./keybindings";
+export type { KeybindingActionId, KeybindingSetting } from "./keybindings";

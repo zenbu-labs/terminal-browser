@@ -1,23 +1,9 @@
 import type { EngineKeyEvent, KeyMods } from "pixel-react";
+import { keybindingSetting } from "pixel-store";
 
 export type KeyBinding = KeyMods & { key: string };
 
-export const defaultKeys =
-  process.platform === "darwin"
-    ? { palette: "super+p", find: "super+shift+f", devtools: "super+shift+i", console: "super+alt+j" }
-    : { palette: "ctrl+k alt+k", find: "ctrl+shift+f", devtools: "ctrl+shift+i", console: "ctrl+alt+j" };
-
-export const recordKeyLabel = process.platform === "darwin" ? "ctrl+r" : "ctrl+shift+r";
-
-export function isRecordKey(event: EngineKeyEvent): boolean {
-  return (
-    event.key.toLowerCase() === "r" &&
-    event.mods.ctrl &&
-    !event.mods.super &&
-    !event.mods.alt &&
-    event.mods.shift === (process.platform !== "darwin")
-  );
-}
+export const recordKeyLabel = keybindingSetting("record")?.binding ?? "";
 
 export function parseKeyBindings(spec: string): KeyBinding[] {
   if (spec === "none") return [];
