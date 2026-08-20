@@ -5,7 +5,13 @@ import path from "node:path";
 import { appleScript } from "../applescript";
 import { panePixels } from "../graphics";
 import { setPaneWorkingDirectory, shellQuote, sleep } from "../shared";
-import type { Detect, Direction, Pane, PaneContext } from "../terminal";
+import type {
+  Detect,
+  Direction,
+  Pane,
+  PaneContext,
+  TerminalKeybinding,
+} from "../terminal";
 
 const LIST_SCRIPT = `
 on run argv
@@ -92,11 +98,51 @@ const splitScript = (direction: Direction) =>
   onPane(`            set opened to split term direction ${direction} with configuration {initial working directory:(item 3 of argv), initial input:(item 2 of argv) & linefeed}
             return (id of opened) as text`);
 
-const RESIZE_SCRIPT = onPane(`            set r to perform action (item 2 of argv) on term
+const RESIZE_SCRIPT =
+  onPane(`            set r to perform action (item 2 of argv) on term
             return r as text`);
 
 const MARKER_ATTEMPTS = 6;
 
+const KEYBIND_PREFIXES = new Set([
+  "all",
+  "global",
+  "performable",
+  "unconsumed",
+]);
+
+export function ghosttyKeybindings(config: string): TerminalKeybinding[] {
+  const bindings = new Map<string, TerminalKeybinding>();
+  for (const line of config.split(/\r?\n/)) {
+    const match = /^keybind = (.+?)=([a-z_].*)$/.exec(line.trim());
+    if (!match) continue;
+    const prefixes: string[] = [];
+    let binding = match[1];
+    while (binding.includes(":")) {
+      const colon = binding.indexOf(":");
+      const prefix = binding.slice(0, colon);
+      if (!KEYBIND_PREFIXES.has(prefix)) break;
+      prefixes.push(prefix);
+      binding = binding.slice(colon + 1);
+    }
+    binding = binding
+      .replaceAll("arrow_left", "left")
+      .replaceAll("arrow_right", "right")
+      .replaceAll("arrow_up", "up")
+      .replaceAll("arrow_down", "down");
+    const action = match[2];
+    if (action === "unbind" || action === "ignore") {
+      bindings.delete(binding);
+    } else if (!prefixes.includes("unconsumed")) {
+      bindings.set(binding, {
+        action,
+        binding,
+        delivery: prefixes.includes("performable") ? "conditional" : "consumed",
+      });
+    }
+  }
+  return [...bindings.values()];
+}
 
 function markerDirectory(): string {
   const name = `terminal-browser-pane-${process.pid}-`;
@@ -113,10 +159,13 @@ export const ghostty: Detect = (env, run) => {
     env.TERM_PROGRAM === "ghostty" ||
     Boolean(env.GHOSTTY_RESOURCES_DIR);
   if (!looksLikeGhostty) return null;
+  const keybindings = async () =>
+    ghosttyKeybindings(await run("ghostty", ["+show-config"]));
 
   if (process.platform !== "darwin") {
     return {
       name: "ghostty",
+      keybindings,
       async split() {
         throw new Error(
           "--split is not supported inside ghostty on this platform",
@@ -126,10 +175,13 @@ export const ghostty: Detect = (env, run) => {
   }
 
   const tooOld =
-    (env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0;
+    (env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, {
+      numeric: true,
+    }) ?? 0) < 0;
   if (tooOld) {
     return {
       name: "ghostty",
+      keybindings,
       async split() {
         throw new Error(
           `Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`,
@@ -167,7 +219,10 @@ export const ghostty: Detect = (env, run) => {
     return listed;
   }
 
-  async function getCurrentPane({ tty, cwd }: PaneContext): Promise<Pane | null> {
+  async function getCurrentPane({
+    tty,
+    cwd,
+  }: PaneContext): Promise<Pane | null> {
     if (!tty) return null;
     const before = await panes();
     const marker = markerDirectory();
@@ -210,8 +265,9 @@ export const ghostty: Detect = (env, run) => {
 
   return {
     name: "ghostty",
+    keybindings,
     getCurrentPane,
-    
+
     async split({ from, direction, command, size }) {
       const startDir = directories.get(from.id) ?? process.cwd();
       const opened = await osascript(splitScript(direction), [

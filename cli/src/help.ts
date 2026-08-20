@@ -1,4 +1,3 @@
-
 interface CommandHelp {
   summary: string;
   usage: string;
@@ -20,6 +19,10 @@ Options:
   --split <direction>   Open in a new pane: right, left, down, up
   --size <fraction>     How much of the space the split takes (0.2 to 0.95)
   --profile <name>      Use an isolated persistent browser profile
+  --palette-key=<keys>  Override the saved command palette binding
+  --find-key=<keys>     Override the saved find binding
+  --devtools-key=<keys> Override the saved developer tools binding
+  --console-key=<keys>  Override the saved developer console binding
   --preload=<path>      Run a script inside the context of a web page before it loads (uses electron's preload feature under the hood, runs in an isolated world).
                         terminal-browser specific api's are exposed on globalThis.terminalBrowser
                         {
@@ -118,6 +121,35 @@ Examples:
   terminal-browser profile sync work
   terminal-browser profile remove work
   terminal-browser open github.com --profile work
+`,
+  },
+  keybindings: {
+    summary: "Configure global browser shortcuts",
+    usage: "terminal-browser keybindings <command> [options]",
+    body: `
+Saved keybindings apply to every browser profile. Multiple bindings for one
+action are separated by spaces. Use "none" to disable an action's shortcut.
+Per-launch shortcut flags override saved settings for that browser session.
+Reopen active browser sessions after changing saved bindings.
+Some terminal-reserved chords never reach terminal-browser. The ls command
+reports conflicts exposed by the current terminal's adapter.
+
+Commands:
+  ls                         List actions, bindings, and their source
+  set <action> <binding>     Save one or more bindings for an action
+  reset <action>             Restore an action's default binding
+  reset --all                Restore every default binding
+
+List options:
+  --json                     Print machine-readable output
+
+Examples:
+  terminal-browser keybindings ls
+  terminal-browser keybindings set close-tab ctrl+w
+  terminal-browser keybindings set palette "ctrl+k alt+k"
+  terminal-browser keybindings set record none
+  terminal-browser keybindings reset close-tab
+  terminal-browser keybindings reset --all
 `,
   },
   ls: {

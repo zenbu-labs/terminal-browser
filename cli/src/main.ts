@@ -27,6 +27,7 @@ import { setupCommand } from "./editors";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
+import { keybindingsCommand } from "./keybindings-command";
 import { lsCommand } from "./ls";
 import { namedProfileName } from "./profile";
 import type { ImportResult } from "./profile";
@@ -670,6 +671,7 @@ async function main(): Promise<number> {
       removePartition: runProfileRemoval,
     });
   }
+  if (command === "keybindings") return keybindingsCommand(args, detect());
   if (command === "upgrade") return upgradeCommand();
   if (command === "shutdown") return shutdownDaemon();
   if (command === "new-tab") {

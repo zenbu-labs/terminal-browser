@@ -13,6 +13,7 @@ test("manages the built-in and named default profiles", () => {
     HOME: os.homedir(),
     PATH: process.env.PATH,
     TERM: "dumb",
+    XDG_CONFIG_HOME: path.join(directory, "config"),
     XDG_DATA_HOME: path.join(directory, "data"),
     XDG_STATE_HOME: path.join(directory, "state"),
   };
@@ -47,7 +48,8 @@ test("manages the built-in and named default profiles", () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /select another default/);
     assert.equal(run("default", "--reset").status, 0);
-    assert.equal(run("remove", "work").status, 0);
+    result = run("remove", "work");
+    assert.equal(result.status, 0, result.stderr);
   } finally {
     fs.rmSync(directory, { force: true, recursive: true });
   }
@@ -59,6 +61,7 @@ test("does not register a lazy profile when opening fails", () => {
     HOME: os.homedir(),
     PATH: process.env.PATH,
     TERM: "dumb",
+    XDG_CONFIG_HOME: path.join(directory, "config"),
     XDG_DATA_HOME: path.join(directory, "data"),
     XDG_STATE_HOME: path.join(directory, "state"),
   };

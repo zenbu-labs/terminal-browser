@@ -20,6 +20,11 @@ export interface SplitRequest {
   tty: string | null;
 }
 
+export interface TerminalKeybinding {
+  action: string;
+  binding: string;
+  delivery: "consumed" | "conditional";
+}
 
 export interface Terminal {
   readonly name: string;
@@ -40,6 +45,7 @@ export interface Terminal {
    * Allows code to be ran at startup, useful for preparing the terminal environment for terminal-browser
    */
   prepare?(): void | Promise<void>;
+  keybindings?(): Promise<TerminalKeybinding[]>;
   /**
    * Allows terminal-browser to know which pane its being called from inside the terminal.
    * This gives terminal-browser the ability to know if a terminal-browser instance
@@ -50,15 +56,14 @@ export interface Terminal {
   getCurrentPane?(context: PaneContext): Promise<Pane | null>;
   /**
    * This powers terminal-browser's --split argument. This is useful when using terminal-browser w/ coding agents
-   * since it allows agents to open a browser next to their TUI without having to know how to 
+   * since it allows agents to open a browser next to their TUI without having to know how to
    * script the current terminal they are running in
-   * 
+   *
    */
   split?(request: SplitRequest): Promise<void>;
 }
 
 export type Detect = (env: NodeJS.ProcessEnv, run: Run) => Terminal | null;
-
 
 export function canSplit(terminal: Terminal | null): boolean {
   return Boolean(terminal?.split);
