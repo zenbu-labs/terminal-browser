@@ -2239,6 +2239,17 @@ mod tests {
 
     #[test]
     fn parses_modifiers_on_legacy_and_kitty_keys() {
+        // super+punctuation matters because a terminal that forwards it restores the
+        // bracket shortcuts every browser uses; 91 is '[' and modifier 9 is super.
+        assert_eq!(
+            parse_event(b"\x1b[91;9u").map(|(event, _)| event),
+            Some(RawEvent::Key(KeyEvent {
+                key: Key::Char('['),
+                mods: Mods { sup: true, ..Mods::default() },
+                kind: KeyKind::Press,
+                text: None,
+            })),
+        );
         assert_eq!(
             parse_event(b"\x1b[1;2D"),
             Some((key_mods(Key::Left, SHIFT), 6))
