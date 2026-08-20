@@ -43,6 +43,9 @@ test("lists, sets, disables, and resets global keybindings", () => {
       settings.find((setting) => setting.id === "record").binding,
       "none",
     );
+    result = run("reset", "close-tab", "--all");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /accepts an action or --all/);
     assert.equal(run("reset", "--all").status, 0);
     result = run("ls", "--json");
     assert.ok(

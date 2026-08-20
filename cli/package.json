@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "commander": "^14.0.3",
     "pixel-store": "workspace:*",
     "pixel-terminals": "workspace:*"
   },

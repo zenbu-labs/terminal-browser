@@ -29,12 +29,24 @@ test("manages the built-in and named default profiles", () => {
     assert.equal(initial[0].searchEngine.origin, "fallback");
 
     assert.equal(run("create", "work", "--empty").status, 0);
+    result = run("default", "work", "--reset");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /accepts a name or --reset/);
+    result = run("default-source", "brave", "--clear");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /accepts a browser or --clear/);
+    result = run("default-source", "--source-profile", "Default");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /source options require a browser/);
     result = run("settings", "work", "--search-engine", "brave");
     assert.equal(result.status, 0);
     assert.match(result.stdout, /search engine: Brave Search \(brave\)/);
     result = run("settings", "work", "--json");
     assert.equal(JSON.parse(result.stdout).searchEngine.origin, "override");
     assert.equal(run("settings", "work", "--search-engine", "inherit").status, 0);
+    result = run("settings", "work", "--json", "--search-engine", "brave");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--json only applies when showing profile settings/);
     result = run("search-engines", "--json");
     assert.equal(result.status, 0);
     assert.ok(JSON.parse(result.stdout).some((engine) => engine.id === "duckduckgo"));

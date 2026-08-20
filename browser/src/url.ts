@@ -45,7 +45,7 @@ export function normalizeUrl(
   }
   const file = localFile(input, cwd);
   if (file) return pathToFileURL(file).toString();
-  if (/^[\w.-]+(?::\d+)?(?:\/.*)?$/.test(input)) {
+  if (looksLikeHost(input)) {
     const host = input.split(/[:/]/)[0].toLowerCase();
     const scheme = host === "localhost" || host === "127.0.0.1" ? "http" : "https";
     return new URL(`${scheme}://${input}`).toString();
@@ -55,6 +55,17 @@ export function normalizeUrl(
 
 const HAS_AUTHORITY = /^[a-z][a-z0-9+.-]*:\/\//i;
 const SCHEMES_WITHOUT_HOST = /^(?:data|mailto|tel|about|blob|chrome|view-source):/i;
+
+function looksLikeHost(input: string): boolean {
+  if (!/^[\w.-]+(?::\d+)?(?:\/.*)?$/.test(input)) return false;
+  const host = input.split(/[:/]/)[0].toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host.includes(".") ||
+    /:\d+/.test(input)
+  );
+}
 
 /** Compact form shown in the tab strip. */
 export function displayUrl(url: string): string {

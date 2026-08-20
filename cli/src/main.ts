@@ -24,7 +24,6 @@ import type { Direction, Terminal, TerminalCheck } from "pixel-terminals";
 import { actionCommand } from "./action";
 import { control } from "./control";
 import { setupCommand } from "./editors";
-import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
 import { keybindingsCommand } from "./keybindings-command";
@@ -32,9 +31,10 @@ import { lsCommand } from "./ls";
 import { namedProfileName } from "./profile";
 import type { ImportResult } from "./profile";
 import { profileCommand } from "./profile-command";
+import { runCli } from "./program";
+import type { CliActions, OpenRequest } from "./program";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
-import { joinTargetWords } from "./target";
 import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 
@@ -48,29 +48,6 @@ function fail(message: string): never {
 
 function print(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function takeFlag(args: string[], name: string): string | undefined {
-  const at = args.indexOf(name);
-  if (at >= 0) {
-    const value = args[at + 1];
-    if (value === undefined) fail(`${name} requires a value`);
-    args.splice(at, 2);
-    return value;
-  }
-  const inline = args.findIndex((arg) => arg.startsWith(`${name}=`));
-  if (inline < 0) return undefined;
-  const value = args[inline].slice(name.length + 1);
-  if (!value) fail(`${name} requires a value`);
-  args.splice(inline, 1);
-  return value;
-}
-
-function takeBoolFlag(args: string[], name: string): boolean {
-  const at = args.indexOf(name);
-  if (at < 0) return false;
-  args.splice(at, 1);
-  return true;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -412,33 +389,6 @@ async function openHere(argv: string[], onStarted?: () => void): Promise<never> 
   );
 }
 
-const DIRECTIONS: Direction[] = ["right", "left", "down", "up"];
-
-function isDirection(value: string): value is Direction {
-  return (DIRECTIONS as string[]).includes(value);
-}
-
-function takeSplitFlag(args: string[]): Direction | null {
-  const raw = takeFlag(args, "--split");
-  if (raw === undefined) return null;
-  if (!isDirection(raw)) fail(`invalid --split ${raw} (right, left, down, up)`);
-  return raw;
-}
-
-function takeSizeFlag(args: string[]): number | null {
-  const raw = takeFlag(args, "--size");
-  if (raw === undefined || raw === null) return null;
-  const size = Number(raw);
-  if (!Number.isFinite(size) || size < 0.2 || size > 0.95) {
-    fail(`invalid --size ${raw} (fraction between 0.2 and 0.95)`);
-  }
-  return size;
-}
-
-
-
-
-
 async function launchInSplit(
   terminal: Terminal,
   direction: Direction,
@@ -509,46 +459,17 @@ async function requireGraphics(check: TerminalCheck) {
   process.exit(1);
 }
 
-const BROWSER_FLAGS = [
-  "--app-mode",
-  "--no-toolbar",
-  "--no-shortcuts",
-  "--no-context-menu",
-  "--no-overlays",
-  "--no-frame",
-  "--open-tabs-in-popup-stack",
-  "--allow-clipboard-read",
-  "--partition=",
-  "--preload=",
-  "--main-script=",
-  "--palette-key=",
-  "--find-key=",
-  "--devtools-key=",
-  "--console-key=",
-  "--split-dir=",
-  "--parent-tty=",
-];
-
-function rejectUnknownFlags(args: string[]) {
-  for (const arg of args) {
-    if (!arg.startsWith("-")) continue;
-    const known = BROWSER_FLAGS.some((flag) =>
-      flag.endsWith("=") ? arg.startsWith(flag) : arg === flag,
-    );
-    if (!known) fail(`unknown option ${arg.split("=")[0]} (terminal-browser open --help)`);
-  }
-}
-
 function requirePaneAccess(): void {
   const refusal = sandboxRefusal();
   if (refusal) fail(refusal);
 }
 
-async function openCommand(args: string[]) {
+async function openCommand(request: OpenRequest) {
   requirePaneAccess();
-  const split = takeSplitFlag(args);
-  const size = takeSizeFlag(args);
-  const profile = takeFlag(args, "--profile");
+  const args = [...(request.target ? [request.target] : []), ...request.browserArgs];
+  const split = request.split ?? null;
+  const size = request.size ?? null;
+  const profile = request.profile;
   let profileNameToSave: string | null = null;
   if (profile) {
     if (args.some((arg) => arg.startsWith("--partition="))) {
@@ -563,8 +484,6 @@ async function openCommand(args: string[]) {
     applyConfiguredDefaultProfile(args);
   }
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
-  rejectUnknownFlags(args);
-  args = joinTargetWords(args);
   await requireGraphics(await currentTerminal());
   const saveCreatedProfile = () => {
     if (profileNameToSave && !findProfile(profileNameToSave)) {
@@ -603,103 +522,37 @@ function applyConfiguredDefaultProfile(args: string[]): void {
   args.push(`--partition=${name}`);
 }
 
-function splitPassthrough(args: string[]): { own: string[]; passthrough: string[] } {
-  const at = args.indexOf("--");
-  if (at < 0) return { own: args, passthrough: [] };
-  return { own: args.slice(0, at), passthrough: args.slice(at + 1) };
-}
-
-function takeTabFlag(args: string[]): number | undefined {
-  const raw = takeFlag(args, "--tab");
-  if (raw === undefined) return undefined;
-  const id = Number(raw.replace(/^t/, ""));
-  if (!Number.isInteger(id)) fail(`invalid --tab ${raw} (a tab id from terminal-browser ls)`);
-  return id;
-}
-
-function asksForHelp(args: string[]): boolean {
-  const end = args.indexOf("--");
-  const own = end < 0 ? args : args.slice(0, end);
-  return own.includes("--help") || own.includes("-h");
-}
-
-function helpCommand(topic: string | undefined): number {
-  if (!topic) {
-    process.stdout.write(rootHelp());
-    return 0;
-  }
-  const help = commandHelp(topic);
-  if (!help) fail(`no help for ${topic} (try ${helpTopics().join(", ")})`);
-  process.stdout.write(help);
-  return 0;
-}
-
 async function main(): Promise<number> {
-  const [command, ...args] = process.argv.slice(2);
-  if (command === "--help" || command === "-h") {
-    process.stdout.write(rootHelp());
-    return 0;
-  }
-  if (command === "--version" || command === "-v") {
-    process.stdout.write(`terminal-browser ${installedVersion() ?? "dev"}\n`);
-    return 0;
-  }
-  if (command === "help") return helpCommand(args[0]);
-  if (asksForHelp(args)) {
-    process.stdout.write(commandHelp(command) ?? rootHelp());
-    return 0;
-  }
-  if (command === "open") {
-    await openCommand(args);
-    return 0;
-  }
-  if (command === "ls") {
-    requirePaneAccess();
-    const all = takeBoolFlag(args, "--all");
-    const json = takeBoolFlag(args, "--json");
-    await lsCommand((await currentTerminal()).terminal, all, json);
-    return 0;
-  }
-  if (command === "setup") {
-    const sandbox = apparmorSetup(electronBinary());
-    const editors = setupCommand();
-    return editors !== 0 ? editors : sandbox;
-  }
-  if (command === "profile") {
-    return profileCommand(args, {
+  const actions: CliActions = {
+    action: async (options) => {
+      requirePaneAccess();
+      return actionCommand((await currentTerminal()).terminal, options);
+    },
+    keybindings: (request) => keybindingsCommand(request, detect()),
+    ls: async (all, json) => {
+      requirePaneAccess();
+      return lsCommand((await currentTerminal()).terminal, all, json);
+    },
+    newTab: async ({ browserKey, target }) => {
+      requirePaneAccess();
+      return newTabCommand(target, browserKey);
+    },
+    open: openCommand,
+    profile: (request) => profileCommand(request, {
       importCookies: runCookieImport,
       removePartition: runProfileRemoval,
-    });
-  }
-  if (command === "keybindings") return keybindingsCommand(args, detect());
-  if (command === "upgrade") return upgradeCommand();
-  if (command === "shutdown") return shutdownDaemon();
-  if (command === "new-tab") {
-    requirePaneAccess();
-    const key = takeFlag(args, "--browser");
-    const target = joinTargetWords(args).find((arg) => !arg.startsWith("-"));
-    return newTabCommand(target, key);
-  }
-  if (command === "action") {
-    requirePaneAccess();
-    const { own, passthrough } = splitPassthrough(args);
-    const options = {
-      browserKey: takeFlag(own, "--browser"),
-      tabId: takeTabFlag(own),
-      targetId: takeFlag(own, "--target"),
-      follow: takeBoolFlag(own, "--follow"),
-      passthrough,
-    };
-    if (own.length > 0) fail(`unexpected ${own[0]} — put agent-browser arguments after --`);
-    return actionCommand((await currentTerminal()).terminal, options);
-  }
-  const rest = process.argv.slice(2);
-  if (asksForHelp(rest)) {
-    process.stdout.write(commandHelp("open") ?? rootHelp());
-    return 0;
-  }
-  await openCommand(rest);
-  return 0;
+    }),
+    setup: () => {
+      const sandbox = apparmorSetup(electronBinary());
+      const editors = setupCommand();
+      return editors !== 0 ? editors : sandbox;
+    },
+    shutdown: shutdownDaemon,
+    upgrade: upgradeCommand,
+  };
+  return runCli(process.argv.slice(2), actions, {
+    version: installedVersion() ?? "dev",
+  });
 }
 
 void main()

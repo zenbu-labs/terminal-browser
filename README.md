@@ -18,10 +18,12 @@ curl -fsSl https://terminal-browser.sh/install | bash
 ### Usage
 ```
 terminal-browser # launches the browser
-terminal-browser open <url> # opens the browser at a url
+terminal-browser open <url or search> # opens a URL or searches with the selected profile
+terminal-browser open kittens # searches with the selected profile's search engine
+terminal-browser "best terminal browser" # quote multi-word searches
 terminal-browser --split right # opens the browser in a split pane to the right
 terminal-browser ls # lists open browsers
-terminal-browser action # an agent-browser compatible cli for interacting with open terminal-browsers
+terminal-browser action -- snapshot # runs agent-browser commands against the open browser
 ```
 
 

@@ -42,6 +42,9 @@ importers:
 
   cli:
     dependencies:
+      commander:
+        specifier: ^14.0.3
+        version: 14.0.3
       pixel-store:
         specifier: workspace:*
         version: link:../store
@@ -793,6 +796,10 @@ packages:
   chownr@1.1.4:
     resolution: {integrity: sha512-jJ0bqzaylmJtVnNgzTeSOs8DPavpbYgEr/b0YL8/2GO3xJEhInFmhKMUnEJQjZumK7KXGFhUy89PrsJWlakBVg==}
 
+  commander@14.0.3:
+    resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
+    engines: {node: '>=20'}
+
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
 
@@ -1494,6 +1501,8 @@ snapshots:
 
   chownr@1.1.4:
     optional: true
+
+  commander@14.0.3: {}
 
   csstype@3.2.3: {}
 

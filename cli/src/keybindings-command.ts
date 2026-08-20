@@ -9,43 +9,39 @@ import type { KeybindingSetting } from "pixel-store";
 import type { Terminal } from "pixel-terminals";
 import { terminalKeybindingConflicts } from "./terminal-keybindings";
 
+export type KeybindingsRequest =
+  | { action: "ls"; json: boolean }
+  | { action: "set"; binding: string[]; id: string }
+  | { action: "reset"; all: boolean; id?: string };
+
 export async function keybindingsCommand(
-  args: string[],
+  request: KeybindingsRequest,
   terminal: Terminal | null,
 ): Promise<number> {
-  const action = args.shift();
-  if (action === "ls") {
-    const json = takeBoolFlag(args, "--json");
-    unexpected(args);
+  if (request.action === "ls") {
     const settings = listKeybindings();
-    if (json) print(settings);
+    if (request.json) print(settings);
     else await printSettings(settings, terminal);
     return 0;
   }
-  if (action === "set") {
-    const id = args.shift();
-    if (!id) fail("keybindings set requires an action");
-    if (!keybindingSetting(id)) fail(`unknown keybinding action ${id}`);
-    if (args.length === 0) fail("keybindings set requires a binding (or none)");
-    if (args.some((arg) => arg.startsWith("--"))) unexpected(args);
-    const setting = setKeybinding(id, args.join(" "));
+  if (request.action === "set") {
+    if (!keybindingSetting(request.id)) fail(`unknown keybinding action ${request.id}`);
+    const setting = setKeybinding(request.id, request.binding.join(" "));
     process.stdout.write(`${setting.id}: ${setting.binding}\n`);
     await printConflicts(terminal);
     return 0;
   }
-  if (action === "reset") {
-    const all = takeBoolFlag(args, "--all");
-    const id = args.shift();
-    unexpected(args);
-    if (all && id)
-      fail("keybindings reset accepts an action or --all, not both");
-    if (!all && !id) fail("keybindings reset requires an action or --all");
-    resetKeybinding(all ? null : id!);
-    if (all) process.stdout.write("reset all keybindings\n");
-    else process.stdout.write(`${id}: ${keybindingSetting(id!)!.binding}\n`);
-    return 0;
+  if (request.all && request.id) {
+    fail("keybindings reset accepts an action or --all, not both");
   }
-  fail("keybindings supports: ls, set, reset");
+  if (!request.all && !request.id) fail("keybindings reset requires an action or --all");
+  if (request.id && !keybindingSetting(request.id)) {
+    fail(`unknown keybinding action ${request.id}`);
+  }
+  resetKeybinding(request.all ? null : request.id!);
+  if (request.all) process.stdout.write("reset all keybindings\n");
+  else process.stdout.write(`${request.id}: ${keybindingSetting(request.id!)!.binding}\n`);
+  return 0;
 }
 
 async function printSettings(
@@ -82,18 +78,6 @@ async function printConflicts(
       `warning: ${conflict.terminal} ${behavior} ${conflict.binding} as ${conflict.terminalAction} (${conflict.action})\n`,
     );
   }
-}
-
-function takeBoolFlag(args: string[], name: string): boolean {
-  const at = args.indexOf(name);
-  if (at < 0) return false;
-  args.splice(at, 1);
-  return true;
-}
-
-function unexpected(args: string[]): void {
-  if (args.length > 0)
-    fail(`unexpected ${args[0]} (terminal-browser keybindings --help)`);
 }
 
 function print(value: unknown): void {

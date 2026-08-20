@@ -27,115 +27,137 @@ export interface ProfileCommandOperations {
   removePartition(partition: string): Promise<boolean>;
 }
 
+interface ProfileSourceRequest {
+  browserPath?: string;
+  sourceDir?: string;
+  sourceProfile?: string;
+}
+
+export type ProfileRequest =
+  | { action: "ls"; json: boolean }
+  | { action: "default"; json: boolean; name?: string; reset: boolean }
+  | ({
+      action: "default-source";
+      browser?: string;
+      clear: boolean;
+      json: boolean;
+    } & ProfileSourceRequest)
+  | { action: "search-engines"; json: boolean }
+  | { action: "settings"; json: boolean; name: string; searchEngine?: string }
+  | { action: "create"; empty: boolean; name: string }
+  | { action: "sources"; json: boolean }
+  | { action: "sync"; name: string; replace: boolean }
+  | { action: "remove"; name: string }
+  | ({
+      action: "import";
+      browser: string;
+      name: string;
+      replace: boolean;
+    } & ProfileSourceRequest);
+
 export async function profileCommand(
-  args: string[],
+  request: ProfileRequest,
   operations: ProfileCommandOperations,
 ): Promise<number> {
-  const action = args.shift();
-  if (action === "ls") {
-    const json = takeBoolFlag(args, "--json");
-    unexpected(args);
+  if (request.action === "ls") {
     const profiles = listedProfiles();
-    if (json) print(profiles);
+    if (request.json) print(profiles);
     else printProfiles(profiles);
     return 0;
   }
-  if (action === "default") {
-    const reset = takeBoolFlag(args, "--reset");
-    const json = takeBoolFlag(args, "--json");
-    const requested = args.shift();
-    unexpected(args);
-    if (reset && requested) profileError("profile default accepts a name or --reset, not both");
-    if (json && (reset || requested)) {
+  if (request.action === "default") {
+    if (request.reset && request.name) {
+      profileError("profile default accepts a name or --reset, not both");
+    }
+    if (request.json && (request.reset || request.name)) {
       profileError("--json only applies when showing the default profile");
     }
-    if (reset || requested === "default") {
+    if (request.reset || request.name === "default") {
       setDefaultProfile(null);
       process.stdout.write("default profile: default\n");
       return 0;
     }
-    if (requested) {
-      const name = namedProfileName(requested);
+    if (request.name) {
+      const name = namedProfileName(request.name);
       if (!findProfile(name)) profileError(`no profile named ${name}`);
       setDefaultProfile(name);
       process.stdout.write(`default profile: ${name}\n`);
       return 0;
     }
     const name = profileSettings().defaultProfile ?? "default";
-    if (json) print({ name });
+    if (request.json) print({ name });
     else process.stdout.write(`default profile: ${name}\n`);
     return 0;
   }
-  if (action === "default-source") {
-    const clear = takeBoolFlag(args, "--clear");
-    const json = takeBoolFlag(args, "--json");
-    const requested = args.shift();
-    if (clear && requested) {
+  if (request.action === "default-source") {
+    const hasSourceOptions =
+      request.browserPath !== undefined ||
+      request.sourceDir !== undefined ||
+      request.sourceProfile !== undefined;
+    if (request.clear && request.browser) {
       profileError("profile default-source accepts a browser or --clear, not both");
     }
-    if (json && (clear || requested)) {
+    if (!request.browser && hasSourceOptions) {
+      profileError("profile default-source source options require a browser");
+    }
+    if (request.json && (request.clear || request.browser)) {
       profileError("--json only applies when showing the default source");
     }
-    if (clear) {
-      unexpected(args);
+    if (request.clear) {
       setDefaultSource(null);
       process.stdout.write("default profile source cleared\n");
       return 0;
     }
-    if (requested) {
-      const source = resolveProfileSource(browserName(requested), takeProfileSourceOptions(args));
-      unexpected(args);
+    if (request.browser) {
+      const source = resolveProfileSource(browserName(request.browser), {
+        browserPath: request.browserPath,
+        sourceDir: request.sourceDir,
+        sourceProfile: request.sourceProfile,
+      });
       setDefaultSource(source);
       printDefaultSource(source);
       return 0;
     }
-    unexpected(args);
     const source = profileSettings().defaultSource;
-    if (json) print(source);
+    if (request.json) print(source);
     else if (source) printDefaultSource(source);
     else process.stdout.write("no default profile source\n");
     return 0;
   }
-  if (action === "search-engines") {
-    const json = takeBoolFlag(args, "--json");
-    unexpected(args);
+  if (request.action === "search-engines") {
     const engines = listSearchEngines();
-    if (json) print(engines);
+    if (request.json) print(engines);
     else printSearchEngines(engines);
     return 0;
   }
-  if (action === "settings") {
-    const rawName = args.shift();
-    if (!rawName) profileError("profile settings requires a profile name");
-    const name = rawName === "default" ? "default" : namedProfileName(rawName);
+  if (request.action === "settings") {
+    const name = request.name === "default" ? "default" : namedProfileName(request.name);
     if (name !== "default" && !findProfile(name)) profileError(`no profile named ${name}`);
-    const json = takeBoolFlag(args, "--json");
-    const requested = takeFlag(args, "--search-engine");
-    unexpected(args);
-    if (json && requested) profileError("--json only applies when showing profile settings");
-    if (requested) {
-      if (requested !== "inherit" && !searchEngine(requested)) {
+    if (request.json && request.searchEngine) {
+      profileError("--json only applies when showing profile settings");
+    }
+    if (request.searchEngine) {
+      if (request.searchEngine !== "inherit" && !searchEngine(request.searchEngine)) {
         profileError(
-          `unknown search engine ${requested} (${listSearchEngines()
+          `unknown search engine ${request.searchEngine} (${listSearchEngines()
             .map((engine) => engine.id)
             .join(", ")}, inherit)`,
         );
       }
-      setProfileSearchEngine(name, requested === "inherit" ? null : requested);
+      setProfileSearchEngine(
+        name,
+        request.searchEngine === "inherit" ? null : request.searchEngine,
+      );
     }
     const settings = displayedSearchEngine(name);
-    if (json) print({ name, searchEngine: settings });
+    if (request.json) print({ name, searchEngine: settings });
     else printProfileSettings(name, settings);
     return 0;
   }
-  if (action === "create") {
-    const rawName = args.shift();
-    if (!rawName) profileError("profile create requires a profile name");
-    const name = namedProfileName(rawName);
-    const empty = takeBoolFlag(args, "--empty");
-    unexpected(args);
+  if (request.action === "create") {
+    const name = namedProfileName(request.name);
     if (findProfile(name)) profileError(`profile ${name} already exists`);
-    const source = empty ? null : profileSettings().defaultSource;
+    const source = request.empty ? null : profileSettings().defaultSource;
     if (!source) {
       saveProfile({ createdAt: new Date().toISOString(), name });
       process.stdout.write(`created empty profile ${name}\n`);
@@ -159,20 +181,14 @@ export async function profileCommand(
     printImportResult(name, result);
     return 0;
   }
-  if (action === "sources") {
-    const json = takeBoolFlag(args, "--json");
-    unexpected(args);
+  if (request.action === "sources") {
     const sources = discoverBrowserProfiles();
-    if (json) print(sources);
+    if (request.json) print(sources);
     else printProfileSources(sources);
     return 0;
   }
-  if (action === "sync") {
-    const rawName = args.shift();
-    if (!rawName) profileError("profile sync requires a profile name");
-    const name = namedProfileName(rawName);
-    const replace = takeBoolFlag(args, "--replace");
-    unexpected(args);
+  if (request.action === "sync") {
+    const name = namedProfileName(request.name);
     const profile = findProfile(name);
     if (!profile) profileError(`no profile named ${name}`);
     if (!profile.source) profileError(`profile ${name} was not imported and has no source to sync`);
@@ -180,7 +196,7 @@ export async function profileCommand(
       browserPath: profile.source.browserPath,
       sourceDir: profile.source.sourceDir,
       sourceProfile: profile.source.sourceProfile,
-      replace,
+      replace: request.replace,
       targetProfile: name,
       importCookies: operations.importCookies,
     });
@@ -193,12 +209,9 @@ export async function profileCommand(
     printImportResult(name, result);
     return 0;
   }
-  if (action === "remove") {
-    const rawName = args.shift();
-    if (!rawName) profileError("profile remove requires a profile name");
-    if (rawName === "default") profileError("the built-in default profile cannot be removed");
-    const name = namedProfileName(rawName);
-    unexpected(args);
+  if (request.action === "remove") {
+    if (request.name === "default") profileError("the built-in default profile cannot be removed");
+    const name = namedProfileName(request.name);
     if (profileSettings().defaultProfile === name) {
       profileError(`profile ${name} is the default; select another default before removing it`);
     }
@@ -209,23 +222,15 @@ export async function profileCommand(
     );
     return 0;
   }
-  if (action !== "import") {
-    profileError(
-      "profile supports: ls, default, default-source, create, settings, search-engines, sources, import, sync, remove",
-    );
-  }
-  const source = args.shift();
-  if (!source) profileError("profile import requires a browser (brave, chrome, chromium)");
-  const targetProfile = takeFlag(args, "--name");
-  if (!targetProfile) profileError("profile import requires --name <name>");
   const options = {
-    ...takeProfileSourceOptions(args),
-    replace: takeBoolFlag(args, "--replace"),
-    targetProfile: namedProfileName(targetProfile),
+    browserPath: request.browserPath,
+    sourceDir: request.sourceDir,
+    sourceProfile: request.sourceProfile,
+    replace: request.replace,
+    targetProfile: namedProfileName(request.name),
     importCookies: operations.importCookies,
   };
-  unexpected(args);
-  const result = await importBrowserProfile(browserName(source), options);
+  const result = await importBrowserProfile(browserName(request.browser), options);
   const existing = findProfile(options.targetProfile);
   saveProfile({
     createdAt: existing?.createdAt ?? new Date().toISOString(),
@@ -238,43 +243,8 @@ export async function profileCommand(
   return 0;
 }
 
-function takeFlag(args: string[], name: string): string | undefined {
-  const at = args.indexOf(name);
-  if (at >= 0) {
-    const value = args[at + 1];
-    if (value === undefined) profileError(`${name} requires a value`);
-    args.splice(at, 2);
-    return value;
-  }
-  const inline = args.findIndex((arg) => arg.startsWith(`${name}=`));
-  if (inline < 0) return undefined;
-  const value = args[inline].slice(name.length + 1);
-  if (!value) profileError(`${name} requires a value`);
-  args.splice(inline, 1);
-  return value;
-}
-
-function takeBoolFlag(args: string[], name: string): boolean {
-  const at = args.indexOf(name);
-  if (at < 0) return false;
-  args.splice(at, 1);
-  return true;
-}
-
-function unexpected(args: string[]): void {
-  if (args.length > 0) profileError(`unexpected ${args[0]} (terminal-browser profile --help)`);
-}
-
 function profileError(message: string): never {
   throw new Error(message);
-}
-
-function takeProfileSourceOptions(args: string[]) {
-  return {
-    browserPath: takeFlag(args, "--browser-path"),
-    sourceDir: takeFlag(args, "--source-dir"),
-    sourceProfile: takeFlag(args, "--source-profile"),
-  };
 }
 
 function print(value: unknown): void {

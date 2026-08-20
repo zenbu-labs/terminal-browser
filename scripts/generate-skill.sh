@@ -9,9 +9,9 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$TMP/cli.js"
-"$ROOT/scripts/bundle.sh" "$ROOT/cli/src/help.ts" "$TMP/help.js"
+"$ROOT/scripts/bundle.sh" "$ROOT/cli/src/program.ts" "$TMP/program.js"
 
-COMMANDS="$(node -e 'process.stdout.write(require(process.argv[1]).helpTopics().join("\n"))' "$TMP/help.js")"
+COMMANDS="$(node -e 'process.stdout.write(require(process.argv[1]).helpTopics().join("\n"))' "$TMP/program.js")"
 
 {
   printf '\n```\n$ terminal-browser help\n'
