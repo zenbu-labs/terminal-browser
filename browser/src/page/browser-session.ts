@@ -121,6 +121,10 @@ export async function routeThroughSocksProxy(
   });
 }
 
+export async function clearSiteData(partition: string | null, origin?: string): Promise<void> {
+  await browserSession(partition).clearData(origin ? { origins: [origin] } : {});
+}
+
 export function browserSession(partition: string | null): Session {
   return partition ? session.fromPartition(persistentPartition(partition)) : session.defaultSession;
 }
