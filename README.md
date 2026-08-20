@@ -30,7 +30,7 @@ terminal-browser action # an agent-browser compatible cli for interacting with o
 ### Use cases:
 - You can have a coding agent and website scoped to the same terminal tab
 - Your agent has full access to interact with open terminal-browsers, which gives your agent the capability to use the web
-- You can ask an agent to make HTML plans and them open them inside terminal-browser, which will automatically open in a split pane next to your agent
+- You can ask an agent to make HTML plans and then open them inside terminal-browser, which will automatically open in a split pane next to your agent
 - terminal-browser works over SSH, which allows you to preview websites running on remote machines easily
 
 ### Shortcuts
