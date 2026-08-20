@@ -17,8 +17,8 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
-import { lastUrl, setLastUrl, settings, store } from "pixel-store";
-import type { DevtoolsDock, InstanceRow } from "pixel-store";
+import { effectiveSearchEngine, lastUrl, setLastUrl, settings, store } from "pixel-store";
+import type { DevtoolsDock, InstanceRow, SearchEngineDefinition } from "pixel-store";
 
 import { RecordSession } from "../record/session";
 import type { RecordActions } from "../record/types";
@@ -159,6 +159,7 @@ class Session {
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
   private readonly partition: string | null;
+  private readonly searchEngine: SearchEngineDefinition;
   private readonly preload: string | null;
   private readonly mainScript: string | null;
   private readonly onThemeRequest = (event: IpcMainEvent) => {
@@ -240,6 +241,7 @@ class Session {
     this.tabsAsPopups = this.argv.includes("--open-tabs-in-popup-stack");
     this.clipboardRead = this.argv.includes("--allow-clipboard-read");
     this.partition = flagValue(this.argv, "--partition");
+    this.searchEngine = effectiveSearchEngine(this.partition ?? "default").engine;
     this.preload = flagValue(this.argv, "--preload");
     this.mainScript = flagValue(this.argv, "--main-script");
     this.fallbackState = initialBrowserState(this.initialUrl());
@@ -257,6 +259,7 @@ class Session {
             this.windowBg,
             visible,
             this.partition,
+            this.searchEngine,
             this.tabsAsPopups,
             this.clipboardRead,
             this.ctx.key,
@@ -365,7 +368,8 @@ class Session {
       splitDir: splitDirection(flagValue(this.argv, "--split-dir")),
       parentTty: flagValue(this.argv, "--parent-tty"),
       state: () => this.tabs.activeState ?? this.fallbackState,
-      openTab: (url, cwd) => this.tabs.create(url ? normalizeUrl(url, cwd) : DEFAULT_URL).id,
+      openTab: (url, cwd) =>
+        this.tabs.create(url ? normalizeUrl(url, cwd, this.searchEngine) : DEFAULT_URL).id,
       activateTab: (id) => {
         if (!this.tabs.has(id) || this.activeRecord()?.reviewing) return false;
         this.tabs.activate(id);
@@ -611,7 +615,9 @@ class Session {
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
       this.closeUrlEdit();
-      if (text.trim()) this.tabs.activeController?.navigate(searchOrUrl(text, this.ctx.cwd));
+      if (text.trim()) {
+        this.tabs.activeController?.navigate(searchOrUrl(text, this.ctx.cwd, this.searchEngine));
+      }
     },
     pointer: (event) => {
       this.browserFocused = true;
@@ -643,7 +649,7 @@ class Session {
     newTabQuery: (text) => this.newTabQuery(text),
     newTabSubmit: (text) => {
       this.closeNewTabModal();
-      if (text.trim()) this.tabs.create(searchOrUrl(text, this.ctx.cwd));
+      if (text.trim()) this.tabs.create(searchOrUrl(text, this.ctx.cwd, this.searchEngine));
     },
     newTabCancel: () => this.closeNewTabModal(),
     popupPointer: (event) => this.tabs.activeController?.popup?.input.pointer(event),
@@ -1286,7 +1292,7 @@ class Session {
     const session = this.newTab;
     if (!session) return;
     const seq = ++session.seq;
-    fetchSuggestions(query)
+    fetchSuggestions(query, this.searchEngine)
       .then((suggestions) => {
         if (this.newTab !== session || session.seq !== seq) return;
         session.suggestions = suggestions;
@@ -1497,4 +1503,3 @@ function rememberUrl(url: string) {
     setLastUrl(url);
   } catch { }
 }
-

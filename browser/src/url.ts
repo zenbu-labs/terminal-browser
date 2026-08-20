@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { renderSearchTemplate, searchEngine } from "pixel-store";
+import type { SearchEngineDefinition } from "pixel-store";
+
+const DEFAULT_SEARCH_ENGINE = searchEngine("google")!;
+
 function localFile(input: string, cwd?: string): string | null {
   const expanded =
     input === "~" || input.startsWith("~/") ? path.join(os.homedir(), input.slice(1)) : input;
@@ -13,16 +18,24 @@ function localFile(input: string, cwd?: string): string | null {
   return fs.existsSync(absolute) ? absolute : null;
 }
 
-export function searchOrUrl(text: string, cwd?: string): string {
+export function searchOrUrl(
+  text: string,
+  cwd?: string,
+  engine: SearchEngineDefinition = DEFAULT_SEARCH_ENGINE,
+): string {
   const trimmed = text.trim();
   if (HAS_AUTHORITY.test(trimmed) || SCHEMES_WITHOUT_HOST.test(trimmed)) return trimmed;
   if (localFile(trimmed, cwd)) return trimmed;
   if (!trimmed.includes(" ") && trimmed.includes(".")) return trimmed;
   if (/^[\w-]+:\d+(\/.*)?$/.test(trimmed)) return trimmed;
-  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+  return renderSearchTemplate(engine.searchUrl, trimmed);
 }
 
-export function normalizeUrl(value: string, cwd?: string): string {
+export function normalizeUrl(
+  value: string,
+  cwd?: string,
+  engine: SearchEngineDefinition = DEFAULT_SEARCH_ENGINE,
+): string {
   const input = value.trim();
   if (!input) return "about:blank";
   if (HAS_AUTHORITY.test(input) || SCHEMES_WITHOUT_HOST.test(input)) {
@@ -37,7 +50,7 @@ export function normalizeUrl(value: string, cwd?: string): string {
     const scheme = host === "localhost" || host === "127.0.0.1" ? "http" : "https";
     return new URL(`${scheme}://${input}`).toString();
   }
-  return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
+  return renderSearchTemplate(engine.searchUrl, input);
 }
 
 const HAS_AUTHORITY = /^[a-z][a-z0-9+.-]*:\/\//i;

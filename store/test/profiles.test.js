@@ -6,13 +6,16 @@ const { test } = require("node:test");
 
 const {
   findProfile,
+  effectiveSearchEngine,
   listProfiles,
   profileSettings,
   removeProfile,
   saveProfile,
   setDefaultProfile,
   setDefaultSource,
+  setProfileSearchEngine,
 } = require("../dist/profiles");
+const { searchEngine } = require("../dist/search-engines");
 
 test("saves, updates, lists, and removes profile records", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-profiles-test-"));
@@ -54,6 +57,35 @@ test("stores profile defaults and protects the selected profile", () => {
     setDefaultSource(null, file);
     assert.equal(removeProfile("work", file), true);
     assert.deepEqual(profileSettings(file), { defaultProfile: null, defaultSource: null });
+  } finally {
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+test("resolves imported and overridden search engines per profile", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-profiles-test-"));
+  const file = path.join(directory, "profiles.json");
+  try {
+    saveProfile(
+      {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        name: "work",
+        preferences: { searchEngine: { imported: searchEngine("brave") } },
+      },
+      file,
+    );
+    assert.equal(effectiveSearchEngine("work", file).engine.id, "brave");
+    assert.equal(effectiveSearchEngine("work", file).origin, "imported");
+
+    setProfileSearchEngine("work", "duckduckgo", file);
+    assert.equal(effectiveSearchEngine("work", file).engine.id, "duckduckgo");
+    assert.equal(effectiveSearchEngine("work", file).origin, "override");
+    setProfileSearchEngine("work", null, file);
+    assert.equal(effectiveSearchEngine("work", file).engine.id, "brave");
+
+    setProfileSearchEngine("default", "kagi", file);
+    assert.equal(effectiveSearchEngine("default", file).engine.id, "kagi");
+    assert.throws(() => setProfileSearchEngine("work", "unknown", file), /unknown search engine/);
   } finally {
     fs.rmSync(directory, { force: true, recursive: true });
   }

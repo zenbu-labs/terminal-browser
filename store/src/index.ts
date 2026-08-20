@@ -18,11 +18,27 @@ export { listInstances, removeInstance, upsertInstance } from "./instances";
 export { lastUrl, setLastUrl } from "./app-state";
 export {
   findProfile,
+  effectiveSearchEngine,
   listProfiles,
+  profilePreferences,
   profileSettings,
   removeProfile,
   saveProfile,
   setDefaultProfile,
   setDefaultSource,
+  setProfileSearchEngine,
 } from "./profiles";
-export type { ProfileRecord, ProfileSettings, ProfileSource } from "./profiles";
+export type {
+  EffectiveSearchEngine,
+  ProfilePreferences,
+  ProfileRecord,
+  ProfileSettings,
+  ProfileSource,
+} from "./profiles";
+export {
+  listSearchEngines,
+  renderSearchTemplate,
+  searchEngine,
+  searchEngineFromTemplate,
+} from "./search-engines";
+export type { SearchEngineDefinition } from "./search-engines";

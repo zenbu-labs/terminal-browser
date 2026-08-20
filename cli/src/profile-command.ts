@@ -1,13 +1,17 @@
 import {
+  effectiveSearchEngine,
   findProfile,
+  listSearchEngines,
   listProfiles,
   profileSettings,
   removeProfile,
   saveProfile,
+  searchEngine,
   setDefaultProfile,
   setDefaultSource,
+  setProfileSearchEngine,
 } from "pixel-store";
-import type { ProfileSource } from "pixel-store";
+import type { ProfilePreferences, ProfileSource, SearchEngineDefinition } from "pixel-store";
 
 import {
   browserName,
@@ -16,7 +20,7 @@ import {
   namedProfileName,
   resolveProfileSource,
 } from "./profile";
-import type { DiscoveredBrowserProfile, ImportResult } from "./profile";
+import type { DiscoveredBrowserProfile, ImportResult, ProfileImportResult } from "./profile";
 
 export interface ProfileCommandOperations {
   importCookies(file: string, partition: string, replace: boolean): Promise<ImportResult>;
@@ -92,6 +96,38 @@ export async function profileCommand(
     else process.stdout.write("no default profile source\n");
     return 0;
   }
+  if (action === "search-engines") {
+    const json = takeBoolFlag(args, "--json");
+    unexpected(args);
+    const engines = listSearchEngines();
+    if (json) print(engines);
+    else printSearchEngines(engines);
+    return 0;
+  }
+  if (action === "settings") {
+    const rawName = args.shift();
+    if (!rawName) profileError("profile settings requires a profile name");
+    const name = rawName === "default" ? "default" : namedProfileName(rawName);
+    if (name !== "default" && !findProfile(name)) profileError(`no profile named ${name}`);
+    const json = takeBoolFlag(args, "--json");
+    const requested = takeFlag(args, "--search-engine");
+    unexpected(args);
+    if (json && requested) profileError("--json only applies when showing profile settings");
+    if (requested) {
+      if (requested !== "inherit" && !searchEngine(requested)) {
+        profileError(
+          `unknown search engine ${requested} (${listSearchEngines()
+            .map((engine) => engine.id)
+            .join(", ")}, inherit)`,
+        );
+      }
+      setProfileSearchEngine(name, requested === "inherit" ? null : requested);
+    }
+    const settings = displayedSearchEngine(name);
+    if (json) print({ name, searchEngine: settings });
+    else printProfileSettings(name, settings);
+    return 0;
+  }
   if (action === "create") {
     const rawName = args.shift();
     if (!rawName) profileError("profile create requires a profile name");
@@ -117,6 +153,7 @@ export async function profileCommand(
       createdAt: new Date().toISOString(),
       lastSyncedAt: new Date().toISOString(),
       name,
+      preferences: importedPreferences(undefined, result.searchEngine),
       source: result.source,
     });
     printImportResult(name, result);
@@ -147,7 +184,12 @@ export async function profileCommand(
       targetProfile: name,
       importCookies: operations.importCookies,
     });
-    saveProfile({ ...profile, lastSyncedAt: new Date().toISOString(), source: result.source });
+    saveProfile({
+      ...profile,
+      lastSyncedAt: new Date().toISOString(),
+      preferences: importedPreferences(profile.preferences, result.searchEngine),
+      source: result.source,
+    });
     printImportResult(name, result);
     return 0;
   }
@@ -169,7 +211,7 @@ export async function profileCommand(
   }
   if (action !== "import") {
     profileError(
-      "profile supports: ls, default, default-source, create, sources, import, sync, remove",
+      "profile supports: ls, default, default-source, create, settings, search-engines, sources, import, sync, remove",
     );
   }
   const source = args.shift();
@@ -189,6 +231,7 @@ export async function profileCommand(
     createdAt: existing?.createdAt ?? new Date().toISOString(),
     lastSyncedAt: new Date().toISOString(),
     name: options.targetProfile,
+    preferences: importedPreferences(existing?.preferences, result.searchEngine),
     source: result.source,
   });
   printImportResult(options.targetProfile, result);
@@ -238,9 +281,10 @@ function print(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-function printImportResult(name: string, result: ImportResult): void {
+function printImportResult(name: string, result: ProfileImportResult): void {
   process.stdout.write(
     `imported ${result.imported} cookies into profile ${name}\n` +
+      `imported search engine: ${result.searchEngine.name}\n` +
       (result.skippedSession ? `skipped ${result.skippedSession} session-only cookies\n` : "") +
       (result.skippedPartitioned ? `skipped ${result.skippedPartitioned} partitioned cookies\n` : "") +
       (result.skippedInvalid ? `skipped ${result.skippedInvalid} invalid cookies\n` : ""),
@@ -253,6 +297,7 @@ interface ListedProfile {
   isDefault: boolean;
   lastSyncedAt: string | null;
   name: string;
+  searchEngine: ReturnType<typeof displayedSearchEngine>;
   source: ProfileSource | null;
 }
 
@@ -265,6 +310,7 @@ function listedProfiles(): ListedProfile[] {
       isDefault: selected === "default",
       lastSyncedAt: null,
       name: "default",
+      searchEngine: displayedSearchEngine("default"),
       source: null,
     },
     ...listProfiles().map((profile) => ({
@@ -273,6 +319,7 @@ function listedProfiles(): ListedProfile[] {
       isDefault: selected === profile.name,
       lastSyncedAt: profile.lastSyncedAt ?? null,
       name: profile.name,
+      searchEngine: displayedSearchEngine(profile.name),
       source: profile.source ?? null,
     })),
   ];
@@ -280,7 +327,7 @@ function listedProfiles(): ListedProfile[] {
 
 function printProfiles(profiles: ListedProfile[]): void {
   printTable(
-    ["NAME", "DEFAULT", "SOURCE", "LAST SYNC"],
+    ["NAME", "DEFAULT", "SOURCE", "SEARCH ENGINE", "LAST SYNC"],
     profiles.map((profile) => [
       profile.name,
       profile.isDefault ? "yes" : "",
@@ -289,8 +336,49 @@ function printProfiles(profiles: ListedProfile[]): void {
         : profile.source
           ? `${profile.source.browser}/${profile.source.sourceProfile}`
           : "—",
+      profile.searchEngine.effective.name,
       profile.lastSyncedAt ?? "—",
     ]),
+  );
+}
+
+function importedPreferences(
+  preferences: ProfilePreferences | undefined,
+  imported: SearchEngineDefinition,
+): ProfilePreferences {
+  return {
+    ...preferences,
+    searchEngine: {
+      ...preferences?.searchEngine,
+      imported,
+    },
+  };
+}
+
+function displayedSearchEngine(name: string) {
+  const setting = effectiveSearchEngine(name);
+  return {
+    effective: setting.engine,
+    imported: setting.imported,
+    origin: setting.origin,
+    override: setting.override,
+  };
+}
+
+function printProfileSettings(name: string, setting: ReturnType<typeof displayedSearchEngine>): void {
+  process.stdout.write(
+    `profile: ${name}\n` +
+      `search engine: ${setting.effective.name} (${setting.effective.id})\n` +
+      `origin: ${setting.origin}\n` +
+      `imported: ${setting.imported ? `${setting.imported.name} (${setting.imported.id})` : "—"}\n` +
+      `override: ${setting.override ?? "—"}\n`,
+  );
+}
+
+function printSearchEngines(engines: SearchEngineDefinition[]): void {
+  printTable(
+    ["ID", "NAME", "SUGGESTIONS"],
+    engines.map((engine) => [engine.id, engine.name, engine.suggestUrl ? "yes" : "no"]),
   );
 }
 

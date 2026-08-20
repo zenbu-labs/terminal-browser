@@ -21,18 +21,22 @@ test("manages the built-in and named default profiles", () => {
   try {
     let result = run("ls", "--json");
     assert.equal(result.status, 0);
-    assert.deepEqual(JSON.parse(result.stdout), [
-      {
-        builtIn: true,
-        createdAt: null,
-        isDefault: true,
-        lastSyncedAt: null,
-        name: "default",
-        source: null,
-      },
-    ]);
+    const initial = JSON.parse(result.stdout);
+    assert.deepEqual(initial.map((profile) => profile.name), ["default"]);
+    assert.equal(initial[0].isDefault, true);
+    assert.equal(initial[0].searchEngine.effective.id, "google");
+    assert.equal(initial[0].searchEngine.origin, "fallback");
 
     assert.equal(run("create", "work", "--empty").status, 0);
+    result = run("settings", "work", "--search-engine", "brave");
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /search engine: Brave Search \(brave\)/);
+    result = run("settings", "work", "--json");
+    assert.equal(JSON.parse(result.stdout).searchEngine.origin, "override");
+    assert.equal(run("settings", "work", "--search-engine", "inherit").status, 0);
+    result = run("search-engines", "--json");
+    assert.equal(result.status, 0);
+    assert.ok(JSON.parse(result.stdout).some((engine) => engine.id === "duckduckgo"));
     assert.equal(run("default", "work").status, 0);
     result = run("ls", "--json");
     const profiles = JSON.parse(result.stdout);

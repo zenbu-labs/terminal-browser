@@ -63,6 +63,8 @@ Commands:
   default [name]             Show or select the profile used when none is passed
   default-source [browser]   Show or configure the source used by create
   create <name>              Create a profile, using the default source if set
+  settings <name>            Show or change terminal-browser profile settings
+  search-engines             List available search engine overrides
   sources                    List importable browser profiles on this machine
   import <browser>           Import brave, chrome, or chromium cookies
   sync <name>                Re-import from a profile's remembered source
@@ -80,6 +82,9 @@ Default-source options:
 Create options:
   --empty                    Ignore the default source and create an empty profile
 
+Settings options:
+  --search-engine <engine>   Override the imported provider, or use "inherit"
+
 Import options:
   --name <name>              Name of the terminal-browser profile
   --source-profile <name>    Source profile directory, such as "Profile 1"
@@ -90,10 +95,12 @@ Import options:
 Sync options:
   --replace                  Clear target cookies before syncing
 
-List, default, default-source, and sources options:
+List, default, default-source, settings, search-engines, and sources options:
   --json                     Print machine-readable output
 
-Session-only and partitioned cookies cannot be preserved and are skipped.
+Import and sync detect the source profile's search engine. An explicit settings
+override is preserved across syncs. Reopen an active profile after changing its
+settings. Session-only and partitioned cookies cannot be preserved and are skipped.
 
 Examples:
   terminal-browser profile sources
@@ -102,6 +109,9 @@ Examples:
   terminal-browser profile create project-a
   terminal-browser profile create scratch --empty
   terminal-browser profile import brave --name work
+  terminal-browser profile settings work --search-engine duckduckgo
+  terminal-browser profile settings work --search-engine inherit
+  terminal-browser profile search-engines
   terminal-browser profile ls
   terminal-browser profile sync work
   terminal-browser profile remove work

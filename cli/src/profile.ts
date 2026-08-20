@@ -2,6 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
+import { searchEngine, searchEngineFromTemplate } from "pixel-store";
+import type { SearchEngineDefinition } from "pixel-store";
 
 export type BrowserName = "brave" | "chrome" | "chromium";
 
@@ -47,6 +51,7 @@ export interface ImportResult {
 }
 
 export interface ProfileImportResult extends ImportResult {
+  searchEngine: SearchEngineDefinition;
   source: ResolvedProfileSource;
 }
 
@@ -93,6 +98,7 @@ export async function importBrowserProfile(
 ): Promise<ProfileImportResult> {
   const source = resolveBrowserSource(browser, options);
   assertBrowserClosed(source.root);
+  const importedSearchEngine = detectProfileSearchEngine(browser, source.root, source.profile);
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-import-"));
   fs.chmodSync(temporaryRoot, 0o700);
   let child: ReturnType<typeof spawn> | null = null;
@@ -124,6 +130,7 @@ export async function importBrowserProfile(
     const result = await options.importCookies(cookieFile, options.targetProfile, options.replace);
     return {
       ...result,
+      searchEngine: importedSearchEngine,
       source: {
         browser,
         browserPath: source.executable,
@@ -228,12 +235,82 @@ interface BrowserLocalState {
   };
 }
 
+interface SearchTemplateData {
+  short_name?: string;
+  suggestions_url?: string;
+  suggest_url?: string;
+  url?: string;
+}
+
 function localState(root: string): BrowserLocalState | null {
   try {
     return JSON.parse(fs.readFileSync(path.join(root, "Local State"), "utf8")) as BrowserLocalState;
   } catch {
     return null;
   }
+}
+
+export function detectProfileSearchEngine(
+  browser: BrowserName,
+  sourceDir: string,
+  sourceProfile: string,
+): SearchEngineDefinition {
+  const source = { executable: "", profile: sourceProfile, root: sourceDir };
+  const preferences = sourcePreferences(source);
+  const direct = preferences?.default_search_provider_data?.template_url_data;
+  const fromDirect = direct ? searchEngineFromData(direct) : null;
+  if (fromDirect) return fromDirect;
+  const guid =
+    preferences?.default_search_provider?.guid ??
+    preferences?.default_search_provider?.synced_guid;
+  const fromDatabase = guid ? searchEngineFromDatabase(source, guid) : null;
+  if (fromDatabase) return fromDatabase;
+  return searchEngine(browser === "brave" ? "brave" : "google")!;
+}
+
+function sourcePreferences(source: BrowserSource): {
+  default_search_provider?: { guid?: string; synced_guid?: string };
+  default_search_provider_data?: { template_url_data?: SearchTemplateData };
+} | null {
+  try {
+    return JSON.parse(
+      fs.readFileSync(path.join(source.root, source.profile, "Preferences"), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function searchEngineFromDatabase(
+  source: BrowserSource,
+  guid: string,
+): SearchEngineDefinition | null {
+  const file = path.join(source.root, source.profile, "Web Data");
+  if (!fs.existsSync(file)) return null;
+  try {
+    const database = new DatabaseSync(file, { readOnly: true });
+    try {
+      const row = database
+        .prepare(
+          "select short_name, url, suggest_url from keywords where sync_guid = ? limit 1",
+        )
+        .get(guid) as SearchTemplateData | undefined;
+      return row ? searchEngineFromData(row) : null;
+    } finally {
+      database.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+function searchEngineFromData(data: SearchTemplateData): SearchEngineDefinition | null {
+  if (!data.url) return null;
+  return searchEngineFromTemplate(
+    data.short_name ?? "Imported search engine",
+    data.url,
+    data.suggestions_url ?? data.suggest_url,
+  );
 }
 
 function cloneCookieStore(source: BrowserSource, targetRoot: string): void {
