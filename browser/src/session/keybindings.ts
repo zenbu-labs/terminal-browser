@@ -12,11 +12,12 @@ export const defaultKeys =
         screenshot: "super+shift+s",
         profiles: "super+shift+p",
         focus: "super+shift+k",
-        // Ghostty delivers super+letter and super+shift+letter, but not super+punctuation, and it
-        // claims every arrow combination it does deliver. So the bracket pair every other browser
-        // uses is kept for terminals that send it, with a letter pair that arrives here.
-        back: "super+[ super+shift+b",
-        forward: "super+] super+shift+n",
+        // Arrows, because they read as navigation and need no terminal config. Ghostty claims
+        // shift+arrow, super+arrow, super+alt+arrow and super+ctrl+arrow, and delivers neither
+        // super+punctuation nor anything else on the brackets - super+shift+arrow is what is left,
+        // and it is what arrives. The brackets stay for terminals that do send them.
+        back: "super+[ super+shift+left",
+        forward: "super+] super+shift+right",
       }
     : {
         palette: "ctrl+k alt+k",
@@ -26,8 +27,8 @@ export const defaultKeys =
         screenshot: "ctrl+shift+s",
         profiles: "ctrl+shift+p",
         focus: "ctrl+shift+k",
-        back: "ctrl+[ ctrl+shift+b",
-        forward: "ctrl+] ctrl+shift+n",
+        back: "ctrl+[ ctrl+shift+left",
+        forward: "ctrl+] ctrl+shift+right",
       };
 
 export const recordKeyLabel = process.platform === "darwin" ? "ctrl+r" : "ctrl+shift+r";

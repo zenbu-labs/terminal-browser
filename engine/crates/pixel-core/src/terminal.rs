@@ -2239,6 +2239,17 @@ mod tests {
 
     #[test]
     fn parses_modifiers_on_legacy_and_kitty_keys() {
+        // super+shift+arrow is the one arrow combination Ghostty forwards, so it is what
+        // back and forward can actually bind to; modifier 10 is super plus shift.
+        assert_eq!(
+            parse_event(b"\x1b[1;10:1D").map(|(event, _)| event),
+            Some(RawEvent::Key(KeyEvent {
+                key: Key::Left,
+                mods: Mods { sup: true, shift: true, ..Mods::default() },
+                kind: KeyKind::Press,
+                text: None,
+            })),
+        );
         // super+punctuation matters because a terminal that forwards it restores the
         // bracket shortcuts every browser uses; 91 is '[' and modifier 9 is super.
         assert_eq!(
