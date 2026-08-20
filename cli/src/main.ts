@@ -21,6 +21,7 @@ import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
 import { lsCommand } from "./ls";
+import { isBrowserFlag } from "./open-flags";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
 import type { InstanceRecord } from "./registry";
@@ -426,33 +427,10 @@ async function requireGraphics(check: TerminalCheck) {
   process.exit(1);
 }
 
-const BROWSER_FLAGS = [
-  "--app-mode",
-  "--no-toolbar",
-  "--no-shortcuts",
-  "--no-context-menu",
-  "--no-overlays",
-  "--no-frame",
-  "--open-tabs-in-popup-stack",
-  "--allow-clipboard-read",
-  "--partition=",
-  "--preload=",
-  "--main-script=",
-  "--palette-key=",
-  "--find-key=",
-  "--devtools-key=",
-  "--console-key=",
-  "--split-dir=",
-  "--parent-tty=",
-];
-
 function rejectUnknownFlags(args: string[]) {
   for (const arg of args) {
     if (!arg.startsWith("-")) continue;
-    const known = BROWSER_FLAGS.some((flag) =>
-      flag.endsWith("=") ? arg.startsWith(flag) : arg === flag,
-    );
-    if (!known) fail(`unknown option ${arg.split("=")[0]} (terminal-browser open --help)`);
+    if (!isBrowserFlag(arg)) fail(`unknown option ${arg.split("=")[0]} (terminal-browser open --help)`);
   }
 }
 
