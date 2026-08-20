@@ -229,6 +229,8 @@ class Session {
   private screenshotBinding: KeyBinding[] = [];
   private profilesBinding: KeyBinding[] = [];
   private focusBinding: KeyBinding[] = [];
+  private backBinding: KeyBinding[] = [];
+  private forwardBinding: KeyBinding[] = [];
   private noSuper = false;
   private readonly tabs: TabManager;
   private readonly fallbackState: BrowserState;
@@ -492,6 +494,8 @@ class Session {
     this.screenshotBinding = binding("--screenshot-key", defaultKeys.screenshot);
     this.profilesBinding = binding("--profiles-key", defaultKeys.profiles);
     this.focusBinding = binding("--focus-key", defaultKeys.focus);
+    this.backBinding = binding("--back-key", defaultKeys.back);
+    this.forwardBinding = binding("--forward-key", defaultKeys.forward);
   }
 
   private cmdHeld(event: EngineKeyEvent): boolean {
@@ -1061,7 +1065,7 @@ class Session {
           this.openPalette();
           return;
         }
-        if (this.accelHeld(event) && event.key === "l") {
+        if (this.accelHeld(event) && !event.mods.shift && event.key === "l") {
           this.openUrlEdit();
           return;
         }
@@ -1092,11 +1096,11 @@ class Session {
           browser?.reload();
           return;
         }
-        if (this.accelHeld(event) && event.key === "[") {
+        if (matchesBinding(event, this.backBinding)) {
           browser?.back();
           return;
         }
-        if (this.accelHeld(event) && event.key === "]") {
+        if (matchesBinding(event, this.forwardBinding)) {
           browser?.forward();
           return;
         }

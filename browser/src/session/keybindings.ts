@@ -12,6 +12,10 @@ export const defaultKeys =
         screenshot: "super+shift+s",
         profiles: "super+shift+p",
         focus: "super+shift+k",
+        // Ghostty does not deliver super+punctuation to the app, so the bracket pair every other
+        // browser uses cannot fire there; the letter pair is the one that arrives.
+        back: "super+[ super+shift+h",
+        forward: "super+] super+shift+l",
       }
     : {
         palette: "ctrl+k alt+k",
@@ -21,6 +25,8 @@ export const defaultKeys =
         screenshot: "ctrl+shift+s",
         profiles: "ctrl+shift+p",
         focus: "ctrl+shift+k",
+        back: "ctrl+[ ctrl+shift+h",
+        forward: "ctrl+] ctrl+shift+l",
       };
 
 export const recordKeyLabel = process.platform === "darwin" ? "ctrl+r" : "ctrl+shift+r";
