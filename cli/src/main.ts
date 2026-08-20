@@ -1,10 +1,17 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { DAEMON_SOCKET, LOGS_DIR, ensureDataDir } from "pixel-store";
+import {
+  DAEMON_SOCKET,
+  LOGS_DIR,
+  ensureDataDir,
+  findProfile,
+  profileSettings,
+  saveProfile,
+} from "pixel-store";
 import {
   callerTty,
   canSplit,
@@ -21,6 +28,9 @@ import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
 import { lsCommand } from "./ls";
+import { namedProfileName } from "./profile";
+import type { ImportResult } from "./profile";
+import { profileCommand } from "./profile-command";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
 import type { InstanceRecord } from "./registry";
@@ -40,10 +50,17 @@ function print(value: unknown) {
 
 function takeFlag(args: string[], name: string): string | undefined {
   const at = args.indexOf(name);
-  if (at < 0) return undefined;
-  const value = args[at + 1];
-  if (value === undefined) fail(`${name} requires a value`);
-  args.splice(at, 2);
+  if (at >= 0) {
+    const value = args[at + 1];
+    if (value === undefined) fail(`${name} requires a value`);
+    args.splice(at, 2);
+    return value;
+  }
+  const inline = args.findIndex((arg) => arg.startsWith(`${name}=`));
+  if (inline < 0) return undefined;
+  const value = args[inline].slice(name.length + 1);
+  if (!value) fail(`${name} requires a value`);
+  args.splice(inline, 1);
   return value;
 }
 
@@ -78,7 +95,7 @@ function electronBinary(): string {
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = browserDirectory();
   const electron = electronBinary();
-  const main = path.join(browserDir, "dist", "main.js");
+  const main = browserMain();
   for (const required of [electron, main]) {
     if (!fs.existsSync(required)) {
       fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
@@ -105,6 +122,66 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
     .join(" ");
   const line = `exec ${quoted} 2>>'${logDir.replaceAll("'", `'\\''`)}/stderr.log'`;
   return { command: ["/bin/sh", "-c", line], cwd: browserDir };
+}
+
+function browserMain(): string {
+  return path.join(browserDirectory(), "dist", "main.js");
+}
+
+async function runCookieImport(
+  file: string,
+  partition: string,
+  replace: boolean,
+): Promise<ImportResult> {
+  const args = [browserMain(), `--import-cookies=${file}`, `--partition=${partition}`];
+  if (replace) args.push("--replace-cookies");
+  return JSON.parse(await runBrowserUtility(args)) as ImportResult;
+}
+
+async function runProfileRemoval(partition: string): Promise<boolean> {
+  const result = JSON.parse(
+    await runBrowserUtility([browserMain(), `--remove-partition=${partition}`]),
+  ) as { removed?: boolean };
+  return result.removed === true;
+}
+
+async function runBrowserUtility(args: string[]): Promise<string> {
+  let daemonRunning = false;
+  try {
+    const socket = await connectDaemon();
+    socket.destroy();
+    daemonRunning = true;
+  } catch {}
+  if (daemonRunning) fail("stop the terminal-browser daemon before changing a profile");
+  const electron = electronBinary();
+  for (const required of [electron, browserMain()]) {
+    if (!fs.existsSync(required)) {
+      fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
+    }
+  }
+  if (process.platform === "linux") {
+    let sandboxError = linuxSandboxError(electron);
+    if (sandboxError) {
+      apparmorSetup(electron);
+      sandboxError = linuxSandboxError(electron);
+    }
+    if (sandboxError) fail(sandboxError);
+  }
+  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    args.push("--ozone-platform=headless", "--screen-info={8192x8192}");
+  }
+  const result = spawnSync(electron, args, {
+    cwd: browserDirectory(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || `browser utility exited with status ${result.status}`);
+  }
+  const line = result.stdout.trim().split(/\r?\n/).at(-1);
+  if (!line) throw new Error("browser utility returned no result");
+  return line;
 }
 
 function clientLaunchCommand(argv: string[]): string[] {
@@ -295,7 +372,7 @@ async function kill(pid: number, why: string): Promise<number> {
   return 0;
 }
 
-async function attachHere(argv: string[]): Promise<never> {
+async function attachHere(argv: string[], onStarted?: () => void): Promise<never> {
   const tty = ownTtyPath();
   if (!tty) throw new Error("not running on a tty");
   const { socket, reply } = await openSession(argv, tty);
@@ -303,6 +380,7 @@ async function attachHere(argv: string[]): Promise<never> {
     socket.destroy();
     throw new Error(reply.error ?? "daemon refused the session");
   }
+  onStarted?.();
   nextReply(socket, (message) => {
     if (message.event === "closed") process.exit(message.code ?? 0);
   });
@@ -326,8 +404,10 @@ async function attachHere(argv: string[]): Promise<never> {
   return new Promise<never>(() => {});
 }
 
-async function openHere(argv: string[]): Promise<never> {
-  return attachHere(argv).catch((error) => fail(`could not start the browser: ${String(error)}`));
+async function openHere(argv: string[], onStarted?: () => void): Promise<never> {
+  return attachHere(argv, onStarted).catch((error) =>
+    fail(`could not start the browser: ${String(error)}`),
+  );
 }
 
 const DIRECTIONS: Direction[] = ["right", "left", "down", "up"];
@@ -410,6 +490,7 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
   }
   await requireGraphics(check);
   const argv = url ? [url] : [];
+  applyConfiguredDefaultProfile(argv);
   if (interactiveTty()) return openHere(argv);
   if (!canSplit(check.terminal)) fail(cannotOpenPanes(check.terminal));
   const split = url && fs.existsSync(url) ? [path.resolve(url)] : argv;
@@ -465,6 +546,20 @@ async function openCommand(args: string[]) {
   requirePaneAccess();
   const split = takeSplitFlag(args);
   const size = takeSizeFlag(args);
+  const profile = takeFlag(args, "--profile");
+  let profileNameToSave: string | null = null;
+  if (profile) {
+    if (args.some((arg) => arg.startsWith("--partition="))) {
+      fail("--profile and --partition cannot be used together");
+    }
+    if (profile !== "default") {
+      const name = namedProfileName(profile);
+      if (!findProfile(name)) profileNameToSave = name;
+      args.push(`--partition=${name}`);
+    }
+  } else {
+    applyConfiguredDefaultProfile(args);
+  }
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
   rejectUnknownFlags(args);
   const positionals = args.filter((arg) => !arg.startsWith("-"));
@@ -472,8 +567,13 @@ async function openCommand(args: string[]) {
     fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
   }
   await requireGraphics(await currentTerminal());
+  const saveCreatedProfile = () => {
+    if (profileNameToSave && !findProfile(profileNameToSave)) {
+      saveProfile({ createdAt: new Date().toISOString(), name: profileNameToSave });
+    }
+  };
   if (!split && interactiveTty()) {
-    return openHere(args);
+    return openHere(args, saveCreatedProfile);
   }
   const terminal = (await currentTerminal()).terminal;
   const direction = split ?? "right";
@@ -489,7 +589,19 @@ async function openCommand(args: string[]) {
   const argv = args.map((arg) => (arg === url && fs.existsSync(arg) ? path.resolve(arg) : arg));
   argv.push(`--split-dir=${direction}`);
   if (tty) argv.push(`--parent-tty=${tty}`);
-  print(await launchInSplit(terminal!, direction, argv, size));
+  const launched = await launchInSplit(terminal!, direction, argv, size);
+  saveCreatedProfile();
+  print(launched);
+}
+
+function applyConfiguredDefaultProfile(args: string[]): void {
+  if (args.some((arg) => arg.startsWith("--partition="))) return;
+  const name = profileSettings().defaultProfile;
+  if (!name) return;
+  if (!findProfile(name)) {
+    fail(`default profile ${name} is missing; reset it with terminal-browser profile default --reset`);
+  }
+  args.push(`--partition=${name}`);
 }
 
 function splitPassthrough(args: string[]): { own: string[]; passthrough: string[] } {
@@ -553,6 +665,12 @@ async function main(): Promise<number> {
     const sandbox = apparmorSetup(electronBinary());
     const editors = setupCommand();
     return editors !== 0 ? editors : sandbox;
+  }
+  if (command === "profile") {
+    return profileCommand(args, {
+      importCookies: runCookieImport,
+      removePartition: runProfileRemoval,
+    });
   }
   if (command === "upgrade") return upgradeCommand();
   if (command === "shutdown") return shutdownDaemon();

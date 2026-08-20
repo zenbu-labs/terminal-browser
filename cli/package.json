@@ -7,6 +7,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "pnpm build && node --test test/*.test.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

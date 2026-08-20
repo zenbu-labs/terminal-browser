@@ -18,6 +18,7 @@ The url can be a normal url, a localhost port, or a path to an html file.
 Options:
   --split <direction>   Open in a new pane: right, left, down, up
   --size <fraction>     How much of the space the split takes (0.2 to 0.95)
+  --profile <name>      Use an isolated persistent browser profile
   --preload=<path>      Run a script inside the context of a web page before it loads (uses electron's preload feature under the hood, runs in an isolated world).
                         terminal-browser specific api's are exposed on globalThis.terminalBrowser
                         {
@@ -42,8 +43,69 @@ Options:
 
 Examples:
   terminal-browser open localhost:3000
+  terminal-browser open github.com --profile work
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
+`,
+  },
+  profile: {
+    summary: "Manage persistent browser profiles",
+    usage: "terminal-browser profile <command> [options]",
+    body: `
+Named profiles keep cookies and site storage isolated from each other. The
+built-in default profile is used until another profile is selected as the
+default. Opening with --profile creates an empty profile when the name is new.
+Import and sync copy persistent cookies through browser APIs; the source profile
+is never modified and its browser must be closed.
+
+Commands:
+  ls                         List profiles and show the selected default
+  default [name]             Show or select the profile used when none is passed
+  default-source [browser]   Show or configure the source used by create
+  create <name>              Create a profile, using the default source if set
+  sources                    List importable browser profiles on this machine
+  import <browser>           Import brave, chrome, or chromium cookies
+  sync <name>                Re-import from a profile's remembered source
+  remove <name>              Permanently delete a named profile
+
+Default options:
+  --reset                    Restore the built-in default profile
+
+Default-source options:
+  --source-profile <name>    Source profile directory, such as "Profile 1"
+  --source-dir <path>        Browser user-data directory when it is not detected
+  --browser-path <path>      Browser executable when it is not detected
+  --clear                    Remove the configured default source
+
+Create options:
+  --empty                    Ignore the default source and create an empty profile
+
+Import options:
+  --name <name>              Name of the terminal-browser profile
+  --source-profile <name>    Source profile directory, such as "Profile 1"
+  --source-dir <path>        Browser user-data directory when it is not detected
+  --browser-path <path>      Browser executable when it is not detected
+  --replace                  Clear target cookies before importing
+
+Sync options:
+  --replace                  Clear target cookies before syncing
+
+List, default, default-source, and sources options:
+  --json                     Print machine-readable output
+
+Session-only and partitioned cookies cannot be preserved and are skipped.
+
+Examples:
+  terminal-browser profile sources
+  terminal-browser profile default work
+  terminal-browser profile default-source brave --source-profile Default
+  terminal-browser profile create project-a
+  terminal-browser profile create scratch --empty
+  terminal-browser profile import brave --name work
+  terminal-browser profile ls
+  terminal-browser profile sync work
+  terminal-browser profile remove work
+  terminal-browser open github.com --profile work
 `,
   },
   ls: {

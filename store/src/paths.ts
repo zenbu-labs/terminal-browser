@@ -47,6 +47,7 @@ export const INSTANCES_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "instances");
 export const AGENT_SOCKETS_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "agent-browser");
 export const DAEMON_SOCKET = path.join(RUNTIME_HOME, APP_DIR_NAME, "daemon.sock");
 export const DB_FILE = path.join(DATA_DIR, "terminal-browser.db");
+export const PROFILES_FILE = path.join(DATA_DIR, "profiles.json");
 
 export function ensureDataDir(): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
