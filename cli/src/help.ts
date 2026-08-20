@@ -8,12 +8,13 @@ interface CommandHelp {
 const COMMANDS: Record<string, CommandHelp> = {
   open: {
     summary: "Open the browser in a terminal pane",
-    usage: "terminal-browser open [url] [options]",
+    usage: "terminal-browser open [url or search] [options]",
     body: `
 Opens the browser in the current pane. Pass --split to open it in a new
 split pane instead.
 
-The url can be a normal url, a localhost port, or a path to an html file.
+The target can be a normal URL, a localhost port, or a path to an HTML file.
+Anything else is searched with the selected profile's search engine.
 
 Options:
   --split <direction>   Open in a new pane: right, left, down, up
@@ -43,6 +44,7 @@ Options:
 
 Examples:
   terminal-browser open localhost:3000
+  terminal-browser open best terminal browser
   terminal-browser open github.com --profile work
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
@@ -150,10 +152,11 @@ nothing when already up to date.
   },
   "new-tab": {
     summary: "Open a tab here, and a browser too if there is none",
-    usage: "terminal-browser new-tab [url] [options]",
+    usage: "terminal-browser new-tab [url or search] [options]",
     body: `
 Opens a tab in a browser already open. By default, if there is a single
 browser open in the current terminal tab, it will open a tab in that browser.
+Non-URL text is searched with that browser profile's search engine.
 If there are no browsers, a new browser will be opened with the specified tab
 as the initial (if ran from a shell without a TTY, it will open in a split to
 the right). If there are multiple browsers, new-tab will error and a
@@ -165,6 +168,7 @@ Options:
 
 Examples:
   terminal-browser new-tab github.com
+  terminal-browser new-tab terminal browser profiles
   terminal-browser new-tab --browser 90107-1 localhost:3000
 `,
   },
@@ -210,7 +214,7 @@ export function rootHelp(): string {
     ([name, help]) => `  ${name.padEnd(width)}  ${help.summary}`,
   );
   return block(`
-Usage: terminal-browser [url] [options]
+Usage: terminal-browser [url or search] [options]
        terminal-browser <command> [args]
 
 ${lines.join("\n")}

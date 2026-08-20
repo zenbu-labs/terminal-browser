@@ -33,6 +33,7 @@ import type { ImportResult } from "./profile";
 import { profileCommand } from "./profile-command";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
+import { joinTargetWords } from "./target";
 import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 
@@ -562,10 +563,7 @@ async function openCommand(args: string[]) {
   }
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
   rejectUnknownFlags(args);
-  const positionals = args.filter((arg) => !arg.startsWith("-"));
-  if (positionals.length > 1) {
-    fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
-  }
+  args = joinTargetWords(args);
   await requireGraphics(await currentTerminal());
   const saveCreatedProfile = () => {
     if (profileNameToSave && !findProfile(profileNameToSave)) {
@@ -677,7 +675,8 @@ async function main(): Promise<number> {
   if (command === "new-tab") {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");
-    return newTabCommand(args.find((arg) => !arg.startsWith("-")), key);
+    const target = joinTargetWords(args).find((arg) => !arg.startsWith("-"));
+    return newTabCommand(target, key);
   }
   if (command === "action") {
     requirePaneAccess();
