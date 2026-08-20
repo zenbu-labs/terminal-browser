@@ -12,10 +12,10 @@ export const defaultKeys =
         screenshot: "super+shift+s",
         profiles: "super+shift+p",
         focus: "super+shift+k",
-        // Ghostty does not deliver super+punctuation to the app, so the bracket pair every other
-        // browser uses cannot fire there; the letter pair is the one that arrives.
-        back: "super+[ super+shift+h",
-        forward: "super+] super+shift+l",
+        // Ghostty delivers neither super+punctuation nor its own super/alt arrow bindings, so the
+        // bracket pair every other browser uses cannot fire there. ctrl+alt+arrow is unclaimed.
+        back: "super+[ ctrl+alt+left super+shift+h",
+        forward: "super+] ctrl+alt+right super+shift+l",
       }
     : {
         palette: "ctrl+k alt+k",
@@ -25,8 +25,8 @@ export const defaultKeys =
         screenshot: "ctrl+shift+s",
         profiles: "ctrl+shift+p",
         focus: "ctrl+shift+k",
-        back: "ctrl+[ ctrl+shift+h",
-        forward: "ctrl+] ctrl+shift+l",
+        back: "ctrl+[ ctrl+alt+left ctrl+shift+h",
+        forward: "ctrl+] ctrl+alt+right ctrl+shift+l",
       };
 
 export const recordKeyLabel = process.platform === "darwin" ? "ctrl+r" : "ctrl+shift+r";
