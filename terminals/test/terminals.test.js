@@ -100,10 +100,13 @@ test("plain ghostty is still ghostty", () => {
 });
 
 test("herdr falls back when the running herdr predates --right-click", async () => {
-  const env = { HERDR_PANE_ID: "w1:p1", HERDR_TAB_ID: "w1:t1" };
+  const env = { HERDR_PANE_ID: "w1:p1", HERDR_TAB_ID: "w1:t1", HERDR_WORKSPACE_ID: "w1" };
   const commands = [];
   const run = async (bin, args) => {
     commands.push([bin, ...args].join(" "));
+    if (args[0] === "workspace") {
+      return JSON.stringify({ result: { workspaces: [{ workspace_id: "w1", focused: true }] } });
+    }
     if (args.includes("--right-click")) {
       const error = new Error("unknown option: --right-click");
       error.stderr = "unknown option: --right-click\n";
@@ -122,10 +125,57 @@ test("herdr falls back when the running herdr predates --right-click", async () 
     tty: null,
   });
   assert.deepEqual(commands, [
+    "herdr workspace list",
     "herdr pane split --pane w1:p1 --direction right --focus --right-click pane",
     "herdr pane split --pane w1:p1 --direction right --focus",
     "herdr pane run w1:p2 terminal-browser open",
   ]);
+});
+
+const SPLIT_RIGHT = {
+  from: { id: "w1:p1", tab: "w1:t1" },
+  direction: "right",
+  command: ["terminal-browser", "open"],
+  size: null,
+  tty: null,
+};
+
+// the environment only names the calling pane's workspace, so a split from any other pane has to ask
+test("herdr looks up the workspace of a pane it was not launched in", async () => {
+  const env = { HERDR_PANE_ID: "w2:p9", HERDR_TAB_ID: "w2:t1", HERDR_WORKSPACE_ID: "w2" };
+  const { run, commands } = recorder({
+    "herdr workspace list": JSON.stringify({
+      result: { workspaces: [{ workspace_id: "w1", focused: false }, { workspace_id: "w2", focused: true }] },
+    }),
+    "herdr pane list": JSON.stringify({
+      result: { panes: [{ pane_id: "w1:p1", workspace_id: "w1" }] },
+    }),
+    "herdr pane split --pane w1:p1 --direction right --no-focus --right-click pane": JSON.stringify({
+      result: { pane: { pane_id: "w1:p2" } },
+    }),
+    "herdr pane run w1:p2 terminal-browser open": "",
+  });
+  await detect(env, run).split(SPLIT_RIGHT);
+  assert.deepEqual(commands, [
+    "herdr workspace list",
+    "herdr pane list",
+    "herdr pane split --pane w1:p1 --direction right --no-focus --right-click pane",
+    "herdr pane run w1:p2 terminal-browser open",
+  ]);
+});
+
+// stealing focus is the bug we are fixing, so an unanswerable question must not be resolved as "focus it"
+test("herdr leaves focus alone when it cannot tell which workspace is focused", async () => {
+  const env = { HERDR_PANE_ID: "w1:p1", HERDR_TAB_ID: "w1:t1", HERDR_WORKSPACE_ID: "w1" };
+  const { run, commands } = recorder({
+    "herdr pane split --pane w1:p1 --direction right --no-focus --right-click pane": JSON.stringify({
+      result: { pane: { pane_id: "w1:p2" } },
+    }),
+    "herdr pane run w1:p2 terminal-browser open": "",
+  });
+  await detect(env, run).split(SPLIT_RIGHT);
+  assert.equal(commands[0], "herdr workspace list");
+  assert.ok(commands.includes("herdr pane split --pane w1:p1 --direction right --no-focus --right-click pane"));
 });
 
 function tempHerdrConfig(initialContent) {
