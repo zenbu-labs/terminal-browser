@@ -5,8 +5,6 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { LOGS_DIR, ensureDataDir } from "pixel-store";
-
 export interface SshTunnel {
   destination: string;
   socksPort: number;
@@ -262,11 +260,6 @@ function launch(
   remoteDir: string,
   status: (line: string) => void,
 ): Promise<RemoteBundle> {
-  ensureDataDir();
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
-  // meh i dont know if this is a great idea
-  const logPath = path.join(LOGS_DIR, `ssh-bundle-${name}.log`);
-  const log = fs.createWriteStream(logPath, { flags: "a" });
   const tail: string[] = [];
   const child = spawn(
     "ssh",
@@ -302,7 +295,7 @@ function launch(
       }
     };
     const timer = setTimeout(() => {
-      finish(new Error(`${name} never printed READY <url> (output: ${logPath})`));
+      finish(new Error(`${name} never printed READY <url>\n${tail.join("\n")}`));
     }, READY_TIMEOUT_MS);
     const sawLine = (line: string) => {
       tail.push(line);
@@ -319,7 +312,6 @@ function launch(
     };
     child.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      log.write(text);
       buffer += text;
       let newline = buffer.indexOf("\n");
       while (newline !== -1) {
