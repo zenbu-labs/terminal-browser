@@ -12,6 +12,7 @@ import type { Pane, Terminal } from "pixel-terminals";
 import {
   browserSession,
   configureBrowserSession,
+  persistentPartition,
   routeThroughSocksProxy,
 } from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
@@ -247,9 +248,10 @@ class Session {
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
-    this.partition =
+    const rawPartition =
       flagValue(this.argv, "--partition") ??
       (sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null);
+    this.partition = rawPartition ? persistentPartition(rawPartition) : null;
     this.preload = flagValue(this.argv, "--preload");
     this.mainScript = flagValue(this.argv, "--main-script");
     this.fallbackState = initialBrowserState(this.initialUrl());
@@ -484,9 +486,6 @@ class Session {
     this.shownRecord = null;
     try {
       this.root?.setPointerShape("text");
-    } catch { }
-    try {
-      browserSession(this.partition).flushStorageData();
     } catch { }
     this.registry?.dispose();
     this.registry = null;

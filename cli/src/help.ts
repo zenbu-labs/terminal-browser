@@ -47,11 +47,14 @@ Options:
   --app-mode            Shorthand for --no-toolbar --no-shortcuts
                         --no-context-menu --no-overlays --no-frame
                         --allow-clipboard-read --open-tabs-in-popup-stack
+  --partition=<name>    Isolated storage profile. Cookies and site data for
+                        the partition are kept on disk between runs
 
 Examples:
   terminal-browser open localhost:3000
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
+  terminal-browser open --partition=work github.com
   terminal-browser open --ssh dev@build-box localhost:8080
 `,
   },
