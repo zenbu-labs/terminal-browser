@@ -21,8 +21,6 @@ const SAFE_STORAGE_BROWSERS: &[(&str, &[&str])] = &[
     ("chromium", &["Chromium"]),
 ];
 
-/// Chromium keeps the key under "<name> Safe Storage"; older builds used "<name> Storage Key".
-/// The account is the name on its own.
 const SERVICE_SUFFIXES: [&str; 2] = ["Storage Key", "Safe Storage"];
 
 fn safe_storage_names(browser: &str) -> Result<&'static [&'static str]> {
@@ -37,6 +35,15 @@ fn safe_storage_names(browser: &str) -> Result<&'static [&'static str]> {
         })
 }
 
+/// The keychain items to try for a browser, in order. Chromium stores the key under
+/// "<name> Safe Storage" — older builds used "<name> Storage Key" — with the name alone
+/// as the account, so the service and the account differ and cannot be swapped.
+fn keychain_items(browser: &str) -> Result<impl Iterator<Item = (String, &'static str)>> {
+    Ok(safe_storage_names(browser)?
+        .iter()
+        .flat_map(|&name| SERVICE_SUFFIXES.map(|suffix| (format!("{name} {suffix}"), name))))
+}
+
 /// Reads a known Chromium-family browser's Safe Storage secret in this process, so macOS
 /// attributes the access prompt to this app rather than to a shared command line tool.
 /// Errors when no such item exists, and when one exists but the keychain refuses it.
@@ -46,22 +53,18 @@ pub fn chromium_safe_storage_secret(browser: String) -> Result<String> {
     const ITEM_NOT_FOUND: i32 = -25300;
 
     let mut tried: Vec<String> = Vec::new();
-    for &name in safe_storage_names(&browser)? {
-        for suffix in SERVICE_SUFFIXES {
-            let service = format!("{name} {suffix}");
-            match security_framework::passwords::get_generic_password(&service, name) {
-                Ok(password) => {
-                    return String::from_utf8(password).map_err(|_| {
-                        Error::from_reason(format!("the key in {service} is not text"))
-                    });
-                }
-                Err(error) if error.code() == ITEM_NOT_FOUND => tried.push(service),
-                Err(error) => {
-                    let code = error.code();
-                    return Err(Error::from_reason(format!(
-                        "macOS refused {service}: {error} (OSStatus {code})"
-                    )));
-                }
+    for (service, account) in keychain_items(&browser)? {
+        match security_framework::passwords::get_generic_password(&service, account) {
+            Ok(password) => {
+                return String::from_utf8(password)
+                    .map_err(|_| Error::from_reason(format!("the key in {service} is not text")));
+            }
+            Err(error) if error.code() == ITEM_NOT_FOUND => tried.push(service),
+            Err(error) => {
+                let code = error.code();
+                return Err(Error::from_reason(format!(
+                    "macOS refused {service}: {error} (OSStatus {code})"
+                )));
             }
         }
     }
@@ -73,13 +76,27 @@ pub fn chromium_safe_storage_secret(browser: String) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_storage_names;
+    use super::keychain_items;
 
     #[test]
     fn only_table_rows_resolve() {
-        assert!(safe_storage_names("google-chrome").is_ok());
+        assert!(keychain_items("google-chrome").is_ok());
         // Naming an item directly must not work — that is the whole restriction.
-        assert!(safe_storage_names("Chrome Safe Storage").is_err());
-        assert!(safe_storage_names("login").is_err());
+        assert!(keychain_items("Chrome Safe Storage").is_err());
+        assert!(keychain_items("login").is_err());
+    }
+
+    #[test]
+    fn chrome_resolves_to_both_names_with_the_name_as_account() {
+        let items: Vec<(String, &str)> = keychain_items("google-chrome").unwrap().collect();
+        assert_eq!(
+            items,
+            vec![
+                ("Google Chrome Storage Key".to_string(), "Google Chrome"),
+                ("Google Chrome Safe Storage".to_string(), "Google Chrome"),
+                ("Chrome Storage Key".to_string(), "Chrome"),
+                ("Chrome Safe Storage".to_string(), "Chrome"),
+            ]
+        );
     }
 }
