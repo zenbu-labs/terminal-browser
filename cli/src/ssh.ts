@@ -308,10 +308,14 @@ function launch(
       tail.push(line);
       if (tail.length > 20) tail.shift();
       const ready = /^READY\s+(\S+)/.exec(line);
-      if (ready) {
-        status(`${name} is up at ${ready[1]}`);
-        finish({ url: ready[1], stop });
+      if (!ready) return;
+      const url = pageUrl(ready[1]);
+      if (!url) {
+        finish(new Error(`${name} printed READY ${ready[1]}, which is not an http(s) url`));
+        return;
       }
+      status(`${name} is up at ${url}`);
+      finish({ url, stop });
     };
     child.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
@@ -335,6 +339,15 @@ function launch(
       );
     });
   });
+}
+
+function pageUrl(token: string): string | null {
+  try {
+    const url = new URL(token);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function freshControlPath(): string {
