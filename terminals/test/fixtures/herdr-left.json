@@ -1,10 +1,12 @@
 {
   "env": {
     "HERDR_PANE_ID": "w1:p1",
-    "HERDR_TAB_ID": "w1:t1"
+    "HERDR_TAB_ID": "w1:t1",
+    "HERDR_WORKSPACE_ID": "w1"
   },
   "exec": {
-    "herdr pane split --pane w1:p1 --direction right --focus --right-click pane": "{\"result\":{\"pane\":{\"pane_id\":\"w1:p2\"}}}",
+    "herdr workspace list": "{\"result\":{\"workspaces\":[{\"workspace_id\":\"w1\",\"focused\":false},{\"workspace_id\":\"w2\",\"focused\":true}]}}",
+    "herdr pane split --pane w1:p1 --direction right --no-focus --right-click pane": "{\"result\":{\"pane\":{\"pane_id\":\"w1:p2\"}}}",
     "herdr pane swap --pane w1:p2 --direction left": "{}",
     "herdr pane run w1:p2 terminal-browser open": ""
   },
@@ -23,7 +25,8 @@
         "tty": null
       },
       "commands": [
-        "herdr pane split --pane w1:p1 --direction right --focus --right-click pane",
+        "herdr workspace list",
+        "herdr pane split --pane w1:p1 --direction right --no-focus --right-click pane",
         "herdr pane swap --pane w1:p2 --direction left",
         "herdr pane run w1:p2 terminal-browser open"
       ]

@@ -13,6 +13,29 @@ const SLOTS: u64 = 3;
 /// Frames handed to herdr carry the writing pid so a later start can tell whose is whose.
 const FRAME_PREFIX: &str = "px-";
 
+/// Direct-kitty file transport is reserved for herdr's default `primary` page
+/// layer; a named secondary layer would drop us back to inline RGBA.
+const LAYER: &str = "primary";
+
+/// herdr hands this number straight to the kitty placement it emits for us
+/// (`z: layer.z_index` in its `src/kitty_graphics.rs`, printed as the `z=` key),
+/// and the kitty graphics protocol gives a placement two rungs below the text.
+/// A merely negative `z` draws under glyphs but still over cell backgrounds, so
+/// at `z: -1` herdr's copy toast came out legible with its dark panel missing.
+/// Under `INT32_MIN/2` a placement also goes under non-default cell backgrounds:
+/// "Negative z-index values below INT32_MIN/2 (-1,073,741,824) will be drawn
+/// under cells with non-default background colors" (kitty
+/// `docs/graphics-protocol.rst:541`), which both implementations enforce as a
+/// strict `<` - kitty's `graphics.c:1397` and ghostty's `renderer/image.zig:384`
+/// both compare against `INT32_MIN/2`.
+///
+/// So take the shallowest z in that class: one below the limit, leaving every
+/// deeper placement below us. herdr does not paint a pane's cells itself - its
+/// `render_panes` only blits the pty grid, and blank cells keep the default
+/// background unless the program redefines it, which we never do - so the page
+/// stays visible and only herdr's own panels come out on top.
+const Z_INDEX: i32 = i32::MIN / 2 - 1;
+
 #[derive(Clone, Debug)]
 pub(crate) struct HerdrTarget {
     pub(crate) pane: String,
@@ -71,15 +94,7 @@ impl Herdr {
         let stream = UnixStream::connect(socket).ok()?;
         stream.set_read_timeout(Some(OPEN_TIMEOUT)).ok()?;
         let mut frames = BufReader::new(stream);
-        write_line(
-            frames.get_mut(),
-            &format!(
-                r#"{{"id":"stream","method":"pane.graphics.stream","params":{{"pane_id":{},"layer_id":"primary","z_index":0}}}}"#,
-                // checkme: how does pane get here? 
-                quote(pane)
-            ),
-        )
-        .ok()?;
+        write_line(frames.get_mut(), &stream_request(pane)).ok()?;
         if !accepted(&read_line(&mut frames).ok()?) {
             return None;
         }
@@ -183,6 +198,15 @@ fn is_wheel(kind: crate::terminal::MouseKind) -> bool {
 
 fn within_grid(ws: &crate::terminal::WindowSize, x: u32, y: u32) -> bool {
     x >= 1 && y >= 1 && x <= ws.cols && y <= ws.rows
+}
+
+/// The line that claims a pane's `primary` graphics layer, below herdr's overlays.
+// checkme: how does pane get here? via HERDR_PANE_ID, in HerdrTarget::from_env.
+fn stream_request(pane: &str) -> String {
+    format!(
+        r#"{{"id":"stream","method":"pane.graphics.stream","params":{{"pane_id":{},"layer_id":"{LAYER}","z_index":{Z_INDEX}}}}}"#,
+        quote(pane)
+    )
 }
 
 fn request(socket: &str, line: &str) -> io::Result<String> {
@@ -302,6 +326,17 @@ pub(crate) mod tests {
         assert!(!accepted(
             r#"{"id":"stream","error":{"code":"feature_disabled","message":"nope"}}"#
         ));
+    }
+
+    /// One below `INT32_MIN/2`, the rung where kitty draws a placement under
+    /// non-default cell backgrounds as well as under text.
+    #[test]
+    fn the_stream_claims_the_primary_layer_under_herdrs_overlays() {
+        assert_eq!(
+            stream_request("w1:p1"),
+            r#"{"id":"stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1","layer_id":"primary","z_index":-1073741825}}"#
+        );
+        assert!(Z_INDEX < i32::MIN / 2, "must clear the below-background limit");
     }
 
     /// Answers like herdr does: one info reply per connection, then a stream
