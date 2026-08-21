@@ -51,6 +51,7 @@ export function Chrome({
   importHint,
   profiles,
   focusMode,
+  focusPinned,
   dividerEngaged,
   record,
   recordSurface,
@@ -76,6 +77,7 @@ export function Chrome({
   importHint: ImportHintView;
   profiles: ProfileMenuView;
   focusMode: boolean;
+  focusPinned: boolean;
   dividerEngaged: boolean;
   record: RecordView | null;
   recordSurface: Surface | null;
@@ -125,6 +127,7 @@ export function Chrome({
             profiles={profiles}
             profileLabel={chipLabel}
             focusMode={focusMode}
+            focusPinned={focusPinned}
           />
         ))}
       <BrowserTabContents
@@ -209,6 +212,7 @@ function Toolbar({
   profiles,
   profileLabel,
   focusMode,
+  focusPinned,
 }: {
   state: BrowserState;
   actions: ChromeActions;
@@ -221,6 +225,7 @@ function Toolbar({
   profiles: ProfileMenuView;
   profileLabel: string | null;
   focusMode: boolean;
+  focusPinned: boolean;
 }) {
   const rem = layout.rem;
   return (
@@ -265,9 +270,10 @@ function Toolbar({
             theme={theme}
             onClick={actions.importHintToggle}
           />
+          {/* --no-shortcuts pins focus mode on: the button stays lit and takes no click */}
           <ToolbarButton
             icon="keyboard"
-            enabled
+            enabled={!focusPinned}
             active={focusMode}
             rem={rem}
             theme={theme}

@@ -682,6 +682,7 @@ class Session {
         importHint={this.importHintView()}
         profiles={this.profileMenuView()}
         focusMode={this.noShortcuts}
+        focusPinned={this.shortcutsDisabled}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
