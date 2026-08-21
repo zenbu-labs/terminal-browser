@@ -24,7 +24,6 @@ export function setLastUrl(url: string): void {
   setAppState("last-url", url);
 }
 
-
 export interface StoredProfile {
   slug: string;
   name: string;

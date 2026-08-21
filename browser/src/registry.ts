@@ -55,7 +55,7 @@ export interface ControlHost {
   profiles(): ProfileListing;
   createProfile(name: string): BrowserProfile;
   renameProfile(selector: string, name: string): BrowserProfile;
-  deleteProfile(selector: string): BrowserProfile;
+  deleteProfile(selector: string): Promise<BrowserProfile>;
   clearProfile(selector: string): Promise<BrowserProfile>;
   switchProfile(selector: string): { profile: BrowserProfile; url: string };
   viewport(): { width: number; height: number } | null;
@@ -238,7 +238,7 @@ export class Registry {
       }
       case "profile-delete": {
         if (!request.selector) throw new Error("profile-delete needs a profile");
-        return { profile: this.host.deleteProfile(request.selector) };
+        return { profile: await this.host.deleteProfile(request.selector) };
       }
       case "profile-clear": {
         if (!request.selector) throw new Error("profile-clear needs a profile");

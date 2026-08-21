@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { readSocketControlSecret, writeSocketControlSecret } from "pixel-store";
+import {
+  discardSocketControlSecret,
+  readSocketControlSecret,
+  writeSocketControlSecret,
+} from "pixel-store";
 
 const SECRET_BYTES = 32;
 const SECRET_SHAPE = /^[0-9a-f]{64}$/;
@@ -27,9 +31,18 @@ interface AuthRequest {
 export function loadOrCreateSocketSecret(): string {
   const stored = readSocketControlSecret();
   if (stored && SECRET_SHAPE.test(stored)) return stored;
-  const created = crypto.randomBytes(SECRET_BYTES).toString("hex");
-  writeSocketControlSecret(created);
-  return created;
+  // A secret that is there but unusable is nobody's live secret, and the write below refuses to
+  // replace whatever already holds the name, so clear it first.
+  if (stored) discardSocketControlSecret();
+  writeSocketControlSecret(crypto.randomBytes(SECRET_BYTES).toString("hex"));
+  // Read back rather than trusting what was just minted: the write only lands if no other
+  // process got there first, and the loser of that race has to adopt the winner's secret or the
+  // two hold different ones and every CLI command fails authentication until the browser dies.
+  const settled = readSocketControlSecret();
+  if (!settled || !SECRET_SHAPE.test(settled)) {
+    throw new Error("could not create the browser control secret");
+  }
+  return settled;
 }
 
 /** Both sockets drive the browser and hand out its cookies, so keep them to this user. */

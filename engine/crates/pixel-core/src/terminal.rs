@@ -334,6 +334,28 @@ impl SessionEnv {
     }
 }
 
+/// The reporting modes we switch on at startup: alternate screen, hidden cursor, any-event mouse
+/// tracking, the SGR and pixel mouse encodings, focus reporting, bracketed paste, in-band resize
+/// and the kitty keyboard protocol. Every mode named here has its inverse in `TEARDOWN`.
+const SETUP: &[u8] =
+    b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u";
+
+/// The inverse of `SETUP`, and `?1002l` on top of it: an unfocused pane sits in button-event
+/// tracking, so exiting while unfocused would otherwise strand that mode in the operator's shell.
+const TEARDOWN: &[u8] =
+    b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?25h\x1b[?1049l";
+
+/// Moves between any-event tracking (1003) and button-event tracking (1002). A terminal keeps one
+/// mouse mode, so the mode being left is reset before the wanted one is set; the order matters and
+/// a bare `?1003l` would leave the pane deaf to the mouse rather than merely quiet.
+const fn mouse_tracking_switch(any_event: bool) -> &'static [u8] {
+    if any_event {
+        b"\x1b[?1002l\x1b[?1003h"
+    } else {
+        b"\x1b[?1003l\x1b[?1002h"
+    }
+}
+
 impl Terminal {
     pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
         Self::with_handle(
@@ -358,9 +380,7 @@ impl Terminal {
         retry_intr(|| termios::tcsetattr(&io.read_fd(), OptionalActions::Drain, &raw))?;
 
         // would prefer if they weren't magic and linked to some known doc on the internet
-        io.out().write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
-        )?; // enable many reporting modes so we get info about mouse/keyboard
+        io.out().write_all(SETUP)?;
         io.out().flush()?;
 
         let mut terminal = Self {
@@ -691,6 +711,7 @@ impl Terminal {
                         self.focused = focused;
                         // Any-event tracking streams every motion, so an unfocused pane holding it
                         // makes the multiplexer share the mouse with an app that cannot use it.
+                        // Button-event tracking drops that stream and keeps the clicks.
                         self.set_mouse_tracking(focused)?;
                         Event::Focus(focused)
                     }
@@ -947,16 +968,17 @@ impl Terminal {
         Ok(self.read_report(150, parse_kitty_keyboard)?.unwrap_or(false))
     }
 
-    /// Turns any-event mouse tracking on or off, leaving the SGR and pixel encodings alone so the
-    /// stream comes back in the same shape it left in. Writes only when the state actually changes.
+    /// Any-event mouse tracking while focused, button-event tracking while unfocused, leaving the
+    /// SGR and pixel encodings alone so the stream comes back in the same shape it left in. An
+    /// unfocused pane still hears press, release and drag motion, so a click that refocuses it is
+    /// reported at the point the operator clicked and a drag interrupted by the blur still gets its
+    /// release; only the idle hover stream stops. Writes only when the state actually changes.
     fn set_mouse_tracking(&mut self, on: bool) -> io::Result<()> {
         if self.mouse_tracking == on {
             return Ok(());
         }
         self.mouse_tracking = on;
-        self.io
-            .out()
-            .write_all(if on { b"\x1b[?1003h" } else { b"\x1b[?1003l" })?;
+        self.io.out().write_all(mouse_tracking_switch(on))?;
         self.io.out().flush()
     }
 
@@ -1260,9 +1282,7 @@ impl Drop for Terminal {
         if self.color_scheme_updates {
             let _ = self.io.out().write_all(b"\x1b[?2031l");
         }
-        let _ = self.io.out().write_all(
-            b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
-        );
+        let _ = self.io.out().write_all(TEARDOWN);
         let _ = self.io.out().flush();
         let _ = retry_intr(|| {
             termios::tcsetattr(&self.io.read_fd(), OptionalActions::Flush, &self.saved)
@@ -2515,6 +2535,57 @@ mod tests {
         assert_eq!(read.items.len(), 1);
         assert_eq!(read.items[0].1, b"first-second");
     }
+
+    /// Every `CSI ? <mode> h|l` in a byte string, in order, as (mode, action).
+    fn dec_modes(bytes: &[u8]) -> Vec<(u32, u8)> {
+        let mut found = Vec::new();
+        let mut rest = bytes;
+        while let Some(at) = rest.windows(3).position(|w| w == b"\x1b[?") {
+            rest = &rest[at + 3..];
+            let end = rest.iter().position(|b| !b.is_ascii_digit()).unwrap();
+            let mode = std::str::from_utf8(&rest[..end]).unwrap().parse().unwrap();
+            found.push((mode, rest[end]));
+            rest = &rest[end + 1..];
+        }
+        found
+    }
+
+    #[test]
+    fn an_unfocused_pane_keeps_button_events_and_loses_only_hover() {
+        // 1003 reports every motion; 1002 reports press, release and drag motion. Going to 1002
+        // rather than to nothing is what keeps a click that refocuses the pane on a real point.
+        assert_eq!(mouse_tracking_switch(false), b"\x1b[?1003l\x1b[?1002h".as_slice());
+        assert_eq!(mouse_tracking_switch(true), b"\x1b[?1002l\x1b[?1003h".as_slice());
+        for any_event in [true, false] {
+            // A terminal holds one mouse mode, so the mode being left is reset before the wanted
+            // one is set. The other order ends on the reset and the pane goes deaf.
+            let switch = dec_modes(mouse_tracking_switch(any_event));
+            assert_eq!(switch.len(), 2, "a switch is one reset and one set");
+            assert_eq!(switch[0].1, b'l');
+            assert_eq!(switch[1].1, b'h');
+        }
+    }
+
+    #[test]
+    fn teardown_puts_back_every_mode_the_terminal_turns_on() {
+        let teardown = dec_modes(TEARDOWN);
+        // Blur leaves 1002 on, so exiting while unfocused owes it a reset that startup never asked
+        // for: the modes to undo are SETUP's plus that one.
+        let blur = dec_modes(mouse_tracking_switch(false));
+        let owed = dec_modes(SETUP)
+            .into_iter()
+            .chain(blur.into_iter().filter(|(_, act)| *act == b'h'));
+        let mut count = 0;
+        for (mode, action) in owed {
+            count += 1;
+            let inverse = if action == b'h' { b'l' } else { b'h' };
+            assert!(
+                teardown.contains(&(mode, inverse)),
+                "mode {mode} is left behind in the operator's shell",
+            );
+        }
+        assert_eq!(teardown.len(), count, "teardown touches a mode nothing turns on");
+    }
 }
 
 #[cfg(test)]
@@ -2653,5 +2724,63 @@ mod tty_tests {
         });
         let got = term.poll_event(None).unwrap();
         assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
+    }
+
+    /// Like `drain`, but the bytes come back while the terminal is alive. The slave fd is held open
+    /// for the whole test so the reader never sees EOF and can never be joined; the terminal still
+    /// needs it reading or Drop blocks, so the receiver has to outlive the terminal.
+    fn tap(master: &std::fs::File) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (chunks, seen) = std::sync::mpsc::channel();
+        let mut master = master.try_clone().unwrap();
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = master.read(&mut buf) {
+                if n == 0 || chunks.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        seen
+    }
+
+    /// The write lands on the tty before `poll_event` returns, but the reader collecting it is
+    /// another thread, so wait for the bytes rather than sampling once.
+    fn wrote(seen: &std::sync::mpsc::Receiver<Vec<u8>>, sink: &mut Vec<u8>, want: &[u8]) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if sink.windows(want.len()).any(|window| window == want) {
+                return true;
+            }
+            match seen.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(chunk) => sink.extend_from_slice(&chunk),
+                Err(_) => return false,
+            }
+        }
+    }
+
+    #[test]
+    fn blur_drops_to_button_event_tracking_and_focus_restores_any_event() {
+        use std::io::Write as _;
+        let (mut master, _slave, path) = open_pty();
+        let seen = tap(&master);
+        let mut written = Vec::new();
+        let mut term = Terminal::open(&path, Wrapper::None, SessionEnv::of_process()).unwrap();
+
+        master.write_all(b"\x1b[O").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(matches!(got, Some(Event::Focus(false))), "focus out: {got:?}");
+        assert!(
+            wrote(&seen, &mut written, b"\x1b[?1003l\x1b[?1002h"),
+            "an unfocused pane must lose the hover stream without going deaf to clicks",
+        );
+
+        master.write_all(b"\x1b[I").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(matches!(got, Some(Event::Focus(true))), "focus in: {got:?}");
+        assert!(
+            wrote(&seen, &mut written, b"\x1b[?1002l\x1b[?1003h"),
+            "regaining focus must restore any-event tracking",
+        );
     }
 }

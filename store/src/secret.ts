@@ -24,8 +24,10 @@ export function writeSocketControlSecret(secret: string): void {
     fs.chmodSync(SOCKET_SECRET_FILE, 0o600);
     return;
   }
-  // Rename so a reader never sees a half-written secret, and open exclusively under an
-  // unguessable name so a pre-planted path cannot redirect the write.
+  // Write under an unguessable name so a pre-planted path cannot redirect the write, then link
+  // it into place rather than renaming over: link fails if the name is taken, so two daemons
+  // minting at once settle on one secret instead of the loser's write orphaning the secret the
+  // running daemon already holds. A reader still never sees a half-written file.
   const staging = `${SOCKET_SECRET_FILE}.${crypto.randomBytes(6).toString("hex")}`;
   const handle = fs.openSync(staging, "wx", 0o600);
   try {
@@ -33,5 +35,17 @@ export function writeSocketControlSecret(secret: string): void {
   } finally {
     fs.closeSync(handle);
   }
-  fs.renameSync(staging, SOCKET_SECRET_FILE);
+  try {
+    fs.linkSync(staging, SOCKET_SECRET_FILE);
+  } catch (error) {
+    // Someone got there first, and theirs is the secret the running daemon authenticates with.
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  } finally {
+    fs.rmSync(staging, { force: true });
+  }
+}
+
+/** Drops a secret nothing can use, so the next mint is not refused by the file already there. */
+export function discardSocketControlSecret(): void {
+  fs.rmSync(SOCKET_SECRET_FILE, { force: true });
 }

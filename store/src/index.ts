@@ -25,4 +25,8 @@ export {
   storedProfiles,
 } from "./app-state";
 export type { StoredProfile } from "./app-state";
-export { readSocketControlSecret, writeSocketControlSecret } from "./secret";
+export {
+  discardSocketControlSecret,
+  readSocketControlSecret,
+  writeSocketControlSecret,
+} from "./secret";
