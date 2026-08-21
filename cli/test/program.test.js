@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const { test } = require("node:test");
 
 const { runCli } = require("../dist/program");
@@ -143,6 +144,12 @@ test("normalizes every browser launch option for the Electron session", async ()
       "--devtools-key",
       "f12",
       "--console-key=ctrl+j",
+      "--ssh",
+      "dev@build-box",
+      "--ssh-bundle",
+      "./fixtures/app",
+      "--ssh-bundle-dir",
+      "/srv/terminal-browser",
       "--split-dir",
       "left",
       "--parent-tty=/dev/pts/2",
@@ -165,6 +172,9 @@ test("normalizes every browser launch option for the Electron session", async ()
     "--find-key=ctrl+f",
     "--devtools-key=f12",
     "--console-key=ctrl+j",
+    "--ssh=dev@build-box",
+    `--ssh-bundle=${path.resolve("./fixtures/app")}`,
+    "--ssh-bundle-dir=/srv/terminal-browser",
     "--split-dir=left",
     "--parent-tty=/dev/pts/2",
   ]);
@@ -321,6 +331,9 @@ test("rejects malformed options before invoking an action", async () => {
     [["profile", "ls", "--json", "--json"], /may only be specified once/],
     [["open", "github.com", "--profile="], /--profile requires a value/],
     [["open", "github.com", "--profile", "--no-toolbar"], /--profile requires a value/],
+    [["open", "github.com", "--ssh="], /--ssh requires a value/],
+    [["open", "--ssh-bundle", "./app"], /--ssh-bundle needs --ssh/],
+    [["open", "--ssh", "dev@host", "--ssh-bundle-dir", "/srv"], /needs --ssh-bundle/],
     [["open", "github.com", "--wat"], /unknown option '--wat'/],
     [["action", "snapshot"], /action requires --/],
   ];

@@ -22,6 +22,7 @@ terminal-browser open <url or search> # opens a URL or searches with the selecte
 terminal-browser open kittens # searches with the selected profile's search engine
 terminal-browser "best terminal browser" # quote multi-word searches
 terminal-browser --split right # opens the browser in a split pane to the right
+terminal-browser open --ssh <user@host> <url> # performs all network requests through a remote server
 terminal-browser ls # lists open browsers
 terminal-browser action -- snapshot # runs agent-browser commands against the open browser
 ```
@@ -66,6 +67,17 @@ After the browser engine starts and is displaying pixels in the terminal, it nee
 
 The outer UI of the browser is implemented using a graphics engine built on top of rust. The actual UI is defined inside react with a custom react renderer, which allows us to build the UI for the browser using typescript. The UI of the outer browser and the browser content itself is all drawn to the same shared canvas inside the rust engine, which allows us to layer UI on top of the browser.
 
+### SSH
+The recommended way to use terminal-browser over ssh is running `terminal-browser --ssh <ssh arguments>`.
+
+The alternative is running terminal-browser directly on the machine you are shh'd into. This will work, but:
+- requires every single frame drawn by the website to be sent over the network
+- all user input must be sent over the network before a website can react
+- misses out some [extra optimizations](https://sw.kovidgoyal.net/kitty/graphics-protocol/#local-client)
+
+`terminal-browser --ssh` improves on this by running the website on your local device, and simply proxying all network requests made by the browser via the remote machine over ssh. This means you can load any website running on `localhost` of the remote machine on your local device.
+
+
 
 ### App Mode
 terminal-browser can be used to build apps in the terminal using browser technology. You can reference `terminal-code` as a production usage example - https://github.com/zenbu-labs/terminal-code
@@ -95,9 +107,14 @@ The following options are the full set of app related options available for `ter
   --app-mode            Shorthand for --no-toolbar --no-shortcuts
                         --no-context-menu --no-overlays --no-frame
                         --allow-clipboard-read --open-tabs-in-popup-stack
+  --ssh-bundle <dir>    Install and execute a bundle on a remote server. This is useful when paired with
+                        --app-mode and --ssh, allowing you to run an application server on a
+                        remote machine, then view the output over ssh
+  --ssh-bundle-dir <dir>
+                        The path --ssh-bundle should be installed to through the ssh server. Defaults to
+                        ${XDG_DATA_HOME:-~/.local/share}/terminal-browser/bundles
 
 ```
-
 
 ### Roadmap
 - linux support ✅

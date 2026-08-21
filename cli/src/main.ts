@@ -34,8 +34,10 @@ import { profileCommand } from "./profile-command";
 import { runCli } from "./program";
 import type { CliActions, OpenRequest } from "./program";
 import { instances } from "./registry";
-import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
 import type { InstanceRecord } from "./registry";
+import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
+import { openSshTunnel, startBundle, validateBundleDir, validateSshTarget } from "./ssh";
+import type { RemoteBundle } from "./ssh";
 import { installedVersion, upgradeCommand } from "./upgrade";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
@@ -380,22 +382,57 @@ async function attachHere(argv: string[], onStarted?: () => void): Promise<never
   };
   process.on("SIGINT", requestClose);
   process.on("SIGTERM", requestClose);
+  process.on("SIGHUP", requestClose);
   return new Promise<never>(() => {});
 }
 
 async function openHere(argv: string[], onStarted?: () => void): Promise<never> {
+  await sshSetup(argv).catch((error) =>
+    fail(error instanceof Error ? error.message : String(error)),
+  );
   return attachHere(argv, onStarted).catch((error) =>
     fail(`could not start the browser: ${String(error)}`),
   );
 }
 
+function flagEq(argv: string[], flag: string): string | undefined {
+  return argv.find((arg) => arg.startsWith(`${flag}=`))?.slice(flag.length + 1);
+}
+
+async function sshSetup(argv: string[]): Promise<void> {
+  const target = flagEq(argv, "--ssh");
+  if (!target) return;
+  const status = (line: string) => process.stdout.write(`ssh: ${line}\n`);
+  const interrupt = () => process.exit(130);
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const signal of signals) process.on(signal, interrupt);
+  let bundle: RemoteBundle | null = null;
+  const tunnel = await openSshTunnel(target, status);
+  process.on("exit", () => {
+    try {
+      bundle?.stop();
+    } catch {}
+    tunnel.stop();
+  });
+  argv.push(`--socks-port=${tunnel.socksPort}`);
+  const bundleDir = flagEq(argv, "--ssh-bundle");
+  if (bundleDir) {
+    const remoteBase = flagEq(argv, "--ssh-bundle-dir");
+    bundle = await startBundle(tunnel, bundleDir, status, remoteBase || undefined);
+    if (!argv.some((arg) => !arg.startsWith("-"))) argv.unshift(bundle.url);
+  }
+  for (const signal of signals) process.removeListener(signal, interrupt);
+}
 async function launchInSplit(
   terminal: Terminal,
   direction: Direction,
   argv: string[],
   size?: number | null,
 ): Promise<InstanceRecord> {
-  const from = await terminal.getCurrentPane?.({ tty: ownTtyPath() ?? callerTty().path, cwd: process.cwd() });
+  const from = await terminal.getCurrentPane?.({
+    tty: ownTtyPath() ?? callerTty().path,
+    cwd: process.cwd(),
+  });
   if (!from) fail(`could not work out which ${terminal.name} pane you are in`);
   const before = new Set((await instances()).map(recordKey));
   await terminal.split!({
@@ -405,7 +442,8 @@ async function launchInSplit(
     size: size ?? null,
     tty: ownTtyPath() ?? callerTty().path,
   });
-  const deadline = Date.now() + 20_000;
+  const registrationTimeout = argv.some((arg) => arg.startsWith("--ssh=")) ? 600_000 : 20_000;
+  const deadline = Date.now() + registrationTimeout;
   while (Date.now() < deadline) {
     const fresh = (await instances()).find((record) => !before.has(recordKey(record)));
     if (fresh) {
@@ -413,7 +451,9 @@ async function launchInSplit(
     }
     await sleep(250);
   }
-  fail("browser did not register within 20s (is the split open?)");
+  fail(
+    `browser did not register within ${Math.round(registrationTimeout / 1000)}s (is the split open?)`,
+  );
 }
 
 let asked: Promise<TerminalCheck> | null = null;
@@ -459,6 +499,20 @@ async function requireGraphics(check: TerminalCheck) {
   process.exit(1);
 }
 
+function validateSshArgs(args: string[]): void {
+  const target = flagEq(args, "--ssh");
+  const at = args.findIndex((arg) => arg.startsWith("--ssh-bundle="));
+  if (at >= 0 && !target) fail("--ssh-bundle needs --ssh");
+  if (args.some((arg) => arg.startsWith("--ssh-bundle-dir=")) && at < 0) {
+    fail("--ssh-bundle-dir needs --ssh-bundle");
+  }
+  try {
+    if (target) validateSshTarget(target);
+    if (at >= 0) validateBundleDir(args[at].slice("--ssh-bundle=".length));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
 function requirePaneAccess(): void {
   const refusal = sandboxRefusal();
   if (refusal) fail(refusal);
@@ -475,7 +529,9 @@ async function openCommand(request: OpenRequest) {
     if (args.some((arg) => arg.startsWith("--partition="))) {
       fail("--profile and --partition cannot be used together");
     }
-    if (profile !== "default") {
+    if (profile === "default") {
+      args.push("--profile=default");
+    } else {
       const name = namedProfileName(profile);
       if (!findProfile(name)) profileNameToSave = name;
       args.push(`--partition=${name}`);
@@ -484,6 +540,7 @@ async function openCommand(request: OpenRequest) {
     applyConfiguredDefaultProfile(args);
   }
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
+  validateSshArgs(args);
   await requireGraphics(await currentTerminal());
   const saveCreatedProfile = () => {
     if (profileNameToSave && !findProfile(profileNameToSave)) {
@@ -515,7 +572,10 @@ async function openCommand(request: OpenRequest) {
 function applyConfiguredDefaultProfile(args: string[]): void {
   if (args.some((arg) => arg.startsWith("--partition="))) return;
   const name = profileSettings().defaultProfile;
-  if (!name) return;
+  if (!name) {
+    args.push("--profile=default");
+    return;
+  }
   if (!findProfile(name)) {
     fail(`default profile ${name} is missing; reset it with terminal-browser profile default --reset`);
   }

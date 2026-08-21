@@ -69,6 +69,9 @@ interface OpenOptionValues {
   size?: number;
   split?: Direction;
   splitDir?: Direction;
+  ssh?: string;
+  sshBundle?: string;
+  sshBundleDir?: string;
   toolbar?: boolean;
 }
 
@@ -91,6 +94,9 @@ const VALUE_OPTIONS = new Set([
   "--source-profile",
   "--split",
   "--split-dir",
+  "--ssh",
+  "--ssh-bundle",
+  "--ssh-bundle-dir",
   "--tab",
   "--target",
 ]);
@@ -186,20 +192,27 @@ Examples:
   terminal-browser open github.com --profile work
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
+  terminal-browser open localhost:8080 --ssh dev@build-box
 `,
     );
   addOpenOptions(open);
-  open.action((target: string | undefined, values: OpenOptionValues) =>
-    invoke(() =>
+  open.action((target: string | undefined, values: OpenOptionValues) => {
+    if (values.sshBundle && !values.ssh) {
+      program.error("error: --ssh-bundle needs --ssh");
+    }
+    if (values.sshBundleDir && !values.sshBundle) {
+      program.error("error: --ssh-bundle-dir needs --ssh-bundle");
+    }
+    return invoke(() =>
       actions.open({
-        browserArgs: browserArguments(values),
+        browserArgs: browserArguments(values, options.cwd ?? process.cwd()),
         profile: values.profile,
         size: values.size,
         split: values.split,
         target,
       }),
-    ),
-  );
+    );
+  });
 
   const profile = program
     .command("profile")
@@ -566,6 +579,11 @@ function addOpenOptions(command: Command): void {
     .addOption(valueOption("--console-key <keys>", "override the developer console binding"))
     .addOption(valueOption("--preload <path>", "run a preload script in each web page"))
     .addOption(valueOption("--main-script <path>", "run a script in the Electron main process"))
+    .addOption(valueOption("--ssh <user@host>", "route network requests through an SSH server"))
+    .addOption(valueOption("--ssh-bundle <dir>", "install and run a local bundle over SSH"))
+    .addOption(
+      valueOption("--ssh-bundle-dir <dir>", "remote directory used to install SSH bundles"),
+    )
     .option("--open-tabs-in-popup-stack", "open new tabs as popups over the page")
     .option("--allow-clipboard-read", "let websites read from the clipboard")
     .option("--no-toolbar", "hide the toolbar and tab strip")
@@ -615,7 +633,7 @@ function parseTabId(value: string): number {
   return id;
 }
 
-function browserArguments(values: OpenOptionValues): string[] {
+function browserArguments(values: OpenOptionValues, cwd: string): string[] {
   const args: string[] = [];
   const booleans: [boolean, string][] = [
     [values.appMode === true, "--app-mode"],
@@ -636,6 +654,9 @@ function browserArguments(values: OpenOptionValues): string[] {
     ["--find-key", values.findKey],
     ["--devtools-key", values.devtoolsKey],
     ["--console-key", values.consoleKey],
+    ["--ssh", values.ssh],
+    ["--ssh-bundle", values.sshBundle ? path.resolve(cwd, values.sshBundle) : undefined],
+    ["--ssh-bundle-dir", values.sshBundleDir],
     ["--split-dir", values.splitDir],
     ["--parent-tty", values.parentTty],
   ];
