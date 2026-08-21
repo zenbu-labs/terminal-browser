@@ -17,24 +17,30 @@ const FRAME_PREFIX: &str = "px-";
 /// layer; a named secondary layer would drop us back to inline RGBA.
 const LAYER: &str = "primary";
 
+/// The depth a kitty placement has to get under to be drawn beneath a cell's
+/// background and not just beneath its glyph: "Negative z-index values below
+/// INT32_MIN/2 (-1,073,741,824) will be drawn under cells with non-default
+/// background colors" (kitty `docs/graphics-protocol.rst:541`). Both
+/// implementations read that "below" as a strict `<` — kitty's `graphics.c:1397`
+/// and ghostty's `renderer/image.zig:384` each compare against `INT32_MIN/2` —
+/// so the limit itself is not in the class and the first depth that is sits one
+/// under it.
+const BELOW_BACKGROUND_LIMIT: i32 = i32::MIN / 2;
+
 /// herdr hands this number straight to the kitty placement it emits for us
-/// (`z: layer.z_index` in its `src/kitty_graphics.rs`, printed as the `z=` key),
-/// and the kitty graphics protocol gives a placement two rungs below the text.
+/// (`z: layer.z_index` in its `src/kitty_graphics.rs`, printed as the `z=` key).
 /// A merely negative `z` draws under glyphs but still over cell backgrounds, so
 /// at `z: -1` herdr's copy toast came out legible with its dark panel missing.
-/// Under `INT32_MIN/2` a placement also goes under non-default cell backgrounds:
-/// "Negative z-index values below INT32_MIN/2 (-1,073,741,824) will be drawn
-/// under cells with non-default background colors" (kitty
-/// `docs/graphics-protocol.rst:541`), which both implementations enforce as a
-/// strict `<` - kitty's `graphics.c:1397` and ghostty's `renderer/image.zig:384`
-/// both compare against `INT32_MIN/2`.
+/// One under the limit is therefore the shallowest depth that hides behind those
+/// panels, and taking the shallowest leaves every deeper placement below us.
 ///
-/// So take the shallowest z in that class: one below the limit, leaving every
-/// deeper placement below us. herdr does not paint a pane's cells itself - its
-/// `render_panes` only blits the pty grid, and blank cells keep the default
-/// background unless the program redefines it, which we never do - so the page
-/// stays visible and only herdr's own panels come out on top.
-const Z_INDEX: i32 = i32::MIN / 2 - 1;
+/// Going under cell backgrounds is only safe because herdr does not paint a
+/// pane's cells itself — its `render_panes` only blits the pty grid, and blank
+/// cells keep the default background unless the program redefines it, which we
+/// never do. If herdr ever fills them, every app on this engine disappears at
+/// once, and the repair is to come back above the limit: any plain negative `z`
+/// still draws under text, at the cost of herdr's panel fills losing to the page.
+const Z_INDEX: i32 = BELOW_BACKGROUND_LIMIT - 1;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HerdrTarget {
@@ -201,7 +207,6 @@ fn within_grid(ws: &crate::terminal::WindowSize, x: u32, y: u32) -> bool {
 }
 
 /// The line that claims a pane's `primary` graphics layer, below herdr's overlays.
-// checkme: how does pane get here? via HERDR_PANE_ID, in HerdrTarget::from_env.
 fn stream_request(pane: &str) -> String {
     format!(
         r#"{{"id":"stream","method":"pane.graphics.stream","params":{{"pane_id":{},"layer_id":"{LAYER}","z_index":{Z_INDEX}}}}}"#,
@@ -328,15 +333,28 @@ pub(crate) mod tests {
         ));
     }
 
-    /// One below `INT32_MIN/2`, the rung where kitty draws a placement under
-    /// non-default cell backgrounds as well as under text.
+    /// The request has to name the pane's own `primary` layer, and the depth it
+    /// asks for has to be the shallowest one kitty draws under a cell background
+    /// from — deeper than the limit, and no deeper than it has to be.
     #[test]
     fn the_stream_claims_the_primary_layer_under_herdrs_overlays() {
+        let line = stream_request("w1:p1");
+        assert!(line.contains(r#""method":"pane.graphics.stream""#), "{line}");
+        assert!(line.contains(r#""pane_id":"w1:p1""#), "{line}");
+        assert!(line.contains(r#""layer_id":"primary""#), "{line}");
+
+        let Some(z) = line
+            .rsplit_once(r#""z_index":"#)
+            .and_then(|(_, tail)| tail.trim_end_matches('}').parse::<i32>().ok())
+        else {
+            panic!("the request carries a parseable z_index: {line}");
+        };
+        assert!(z < BELOW_BACKGROUND_LIMIT, "must clear the below-background limit");
         assert_eq!(
-            stream_request("w1:p1"),
-            r#"{"id":"stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1","layer_id":"primary","z_index":-1073741825}}"#
+            z + 1,
+            BELOW_BACKGROUND_LIMIT,
+            "and clear it by one: a deeper z puts every other placement above the page"
         );
-        assert!(Z_INDEX < i32::MIN / 2, "must clear the below-background limit");
     }
 
     /// Answers like herdr does: one info reply per connection, then a stream

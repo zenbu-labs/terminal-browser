@@ -543,7 +543,7 @@ impl Terminal {
 
     fn frame_path(&self, slot: u64, generation: u64) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "terminal-browser-{}-{}-{generation}-{slot}.rgba",
+            "{FRAME_FILE_PREFIX}{}-{}-{generation}-{slot}{FRAME_FILE_SUFFIX}",
             std::process::id(),
             self.terminal_id
         ))

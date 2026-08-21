@@ -4,13 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { keychainGenericPassword } from "pixel-react";
+// Reached past pixel-react's index on purpose: a browser's cookie key is not an engine API.
+import { chromiumSafeStorageSecret } from "pixel-react/dist/native";
 
 import { browserSession } from "./page/browser-session";
 import { defaultProfile, partitionFor, resolveProfile } from "./profiles";
 
 const SALT = "saltysalt";
-const ITERATIONS = 1003;
+/** Chromium's PBKDF2 round count for the macOS keychain secret. Linux uses 1, so it is not shared. */
+export const DARWIN_ITERATIONS = 1003;
 const KEY_LENGTH = 16;
 const BLOCK_SIZE = 16;
 const DOMAIN_HASH_LENGTH = 32;
@@ -24,8 +26,8 @@ interface SourceBrowserDescriptor {
   aliases: readonly string[];
   family: CookieEngineFamily;
   appNames: readonly string[];
-  /** Keychain base names the app/display names do not yield, e.g. Comet ships as "Perplexity Comet". */
-  extraKeychainNames: readonly string[];
+  /** True only where an import has actually been run against a real profile of this browser. */
+  verified: boolean;
   darwinRoots: readonly string[];
   linuxRoots: readonly string[];
 }
@@ -37,7 +39,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: ["chrome"],
     family: "chromium",
     appNames: ["Google Chrome.app"],
-    extraKeychainNames: [],
+    verified: true,
     darwinRoots: ["Library/Application Support/Google/Chrome"],
     linuxRoots: [".config/google-chrome", ".var/app/com.google.Chrome/config/google-chrome"],
   },
@@ -47,7 +49,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: ["brave-browser"],
     family: "chromium",
     appNames: ["Brave Browser.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/BraveSoftware/Brave-Browser"],
     linuxRoots: [
       ".config/BraveSoftware/Brave-Browser",
@@ -60,7 +62,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: ["edge", "ms-edge"],
     family: "chromium",
     appNames: ["Microsoft Edge.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/Microsoft Edge"],
     linuxRoots: [".config/microsoft-edge"],
   },
@@ -70,7 +72,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Arc.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/Arc/User Data", "Library/Application Support/Arc"],
     linuxRoots: [],
   },
@@ -80,7 +82,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Opera.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: [
       "Library/Application Support/com.operasoftware.Opera",
       "Library/Application Support/Opera",
@@ -93,7 +95,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: ["operagx"],
     family: "chromium",
     appNames: ["Opera GX.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: [
       "Library/Application Support/com.operasoftware.OperaGX",
       "Library/Application Support/Opera GX Stable",
@@ -106,7 +108,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Vivaldi.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/Vivaldi"],
     linuxRoots: [".config/vivaldi"],
   },
@@ -116,7 +118,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Dia.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/Dia/User Data"],
     linuxRoots: [],
   },
@@ -126,7 +128,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: ["comet", "perplexity"],
     family: "chromium",
     appNames: ["Perplexity Comet.app", "Comet.app"],
-    extraKeychainNames: ["Comet"],
+    verified: false,
     darwinRoots: ["Library/Application Support/Comet"],
     linuxRoots: [],
   },
@@ -136,7 +138,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["SigmaOS.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/SigmaOS"],
     linuxRoots: [],
   },
@@ -146,7 +148,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Sidekick.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/Sidekick"],
     linuxRoots: [],
   },
@@ -156,7 +158,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Helium.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: [
       "Library/Application Support/net.imput.helium",
       "Library/Application Support/Helium",
@@ -169,7 +171,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Atlas.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/Atlas"],
     linuxRoots: [],
   },
@@ -179,7 +181,7 @@ const SOURCE_BROWSERS: readonly SourceBrowserDescriptor[] = [
     aliases: [],
     family: "chromium",
     appNames: ["Chromium.app"],
-    extraKeychainNames: [],
+    verified: false,
     darwinRoots: ["Library/Application Support/Chromium"],
     linuxRoots: [
       ".config/chromium",
@@ -246,7 +248,14 @@ interface ChromeCookieRow {
 
 function userDataRoots(descriptor: SourceBrowserDescriptor): string[] {
   const home = os.homedir();
-  const relative = process.platform === "darwin" ? descriptor.darwinRoots : descriptor.linuxRoots;
+  // Windows keeps these under %LOCALAPPDATA% behind DPAPI, so it gets neither list rather than
+  // being walked down the Linux one.
+  const relative =
+    process.platform === "darwin"
+      ? descriptor.darwinRoots
+      : process.platform === "linux"
+        ? descriptor.linuxRoots
+        : [];
   return relative.map((entry) => path.join(home, entry));
 }
 
@@ -460,67 +469,42 @@ export function resolveCookieProfile(source: CookieSource, query?: string): Cook
   throw new Error(`no ${source.displayName} profile ${query} — found ${known}`);
 }
 
-function keychainBaseNames(descriptor: SourceBrowserDescriptor): string[] {
-  const names: string[] = [];
-  const add = (raw: string | undefined) => {
-    const name = raw?.trim();
-    if (!name || names.includes(name)) return;
-    names.push(name);
-  };
-
-  add(descriptor.displayName);
-  for (const appName of descriptor.appNames) add(appName.replace(/\.app$/, ""));
-  // Chrome's item is "Chrome Safe Storage" and Brave's is "Brave Safe Storage", so the
-  // vendor prefix and the " Browser" suffix both have to be tried stripped.
-  for (const name of [...names]) {
-    if (name.startsWith("Google ")) add(name.slice("Google ".length));
-    if (name.endsWith(" Browser")) add(name.slice(0, -" Browser".length));
-  }
-  for (const extra of descriptor.extraKeychainNames) add(extra);
-  return names;
-}
-
 function chromiumSecret(descriptor: SourceBrowserDescriptor): Buffer {
-  if (process.platform !== "darwin") {
-    // Chromium on Linux encrypts with a fixed passphrase when no keyring is present.
-    return Buffer.from("peanuts", "utf8");
+  try {
+    return Buffer.from(chromiumSafeStorageSecret(descriptor.slug), "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `could not read the ${descriptor.displayName} cookie key from your keychain: ${message}`,
+    );
   }
-  const tried: string[] = [];
-  for (const base of keychainBaseNames(descriptor)) {
-    for (const suffix of ["Storage Key", "Safe Storage"]) {
-      const service = `${base} ${suffix}`;
-      tried.push(service);
-      let secret: string | null;
-      try {
-        secret = keychainGenericPassword(service, base);
-      } catch (error) {
-        // The key is there but macOS refused it: a denied prompt or a locked keychain.
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `your keychain refused the ${descriptor.displayName} cookie key: ${message}`,
-        );
-      }
-      if (secret) return Buffer.from(secret, "utf8");
-    }
-  }
-  throw new Error(
-    `could not read a ${descriptor.displayName} cookie key from your keychain — tried ${tried.join(", ")}`,
-  );
 }
 
-export function deriveKey(secret: Buffer): Buffer {
-  return crypto.pbkdf2Sync(secret, SALT, ITERATIONS, KEY_LENGTH, "sha1");
+/**
+ * One key per cookie version prefix. The prefix names the secret a row was encrypted under, so a
+ * prefix whose secret this platform cannot produce gets no key at all rather than a borrowed one.
+ */
+export interface CookieKeys {
+  v10: Buffer | null;
+  v11: Buffer | null;
+}
+
+export function deriveKey(secret: Buffer, iterations: number): Buffer {
+  return crypto.pbkdf2Sync(secret, SALT, iterations, KEY_LENGTH, "sha1");
 }
 
 export function decryptCookieValue(
   encrypted: Uint8Array,
-  key: Buffer,
+  keys: CookieKeys,
   host: string,
 ): string | null {
   const buffer = Buffer.from(encrypted);
   if (buffer.length <= 3) return null;
   const version = buffer.subarray(0, 3).toString("latin1");
-  if (version !== "v10" && version !== "v11") return null;
+  // On Linux v10 means the fixed passphrase and v11 the keyring secret, so the prefix chooses the
+  // key rather than only saying the row is encrypted.
+  const key = version === "v10" ? keys.v10 : version === "v11" ? keys.v11 : null;
+  if (!key) return null;
   const body = buffer.subarray(3);
   if (body.length === 0 || body.length % BLOCK_SIZE !== 0) return null;
 
@@ -642,7 +626,7 @@ export function parseDomainFilters(raw: string): string[] {
   return filters;
 }
 
-function matchesDomain(host: string, filters: string[]): boolean {
+export function matchesDomain(host: string, filters: string[]): boolean {
   if (filters.length === 0) return true;
   const bare = host.trim().toLowerCase().replace(/^\.+/, "");
   if (!bare) return false;
@@ -652,6 +636,16 @@ function matchesDomain(host: string, filters: string[]): boolean {
 export async function importChromeCookies(
   request: CookieImportRequest = {},
 ): Promise<CookieImportResult> {
+  // A wrong key does not fail loudly here: AES-CBC hands back random bytes and about one block in
+  // 256 passes the padding check, so a store this cannot read would import a few corrupt logins
+  // under real cookie names. Refuse before a single row is touched.
+  if (process.platform !== "darwin") {
+    throw new Error(
+      "importing cookies needs the key the browser encrypted them with, and only the macOS " +
+        `keychain is implemented — on ${process.platform} that key lives in gnome-keyring or ` +
+        "kwallet, and nothing here reads libsecret or kwallet yet",
+    );
+  }
   const { descriptor, source, available } = resolveCookieSource(request.from);
   const profile = resolveCookieProfile(source, request.profile);
   const domains = request.domain ? parseDomainFilters(request.domain) : [];
@@ -668,9 +662,16 @@ export async function importChromeCookies(
         .join(", ")} — pick one with --from`,
     );
   }
+  if (!descriptor.verified) {
+    warnings.push(
+      `where ${source.displayName} keeps its profiles and its cookie key here follows Chromium's ` +
+        "naming pattern rather than a checked import — Google Chrome is the one that was checked",
+    );
+  }
 
   const secret = chromiumSecret(descriptor);
-  const key = deriveKey(secret);
+  // Chrome on macOS writes v10 only; v11 is Linux's keyring prefix and has no secret on this side.
+  const keys: CookieKeys = { v10: deriveKey(secret, DARWIN_ITERATIONS), v11: null };
   secret.fill(0);
   const rows = readRows(profile.cookiesPath);
   const store = browserSession(partitionFor(destination.slug)).cookies;
@@ -697,7 +698,7 @@ export async function importChromeCookies(
 
     const value =
       row.encrypted_value && row.encrypted_value.length > 0
-        ? decryptCookieValue(row.encrypted_value, key, row.host_key)
+        ? decryptCookieValue(row.encrypted_value, keys, row.host_key)
         : row.value;
     if (value === null) {
       result.undecryptable += 1;
@@ -729,6 +730,15 @@ export async function importChromeCookies(
       // Chrome can hold cookies Electron refuses, e.g. an oversized value.
       result.rejected += 1;
     }
+  }
+
+  // Every row failing is a key that does not fit this store, not a result: counting it as
+  // "imported 0" leaves no way to tell it from a profile with nothing in it.
+  if (result.read > 0 && result.undecryptable === result.read) {
+    throw new Error(
+      `none of the ${result.read} ${source.displayName} cookies in ${profile.name} decrypted — ` +
+        "the key in your keychain does not match that store, so nothing was copied",
+    );
   }
 
   await store.flushStore();

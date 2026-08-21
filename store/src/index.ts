@@ -4,7 +4,6 @@ export {
   LOGS_DIR,
   FAVICONS_DIR,
   INSTANCES_DIR,
-  SOCKET_SECRET_FILE,
   AGENT_SOCKETS_DIR,
   DAEMON_SOCKET,
   DB_FILE,
@@ -17,16 +16,15 @@ export type { DevtoolsDock, InstanceRow, NewInstanceRow, SettingsRow } from "./s
 export { listInstances, liveInstanceProfiles, removeInstance, upsertInstance } from "./instances";
 export type { InstanceProfile } from "./instances";
 export {
+  DEFAULT_PROFILE,
   lastUrl,
+  matchProfiles,
+  profileRegistry,
   setLastUrl,
   setStoredLastUsedProfile,
   setStoredProfiles,
+  sortProfiles,
   storedLastUsedProfile,
   storedProfiles,
 } from "./app-state";
-export type { StoredProfile } from "./app-state";
-export {
-  discardSocketControlSecret,
-  readSocketControlSecret,
-  writeSocketControlSecret,
-} from "./secret";
+export type { RegistryProfile, StoredProfile } from "./app-state";

@@ -61,3 +61,48 @@ export function storedLastUsedProfile(): string | null {
 export function setStoredLastUsedProfile(slug: string): void {
   setAppState("browser-profiles-last-used", slug);
 }
+
+export interface RegistryProfile extends StoredProfile {
+  /** true only for the default profile */
+  builtIn: boolean;
+}
+
+/** Never persisted: this one is the storage the browser already had before profiles existed. */
+export const DEFAULT_PROFILE: RegistryProfile = {
+  slug: "default",
+  name: "Default",
+  createdAt: 0,
+  builtIn: true,
+};
+
+export function sortProfiles(unsorted: RegistryProfile[]): RegistryProfile[] {
+  return unsorted.sort((a, b) => {
+    if (a.builtIn !== b.builtIn) return a.builtIn ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+}
+
+/** The default plus what is stored. Lives here so the browser and the cli see one same list. */
+export function profileRegistry(): RegistryProfile[] {
+  return sortProfiles([
+    DEFAULT_PROFILE,
+    ...storedProfiles()
+      .filter((profile) => profile.slug !== DEFAULT_PROFILE.slug)
+      .map((profile) => ({ ...profile, builtIn: false })),
+  ]);
+}
+
+/**
+ * Slug first, then display name, ignoring case and surrounding space. Duplicate names are allowed,
+ * so a name can match several: every caller refuses rather than pick one.
+ */
+export function matchProfiles<T extends { slug: string; name: string }>(
+  known: T[],
+  selector: string,
+): T[] {
+  const wanted = selector.trim().toLowerCase();
+  if (!wanted) return [];
+  const bySlug = known.find((profile) => profile.slug.toLowerCase() === wanted);
+  if (bySlug) return [bySlug];
+  return known.filter((profile) => profile.name.trim().toLowerCase() === wanted);
+}

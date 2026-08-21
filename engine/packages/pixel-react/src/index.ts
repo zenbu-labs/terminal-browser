@@ -103,7 +103,6 @@ export {
   diff,
   encodeRecording,
   highlight,
-  keychainGenericPassword,
   parseMarkdown,
 } from "./native";
 export { useTerminalColors } from "./colors";

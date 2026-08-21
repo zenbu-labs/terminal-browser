@@ -1,52 +1,25 @@
 import {
+  DEFAULT_PROFILE,
   liveInstanceProfiles,
+  matchProfiles,
+  profileRegistry,
   setStoredLastUsedProfile,
   setStoredProfiles,
+  sortProfiles,
   storedLastUsedProfile,
-  storedProfiles,
 } from "pixel-store";
+import type { RegistryProfile } from "pixel-store";
 
 import { browserSession } from "./page/browser-session";
 
-export interface BrowserProfile {
-  /** stable id, url-safe; the built-in default is "default" */
-  slug: string;
-  /** display name */
-  name: string;
-  /** epoch ms */
-  createdAt: number;
-  /** true only for the default profile */
-  builtIn: boolean;
-}
-
-const DEFAULT_SLUG = "default";
-const DEFAULT_NAME = "Default";
-
-/** Never persisted: this one is the storage the browser already had before profiles existed. */
-const BUILT_IN: BrowserProfile = {
-  slug: DEFAULT_SLUG,
-  name: DEFAULT_NAME,
-  createdAt: 0,
-  builtIn: true,
-};
+/** The store composes and matches the list, so the cli can read it without a browser running. */
+export type BrowserProfile = RegistryProfile;
 
 /** One process owns every pane and nothing else writes the list, so it is loaded once. */
 let profiles: BrowserProfile[] | null = null;
 
-function sortProfiles(unsorted: BrowserProfile[]): BrowserProfile[] {
-  return unsorted.sort((a, b) => {
-    if (a.builtIn !== b.builtIn) return a.builtIn ? -1 : 1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-  });
-}
-
 function load(): BrowserProfile[] {
-  profiles ??= sortProfiles([
-    BUILT_IN,
-    ...storedProfiles()
-      .filter((stored) => stored.slug !== DEFAULT_SLUG)
-      .map((stored) => ({ ...stored, builtIn: false })),
-  ]);
+  profiles ??= profileRegistry();
   return profiles;
 }
 
@@ -57,16 +30,6 @@ function persist(next: BrowserProfile[]): void {
       .filter((profile) => !profile.builtIn)
       .map(({ slug, name, createdAt }) => ({ slug, name, createdAt })),
   );
-}
-
-/** Slug first, then display name. Duplicate names are allowed, so a name can match several. */
-function candidates(selector: string): BrowserProfile[] {
-  const wanted = selector.trim().toLowerCase();
-  if (!wanted) return [];
-  const known = load();
-  const bySlug = known.find((profile) => profile.slug.toLowerCase() === wanted);
-  if (bySlug) return [bySlug];
-  return known.filter((profile) => profile.name.trim().toLowerCase() === wanted);
 }
 
 function mintSlug(name: string): string {
@@ -95,7 +58,7 @@ export function listProfiles(): BrowserProfile[] {
 }
 
 export function defaultProfile(): BrowserProfile {
-  return BUILT_IN;
+  return DEFAULT_PROFILE;
 }
 
 /**
@@ -103,7 +66,7 @@ export function defaultProfile(): BrowserProfile {
  * throws naming both candidates when a display name is ambiguous.
  */
 export function resolveProfile(selector: string): BrowserProfile {
-  const matches = candidates(selector);
+  const matches = matchProfiles(load(), selector);
   if (matches.length === 1) return matches[0];
   const wanted = selector.trim();
   if (matches.length === 0) throw new Error(`no browser profile matches "${wanted}"`);
@@ -148,7 +111,7 @@ export async function deleteProfile(slug: string): Promise<void> {
   // because a profile named the same later would reach that storage through the same slug.
   await wipe(slug);
   persist(load().filter((known) => known.slug !== slug));
-  if (storedLastUsedProfile() === slug) setStoredLastUsedProfile(DEFAULT_SLUG);
+  if (storedLastUsedProfile() === slug) setStoredLastUsedProfile(DEFAULT_PROFILE.slug);
 }
 
 export function clearProfileData(slug: string): Promise<void> {
@@ -161,7 +124,7 @@ export function clearProfileData(slug: string): Promise<void> {
  * defaultSession so existing logins survive this feature landing.
  */
 export function partitionFor(slug: string): string | null {
-  return slug === DEFAULT_SLUG ? null : `profile-${slug}`;
+  return slug === DEFAULT_PROFILE.slug ? null : `profile-${slug}`;
 }
 
 /** Records the profile a pane opened on or switched to; unknown slugs are ignored. */
@@ -174,21 +137,19 @@ export function noteProfileUsed(slug: string): void {
 /** The last-used profile while it still exists, else the built-in default. */
 export function lastUsedProfile(): BrowserProfile {
   const slug = storedLastUsedProfile();
-  return load().find((profile) => profile.slug === slug) ?? BUILT_IN;
+  return load().find((profile) => profile.slug === slug) ?? DEFAULT_PROFILE;
 }
 
 /**
  * What was asked for, else what the pane it split from is on, else the last one used, else the
- * default. An unresolvable request falls through rather than failing the launch.
+ * default. A request that names no profile, or more than one, throws: opening signed in as
+ * somebody else is worse than not opening.
  */
 export function profileForNewPane(
   requested: string | null,
   parentTty: string | null,
 ): BrowserProfile {
-  if (requested) {
-    const matches = candidates(requested);
-    if (matches.length === 1) return matches[0];
-  }
+  if (requested) return resolveProfile(requested);
   if (parentTty) {
     const parent = liveInstanceProfiles().find((row) => row.tty === parentTty && row.profile);
     const inherited = load().find((profile) => profile.slug === parent?.profile);

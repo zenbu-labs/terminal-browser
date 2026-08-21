@@ -22,7 +22,9 @@ Options:
                         display name (terminal-browser profile lists them). The
                         cookies, local storage and history of one profile are
                         invisible to every other, so the same site can be signed
-                        in twice at once. Default: the profile last used here
+                        in twice at once. A name that fits no profile, or more
+                        than one, refuses instead of opening on a profile you
+                        did not ask for. Default: the profile last used here
   --ssh <user@host>     Perform all network requests through a remote server, then
                         proxy the result back to the local terminal-browser instance
   --ssh-bundle <dir>    Install and execute a bundle on a remote server. This is useful when paired with
@@ -124,28 +126,41 @@ Examples:
     usage: "terminal-browser import-cookies [options]",
     body: `
 Reads the cookies out of a Chromium-family profile on this machine and puts them
-into a browser you already have open, so pages come up already signed in. Chrome,
+into a browser you already have open, so pages come up already signed in. macOS
+only: on Linux the key these are encrypted with sits in gnome-keyring or kwallet
+and nothing here reads those yet, so the import refuses there rather than copying
+values it cannot decrypt. The source profile is only ever read, never written,
+and the browser it belongs to can stay open while this runs.
+
+Google Chrome is the one browser this has been run against on a real profile.
 Chromium, Brave, Microsoft Edge, Arc, Opera, Opera GX, Vivaldi, Dia, Perplexity
-Comet, SigmaOS, Sidekick, Helium and Atlas are all read the same way; Firefox and
-Safari are not supported yet. The source profile is only ever read, never
-written, and the browser it belongs to can stay open while this runs.
+Comet, SigmaOS, Sidekick, Helium and Atlas are read the same way, but where each
+of them keeps its profiles and its cookie key is reconstructed from Chromium's
+naming pattern rather than checked, so importing from one of those says so.
+Firefox and Safari are not supported.
 
 In a terminal it lists what it found and asks before copying anything, because
 afterwards anything that can reach this browser can use those logins. Answer
-anything but y and nothing is copied. With -y, or when stdin is not a terminal,
-it copies straight away, which is the shape a script or an agent wants. The
-question goes to stderr, so redirecting stderr from a terminal stops the command
-rather than asking something you would never see.
+anything but y and nothing is copied. Having no terminal to ask in is not
+consent: without one it refuses unless -y is there, so a script or an agent has
+to say so outright. The question goes to stderr, so redirecting stderr from a
+terminal stops the command rather than asking something you would never see.
 
-On macOS the cookie values are encrypted with a key held in your login keychain,
-read in-process, so macOS attributes the request to terminal-browser itself and
-"Always Allow" grants it to this browser rather than to everything you run.
+The running browser holds the same line for every client, not just this one: it
+refuses an import that does not say the operator was asked.
+
+The cookie values are encrypted with a key held in your login keychain, read
+in-process, so macOS attributes the request to terminal-browser itself and
+"Always Allow" grants it to this browser rather than to everything you run. A run
+where nothing decrypts is an error, not a count of zero: a key that does not fit
+the store is not the same thing as a profile with no cookies in it.
 
 Cookies only: no history, no bookmarks, no saved passwords. Sites that keep
 their login in local storage rather than a cookie will still ask you to sign in.
 
 Options:
-  -y, --yes           Copy without asking
+  -y, --yes           Copy without asking, and the only way to copy with no
+                      terminal to ask in
   --json              Print the result as JSON instead of a sentence
   --from <browser>    Source browser, by slug, display name or alias: chrome,
                       brave, edge, arc, opera, vivaldi, chromium and the rest
@@ -179,12 +194,15 @@ on one profile know nothing about pages opened on another, so you can be signed
 into the same site twice at once. Every browser starts on the default profile,
 which is the one already holding the logins you have now.
 
-The profiles are one list shared by every browser running here, so any of them
-can answer. With no subcommand this lists them. "profiles" is the same command.
+The profiles are one list, kept where every browser here reads it. Listing them
+works whether or not one is running; making, renaming, deleting and clearing
+need a browser to do the work. With no subcommand this lists them. "profiles"
+is the same command.
 
 Subcommands:
   list                Every profile, one per line: slug, then display name, then
-                      (active) and (default) markers. Alias: ls
+                      (active) if a running pane is on it and (default) for the
+                      default profile. Alias: ls
   create <name>       Make a profile. Aliases: add, new
   rename <profile> <name>
                       Give a profile a new display name
@@ -203,7 +221,7 @@ Options:
   --json              Print the result as JSON instead of a sentence
 
 delete and clear both throw logins away for good, so in a terminal they say what
-goes and ask first. Answer anything but y and nothing happens. Unlike
+goes and ask first. Answer anything but y and nothing happens. As with
 import-cookies, having no terminal to ask in is not consent: without one they
 refuse unless -y is there, so a script or an agent has to say so outright.
 

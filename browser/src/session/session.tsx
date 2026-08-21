@@ -41,7 +41,6 @@ import type { DevtoolsDock, InstanceRow } from "pixel-store";
 import { RecordSession } from "../record/session";
 import type { RecordActions } from "../record/types";
 import { Registry } from "../registry";
-import type { ProfileListing } from "../registry";
 import { Chrome } from "../ui/chrome";
 import { ICONS } from "../ui/icons";
 import type {
@@ -176,7 +175,7 @@ function cookieImportWarnings(result: CookieImportResult): string[] {
   for (const warning of result.warnings) add(warning);
   if (result.undecryptable > 0) {
     add(
-      `${result.undecryptable} ${result.browser} cookies would not decrypt with the key from your login keychain, so those sites will still ask you to sign in.`,
+      `${result.undecryptable} ${result.browser} cookies would not decrypt with the key ${result.browser} encrypted them with, so those sites will still ask you to sign in.`,
     );
   }
   if (result.rejected > 0) {
@@ -473,7 +472,6 @@ class Session {
       targets: () => this.tabs.targets(),
       importCookies: (request) => this.runCookieImport(request),
       cookieSources: () => listCookieSources(),
-      profiles: () => this.profileListing(),
       createProfile: (name) => {
         const created = createProfile(name);
         this.render();
@@ -1302,17 +1300,6 @@ class Session {
         active: profile.slug === this.profile?.slug,
       })),
       prompt: this.profilePrompt,
-    };
-  }
-
-  private profileListing(): ProfileListing {
-    return {
-      profiles: listProfiles().map((profile) => ({
-        ...profile,
-        active: profile.slug === this.profile?.slug,
-      })),
-      activeSlug: this.profile?.slug ?? "",
-      activeName: this.profile?.name ?? "",
     };
   }
 

@@ -9,32 +9,18 @@ import type { InstanceRow } from "pixel-store";
 import type { BrowserState } from "./page/types";
 import type { CookieImportRequest, CookieSource } from "./cookies";
 import type { BrowserProfile } from "./profiles";
-import {
-  PRE_AUTH_MAX_BYTES,
-  PRE_AUTH_TIMEOUT_MS,
-  authenticationFailure,
-  loadOrCreateSocketSecret,
-  prepareSocketDirectory,
-  restrictSocketMode,
-} from "./socket-secret";
+import { prepareSocketDirectory, restrictSocketMode } from "./socket-permissions";
 
-// Every request this socket takes is a short json line, so an authenticated peer still
-// has a ceiling and still has to say something before its slot is reclaimed.
-const POST_AUTH_MAX_BYTES = 64 * 1024;
-const POST_AUTH_IDLE_MS = 10_000;
-const MAX_UNAUTHENTICATED_CONNECTIONS = 32;
+// Every request this socket takes is a short json line, so a peer still has a ceiling
+// and still has to say something before its slot is reclaimed.
+const MAX_REQUEST_BYTES = 64 * 1024;
+const IDLE_MS = 10_000;
+const MAX_SILENT_CONNECTIONS = 32;
 
 export interface Where {
   terminal: string | null;
   tab: string | null;
   pane: string | null;
-}
-
-export interface ProfileListing {
-  profiles: (BrowserProfile & { active: boolean })[];
-  /** Empty for a pane pinned to an explicit --partition, which is on no profile. */
-  activeSlug: string;
-  activeName: string;
 }
 
 export interface ControlHost {
@@ -52,7 +38,6 @@ export interface ControlHost {
   targets(): Promise<unknown>;
   importCookies(request: CookieImportRequest): Promise<unknown>;
   cookieSources(): CookieSource[];
-  profiles(): ProfileListing;
   createProfile(name: string): BrowserProfile;
   renameProfile(selector: string, name: string): BrowserProfile;
   deleteProfile(selector: string): Promise<BrowserProfile>;
@@ -72,6 +57,7 @@ interface ControlRequest {
   selector?: string;
   toProfile?: string;
   domain?: string;
+  confirmed?: boolean;
 }
 
 export class Registry {
@@ -79,8 +65,7 @@ export class Registry {
   private readonly socketPath: string;
   private readonly tty: string | null;
   private readonly startedAt = Date.now();
-  private readonly secret: string;
-  private readonly pending = new Set<net.Socket>();
+  private readonly silent = new Set<net.Socket>();
   private cdpPort: number | null = null;
   private server: net.Server | null = null;
   private importing: Promise<unknown> | null = null;
@@ -91,8 +76,6 @@ export class Registry {
     this.tty = host.tty ?? callerTty().path;
     this.socketPath = path.join(INSTANCES_DIR, `${host.key}.sock`);
     prepareSocketDirectory(this.socketPath);
-    // The secret has to exist before the socket accepts anyone.
-    this.secret = loadOrCreateSocketSecret();
     fs.rmSync(this.socketPath, { force: true });
     this.server = net.createServer((connection) => this.serve(connection));
     this.server.on("error", () => {});
@@ -145,56 +128,39 @@ export class Registry {
     connection.on("error", () => {});
     // Refusing the newcomer would let a flooder hold every slot forever, so the peer
     // that has been silent longest loses its place instead.
-    if (this.pending.size >= MAX_UNAUTHENTICATED_CONNECTIONS) {
-      for (const oldest of this.pending) {
+    if (this.silent.size >= MAX_SILENT_CONNECTIONS) {
+      for (const oldest of this.silent) {
         oldest.destroy();
         break;
       }
     }
-    this.pending.add(connection);
-    let authenticated = false;
+    this.silent.add(connection);
     let buffer = "";
-    let idleTimer = setTimeout(() => connection.destroy(), PRE_AUTH_TIMEOUT_MS);
+    const idleTimer = setTimeout(() => connection.destroy(), IDLE_MS);
     connection.on("close", () => {
       clearTimeout(idleTimer);
-      this.pending.delete(connection);
+      this.silent.delete(connection);
     });
     connection.on("data", (chunk: string) => {
       buffer += chunk;
-      if (buffer.length > (authenticated ? POST_AUTH_MAX_BYTES : PRE_AUTH_MAX_BYTES)) {
+      if (buffer.length > MAX_REQUEST_BYTES) {
         connection.destroy();
         return;
       }
-      while (!connection.destroyed) {
-        const newline = buffer.indexOf("\n");
-        if (newline < 0) return;
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        if (!authenticated) {
-          const failure = authenticationFailure(this.secret, line);
-          if (failure) {
-            connection.end(`${JSON.stringify({ ok: false, error: failure })}\n`);
-            return;
-          }
-          authenticated = true;
-          this.pending.delete(connection);
-          clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => connection.destroy(), POST_AUTH_IDLE_MS);
-          connection.write(`${JSON.stringify({ ok: true, data: { authenticated: true } })}\n`);
-          continue;
-        }
-        buffer = "";
-        clearTimeout(idleTimer);
-        void this.handle(line)
-          .then((data) => {
-            connection.end(`${JSON.stringify({ ok: true, data })}\n`);
-          })
-          .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            connection.end(`${JSON.stringify({ ok: false, error: message })}\n`);
-          });
-        return;
-      }
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const line = buffer.slice(0, newline);
+      buffer = "";
+      this.silent.delete(connection);
+      clearTimeout(idleTimer);
+      void this.handle(line)
+        .then((data) => {
+          connection.end(`${JSON.stringify({ ok: true, data })}\n`);
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          connection.end(`${JSON.stringify({ ok: false, error: message })}\n`);
+        });
     });
   }
 
@@ -223,10 +189,16 @@ export class Registry {
       }
       case "cookie-sources":
         return this.host.cookieSources();
-      case "import-cookies":
+      case "import-cookies": {
+        // This copies every live login on the machine, so the client has to say it asked first:
+        // the CLI sends confirmed once it has a yes, and nothing else here can supply the answer.
+        if (request.confirmed !== true) {
+          throw new Error(
+            'import-cookies copies your live logins, so it needs "confirmed": true from a client that asked you first',
+          );
+        }
         return this.importCookies(request);
-      case "profiles":
-        return this.host.profiles();
+      }
       case "profile-create": {
         if (!request.name) throw new Error("profile-create needs a name");
         return { profile: this.host.createProfile(request.name) };

@@ -10,7 +10,9 @@ export const defaultKeys =
         devtools: "super+shift+i",
         console: "super+alt+j",
         screenshot: "super+shift+s",
-        profiles: "super+shift+p",
+        // b, not p: one shift away from the palette is a chord nobody means to press. Ghostty
+        // sends this one, unlike super+punctuation, which it never delivers.
+        profiles: "super+shift+b",
         focus: "super+shift+k",
         // Arrows, because they read as navigation and need no terminal config. Ghostty claims
         // shift+arrow, super+arrow, super+alt+arrow and super+ctrl+arrow, and delivers neither
@@ -25,7 +27,7 @@ export const defaultKeys =
         devtools: "ctrl+shift+i",
         console: "ctrl+alt+j",
         screenshot: "ctrl+shift+s",
-        profiles: "ctrl+shift+p",
+        profiles: "ctrl+shift+b",
         focus: "ctrl+shift+k",
         back: "ctrl+[ ctrl+shift+left",
         forward: "ctrl+] ctrl+shift+right",

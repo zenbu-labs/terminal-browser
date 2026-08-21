@@ -1,0 +1,57 @@
+name: check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../cargo-target
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # pixel-react's build compiles the napi module, so the workspace build needs a toolchain.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: pnpm install --frozen-lockfile
+
+      # Each package typechecks against its dependencies' emitted .d.ts, so nothing can be checked
+      # before the workspace is built in dependency order.
+      - run: pnpm -r build
+
+      - run: pnpm -r typecheck
+
+      - run: pnpm -r test
+
+  cargo:
+    # macOS as well as Linux: the keychain binding is behind cfg(target_os = "macos"), so its
+    # tests do not exist in a Linux build. Both images are GitHub-hosted.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../cargo-target
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo test --workspace
+        working-directory: engine

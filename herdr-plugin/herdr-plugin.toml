@@ -5,6 +5,12 @@ min_herdr_version = "0.8.2"
 description = "Open a browser inside herdr"
 platforms = ["linux", "macos"]
 
+# Everything below runs terminal-browser, so a plugin installed onto a machine without one
+# errors on the first click. install.sh brings a browser along, and does nothing at all when
+# there is already one on PATH or in TERMINAL_BROWSER_BIN.
+[[build]]
+command = ["bash", "install.sh"]
+
 [[panes]]
 id = "browser"
 title = "Terminal Browser"
@@ -26,6 +32,10 @@ description = "Open a clicked URL in a terminal-browser pane"
 contexts = ["global", "pane", "selection"]
 command = ["/bin/sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/open-url.sh"']
 
+# Only a Ctrl+click reaches a link handler — a plain click still opens the system browser
+# (herdr's plugin docs, "Link handlers"). When two plugins claim the same url herdr sorts the
+# enabled plugins by id and takes the first match (`find_plugin_link_handler`, herdr v0.8.2),
+# so `zenbu-labs.terminal-browser` yields to nearly every other plugin that wants the click.
 [[link_handlers]]
 id = "http"
 title = "Open in Terminal Browser"

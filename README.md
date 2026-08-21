@@ -22,6 +22,8 @@ terminal-browser open <url> # opens the browser at a url
 terminal-browser --split right # opens the browser in a split pane to the right
 terminal-browser open --ssh <user@host> <url> # performs all network requests through a remote server
 terminal-browser ls # lists open browsers
+terminal-browser profile list # lists the profiles that keep your logins apart
+terminal-browser import-cookies # copies the logins out of your everyday browser (macOS only)
 terminal-browser action # an agent-browser compatible cli for interacting with open terminal-browsers
 ```
 
@@ -45,14 +47,19 @@ terminal-browser action # an agent-browser compatible cli for interacting with o
 | Find in page | cmd+shift+f | ctrl+shift+f |
 | Next / previous match | enter / shift+enter | enter / shift+enter |
 | Reload | cmd+r | ctrl+r |
-| Back / forward | cmd+[ / cmd+] | ctrl+[ / ctrl+] |
+| Back / forward | cmd+shift+left / cmd+shift+right | ctrl+shift+left / ctrl+shift+right |
 | Zoom in / out / reset | your terminal's zoom keybind | your terminal's zoom keybind |
 | Devtools | cmd+shift+i or f12 | ctrl+shift+i or f12 |
 | Devtools console | cmd+alt+j | ctrl+alt+j |
 | Copy / paste / cut | cmd+c / cmd+v / cmd+x | ctrl+c / ctrl+v / ctrl+x |
+| Copy a screenshot of the page | cmd+shift+s | ctrl+shift+s |
+| Profiles menu | cmd+shift+b | ctrl+shift+b |
+| Focus mode (every key goes to the page) | cmd+shift+k | ctrl+shift+k |
 | Record page (start/stop) | ctrl+r | ctrl+shift+r |
 | Complete recording review | ctrl+enter | ctrl+enter |
 | Close popup / overlay | escape | escape |
+
+Back and forward also take cmd+[ / cmd+] and ctrl+[ / ctrl+] on terminals that send them, which ghostty does not.
 
 
 

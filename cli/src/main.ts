@@ -5,7 +5,13 @@ import net from "node:net";
 import path from "node:path";
 import readline from "node:readline";
 
-import { DAEMON_SOCKET, LOGS_DIR, ensureDataDir, readSocketControlSecret } from "pixel-store";
+import {
+  DAEMON_SOCKET,
+  LOGS_DIR,
+  ensureDataDir,
+  matchProfiles,
+  profileRegistry,
+} from "pixel-store";
 import {
   callerTty,
   canSplit,
@@ -159,53 +165,6 @@ function dialDaemon(): Promise<net.Socket> {
   return promise;
 }
 
-/** The daemon dispatches nothing until this line proves the secret it holds too. */
-function handshake(socket: net.Socket): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const secret = readSocketControlSecret();
-  if (!secret) {
-    reject(new Error("no browser control secret yet; start the browser first"));
-    return promise;
-  }
-  function finish(settle: () => void) {
-    clearTimeout(timer);
-    socket.off("data", onData);
-    socket.off("close", onClose);
-    settle();
-  }
-  let buffer = "";
-  const timer = setTimeout(
-    () => finish(() => reject(new Error("the daemon did not answer the handshake"))),
-    5000,
-  );
-  const onData = (chunk: Buffer) => {
-    buffer += chunk.toString("utf8");
-    const newline = buffer.indexOf("\n");
-    if (newline < 0) return;
-    const line = buffer.slice(0, newline);
-    const rest = buffer.slice(newline + 1);
-    finish(() => {
-      // Nothing else is sent before the first command, but put back whatever did arrive
-      // so the caller's own reader still sees it.
-      if (rest) socket.unshift(Buffer.from(rest, "utf8"));
-      let reply: DaemonReply;
-      try {
-        reply = JSON.parse(line) as DaemonReply;
-      } catch {
-        reject(new Error("the daemon answered the handshake with something other than json"));
-        return;
-      }
-      if (reply.ok) resolve();
-      else reject(new Error(reply.error ?? "the daemon refused the handshake"));
-    });
-  };
-  const onClose = () => finish(() => reject(new Error("daemon closed the connection")));
-  socket.on("data", onData);
-  socket.once("close", onClose);
-  socket.write(`${JSON.stringify({ cmd: "auth", secret })}\n`);
-  return promise;
-}
-
 function spawnDaemon() {
   const { command, cwd } = browserLaunchCommand(["--daemon"]);
   const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore" });
@@ -223,13 +182,6 @@ async function daemonSocket(): Promise<net.Socket> {
       await sleep(200);
     }
     if (!socket) throw new Error("daemon did not start");
-  }
-  // A refused handshake is not a missing daemon: respawning cannot fix a wrong secret.
-  try {
-    await handshake(socket);
-  } catch (error) {
-    socket.destroy();
-    throw error;
   }
   return socket;
 }
@@ -318,14 +270,7 @@ async function gone(pid: number, within: number): Promise<boolean> {
 }
 
 async function shutdownDaemon(): Promise<number> {
-  let socket: net.Socket | null = null;
-  try {
-    socket = await dialDaemon();
-    await handshake(socket);
-  } catch {
-    socket?.destroy();
-    socket = null;
-  }
+  const socket = await dialDaemon().catch(() => null);
   const pid = await daemonPid();
   if (!socket) {
     if (pid === null) {
@@ -608,7 +553,12 @@ async function importCookiesCommand(options: ImportCookiesOptions): Promise<numb
         "name one with --to-profile",
     );
   }
-  if (!options.confirmed && process.stdin.isTTY) {
+  if (!options.confirmed) {
+    if (!process.stdin.isTTY) {
+      fail(
+        "import-cookies copies live logins and there is no terminal to ask in — re-run with -y to say so outright",
+      );
+    }
     if (!process.stderr.isTTY) {
       fail("stderr is redirected, so the confirmation cannot be shown — re-run with -y to copy without asking");
     }
@@ -624,10 +574,12 @@ async function importCookiesCommand(options: ImportCookiesOptions): Promise<numb
       return 1;
     }
   }
+  // The daemon refuses an import that does not say consent was taken, so send it having taken it.
   const report = (await control(
     target.socket,
     {
       cmd: "import-cookies",
+      confirmed: true,
       from: options.from,
       profile: options.profile,
       toProfile: options.toProfile,
@@ -653,8 +605,6 @@ interface ProfileRow {
 
 interface ProfileList {
   profiles: ProfileRow[];
-  activeSlug: string;
-  activeName: string;
 }
 
 interface ProfileReply {
@@ -680,7 +630,18 @@ function renderProfiles(list: ProfileList): string {
   return `${list.profiles.map(profileLine).join("\n")}\n`;
 }
 
-/** Profiles are one registry for the whole browser process, so any running browser answers alike. */
+/**
+ * Read from sqlite, not from a browser: listing profiles must not need one open. The registry has
+ * every live pane's profile in it too, so "active" is every profile a pane is on, not just one.
+ */
+async function profileList(): Promise<ProfileList> {
+  const inUse = new Set((await instances()).map((record) => record.profile));
+  return {
+    profiles: profileRegistry().map((profile) => ({ ...profile, active: inUse.has(profile.slug) })),
+  };
+}
+
+/** Only creating, renaming, deleting and clearing need a browser; the list itself is in sqlite. */
 async function profileHost(): Promise<string> {
   const records = await instances();
   const host = records[0];
@@ -719,7 +680,7 @@ function takeName(args: string[], verb: string, what: string): string {
 
 /**
  * Losing a profile's logins is unrecoverable, so it is refused unattended unless -y says
- * otherwise, the same bargain import-cookies strikes over copying them in.
+ * otherwise — the same bargain import-cookies strikes over copying them in.
  */
 async function confirmProfileLoss(verb: "delete" | "clear", selector: string, confirmed: boolean): Promise<boolean> {
   if (confirmed) return true;
@@ -748,7 +709,7 @@ async function profileCommand(args: string[]): Promise<number> {
   switch (PROFILE_VERBS[verb] ?? verb) {
     case "list": {
       if (rest.length > 0) fail(`unexpected ${rest[0]} (terminal-browser profile --help)`);
-      const list = (await control(await profileHost(), { cmd: "profiles" })) as ProfileList;
+      const list = await profileList();
       if (json) print(list);
       else process.stdout.write(renderProfiles(list));
       return 0;
@@ -867,7 +828,25 @@ function rejectUnknownFlags(args: string[]) {
   }
 }
 
-/** Takes both spellings, because the browser itself reads the `--profile=<selector>` form. */
+/**
+ * Refused here rather than in the browser, and passed on as a slug: a launch lands in a pane whose
+ * exit status nobody sees, so a profile that names none or several has to stop the command instead
+ * of opening signed in as somebody else.
+ */
+function resolveProfileSelector(selector: string): string {
+  const matches = matchProfiles(profileRegistry(), selector);
+  if (matches.length === 1) return matches[0].slug;
+  if (matches.length === 0) {
+    fail(`no browser profile matches "${selector}" (terminal-browser profile lists them)`);
+  }
+  fail(
+    `"${selector}" matches more than one browser profile: ${matches
+      .map((profile) => profile.slug)
+      .join(", ")}`,
+  );
+}
+
+/** Takes both spellings, and hands back the slug the browser reads as `--profile=<slug>`. */
 function takeProfileFlag(args: string[]): string | undefined {
   const at = args.findIndex((arg) => arg === "--profile" || arg.startsWith("--profile="));
   if (at < 0) return undefined;
@@ -878,7 +857,7 @@ function takeProfileFlag(args: string[]): string | undefined {
   if (!selector || selector.startsWith("-")) {
     fail("--profile requires a non-empty profile name or slug (terminal-browser profile lists them)");
   }
-  return selector;
+  return resolveProfileSelector(selector);
 }
 
 function takeSshFlags(args: string[]): void {

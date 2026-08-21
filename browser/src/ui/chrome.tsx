@@ -595,7 +595,7 @@ function ImportHintPopover({
   gutter: number;
 }) {
   const rem = layout.rem;
-  const width = Math.min(rem * 17, layout.width - gutter - rem * 0.8);
+  const width = Math.min(rem * 21, layout.width - gutter - rem * 0.8);
   return (
     <Box
       style={{
@@ -612,16 +612,21 @@ function ImportHintPopover({
       onClickOutside={actions.importHintToggle}
     >
       <Text style={{ fontSize: rem * 0.8, color: theme.fg, wrap: false, selectable: false }}>
-        Import browser data
+        Copy your browser logins
       </Text>
       <Text style={{ fontSize: rem * 0.72, color: theme.muted, selectable: false }}>
         {view.summary}
       </Text>
+      <Text style={{ fontSize: rem * 0.72, color: theme.muted, selectable: false }}>
+        Copying takes its cookies, which are your real sessions: afterwards anything that can reach
+        this browser is signed in as you.
+      </Text>
       <Text style={{ fontSize: rem * 0.64, color: theme.disabled, selectable: false }}>
-        You can always find this in the command palette.
+        Cookies only, no history or saved passwords. Also in the command palette.
       </Text>
       <Box style={{ alignItems: "center", gap: rem * 0.35, margin: { top: rem * 0.15 } }}>
-        <HintButton label="Import…" primary rem={rem} theme={theme} onClick={actions.importRun} />
+        <HintButton label="Copy cookies" primary rem={rem} theme={theme} onClick={actions.importRun} />
+        <HintButton label="Not now" rem={rem} theme={theme} onClick={actions.importHintToggle} />
       </Box>
     </Box>
   );

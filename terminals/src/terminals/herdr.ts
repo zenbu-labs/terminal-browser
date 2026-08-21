@@ -49,6 +49,12 @@ export const herdr: Detect = (env, run) => {
   const bin = env.HERDR_BIN_PATH || "herdr";
   const herdr = (args: string[]) => run(bin, args);
 
+  /**
+   * `--right-click pane` is new in herdr 0.8.2 (its CHANGELOG), and an older herdr rejects the whole
+   * split rather than the one flag, so the retry drops it. The caller's focus flag survives the retry:
+   * `pane split` has taken `--no-focus` since the subcommand first existed, in herdr 0.2.0
+   * (`src/cli.rs` at that tag), so no herdr that refuses `--right-click` can refuse it too.
+   */
   async function splitPane(args: string[]): Promise<HerdrPaneSplitResult> {
     try {
       return JSON.parse(await herdr(["pane", "split", ...args, "--right-click", "pane"]));
