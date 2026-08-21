@@ -23,6 +23,9 @@ Options:
   --ssh-bundle <dir>    Install and execute a bundle on a remote server. This is useful when paired with
                         --app-mode and --ssh, allowing you to run an application server on a
                         remote mahine, then view the output over ssh
+  --ssh-bundle-dir <dir>
+                        The path --ssh-bundle should be installed to through the ssh server. Defaults to
+                        \${XDG_DATA_HOME:-~/.local/share}/terminal-browser/bundles
   --preload=<path>      Run a script inside the context of a web page before it loads (uses electron's preload feature under the hood, runs in an isolated world).
                         terminal-browser specific api's are exposed on globalThis.terminalBrowser
                         {

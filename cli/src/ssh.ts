@@ -162,14 +162,17 @@ export function validateBundleDir(dir: string): void {
 
 const READY_TIMEOUT_MS = 120_000;
 
+const REMOTE_BUNDLES_DIR = '${XDG_DATA_HOME:-$HOME/.local/share}/terminal-browser/bundles';
+
 export async function startBundle(
   tunnel: SshTunnel,
   dir: string,
   status: (line: string) => void,
+  remoteBase: string = REMOTE_BUNDLES_DIR,
 ): Promise<RemoteBundle> {
   validateBundleDir(dir);
   const name = bundleName(dir);
-  const remoteDir = `.terminal-browser/bundles/${name}-${bundleHash(dir).slice(0, 12)}`;
+  const remoteDir = `${remoteBase}/${name}-${bundleHash(dir).slice(0, 12)}`;
   if (!installed(tunnel, remoteDir)) {
     status(`installing ${name} on ${tunnel.destination}`);
     upload(tunnel, dir, remoteDir);
@@ -225,7 +228,7 @@ function run(
 }
 
 function installed(tunnel: SshTunnel, remoteDir: string): boolean {
-  return run(tunnel, `test -f '${remoteDir}/.ready'`).status === 0;
+  return run(tunnel, `test -f "${remoteDir}/.ready"`).status === 0;
 }
 
 function upload(tunnel: SshTunnel, dir: string, remoteDir: string): void {
@@ -234,7 +237,7 @@ function upload(tunnel: SshTunnel, dir: string, remoteDir: string): void {
     maxBuffer: 256 * 1024 * 1024,
   });
   if (tar.status !== 0 || !tar.stdout) throw new Error(`could not pack ${dir}`);
-  const result = run(tunnel, `mkdir -p '${remoteDir}' && tar -xz -C '${remoteDir}'`, {
+  const result = run(tunnel, `mkdir -p "${remoteDir}" && tar -xz -C "${remoteDir}"`, {
     input: tar.stdout,
   });
   if (result.status !== 0) {
@@ -245,7 +248,7 @@ function upload(tunnel: SshTunnel, dir: string, remoteDir: string): void {
 function setup(tunnel: SshTunnel, remoteDir: string): void {
   const result = run(
     tunnel,
-    `cd '${remoteDir}' && { [ ! -x ./setup ] || ./setup; } && touch .ready`,
+    `cd "${remoteDir}" && { [ ! -x ./setup ] || ./setup; } && touch .ready`,
     { stdio: "inherit" },
   );
   if (result.status !== 0) {
@@ -272,13 +275,13 @@ function launch(
       "-S",
       tunnel.controlPath,
       tunnel.destination,
-      `cd '${remoteDir}' || exit 9; [ -x ./stop ] && ./stop >/dev/null 2>&1; exec ./start`,
+      `cd "${remoteDir}" || exit 9; [ -x ./stop ] && ./stop >/dev/null 2>&1; exec ./start`,
     ],
     { stdio: ["ignore", "pipe", "ignore"] },
   );
   const stop = () => {
     try {
-      run(tunnel, `cd '${remoteDir}' && [ -x ./stop ] && ./stop`, { timeout: 10_000 });
+      run(tunnel, `cd "${remoteDir}" && [ -x ./stop ] && ./stop`, { timeout: 10_000 });
     } catch {}
     try {
       child.kill();

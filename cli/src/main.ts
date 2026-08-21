@@ -358,7 +358,8 @@ async function sshSetup(argv: string[]): Promise<void> {
   argv.push(`--socks-port=${tunnel.socksPort}`);
   const bundleDir = flagEq(argv, "--ssh-bundle");
   if (bundleDir) {
-    bundle = await startBundle(tunnel, bundleDir, status);
+    const remoteBase = flagEq(argv, "--ssh-bundle-dir");
+    bundle = await startBundle(tunnel, bundleDir, status, remoteBase || undefined);
     if (!argv.some((arg) => !arg.startsWith("-"))) argv.unshift(bundle.url);
   }
   for (const signal of signals) process.removeListener(signal, interrupt);
@@ -474,6 +475,7 @@ const BROWSER_FLAGS = [
   "--partition=",
   "--ssh=",
   "--ssh-bundle=",
+  "--ssh-bundle-dir=",
   "--preload=",
   "--main-script=",
   "--palette-key=",
@@ -503,8 +505,13 @@ function takeSshFlags(args: string[]): void {
   if (at >= 0) {
     args[at] = `--ssh-bundle=${path.resolve(args[at].slice("--ssh-bundle=".length))}`;
   }
+  const bundleDir = takeFlag(args, "--ssh-bundle-dir");
+  if (bundleDir !== undefined) args.push(`--ssh-bundle-dir=${bundleDir}`);
   const target = args.find((arg) => arg.startsWith("--ssh="))?.slice("--ssh=".length);
   if (at >= 0 && !target) fail("--ssh-bundle needs --ssh");
+  if (args.some((arg) => arg.startsWith("--ssh-bundle-dir=")) && at < 0) {
+    fail("--ssh-bundle-dir needs --ssh-bundle");
+  }
   try {
     if (target) parseSshTarget(target);
     if (at >= 0) validateBundleDir(args[at].slice("--ssh-bundle=".length));
