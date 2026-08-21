@@ -141,39 +141,58 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
-    /// most of that window at 8x.
+    const WINDOW: Duration = Duration::from_millis(100);
+    const BASELINE_WINDOWS: usize = 3;
+    const THROTTLED_WINDOWS: usize = 3;
+    const ENGAGE_DEADLINE: Duration = Duration::from_secs(5);
+
+    /// Iterations a spin loop completes in one window of wall time.
+    fn spin_window() -> u64 {
+        let start = Instant::now();
+        let mut iterations = 0u64;
+        while start.elapsed() < WINDOW {
+            for _ in 0..1000 {
+                iterations = std::hint::black_box(iterations.wrapping_add(1));
+            }
+        }
+        iterations
+    }
+
     #[test]
     fn throttled_thread_gets_less_cpu_per_wall_second() {
         if !CpuThrottle::supported() {
             return;
         }
         let throttle = CpuThrottle::new();
-        let spin = |ms: u64| {
-            let start = Instant::now();
-            let mut iterations = 0u64;
-            while start.elapsed() < Duration::from_millis(ms) {
-                for _ in 0..1000 {
-                    iterations = std::hint::black_box(iterations.wrapping_add(1));
-                }
-            }
-            iterations
-        };
-        let (baseline, throttled) = thread::scope(|scope| {
-            let worker = scope.spawn(|| {
-                throttle.register_current_thread();
-                let baseline = spin(120);
-                thread::sleep(Duration::from_millis(80));
-                let throttled = spin(120);
-                (baseline, throttled)
-            });
-            thread::sleep(Duration::from_millis(150));
-            throttle.set_rate(8.0);
-            worker.join().unwrap()
+        let (baseline, peak, streak) = thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    throttle.register_current_thread();
+                    // A busy machine can preempt any single window, so keep the best one: sharing a
+                    // core only ever lowers a sample, while the throttle caps every one of them.
+                    let baseline = (0..BASELINE_WINDOWS)
+                        .map(|_| spin_window())
+                        .max()
+                        .unwrap_or(0);
+                    throttle.set_rate(8.0);
+                    // The controller polls, so it starts suspending some time after the rate
+                    // changes, and on a loaded machine that wait is not bounded by the poll delay.
+                    let deadline = Instant::now() + ENGAGE_DEADLINE;
+                    let (mut peak, mut streak) = (0u64, 0usize);
+                    while streak < THROTTLED_WINDOWS && Instant::now() < deadline {
+                        let sample = spin_window();
+                        peak = peak.max(sample);
+                        streak = if sample * 2 < baseline { streak + 1 } else { 0 };
+                    }
+                    (baseline, peak, streak)
+                })
+                .join()
+                .unwrap()
         });
         throttle.set_rate(1.0);
-        assert!(
-            throttled < baseline / 2,
-            "8x throttle should at least halve throughput: {throttled} vs {baseline}"
+        assert_eq!(
+            streak, THROTTLED_WINDOWS,
+            "8x throttle should hold throughput under half of {baseline}, best window was {peak}"
         );
         assert_eq!(throttle.rate(), 1.0);
     }
