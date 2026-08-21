@@ -10,6 +10,9 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(12);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 const SLOTS: u64 = 3;
 
+/// Frames handed to herdr carry the writing pid so a later start can tell whose is whose.
+const FRAME_PREFIX: &str = "px-";
+
 #[derive(Clone, Debug)]
 pub(crate) struct HerdrTarget {
     pub(crate) pane: String,
@@ -82,6 +85,9 @@ impl Herdr {
         }
         frames.get_ref().set_read_timeout(Some(ACK_TIMEOUT)).ok()?;
 
+        // Frames in herdr's directory leak exactly the way ours in TMPDIR do when a process is
+        // killed, and they are just as large; clear out the ones nobody owns before adding more.
+        crate::terminal::sweep_dead_frame_files(&directory, FRAME_PREFIX, "");
         crate::logging::info("herdr", "frames go straight to herdr as files");
         Some(Self {
             frames,
@@ -149,7 +155,7 @@ impl Herdr {
             for slot in 0..SLOTS {
                 self.files.push(FrameFile::create(
                     self.directory.join(format!(
-                        "px-{}-{}-{}-{slot}",
+                        "{FRAME_PREFIX}{}-{}-{}-{slot}",
                         std::process::id(),
                         self.instance,
                         self.generation
@@ -254,7 +260,7 @@ fn field_bool(json: &str, key: &str) -> Option<bool> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const INFO: &str = r#"{"id":"info","result":{"type":"pane_graphics_info","cell_width_px":9,"cell_height_px":19,"pane_visible":true,"file_frame_directory":"/tmp/herdr/frames/source","file_frame_formats":["rgba","bgra"],"max_layers_per_pane":16,"pixel_mouse":false,"file_frame_transport":"direct-kitty"}}"#;
@@ -300,7 +306,7 @@ mod tests {
 
     /// Answers like herdr does: one info reply per connection, then a stream
     /// that acks every frame. Collects the frame headers it was sent.
-    pub(super) fn fake_herdr(
+    pub(crate) fn fake_herdr(
         directory: &std::path::Path,
         transport: &str,
     ) -> (PathBuf, std::sync::mpsc::Receiver<String>) {
@@ -335,7 +341,7 @@ mod tests {
         (socket, rx)
     }
 
-    pub(super) fn scratch(name: &str) -> PathBuf {
+    pub(crate) fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("pixel-herdr-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -397,6 +403,31 @@ mod tests {
 
         paths.dedup();
         assert_eq!(paths.len(), SLOTS as usize, "consecutive frames shared a file");
+    }
+
+    #[test]
+    fn attaching_clears_frames_herdr_still_holds_for_a_dead_process() {
+        let dir = scratch("dead-frames");
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+
+        // A session killed mid-frame leaves its mapped files behind in herdr's own directory,
+        // at a whole frame each; a later attach is what finally clears them.
+        let stale = dir.join(format!("{FRAME_PREFIX}{dead}-0-1-0"));
+        let live = dir.join(format!("{FRAME_PREFIX}{}-0-1-0", std::process::id()));
+        std::fs::write(&stale, [0u8; 4]).unwrap();
+        std::fs::write(&live, [0u8; 4]).unwrap();
+
+        let (socket, _frames) = fake_herdr(&dir, "direct-kitty");
+        let _herdr = Herdr::connect("w1:p1", &socket.to_string_lossy()).unwrap();
+
+        assert!(!stale.exists(), "frames whose writer is gone must not outlive it");
+        assert!(live.exists(), "panes share a process, so a live pid keeps its frames");
     }
 
     #[test]
