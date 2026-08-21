@@ -9,6 +9,8 @@ import type { DragEvent, EngineKeyEvent, PixelRoot, Surface } from "pixel-react"
 import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
+import { importChromeCookies, listCookieSources } from "../cookies";
+import type { CookieImportRequest, CookieImportResult } from "../cookies";
 import { browserSession, configureBrowserSession } from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
@@ -142,6 +144,30 @@ interface NewTabState {
   seq: number;
   timer: ReturnType<typeof setTimeout> | null;
 }
+
+function cookieImportWarnings(result: CookieImportResult): string[] {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const add = (warning: string) => {
+    if (seen.has(warning)) return;
+    seen.add(warning);
+    warnings.push(warning);
+  };
+  for (const warning of result.warnings) add(warning);
+  if (result.undecryptable > 0) {
+    add(
+      `${result.undecryptable} ${result.browser} cookies would not decrypt with the key from your login keychain, so those sites will still ask you to sign in.`,
+    );
+  }
+  if (result.rejected > 0) {
+    add(`${result.rejected} cookies were rejected by this browser's cookie store.`);
+  }
+  return warnings;
+}
+
+// Every pane in this process imports into the same default cookie store, so one
+// import at a time across all of them, not one per session.
+let importingCookies = false;
 
 class Session {
   private readonly ctx: SessionContext;
@@ -379,6 +405,8 @@ class Session {
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),
       targets: () => this.tabs.targets(),
+      importCookies: (request) => this.runCookieImport(request),
+      cookieSources: () => listCookieSources(),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
@@ -1022,6 +1050,19 @@ class Session {
     this.render();
   }
 
+  private async runCookieImport(request: CookieImportRequest): Promise<CookieImportResult> {
+    if (importingCookies) {
+      throw new Error("a cookie import is already running — wait for it to finish");
+    }
+    importingCookies = true;
+    try {
+      const result = await importChromeCookies(request);
+      return { ...result, warnings: cookieImportWarnings(result) };
+    } finally {
+      importingCookies = false;
+    }
+  }
+
   private showToast(text: string, state: "done" | "failed" | "alert", detail?: string) {
     if (this.noOverlays) return;
     this.toast = { text, detail, failed: state === "failed", alert: state === "alert" };
@@ -1337,6 +1378,24 @@ class Session {
 
   private paletteActions(): PaletteAction[] {
     return [
+      {
+        id: "import-cookies",
+        label: "import cookies (sign in as your everyday browser profile)",
+        shortcut: "",
+        run: () => {
+          void this.runCookieImport({})
+            .then((report) => {
+              this.showToast(
+                `imported ${report.imported} cookies from ${report.browser} (${report.profileName})`,
+                report.warnings.length > 0 ? "alert" : "done",
+                report.warnings.join("\n") || undefined,
+              );
+            })
+            .catch((error: unknown) => {
+              this.showToast("cookie import failed", "failed", error instanceof Error ? error.message : String(error));
+            });
+        },
+      },
       {
         id: "find",
         label: "find in page",

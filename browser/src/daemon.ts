@@ -7,9 +7,20 @@ import { app } from "electron";
 import { DAEMON_SOCKET } from "pixel-store";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
+import {
+  PRE_AUTH_MAX_BYTES,
+  PRE_AUTH_TIMEOUT_MS,
+  authenticationFailure,
+  loadOrCreateSocketSecret,
+  prepareSocketDirectory,
+  restrictSocketMode,
+} from "./socket-secret";
 
 // what
 const IDLE_EXIT_MS = 15_000;
+// An open request carries the caller's whole environment, so this ceiling is far above
+// the instance socket's: it only has to stop an unbounded newline-free stream.
+const POST_AUTH_MAX_BYTES = 4 * 1024 * 1024;
 
 
 interface OpenRequest {
@@ -35,8 +46,11 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     app.exit(3);
     return;
   }
-  fs.mkdirSync(path.dirname(DAEMON_SOCKET), { recursive: true });
+  prepareSocketDirectory(DAEMON_SOCKET);
   fs.rmSync(DAEMON_SOCKET, { force: true });
+  // The CLI reads this from its 0600 file the moment its connect succeeds, so it has to
+  // exist before anyone can reach the socket.
+  const secret = loadOrCreateSocketSecret();
 
   const build = buildStamp();
   const sessions = new Map<string, SessionHandle>();
@@ -66,20 +80,40 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   const server = net.createServer((connection) => {
     let key: string | null = null;
     let session: SessionHandle | null = null;
+    let authenticated = false;
     const reply = (value: unknown) => {
       try {
         connection.write(`${JSON.stringify(value)}\n`);
       } catch {}
     };
 
+    // This socket spawns sessions from the argv it is handed, so nothing is dispatched
+    // until the peer proves it holds the same secret the instance sockets take.
+    const authTimer = setTimeout(() => connection.destroy(), PRE_AUTH_TIMEOUT_MS);
     let buffer = "";
     connection.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
+      if (buffer.length > (authenticated ? POST_AUTH_MAX_BYTES : PRE_AUTH_MAX_BYTES)) {
+        connection.destroy();
+        return;
+      }
       let newline = buffer.indexOf("\n");
       while (newline !== -1) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         newline = buffer.indexOf("\n");
+        if (!authenticated) {
+          const failure = authenticationFailure(secret, line);
+          if (failure) {
+            reply({ ok: false, error: failure });
+            connection.end();
+            return;
+          }
+          authenticated = true;
+          clearTimeout(authTimer);
+          reply({ ok: true, authenticated: true });
+          continue;
+        }
         let message: Omit<OpenRequest, "cmd"> & { cmd: string };
         try {
           message = JSON.parse(line);
@@ -137,6 +171,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     });
     connection.on("error", () => {});
     connection.on("close", () => {
+      clearTimeout(authTimer);
       if (key && sessions.has(key)) {
         const orphan = sessions.get(key)!;
         sessions.delete(key);
@@ -149,7 +184,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     process.stderr.write(`terminal-browser daemon socket error: ${error}\n`);
     app.exit(1);
   });
-  server.listen(DAEMON_SOCKET);
+  server.listen(DAEMON_SOCKET, () => restrictSocketMode(DAEMON_SOCKET));
 }
 
 function socketAlive(): Promise<boolean> {
