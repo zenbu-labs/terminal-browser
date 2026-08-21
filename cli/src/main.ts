@@ -24,6 +24,8 @@ import type { Browser } from "./instances";
 import { lsCommand } from "./ls";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
+import { openSshTunnel, startBundle, validateBundleDir, validateSshTarget } from "./ssh";
+import type { RemoteBundle } from "./ssh";
 import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 
@@ -389,11 +391,44 @@ async function attachHere(argv: string[]): Promise<never> {
   };
   process.on("SIGINT", requestClose);
   process.on("SIGTERM", requestClose);
+  process.on("SIGHUP", requestClose);
   return new Promise<never>(() => {});
 }
 
 async function openHere(argv: string[]): Promise<never> {
+  await sshSetup(argv).catch((error) =>
+    fail(error instanceof Error ? error.message : String(error)),
+  );
   return attachHere(argv).catch((error) => fail(`could not start the browser: ${String(error)}`));
+}
+
+function flagEq(argv: string[], flag: string): string | undefined {
+  return argv.find((arg) => arg.startsWith(`${flag}=`))?.slice(flag.length + 1);
+}
+
+async function sshSetup(argv: string[]): Promise<void> {
+  const target = flagEq(argv, "--ssh");
+  if (!target) return;
+  const status = (line: string) => process.stdout.write(`ssh: ${line}\n`);
+  const interrupt = () => process.exit(130);
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const signal of signals) process.on(signal, interrupt);
+  let bundle: RemoteBundle | null = null;
+  const tunnel = await openSshTunnel(target, status);
+  process.on("exit", () => {
+    try {
+      bundle?.stop();
+    } catch {}
+    tunnel.stop();
+  });
+  argv.push(`--socks-port=${tunnel.socksPort}`);
+  const bundleDir = flagEq(argv, "--ssh-bundle");
+  if (bundleDir) {
+    const remoteBase = flagEq(argv, "--ssh-bundle-dir");
+    bundle = await startBundle(tunnel, bundleDir, status, remoteBase || undefined);
+    if (!argv.some((arg) => !arg.startsWith("-"))) argv.unshift(bundle.url);
+  }
+  for (const signal of signals) process.removeListener(signal, interrupt);
 }
 
 const DIRECTIONS: Direction[] = ["right", "left", "down", "up"];
@@ -439,7 +474,9 @@ async function launchInSplit(
     size: size ?? null,
     tty: ownTtyPath() ?? callerTty().path,
   });
-  const deadline = Date.now() + 20_000;
+  // ssh auth prompts and bundle installs run inside the new pane first
+  const patience = argv.some((arg) => arg.startsWith("--ssh=")) ? 600_000 : 20_000;
+  const deadline = Date.now() + patience;
   while (Date.now() < deadline) {
     const fresh = (await instances()).find((record) => !before.has(recordKey(record)));
     if (fresh) {
@@ -447,7 +484,7 @@ async function launchInSplit(
     }
     await sleep(250);
   }
-  fail("browser did not register within 20s (is the split open?)");
+  fail(`browser did not register within ${Math.round(patience / 1000)}s (is the split open?)`);
 }
 
 let asked: Promise<TerminalCheck> | null = null;
@@ -807,6 +844,9 @@ const BROWSER_FLAGS = [
   "--open-tabs-in-popup-stack",
   "--allow-clipboard-read",
   "--partition=",
+  "--ssh=",
+  "--ssh-bundle=",
+  "--ssh-bundle-dir=",
   "--preload=",
   "--main-script=",
   "--palette-key=",
@@ -841,6 +881,30 @@ function takeProfileFlag(args: string[]): string | undefined {
   return selector;
 }
 
+function takeSshFlags(args: string[]): void {
+  const ssh = takeFlag(args, "--ssh");
+  if (ssh !== undefined) args.push(`--ssh=${ssh}`);
+  const bundle = takeFlag(args, "--ssh-bundle");
+  if (bundle !== undefined) args.push(`--ssh-bundle=${bundle}`);
+  const bundleDir = takeFlag(args, "--ssh-bundle-dir");
+  if (bundleDir !== undefined) args.push(`--ssh-bundle-dir=${bundleDir}`);
+  const at = args.findIndex((arg) => arg.startsWith("--ssh-bundle="));
+  if (at >= 0) {
+    args[at] = `--ssh-bundle=${path.resolve(args[at].slice("--ssh-bundle=".length))}`;
+  }
+  const target = args.find((arg) => arg.startsWith("--ssh="))?.slice("--ssh=".length);
+  if (at >= 0 && !target) fail("--ssh-bundle needs --ssh");
+  if (args.some((arg) => arg.startsWith("--ssh-bundle-dir=")) && at < 0) {
+    fail("--ssh-bundle-dir needs --ssh-bundle");
+  }
+  try {
+    if (target) validateSshTarget(target);
+    if (at >= 0) validateBundleDir(args[at].slice("--ssh-bundle=".length));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function requirePaneAccess(): void {
   const refusal = sandboxRefusal();
   if (refusal) fail(refusal);
@@ -852,6 +916,7 @@ async function openCommand(args: string[]) {
   const size = takeSizeFlag(args);
   const profile = takeProfileFlag(args);
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
+  takeSshFlags(args);
   rejectUnknownFlags(args);
   if (profile) args.push(`--profile=${profile}`);
   const positionals = args.filter((arg) => !arg.startsWith("-"));

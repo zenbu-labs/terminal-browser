@@ -23,7 +23,17 @@ BINARY="$(readlink -f "$BINARY")"
 NAME="terminal-browser-$(printf '%s' "$BINARY" | sha256sum | cut -c1-12)"
 PROFILE="/etc/apparmor.d/$NAME"
 
-WANTED="abi <abi/5.0>,
+# Ubuntu 24.04 ships AppArmor 4.x (abi/4.0 only). Newer releases may have abi/5.0.
+if [ -f /etc/apparmor.d/abi/5.0 ]; then
+  ABI=5.0
+elif [ -f /etc/apparmor.d/abi/4.0 ]; then
+  ABI=4.0
+else
+  echo "no supported AppArmor abi under /etc/apparmor.d/abi/ - cannot install profile" >&2
+  exit 1
+fi
+
+WANTED="abi <abi/${ABI}>,
 
 include <tunables/global>
 

@@ -141,6 +141,9 @@ export class BrowserController {
     });
     this.window.webContents.setFrameRate(frameRate());
     this.window.on("closed", this.onWindowClosed);
+    this.window.webContents.on("will-navigate", (event, url) => {
+      if (this.quitLink(url)) event.preventDefault();
+    });
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
@@ -211,6 +214,7 @@ export class BrowserController {
   }
 
   resize(layout: BrowserSurfaceLayout, options?: { keepFrame?: boolean }) {
+    if (this.stopped) return;
     if (
       this.layout.x === layout.x &&
       this.layout.y === layout.y &&
@@ -517,6 +521,7 @@ export class BrowserController {
   };
 
   setVisible(visible: boolean) {
+    if (this.stopped) return;
     if (this.visible === visible) return;
     this.visible = visible;
     this.popup?.setVisible(visible);
@@ -534,13 +539,16 @@ export class BrowserController {
   }
 
   invalidate(): void {
+    if (this.stopped) return;
     this.wholeSurfaceNext = true;
     this.window.webContents.invalidate();
   }
 
   private async loadFavicon(urls: string[]) {
     const seq = ++this.faviconSeq;
-    const file = await this.favicons.resolve(urls).catch(() => null);
+    const file = await this.favicons
+      .resolve(urls, this.window.webContents.session)
+      .catch(() => null);
     if (file && seq === this.faviconSeq) this.updateState({ favicon: file });
   }
 
@@ -559,10 +567,19 @@ export class BrowserController {
     this.onState(this.state);
   }
 
+  private quitLink(url: string): boolean {
+    if (!url.startsWith("terminal-browser://quit")) return false;
+    setImmediate(() => {
+      if (!this.stopped) this.window.close();
+    });
+    return true;
+  }
+
   private handleWindowOpen(
     { url, disposition, features }: Electron.HandlerDetails,
     opener: Electron.WebContents,
   ): Electron.WindowOpenHandlerResponse {
+    if (this.quitLink(url)) return { action: "deny" };
     const wantsTab = disposition === "foreground-tab" || disposition === "background-tab";
     if (wantsTab && !this.tabsAsPopups && this.onOpenTab) {
       this.onOpenTab(url, disposition === "foreground-tab");

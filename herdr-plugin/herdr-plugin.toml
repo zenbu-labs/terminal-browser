@@ -1,8 +1,8 @@
 id = "zenbu-labs.terminal-browser"
 name = "Terminal Browser"
-version = "0.2.0"
-min_herdr_version = "0.8.0"
-description = "Open a real browser split next to your herdr panes"
+version = "0.1.1"
+min_herdr_version = "0.8.2"
+description = "Open a browser inside herdr"
 platforms = ["linux", "macos"]
 
 [[panes]]

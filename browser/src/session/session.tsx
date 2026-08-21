@@ -11,7 +11,11 @@ import type { Pane, Terminal } from "pixel-terminals";
 
 import { importChromeCookies, listCookieSources } from "../cookies";
 import type { CookieImportRequest, CookieImportResult, CookieSource } from "../cookies";
-import { browserSession, configureBrowserSession } from "../page/browser-session";
+import {
+  browserSession,
+  configureBrowserSession,
+  routeThroughSocksProxy,
+} from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
 import { initOffscreenMode } from "../page/offscreen";
@@ -96,6 +100,7 @@ const APP_MODE_FLAGS = [
   "--no-overlays",
   "--no-frame",
   "--allow-clipboard-read",
+  "--open-tabs-in-popup-stack",
 ];
 
 const FONT_FILE = path.join("assets", "fonts", "JetBrainsMono-Regular.ttf");
@@ -214,9 +219,13 @@ class Session {
   private readonly noFrame: boolean;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
-  /** --partition pins this pane's storage directly, which puts it on no profile at all. */
+  /**
+   * --partition pins this pane's storage directly, which puts it on no profile at all. --ssh
+   * pins it the same way, so a remote host's cookies never land in a local profile.
+   */
   private readonly explicitPartition: string | null;
   private profile: BrowserProfile | null;
+  private readonly socksPort: number | null;
   private readonly preload: string | null;
   private readonly mainScript: string | null;
   private readonly onThemeRequest = (event: IpcMainEvent) => {
@@ -306,7 +315,12 @@ class Session {
     this.noFrame = this.argv.includes("--no-frame");
     this.tabsAsPopups = this.argv.includes("--open-tabs-in-popup-stack");
     this.clipboardRead = this.argv.includes("--allow-clipboard-read");
-    this.explicitPartition = flagValue(this.argv, "--partition");
+    const sshTarget = flagValue(this.argv, "--ssh");
+    const socksPort = Number(flagValue(this.argv, "--socks-port"));
+    this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
+    this.explicitPartition =
+      flagValue(this.argv, "--partition") ??
+      (sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null);
     this.profile = this.explicitPartition
       ? null
       : profileForNewPane(flagValue(this.argv, "--profile"), flagValue(this.argv, "--parent-tty"));
@@ -368,6 +382,7 @@ class Session {
   }
 
   async start(): Promise<void> {
+    if (this.socksPort) await routeThroughSocksProxy(this.sessionPartition(), this.socksPort);
     if (process.platform === "darwin") app.dock?.hide();
     await this.loadDevtoolsSettings();
     this.loadImportHint();
