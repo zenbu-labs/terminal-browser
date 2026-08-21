@@ -10,6 +10,22 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(12);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 const SLOTS: u64 = 3;
 
+/// Direct-kitty file transport is reserved for herdr's default `primary` page
+/// layer; a named secondary layer would drop us back to inline RGBA.
+const LAYER: &str = "primary";
+
+/// herdr hands this number straight to the kitty placement it emits for us
+/// (`z: layer.z_index` in its `src/kitty_graphics.rs`, printed as the `z=` key),
+/// and the kitty graphics protocol draws a placement with a negative `z` under
+/// the terminal's text. herdr paints its own overlays - the copy toast, its
+/// notifications - as text, so at `z=0` our frames covered them.
+///
+/// -1 is the shallowest negative: every non-default cell background still sits
+/// below our frames, which is what a `z` under INT32_MIN/2 would give away, and
+/// nothing but glyphs comes out on top. We draw over the alternate screen with
+/// the cursor hidden, so herdr's overlays are the only glyphs there are.
+const Z_INDEX: i32 = -1;
+
 #[derive(Clone, Debug)]
 pub(crate) struct HerdrTarget {
     pub(crate) pane: String,
@@ -68,15 +84,7 @@ impl Herdr {
         let stream = UnixStream::connect(socket).ok()?;
         stream.set_read_timeout(Some(OPEN_TIMEOUT)).ok()?;
         let mut frames = BufReader::new(stream);
-        write_line(
-            frames.get_mut(),
-            &format!(
-                r#"{{"id":"stream","method":"pane.graphics.stream","params":{{"pane_id":{},"layer_id":"primary","z_index":0}}}}"#,
-                // checkme: how does pane get here? 
-                quote(pane)
-            ),
-        )
-        .ok()?;
+        write_line(frames.get_mut(), &stream_request(pane)).ok()?;
         if !accepted(&read_line(&mut frames).ok()?) {
             return None;
         }
@@ -177,6 +185,15 @@ fn is_wheel(kind: crate::terminal::MouseKind) -> bool {
 
 fn within_grid(ws: &crate::terminal::WindowSize, x: u32, y: u32) -> bool {
     x >= 1 && y >= 1 && x <= ws.cols && y <= ws.rows
+}
+
+/// The line that claims a pane's `primary` graphics layer, below herdr's overlays.
+// checkme: how does pane get here? via HERDR_PANE_ID, in HerdrTarget::from_env.
+fn stream_request(pane: &str) -> String {
+    format!(
+        r#"{{"id":"stream","method":"pane.graphics.stream","params":{{"pane_id":{},"layer_id":"{LAYER}","z_index":{Z_INDEX}}}}}"#,
+        quote(pane)
+    )
 }
 
 fn request(socket: &str, line: &str) -> io::Result<String> {
@@ -296,6 +313,14 @@ mod tests {
         assert!(!accepted(
             r#"{"id":"stream","error":{"code":"feature_disabled","message":"nope"}}"#
         ));
+    }
+
+    #[test]
+    fn the_stream_claims_the_primary_layer_under_herdrs_overlays() {
+        assert_eq!(
+            stream_request("w1:p1"),
+            r#"{"id":"stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1","layer_id":"primary","z_index":-1}}"#
+        );
     }
 
     /// Answers like herdr does: one info reply per connection, then a stream
