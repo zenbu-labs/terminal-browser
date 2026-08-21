@@ -9,7 +9,11 @@ import type { DragEvent, EngineKeyEvent, PixelRoot, Surface } from "pixel-react"
 import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
-import { browserSession, configureBrowserSession } from "../page/browser-session";
+import {
+  browserSession,
+  configureBrowserSession,
+  routeThroughSocksProxy,
+} from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
 import { initOffscreenMode } from "../page/offscreen";
@@ -159,6 +163,7 @@ class Session {
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
   private readonly partition: string | null;
+  private readonly socksPort: number | null;
   private readonly preload: string | null;
   private readonly mainScript: string | null;
   private readonly onThemeRequest = (event: IpcMainEvent) => {
@@ -239,7 +244,12 @@ class Session {
     this.noFrame = this.argv.includes("--no-frame");
     this.tabsAsPopups = this.argv.includes("--open-tabs-in-popup-stack");
     this.clipboardRead = this.argv.includes("--allow-clipboard-read");
-    this.partition = flagValue(this.argv, "--partition");
+    const sshTarget = flagValue(this.argv, "--ssh");
+    const socksPort = Number(flagValue(this.argv, "--socks-port"));
+    this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
+    this.partition =
+      flagValue(this.argv, "--partition") ??
+      (sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null);
     this.preload = flagValue(this.argv, "--preload");
     this.mainScript = flagValue(this.argv, "--main-script");
     this.fallbackState = initialBrowserState(this.initialUrl());
@@ -297,6 +307,7 @@ class Session {
   }
 
   async start(): Promise<void> {
+    if (this.socksPort) await routeThroughSocksProxy(this.partition, this.socksPort);
     if (process.platform === "darwin") app.dock?.hide();
     await this.loadDevtoolsSettings();
     if (!this.ctx.tty) process.stdout.write(`\x1b]2;${this.marker}\x07`);

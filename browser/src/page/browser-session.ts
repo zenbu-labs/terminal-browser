@@ -98,6 +98,29 @@ export function configureBrowserSession(
   return target;
 }
 
+const socksProxied = new WeakSet<Session>();
+let webrtcGuardInstalled = false;
+
+export async function routeThroughSocksProxy(
+  partition: string | null,
+  port: number,
+): Promise<void> {
+  const target = browserSession(partition);
+  socksProxied.add(target);
+  if (!webrtcGuardInstalled) {
+    webrtcGuardInstalled = true;
+    app.on("web-contents-created", (_event, contents) => {
+      if (socksProxied.has(contents.session)) {
+        contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+      }
+    });
+  }
+  await target.setProxy({
+    proxyRules: `socks5://127.0.0.1:${port}`,
+    proxyBypassRules: "<-loopback>",
+  });
+}
+
 export function browserSession(partition: string | null): Session {
   return partition ? session.fromPartition(persistentPartition(partition)) : session.defaultSession;
 }

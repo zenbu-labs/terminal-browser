@@ -546,7 +546,9 @@ export class BrowserController {
 
   private async loadFavicon(urls: string[]) {
     const seq = ++this.faviconSeq;
-    const file = await this.favicons.resolve(urls).catch(() => null);
+    const file = await this.favicons
+      .resolve(urls, this.window.webContents.session)
+      .catch(() => null);
     if (file && seq === this.faviconSeq) this.updateState({ favicon: file });
   }
 

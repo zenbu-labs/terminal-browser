@@ -18,6 +18,11 @@ The url can be a normal url, a localhost port, or a path to an html file.
 Options:
   --split <direction>   Open in a new pane: right, left, down, up
   --size <fraction>     How much of the space the split takes (0.2 to 0.95)
+  --ssh <user@host>     Perform all network requests through a remote server, then
+                        proxy the result back to the local terminal-browser instance
+  --ssh-bundle <dir>    Install and execute a bundle on a remote server. This is useful when paired with
+                        --app-mode and --ssh, allowing you to run an application server on a
+                        remote mahine, then view the output over ssh
   --preload=<path>      Run a script inside the context of a web page before it loads (uses electron's preload feature under the hood, runs in an isolated world).
                         terminal-browser specific api's are exposed on globalThis.terminalBrowser
                         {
@@ -44,6 +49,7 @@ Examples:
   terminal-browser open localhost:3000
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
+  terminal-browser open --ssh dev@build-box localhost:8080
 `,
   },
   ls: {
