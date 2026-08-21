@@ -572,9 +572,19 @@ function sameSite(value: number): "unspecified" | "no_restriction" | "lax" | "st
 
 function sweepStaleScratch(): void {
   const root = os.tmpdir();
-  for (const name of fs.readdirSync(root)) {
+  let names: string[];
+  try {
+    names = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
     if (!name.startsWith("terminal-browser-cookies-")) continue;
-    fs.rmSync(path.join(root, name), { recursive: true, force: true });
+    // On Linux this is the shared /tmp, so one of these can belong to another user. A scratch
+    // directory we are not allowed to remove is not a reason to refuse every future import.
+    try {
+      fs.rmSync(path.join(root, name), { recursive: true, force: true });
+    } catch {}
   }
 }
 

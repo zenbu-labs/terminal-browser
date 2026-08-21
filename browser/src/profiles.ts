@@ -137,19 +137,18 @@ export function renameProfile(slug: string, name: string): BrowserProfile {
   return renamed;
 }
 
-export function deleteProfile(slug: string): void {
+export async function deleteProfile(slug: string): Promise<void> {
   const profile = findSlug(slug);
   if (profile.builtIn) throw new Error("the default browser profile cannot be deleted");
   const panes = liveInstanceProfiles().filter((row) => row.profile === slug).length;
   if (panes > 0) {
     throw new Error(`cannot delete browser profile ${slug} while ${panes} pane(s) are using it`);
   }
-  // Wiped before it is forgotten: afterwards nothing knows this storage is unowned, and a profile
-  // named the same later would reach it through the same slug.
-  const wiped = wipe(slug);
+  // Forgotten only once the storage is gone: a failed wipe must leave the profile on the list,
+  // because a profile named the same later would reach that storage through the same slug.
+  await wipe(slug);
   persist(load().filter((known) => known.slug !== slug));
   if (storedLastUsedProfile() === slug) setStoredLastUsedProfile(DEFAULT_SLUG);
-  void wiped.catch(() => {});
 }
 
 export function clearProfileData(slug: string): Promise<void> {

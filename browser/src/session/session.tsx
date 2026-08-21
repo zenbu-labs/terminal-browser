@@ -201,8 +201,14 @@ class Session {
   private finding: Promise<Pane | null> | null = null;
   private readonly argv: string[];
   private readonly hideToolbar: boolean;
-  /** --no-shortcuts at launch, and the focus-mode toggle at runtime: every key goes to the page. */
-  private noShortcuts: boolean;
+  /** --no-shortcuts at launch: a floor the runtime toggle never lifts. */
+  private readonly shortcutsDisabled: boolean;
+  /** The focus-mode toggle at runtime: every key goes to the page. */
+  private focusMode = false;
+  /** What every shortcut reads: the launch flag, or focus mode while it is on. */
+  private get noShortcuts(): boolean {
+    return this.shortcutsDisabled || this.focusMode;
+  }
   private readonly noContextMenu: boolean;
   private readonly noOverlays: boolean;
   private readonly noFrame: boolean;
@@ -294,7 +300,7 @@ class Session {
     this.marker = `terminal-browser:${ctx.key}`;
     this.argv = ctx.argv.includes("--app-mode") ? [...ctx.argv, ...APP_MODE_FLAGS] : ctx.argv;
     this.hideToolbar = this.argv.includes("--no-toolbar");
-    this.noShortcuts = this.argv.includes("--no-shortcuts");
+    this.shortcutsDisabled = this.argv.includes("--no-shortcuts");
     this.noContextMenu = this.argv.includes("--no-context-menu");
     this.noOverlays = this.argv.includes("--no-overlays");
     this.noFrame = this.argv.includes("--no-frame");
@@ -676,6 +682,7 @@ class Session {
         importHint={this.importHintView()}
         profiles={this.profileMenuView()}
         focusMode={this.noShortcuts}
+        focusPinned={this.shortcutsDisabled}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
@@ -799,22 +806,17 @@ class Session {
       this.render();
     },
     profileDelete: (slug) => {
-      try {
-        deleteProfile(slug);
-        this.showToast(`deleted browser profile ${slug}`, "done");
-      } catch (error) {
-        this.showProfileFailure(error);
-      }
-      this.render();
+      // The storage wipe is awaited before the profile leaves the list, so the toast waits too.
+      void deleteProfile(slug)
+        .then(() => {
+          this.showToast(`deleted browser profile ${slug}`, "done");
+          this.render();
+        })
+        .catch((error: unknown) => this.showProfileFailure(error));
     },
     profileSwitch: (slug) => {
       this.profileMenuOpen = false;
       this.profilePrompt = null;
-      // Picking the row the pane is already on just closes the menu; only a real move rebuilds.
-      if (slug === this.profile?.slug) {
-        this.render();
-        return;
-      }
       this.applyProfileSwitch(slug);
     },
     profileCreate: (name) => {
@@ -1037,8 +1039,9 @@ class Session {
       }
       if (!this.findOpen && this.activeRecord()?.handleKey(event)) return;
       // Outside the gate below on purpose: focus mode sends every other key to the page, so the
-      // key that turns it off has to keep working while it is on.
-      if (matchesBinding(event, this.focusBinding)) {
+      // key that turns it off has to keep working while it is on. A pane launched with
+      // --no-shortcuts never had the chord, so it does not get it back here.
+      if (!this.shortcutsDisabled && matchesBinding(event, this.focusBinding)) {
         this.toggleFocusMode();
         return;
       }
@@ -1195,6 +1198,14 @@ class Session {
   }
 
   private async runCookieImport(request: CookieImportRequest): Promise<CookieImportResult> {
+    // A pinned pane is on no profile, so there is nothing to default to: guessing would write
+    // the operator's real logins into a store they never named.
+    if (this.explicitPartition && !request.toProfile) {
+      throw new Error(
+        `this browser is pinned to --partition=${this.explicitPartition}, which is on no profile — ` +
+          "name one with --to-profile",
+      );
+    }
     if (importingCookies) {
       throw new Error("a cookie import is already running — wait for it to finish");
     }
@@ -1297,9 +1308,9 @@ class Session {
     return renamed;
   }
 
-  private deleteBySelector(selector: string): BrowserProfile {
+  private async deleteBySelector(selector: string): Promise<BrowserProfile> {
     const target = resolveProfile(selector);
-    deleteProfile(target.slug);
+    await deleteProfile(target.slug);
     this.render();
     return target;
   }
@@ -1321,9 +1332,12 @@ class Session {
     }
     const target = resolveProfile(selector);
     const url = this.tabs.activeState?.url ?? this.fallbackState.url;
+    // Already there: the caller asked for a state the pane is in, which is satisfied, not an
+    // error. Every caller wants the tab that follows to open.
     if (target.slug === this.profile?.slug) {
       noteProfileUsed(target.slug);
-      throw new Error(`already on browser profile ${target.slug}`);
+      this.render();
+      return { profile: target, url };
     }
     this.findOpen = false;
     this.urlEditOpen = false;
@@ -1413,7 +1427,7 @@ class Session {
   }
 
   private toggleFocusMode() {
-    this.noShortcuts = !this.noShortcuts;
+    this.focusMode = !this.focusMode;
     this.showToast(
       this.noShortcuts ? "focus mode on — every key goes to the page" : "focus mode off",
       "done",

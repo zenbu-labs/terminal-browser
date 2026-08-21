@@ -455,7 +455,6 @@ impl Engine {
         }
     }
 
-
     pub fn set_clear_color(&mut self, view: usize, color: Color) {
         let Some(v) = self.comp.views.get_mut(view) else {
             return;
@@ -891,6 +890,12 @@ impl Engine {
                 }
                 if !focused {
                     self.focus_click = None;
+                    // Unfocused we hear button events but no hover motion, so the pointer can
+                    // travel anywhere without us learning. Whatever we knew about its position
+                    // died with the focus; only a report that arrives while unfocused revives it,
+                    // which keeps the synthetic click below on a point the operator really clicked.
+                    self.cursor = None;
+                    self.last_pointer_activity = None;
                 } else if gained
                     && let Some(at) = self.last_pointer_activity
                     && at.elapsed() <= Duration::from_millis(1000)

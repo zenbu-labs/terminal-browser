@@ -563,6 +563,14 @@ async function importCookiesCommand(options: ImportCookiesOptions): Promise<numb
     fail(`${here.length} browsers in this tab, so say which with --browser:\n${list(here)}`);
   }
   const target = here[0];
+  // A pinned pane is on no profile, so the daemon refuses this import. Say so here rather than
+  // offering to copy real credentials into a profile nobody named.
+  if (!options.toProfile && target.profile === null) {
+    fail(
+      `${describe(target)} is pinned to a --partition, which is on no browser profile — ` +
+        "name one with --to-profile",
+    );
+  }
   if (!options.confirmed && process.stdin.isTTY) {
     if (!process.stderr.isTTY) {
       fail("stderr is redirected, so the confirmation cannot be shown — re-run with -y to copy without asking");
