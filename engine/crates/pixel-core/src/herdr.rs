@@ -16,15 +16,22 @@ const LAYER: &str = "primary";
 
 /// herdr hands this number straight to the kitty placement it emits for us
 /// (`z: layer.z_index` in its `src/kitty_graphics.rs`, printed as the `z=` key),
-/// and the kitty graphics protocol draws a placement with a negative `z` under
-/// the terminal's text. herdr paints its own overlays - the copy toast, its
-/// notifications - as text, so at `z=0` our frames covered them.
+/// and the kitty graphics protocol gives a placement two rungs below the text.
+/// A merely negative `z` draws under glyphs but still over cell backgrounds, so
+/// at `z: -1` herdr's copy toast came out legible with its dark panel missing.
+/// Under `INT32_MIN/2` a placement also goes under non-default cell backgrounds:
+/// "Negative z-index values below INT32_MIN/2 (-1,073,741,824) will be drawn
+/// under cells with non-default background colors" (kitty
+/// `docs/graphics-protocol.rst:541`), which both implementations enforce as a
+/// strict `<` - kitty's `graphics.c:1397` and ghostty's `renderer/image.zig:384`
+/// both compare against `INT32_MIN/2`.
 ///
-/// -1 is the shallowest negative: every non-default cell background still sits
-/// below our frames, which is what a `z` under INT32_MIN/2 would give away, and
-/// nothing but glyphs comes out on top. We draw over the alternate screen with
-/// the cursor hidden, so herdr's overlays are the only glyphs there are.
-const Z_INDEX: i32 = -1;
+/// So take the shallowest z in that class: one below the limit, leaving every
+/// deeper placement below us. herdr does not paint a pane's cells itself - its
+/// `render_panes` only blits the pty grid, and blank cells keep the default
+/// background unless the program redefines it, which we never do - so the page
+/// stays visible and only herdr's own panels come out on top.
+const Z_INDEX: i32 = i32::MIN / 2 - 1;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HerdrTarget {
@@ -315,12 +322,15 @@ mod tests {
         ));
     }
 
+    /// One below `INT32_MIN/2`, the rung where kitty draws a placement under
+    /// non-default cell backgrounds as well as under text.
     #[test]
     fn the_stream_claims_the_primary_layer_under_herdrs_overlays() {
         assert_eq!(
             stream_request("w1:p1"),
-            r#"{"id":"stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1","layer_id":"primary","z_index":-1}}"#
+            r#"{"id":"stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1","layer_id":"primary","z_index":-1073741825}}"#
         );
+        assert!(Z_INDEX < i32::MIN / 2, "must clear the below-background limit");
     }
 
     /// Answers like herdr does: one info reply per connection, then a stream
