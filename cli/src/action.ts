@@ -57,6 +57,10 @@ function sessionName(browser: Browser): string {
   return `terminal-browser-${recordKey(browser)}`;
 }
 
+function sessionArgs(session: string, port: string, args: string[]): string[] {
+  return ["--session", session, "--cdp", port, ...args];
+}
+
 function childEnv(): NodeJS.ProcessEnv {
   fs.mkdirSync(AGENT_SOCKETS_DIR, { recursive: true });
   return { ...process.env, AGENT_BROWSER_SOCKET_DIR: AGENT_SOCKETS_DIR };
@@ -92,7 +96,7 @@ function evalResult(stdout: string): unknown {
 function agentTabs(binary: string, browser: Browser): AgentTab[] {
   const session = sessionName(browser);
   const port = String(browser.cdpPort);
-  const listing = runAgent(binary, ["--session", session, "--cdp", port, "tab", "list", "--json"]);
+  const listing = runAgent(binary, sessionArgs(session, port, ["tab", "list", "--json"]));
   if (listing.status === 0) {
     try {
       return parseTabs(listing.stdout);
@@ -102,7 +106,7 @@ function agentTabs(binary: string, browser: Browser): AgentTab[] {
   if (reconnect.status !== 0) {
     throw new Error(`could not connect agent-browser to terminal browser ${recordKey(browser)} on port ${port}`);
   }
-  const retry = runAgent(binary, ["--session", session, "tab", "list", "--json"]);
+  const retry = runAgent(binary, sessionArgs(session, port, ["tab", "list", "--json"]));
   if (retry.status !== 0) throw new Error("agent-browser could not list tabs after reconnecting");
   return parseTabs(retry.stdout);
 }
@@ -110,6 +114,7 @@ function agentTabs(binary: string, browser: Browser): AgentTab[] {
 function matchTab(
   binary: string,
   session: string,
+  port: string,
   agentView: AgentTab[],
   tab: TabTarget,
 ): AgentTab {
@@ -124,14 +129,12 @@ function matchTab(
     );
   }
   for (const candidate of candidates) {
-    runAgent(binary, ["--session", session, "tab", candidate.tabId]);
-    const probe = runAgent(binary, [
-      "--session",
-      session,
+    runAgent(binary, sessionArgs(session, port, ["tab", candidate.tabId]));
+    const probe = runAgent(binary, sessionArgs(session, port, [
       "eval",
       "performance.timeOrigin",
       "--json",
-    ]);
+    ]));
     if (probe.status !== 0) continue;
     try {
       if (evalResult(probe.stdout) === tab.timeOrigin) return { ...candidate, active: true };
@@ -267,16 +270,17 @@ export async function actionCommand(terminal: Terminal | null, options: ActionOp
 
   const binary = agentBrowserPath();
   const session = sessionName(browser);
-  const match = matchTab(binary, session, agentTabs(binary, browser), tab);
+  const port = String(browser.cdpPort);
+  const match = matchTab(binary, session, port, agentTabs(binary, browser), tab);
   if (!match.active) {
-    const switched = runAgent(binary, ["--session", session, "tab", match.tabId]);
+    const switched = runAgent(binary, sessionArgs(session, port, ["tab", match.tabId]));
     if (switched.status !== 0) throw new Error(`agent-browser could not switch to ${match.tabId}`);
   }
   if (options.follow && !tab.active) {
     await control(browser.socket, { cmd: "activate-tab", tab: tab.id });
   }
 
-  const child = spawnSync(binary, ["--session", session, ...options.passthrough], {
+  const child = spawnSync(binary, sessionArgs(session, port, options.passthrough), {
     env: childEnv(),
     stdio: "inherit",
   });
