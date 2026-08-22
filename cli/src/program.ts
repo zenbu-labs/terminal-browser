@@ -495,6 +495,7 @@ Examples:
     )
     .addOption(valueOption("--target <id>", "CDP target id"))
     .option("--follow", "bring the tab to the front before running the command")
+    .option("--receipt", "print the resolved target and exit status to stderr")
     .passThroughOptions()
     .addHelpText(
       "after",
@@ -508,6 +509,7 @@ Examples:
   terminal-browser action -- click @e14
   terminal-browser action -- eval "document.title"
   terminal-browser action --browser 90107-1 --tab 2 -- fill @e3 "hello"
+  terminal-browser action --browser 90107-1 --tab 2 --receipt -- get url
 `,
     )
     .action(
@@ -516,6 +518,7 @@ Examples:
         values: {
           browser?: string;
           follow?: boolean;
+          receipt?: boolean;
           tab?: number;
           target?: string;
         },
@@ -525,6 +528,7 @@ Examples:
             browserKey: values.browser,
             follow: values.follow === true,
             passthrough: agentArgs,
+            receipt: values.receipt === true,
             tabId: values.tab,
             targetId: values.target,
           }),

@@ -29,6 +29,7 @@ export interface ActionOptions {
   targetId?: string;
   follow: boolean;
   passthrough: string[];
+  receipt: boolean;
 }
 
 function repoScript(): string {
@@ -231,9 +232,6 @@ async function interceptTabLifecycle(
 ): Promise<unknown | null> {
   const positional = args.filter((arg) => !arg.startsWith("-"));
   const [command, sub, value] = positional;
-  if (command === "open") {
-    return control(selection.browser.socket, { cmd: "open-tab", url: sub });
-  }
   if (command !== "tab") return null;
   if (sub === "new") {
     return control(selection.browser.socket, { cmd: "open-tab", url: value });
@@ -244,6 +242,25 @@ async function interceptTabLifecycle(
     return control(selection.browser.socket, { cmd: "close-tab", tab: id });
   }
   return null;
+}
+
+function outcome(selection: Selection, status: number): string {
+  const { browser, tab } = selection;
+  return `browser ${recordKey(browser)}, tab ${tab.id}, target ${tab.targetId}, url ${tab.url}, exit ${status}`;
+}
+
+function reportFailure(selection: Selection, status: number, args: string[]): void {
+  process.stderr.write(`terminal-browser action failed: ${outcome(selection, status)}\n`);
+  const ref = args.find((arg) => /^@e\d+$/.test(arg));
+  if (ref) {
+    process.stderr.write(
+      `The command used ${ref}; take a fresh snapshot of this tab before retrying because refs can change after navigation.\n`,
+    );
+  }
+}
+
+function reportReceipt(selection: Selection, status: number): void {
+  process.stderr.write(`terminal-browser action receipt: ${outcome(selection, status)}\n`);
 }
 
 export async function actionCommand(terminal: Terminal | null, options: ActionOptions) {
@@ -258,6 +275,7 @@ export async function actionCommand(terminal: Terminal | null, options: ActionOp
   const intercepted = await interceptTabLifecycle(selection, options.passthrough);
   if (intercepted !== null) {
     process.stdout.write(`${JSON.stringify(intercepted, null, 2)}\n`);
+    if (options.receipt) reportReceipt(selection, 0);
     return 0;
   }
 
@@ -285,5 +303,8 @@ export async function actionCommand(terminal: Terminal | null, options: ActionOp
     stdio: "inherit",
   });
   if (child.error) throw child.error;
-  return child.status ?? 1;
+  const status = child.status ?? 1;
+  if (status !== 0) reportFailure(selection, status, options.passthrough);
+  if (options.receipt) reportReceipt(selection, status);
+  return status;
 }

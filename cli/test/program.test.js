@@ -295,6 +295,40 @@ test("passes action arguments after the required delimiter untouched", async () 
           browserKey: "90107-1",
           follow: true,
           passthrough: ["eval", "--profile", "one", "--", "--profile", "two"],
+          receipt: false,
+          tabId: 2,
+          targetId: undefined,
+        },
+      ],
+      name: "action",
+    },
+  ]);
+});
+
+test("keeps nested open distinct from top-level open and parses action receipts", async () => {
+  const cli = harness();
+  assert.equal(
+    await cli.run([
+      "action",
+      "--browser",
+      "90107-1",
+      "--tab",
+      "t2",
+      "--receipt",
+      "--",
+      "open",
+      "https://example.com/next",
+    ]),
+    0,
+  );
+  assert.deepEqual(cli.calls, [
+    {
+      args: [
+        {
+          browserKey: "90107-1",
+          follow: false,
+          passthrough: ["open", "https://example.com/next"],
+          receipt: true,
           tabId: 2,
           targetId: undefined,
         },

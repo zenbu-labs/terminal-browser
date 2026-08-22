@@ -27,6 +27,21 @@ terminal-browser ls # lists open browsers
 terminal-browser action -- snapshot # runs agent-browser commands against the open browser
 ```
 
+For a fail-fast upload workflow, resolve the browser and tab with `terminal-browser ls`,
+then keep the dependent steps in one batch:
+
+```bash
+terminal-browser action --browser <key> --tab <id> -- batch --bail \
+  'snapshot -i' \
+  'upload "#file-input" "./artifact.zip"' \
+  'click "#submit-upload"' \
+  'wait --text "Upload complete"' \
+  'get text "#upload-status"'
+```
+
+`--bail` stops later steps after a failure; it does not undo an upload that has
+already completed.
+
 
 
 
