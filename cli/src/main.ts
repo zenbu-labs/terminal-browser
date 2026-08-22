@@ -1,10 +1,17 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { DAEMON_SOCKET, LOGS_DIR, ensureDataDir } from "pixel-store";
+import {
+  DAEMON_SOCKET,
+  LOGS_DIR,
+  ensureDataDir,
+  findProfile,
+  profileSettings,
+  saveProfile,
+} from "pixel-store";
 import {
   callerTty,
   canSplit,
@@ -17,15 +24,20 @@ import type { Direction, Terminal, TerminalCheck } from "pixel-terminals";
 import { actionCommand } from "./action";
 import { control } from "./control";
 import { setupCommand } from "./editors";
-import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
+import { keybindingsCommand } from "./keybindings-command";
 import { lsCommand } from "./ls";
+import { namedProfileName } from "./profile";
+import type { ImportResult } from "./profile";
+import { profileCommand } from "./profile-command";
+import { runCli } from "./program";
+import type { CliActions, OpenRequest } from "./program";
 import { instances } from "./registry";
+import type { InstanceRecord } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
 import { openSshTunnel, startBundle, validateBundleDir, validateSshTarget } from "./ssh";
 import type { RemoteBundle } from "./ssh";
-import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
@@ -38,22 +50,6 @@ function fail(message: string): never {
 
 function print(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function takeFlag(args: string[], name: string): string | undefined {
-  const at = args.indexOf(name);
-  if (at < 0) return undefined;
-  const value = args[at + 1];
-  if (value === undefined) fail(`${name} requires a value`);
-  args.splice(at, 2);
-  return value;
-}
-
-function takeBoolFlag(args: string[], name: string): boolean {
-  const at = args.indexOf(name);
-  if (at < 0) return false;
-  args.splice(at, 1);
-  return true;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,7 +76,7 @@ function electronBinary(): string {
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = browserDirectory();
   const electron = electronBinary();
-  const main = path.join(browserDir, "dist", "main.js");
+  const main = browserMain();
   for (const required of [electron, main]) {
     if (!fs.existsSync(required)) {
       fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
@@ -107,6 +103,66 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
     .join(" ");
   const line = `exec ${quoted} 2>>'${logDir.replaceAll("'", `'\\''`)}/stderr.log'`;
   return { command: ["/bin/sh", "-c", line], cwd: browserDir };
+}
+
+function browserMain(): string {
+  return path.join(browserDirectory(), "dist", "main.js");
+}
+
+async function runCookieImport(
+  file: string,
+  partition: string,
+  replace: boolean,
+): Promise<ImportResult> {
+  const args = [browserMain(), `--import-cookies=${file}`, `--partition=${partition}`];
+  if (replace) args.push("--replace-cookies");
+  return JSON.parse(await runBrowserUtility(args)) as ImportResult;
+}
+
+async function runProfileRemoval(partition: string): Promise<boolean> {
+  const result = JSON.parse(
+    await runBrowserUtility([browserMain(), `--remove-partition=${partition}`]),
+  ) as { removed?: boolean };
+  return result.removed === true;
+}
+
+async function runBrowserUtility(args: string[]): Promise<string> {
+  let daemonRunning = false;
+  try {
+    const socket = await connectDaemon();
+    socket.destroy();
+    daemonRunning = true;
+  } catch {}
+  if (daemonRunning) fail("stop the terminal-browser daemon before changing a profile");
+  const electron = electronBinary();
+  for (const required of [electron, browserMain()]) {
+    if (!fs.existsSync(required)) {
+      fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
+    }
+  }
+  if (process.platform === "linux") {
+    let sandboxError = linuxSandboxError(electron);
+    if (sandboxError) {
+      apparmorSetup(electron);
+      sandboxError = linuxSandboxError(electron);
+    }
+    if (sandboxError) fail(sandboxError);
+  }
+  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    args.push("--ozone-platform=headless", "--screen-info={8192x8192}");
+  }
+  const result = spawnSync(electron, args, {
+    cwd: browserDirectory(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || `browser utility exited with status ${result.status}`);
+  }
+  const line = result.stdout.trim().split(/\r?\n/).at(-1);
+  if (!line) throw new Error("browser utility returned no result");
+  return line;
 }
 
 function clientLaunchCommand(argv: string[]): string[] {
@@ -297,7 +353,7 @@ async function kill(pid: number, why: string): Promise<number> {
   return 0;
 }
 
-async function attachHere(argv: string[]): Promise<never> {
+async function attachHere(argv: string[], onStarted?: () => void): Promise<never> {
   const tty = ownTtyPath();
   if (!tty) throw new Error("not running on a tty");
   const { socket, reply } = await openSession(argv, tty);
@@ -305,6 +361,7 @@ async function attachHere(argv: string[]): Promise<never> {
     socket.destroy();
     throw new Error(reply.error ?? "daemon refused the session");
   }
+  onStarted?.();
   nextReply(socket, (message) => {
     if (message.event === "closed") process.exit(message.code ?? 0);
   });
@@ -329,11 +386,13 @@ async function attachHere(argv: string[]): Promise<never> {
   return new Promise<never>(() => {});
 }
 
-async function openHere(argv: string[]): Promise<never> {
+async function openHere(argv: string[], onStarted?: () => void): Promise<never> {
   await sshSetup(argv).catch((error) =>
     fail(error instanceof Error ? error.message : String(error)),
   );
-  return attachHere(argv).catch((error) => fail(`could not start the browser: ${String(error)}`));
+  return attachHere(argv, onStarted).catch((error) =>
+    fail(`could not start the browser: ${String(error)}`),
+  );
 }
 
 function flagEq(argv: string[], flag: string): string | undefined {
@@ -364,41 +423,16 @@ async function sshSetup(argv: string[]): Promise<void> {
   }
   for (const signal of signals) process.removeListener(signal, interrupt);
 }
-
-const DIRECTIONS: Direction[] = ["right", "left", "down", "up"];
-
-function isDirection(value: string): value is Direction {
-  return (DIRECTIONS as string[]).includes(value);
-}
-
-function takeSplitFlag(args: string[]): Direction | null {
-  const raw = takeFlag(args, "--split");
-  if (raw === undefined) return null;
-  if (!isDirection(raw)) fail(`invalid --split ${raw} (right, left, down, up)`);
-  return raw;
-}
-
-function takeSizeFlag(args: string[]): number | null {
-  const raw = takeFlag(args, "--size");
-  if (raw === undefined || raw === null) return null;
-  const size = Number(raw);
-  if (!Number.isFinite(size) || size < 0.2 || size > 0.95) {
-    fail(`invalid --size ${raw} (fraction between 0.2 and 0.95)`);
-  }
-  return size;
-}
-
-
-
-
-
 async function launchInSplit(
   terminal: Terminal,
   direction: Direction,
   argv: string[],
   size?: number | null,
 ): Promise<InstanceRecord> {
-  const from = await terminal.getCurrentPane?.({ tty: ownTtyPath() ?? callerTty().path, cwd: process.cwd() });
+  const from = await terminal.getCurrentPane?.({
+    tty: ownTtyPath() ?? callerTty().path,
+    cwd: process.cwd(),
+  });
   if (!from) fail(`could not work out which ${terminal.name} pane you are in`);
   const before = new Set((await instances()).map(recordKey));
   await terminal.split!({
@@ -408,9 +442,8 @@ async function launchInSplit(
     size: size ?? null,
     tty: ownTtyPath() ?? callerTty().path,
   });
-  // ssh auth prompts and bundle installs run inside the new pane first
-  const patience = argv.some((arg) => arg.startsWith("--ssh=")) ? 600_000 : 20_000;
-  const deadline = Date.now() + patience;
+  const registrationTimeout = argv.some((arg) => arg.startsWith("--ssh=")) ? 600_000 : 20_000;
+  const deadline = Date.now() + registrationTimeout;
   while (Date.now() < deadline) {
     const fresh = (await instances()).find((record) => !before.has(recordKey(record)));
     if (fresh) {
@@ -418,7 +451,9 @@ async function launchInSplit(
     }
     await sleep(250);
   }
-  fail(`browser did not register within ${Math.round(patience / 1000)}s (is the split open?)`);
+  fail(
+    `browser did not register within ${Math.round(registrationTimeout / 1000)}s (is the split open?)`,
+  );
 }
 
 let asked: Promise<TerminalCheck> | null = null;
@@ -447,6 +482,7 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
   }
   await requireGraphics(check);
   const argv = url ? [url] : [];
+  applyConfiguredDefaultProfile(argv);
   if (interactiveTty()) return openHere(argv);
   if (!canSplit(check.terminal)) fail(cannotOpenPanes(check.terminal));
   const split = url && fs.existsSync(url) ? [path.resolve(url)] : argv;
@@ -463,51 +499,9 @@ async function requireGraphics(check: TerminalCheck) {
   process.exit(1);
 }
 
-const BROWSER_FLAGS = [
-  "--app-mode",
-  "--no-toolbar",
-  "--no-shortcuts",
-  "--no-context-menu",
-  "--no-overlays",
-  "--no-frame",
-  "--open-tabs-in-popup-stack",
-  "--allow-clipboard-read",
-  "--partition=",
-  "--ssh=",
-  "--ssh-bundle=",
-  "--ssh-bundle-dir=",
-  "--preload=",
-  "--main-script=",
-  "--palette-key=",
-  "--find-key=",
-  "--devtools-key=",
-  "--console-key=",
-  "--split-dir=",
-  "--parent-tty=",
-];
-
-function rejectUnknownFlags(args: string[]) {
-  for (const arg of args) {
-    if (!arg.startsWith("-")) continue;
-    const known = BROWSER_FLAGS.some((flag) =>
-      flag.endsWith("=") ? arg.startsWith(flag) : arg === flag,
-    );
-    if (!known) fail(`unknown option ${arg.split("=")[0]} (terminal-browser open --help)`);
-  }
-}
-
-function takeSshFlags(args: string[]): void {
-  const ssh = takeFlag(args, "--ssh");
-  if (ssh !== undefined) args.push(`--ssh=${ssh}`);
-  const bundle = takeFlag(args, "--ssh-bundle");
-  if (bundle !== undefined) args.push(`--ssh-bundle=${bundle}`);
-  const bundleDir = takeFlag(args, "--ssh-bundle-dir");
-  if (bundleDir !== undefined) args.push(`--ssh-bundle-dir=${bundleDir}`);
+function validateSshArgs(args: string[]): void {
+  const target = flagEq(args, "--ssh");
   const at = args.findIndex((arg) => arg.startsWith("--ssh-bundle="));
-  if (at >= 0) {
-    args[at] = `--ssh-bundle=${path.resolve(args[at].slice("--ssh-bundle=".length))}`;
-  }
-  const target = args.find((arg) => arg.startsWith("--ssh="))?.slice("--ssh=".length);
   if (at >= 0 && !target) fail("--ssh-bundle needs --ssh");
   if (args.some((arg) => arg.startsWith("--ssh-bundle-dir=")) && at < 0) {
     fail("--ssh-bundle-dir needs --ssh-bundle");
@@ -519,26 +513,42 @@ function takeSshFlags(args: string[]): void {
     fail(error instanceof Error ? error.message : String(error));
   }
 }
-
 function requirePaneAccess(): void {
   const refusal = sandboxRefusal();
   if (refusal) fail(refusal);
 }
 
-async function openCommand(args: string[]) {
+async function openCommand(request: OpenRequest) {
   requirePaneAccess();
-  const split = takeSplitFlag(args);
-  const size = takeSizeFlag(args);
-  if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
-  takeSshFlags(args);
-  rejectUnknownFlags(args);
-  const positionals = args.filter((arg) => !arg.startsWith("-"));
-  if (positionals.length > 1) {
-    fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
+  const args = [...(request.target ? [request.target] : []), ...request.browserArgs];
+  const split = request.split ?? null;
+  const size = request.size ?? null;
+  const profile = request.profile;
+  let profileNameToSave: string | null = null;
+  if (profile) {
+    if (args.some((arg) => arg.startsWith("--partition="))) {
+      fail("--profile and --partition cannot be used together");
+    }
+    if (profile === "default") {
+      args.push("--profile=default");
+    } else {
+      const name = namedProfileName(profile);
+      if (!findProfile(name)) profileNameToSave = name;
+      args.push(`--partition=${name}`);
+    }
+  } else {
+    applyConfiguredDefaultProfile(args);
   }
+  if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
+  validateSshArgs(args);
   await requireGraphics(await currentTerminal());
+  const saveCreatedProfile = () => {
+    if (profileNameToSave && !findProfile(profileNameToSave)) {
+      saveProfile({ createdAt: new Date().toISOString(), name: profileNameToSave });
+    }
+  };
   if (!split && interactiveTty()) {
-    return openHere(args);
+    return openHere(args, saveCreatedProfile);
   }
   const terminal = (await currentTerminal()).terminal;
   const direction = split ?? "right";
@@ -554,98 +564,55 @@ async function openCommand(args: string[]) {
   const argv = args.map((arg) => (arg === url && fs.existsSync(arg) ? path.resolve(arg) : arg));
   argv.push(`--split-dir=${direction}`);
   if (tty) argv.push(`--parent-tty=${tty}`);
-  print(await launchInSplit(terminal!, direction, argv, size));
+  const launched = await launchInSplit(terminal!, direction, argv, size);
+  saveCreatedProfile();
+  print(launched);
 }
 
-function splitPassthrough(args: string[]): { own: string[]; passthrough: string[] } {
-  const at = args.indexOf("--");
-  if (at < 0) return { own: args, passthrough: [] };
-  return { own: args.slice(0, at), passthrough: args.slice(at + 1) };
-}
-
-function takeTabFlag(args: string[]): number | undefined {
-  const raw = takeFlag(args, "--tab");
-  if (raw === undefined) return undefined;
-  const id = Number(raw.replace(/^t/, ""));
-  if (!Number.isInteger(id)) fail(`invalid --tab ${raw} (a tab id from terminal-browser ls)`);
-  return id;
-}
-
-function asksForHelp(args: string[]): boolean {
-  const end = args.indexOf("--");
-  const own = end < 0 ? args : args.slice(0, end);
-  return own.includes("--help") || own.includes("-h");
-}
-
-function helpCommand(topic: string | undefined): number {
-  if (!topic) {
-    process.stdout.write(rootHelp());
-    return 0;
+function applyConfiguredDefaultProfile(args: string[]): void {
+  if (args.some((arg) => arg.startsWith("--partition="))) return;
+  const name = profileSettings().defaultProfile;
+  if (!name) {
+    args.push("--profile=default");
+    return;
   }
-  const help = commandHelp(topic);
-  if (!help) fail(`no help for ${topic} (try ${helpTopics().join(", ")})`);
-  process.stdout.write(help);
-  return 0;
+  if (!findProfile(name)) {
+    fail(`default profile ${name} is missing; reset it with terminal-browser profile default --reset`);
+  }
+  args.push(`--partition=${name}`);
 }
 
 async function main(): Promise<number> {
-  const [command, ...args] = process.argv.slice(2);
-  if (command === "--help" || command === "-h") {
-    process.stdout.write(rootHelp());
-    return 0;
-  }
-  if (command === "--version" || command === "-v") {
-    process.stdout.write(`terminal-browser ${installedVersion() ?? "dev"}\n`);
-    return 0;
-  }
-  if (command === "help") return helpCommand(args[0]);
-  if (asksForHelp(args)) {
-    process.stdout.write(commandHelp(command) ?? rootHelp());
-    return 0;
-  }
-  if (command === "open") {
-    await openCommand(args);
-    return 0;
-  }
-  if (command === "ls") {
-    requirePaneAccess();
-    const all = takeBoolFlag(args, "--all");
-    const json = takeBoolFlag(args, "--json");
-    await lsCommand((await currentTerminal()).terminal, all, json);
-    return 0;
-  }
-  if (command === "setup") {
-    const sandbox = apparmorSetup(electronBinary());
-    const editors = setupCommand();
-    return editors !== 0 ? editors : sandbox;
-  }
-  if (command === "upgrade") return upgradeCommand();
-  if (command === "shutdown") return shutdownDaemon();
-  if (command === "new-tab") {
-    requirePaneAccess();
-    const key = takeFlag(args, "--browser");
-    return newTabCommand(args.find((arg) => !arg.startsWith("-")), key);
-  }
-  if (command === "action") {
-    requirePaneAccess();
-    const { own, passthrough } = splitPassthrough(args);
-    const options = {
-      browserKey: takeFlag(own, "--browser"),
-      tabId: takeTabFlag(own),
-      targetId: takeFlag(own, "--target"),
-      follow: takeBoolFlag(own, "--follow"),
-      passthrough,
-    };
-    if (own.length > 0) fail(`unexpected ${own[0]} — put agent-browser arguments after --`);
-    return actionCommand((await currentTerminal()).terminal, options);
-  }
-  const rest = process.argv.slice(2);
-  if (asksForHelp(rest)) {
-    process.stdout.write(commandHelp("open") ?? rootHelp());
-    return 0;
-  }
-  await openCommand(rest);
-  return 0;
+  const actions: CliActions = {
+    action: async (options) => {
+      requirePaneAccess();
+      return actionCommand((await currentTerminal()).terminal, options);
+    },
+    keybindings: (request) => keybindingsCommand(request, detect()),
+    ls: async (all, json) => {
+      requirePaneAccess();
+      return lsCommand((await currentTerminal()).terminal, all, json);
+    },
+    newTab: async ({ browserKey, target }) => {
+      requirePaneAccess();
+      return newTabCommand(target, browserKey);
+    },
+    open: openCommand,
+    profile: (request) => profileCommand(request, {
+      importCookies: runCookieImport,
+      removePartition: runProfileRemoval,
+    }),
+    setup: () => {
+      const sandbox = apparmorSetup(electronBinary());
+      const editors = setupCommand();
+      return editors !== 0 ? editors : sandbox;
+    },
+    shutdown: shutdownDaemon,
+    upgrade: upgradeCommand,
+  };
+  return runCli(process.argv.slice(2), actions, {
+    version: installedVersion() ?? "dev",
+  });
 }
 
 void main()

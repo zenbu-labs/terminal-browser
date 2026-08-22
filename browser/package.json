@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "build:engine": "pnpm --filter pixel-react build",
     "start": "pnpm build:engine && pnpm build && pnpm --filter terminal-browser-cli build && exec node ../cli/dist/main.js",
+    "test": "pnpm build && node --test test/*.test.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

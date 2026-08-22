@@ -18,12 +18,29 @@ curl -fsSl https://terminal-browser.sh/install | bash
 ### Usage
 ```
 terminal-browser # launches the browser
-terminal-browser open <url> # opens the browser at a url
+terminal-browser open <url or search> # opens a URL or searches with the selected profile
+terminal-browser open kittens # searches with the selected profile's search engine
+terminal-browser "best terminal browser" # quote multi-word searches
 terminal-browser --split right # opens the browser in a split pane to the right
 terminal-browser open --ssh <user@host> <url> # performs all network requests through a remote server
 terminal-browser ls # lists open browsers
-terminal-browser action # an agent-browser compatible cli for interacting with open terminal-browsers
+terminal-browser action -- snapshot # runs agent-browser commands against the open browser
 ```
+
+For a fail-fast upload workflow, resolve the browser and tab with `terminal-browser ls`,
+then keep the dependent steps in one batch:
+
+```bash
+terminal-browser action --browser <key> --tab <id> -- batch --bail \
+  'snapshot -i' \
+  'upload "#file-input" "./artifact.zip"' \
+  'click "#submit-upload"' \
+  'wait --text "Upload complete"' \
+  'get text "#upload-status"'
+```
+
+`--bail` stops later steps after a failure; it does not undo an upload that has
+already completed.
 
 
 

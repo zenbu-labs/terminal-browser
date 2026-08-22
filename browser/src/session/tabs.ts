@@ -43,6 +43,7 @@ export interface TabHost {
 
 export class TabManager {
   private tabs: Tab[] = [];
+  private closedUrls: string[] = [];
   private activeId = 0;
   private seq = 1;
 
@@ -67,6 +68,10 @@ export class TabManager {
 
   get count(): number {
     return this.tabs.length;
+  }
+
+  get canReopen(): boolean {
+    return this.closedUrls.length > 0;
   }
 
   
@@ -130,6 +135,10 @@ export class TabManager {
     const at = this.tabs.findIndex((t) => t.id === id);
     if (at < 0) return;
     const [closed] = this.tabs.splice(at, 1);
+    if (closed.state.url && closed.state.url !== "about:blank") {
+      this.closedUrls.push(closed.state.url);
+      if (this.closedUrls.length > 20) this.closedUrls.shift();
+    }
     closed.controller.stop();
     if (this.activeId === id) {
       const fallback = this.tabs[Math.min(at, this.tabs.length - 1)];
@@ -138,6 +147,27 @@ export class TabManager {
     }
     this.host.onTabsChanged();
     this.host.requestRender();
+  }
+
+  cycle(offset: 1 | -1): boolean {
+    if (this.tabs.length < 2) return false;
+    const at = this.tabs.findIndex((tab) => tab.id === this.activeId);
+    const next = (at + offset + this.tabs.length) % this.tabs.length;
+    this.activate(this.tabs[next].id);
+    return true;
+  }
+
+  duplicateActive(): boolean {
+    if (!this.active) return false;
+    this.create(this.active.state.url);
+    return true;
+  }
+
+  reopenClosed(): boolean {
+    const url = this.closedUrls.pop();
+    if (!url) return false;
+    this.create(url);
+    return true;
   }
 
   has(id: number): boolean {

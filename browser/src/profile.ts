@@ -6,7 +6,7 @@ import { app } from "electron";
 import { APP_DIR_NAME } from "pixel-store";
 
 // er i don't think this is necessary anymore given our daemon but i guess it doesn't hurt to be explicit 
-export function claimProfile() {
+export function claimProfile(): boolean {
   const appData = process.env.TERMINAL_BROWSER_APPDATA ?? app.getPath("appData");
   for (let i = 0; i < 32; i++) {
     const dir = path.join(appData, i === 0 ? APP_DIR_NAME : `${APP_DIR_NAME}-${i + 1}`);
@@ -26,10 +26,11 @@ export function claimProfile() {
           if (Number(fs.readFileSync(lock, "utf8")) === process.pid) fs.unlinkSync(lock);
         } catch {}
       });
-      return;
+      return i === 0;
     } catch {}
   }
   app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-")));
+  return false;
 }
 
 function alive(pid: number) {

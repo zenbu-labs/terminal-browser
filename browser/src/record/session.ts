@@ -34,7 +34,7 @@ import {
   unionRects,
 } from "./model";
 import type { CropScope, HandleId, MarkupObject, Rect, Tool, Vec } from "./model";
-import { isRecordKey, listStep } from "../session/keybindings";
+import { listStep } from "../session/keybindings";
 import { newRecordingDir } from "./paths";
 import {
   CLICK_PULSE_MS,
@@ -58,6 +58,7 @@ export interface RecordHost {
   reviewStarted(): void;
   setKeyCapture(keys: string[]): void;
   setClipboard(text: string): void;
+  recordKey(event: EngineKeyEvent): boolean;
   toast(name: string, state: "done" | "failed", detail?: string): void;
   finished(): void;
 }
@@ -357,7 +358,7 @@ export class RecordSession {
   handleKey(event: EngineKeyEvent): boolean {
     if (event.kind === "release") return false;
     if (this.scrub == null) {
-      if (isRecordKey(event) && !this.recorder.stopped) {
+      if (this.host.recordKey(event) && !this.recorder.stopped) {
         this.stopReview();
         return true;
       }
@@ -379,7 +380,7 @@ export class RecordSession {
     }
     const cmd = event.mods.super || event.mods.ctrl;
     const plainCtrl = event.mods.ctrl && !event.mods.super && !event.mods.alt;
-    if (isRecordKey(event)) {
+    if (this.host.recordKey(event)) {
       this.discard();
       return true;
     }
