@@ -40,3 +40,16 @@ export async function listInstances(): Promise<InstanceRow[]> {
   }
   return live.sort((a, b) => a.startedAt - b.startedAt);
 }
+
+export interface InstanceProfile {
+  tty: string | null;
+  profile: string | null;
+}
+
+/** Synchronous: a launching pane needs its parent's profile before it builds its first view. */
+export function liveInstanceProfiles(): InstanceProfile[] {
+  const rows = store()
+    .sqlite.prepare("SELECT pid, tty, profile FROM instances")
+    .all() as Array<{ pid: number; tty: string | null; profile: string | null }>;
+  return rows.filter((row) => alive(row.pid)).map(({ tty, profile }) => ({ tty, profile }));
+}

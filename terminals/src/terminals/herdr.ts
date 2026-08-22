@@ -9,6 +9,14 @@ interface HerdrPaneSplitResult {
   result: { pane: { pane_id: string } };
 }
 
+interface HerdrWorkspaceList {
+  result: { workspaces: { workspace_id: string; focused: boolean }[] };
+}
+
+interface HerdrPaneList {
+  result: { panes: { pane_id: string; workspace_id: string }[] };
+}
+
 function herdrConfigPath(env: NodeJS.ProcessEnv): string {
   if (env.HERDR_CONFIG_PATH) return env.HERDR_CONFIG_PATH;
   if (process.platform === "win32") {
@@ -41,8 +49,44 @@ export const herdr: Detect = (env, run) => {
   const bin = env.HERDR_BIN_PATH || "herdr";
   const herdr = (args: string[]) => run(bin, args);
 
+  /**
+   * `--right-click pane` is new in herdr 0.8.2 (its CHANGELOG), and an older herdr rejects the whole
+   * split rather than the one flag, so the retry drops it. The caller's focus flag survives the retry:
+   * `pane split` has taken `--no-focus` since the subcommand first existed, in herdr 0.2.0
+   * (`src/cli.rs` at that tag), so no herdr that refuses `--right-click` can refuse it too.
+   */
   async function splitPane(args: string[]): Promise<HerdrPaneSplitResult> {
-    return JSON.parse(await herdr(["pane", "split", ...args, "--right-click", "pane"]));
+    try {
+      return JSON.parse(await herdr(["pane", "split", ...args, "--right-click", "pane"]));
+    } catch (error) {
+      const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "") : "";
+      if (!stderr.includes("--right-click")) throw error;
+      return JSON.parse(await herdr(["pane", "split", ...args]));
+    }
+  }
+
+  /** The workspace a pane lives in. The calling pane's is already in the environment, so asking costs nothing. */
+  async function paneWorkspace(paneId: string): Promise<string | null> {
+    if (paneId === env.HERDR_PANE_ID && env.HERDR_WORKSPACE_ID) return env.HERDR_WORKSPACE_ID;
+    const { result }: HerdrPaneList = JSON.parse(await herdr(["pane", "list"]));
+    return result.panes.find((pane) => pane.pane_id === paneId)?.workspace_id ?? null;
+  }
+
+  /**
+   * A new pane only earns focus when the split happens in the space the person is already looking at.
+   * Splitting from a pane in another workspace — an agent, or a background job — used to yank them out
+   * of whatever they were doing, so those splits are created unfocused. When herdr will not say which
+   * workspace is focused we also stay put: failing to focus is an inconvenience, stealing focus is the bug.
+   */
+  async function focusFlag(fromPaneId: string): Promise<"--focus" | "--no-focus"> {
+    try {
+      const { result }: HerdrWorkspaceList = JSON.parse(await herdr(["workspace", "list"]));
+      const focused = result.workspaces.find((workspace) => workspace.focused)?.workspace_id;
+      const from = await paneWorkspace(fromPaneId);
+      return from !== null && from === focused ? "--focus" : "--no-focus";
+    } catch {
+      return "--no-focus";
+    }
   }
 
   async function prepare(): Promise<void> {
@@ -64,7 +108,8 @@ export const herdr: Detect = (env, run) => {
     async split({ from, direction, command, size }) {
       const native = NATIVE_DIRECTION[direction];
       const ratio = size ? ["--ratio", String(size)] : [];
-      const { result } = await splitPane(["--pane", from.id, "--direction", native, "--focus", ...ratio]);
+      const focus = await focusFlag(from.id);
+      const { result } = await splitPane(["--pane", from.id, "--direction", native, focus, ...ratio]);
       const newPaneId = result.pane.pane_id;
       if (direction === "left" || direction === "up") {
         await herdr(["pane", "swap", "--pane", newPaneId, "--direction", OPPOSITE[native]]);

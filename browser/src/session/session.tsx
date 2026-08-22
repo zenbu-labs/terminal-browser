@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app, ipcMain, screen } from "electron";
+import { app, clipboard, ipcMain, nativeImage, screen } from "electron";
 import { createRequire } from "node:module";
 import type { IpcMainEvent, Session as ElectronSession } from "electron";
 import { createRoot } from "pixel-react";
@@ -9,6 +9,8 @@ import type { DragEvent, EngineKeyEvent, PixelRoot, Surface } from "pixel-react"
 import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
+import { importChromeCookies, listCookieSources } from "../cookies";
+import type { CookieImportRequest, CookieImportResult, CookieSource } from "../cookies";
 import {
   browserSession,
   configureBrowserSession,
@@ -21,6 +23,18 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
+import {
+  clearProfileData,
+  createProfile,
+  deleteProfile,
+  listProfiles,
+  noteProfileUsed,
+  partitionFor,
+  profileForNewPane,
+  renameProfile,
+  resolveProfile,
+} from "../profiles";
+import type { BrowserProfile } from "../profiles";
 import { lastUrl, setLastUrl, settings, store } from "pixel-store";
 import type { DevtoolsDock, InstanceRow } from "pixel-store";
 
@@ -33,9 +47,11 @@ import type {
   ChromeActions,
   ChromeLayout,
   DownloadView,
+  ImportHintView,
   PageMenuItem,
   PageMenuView,
   PopupView,
+  ProfileMenuView,
 } from "../ui/types";
 import { normalizeUrl, searchOrUrl } from "../url";
 import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
@@ -148,6 +164,39 @@ interface NewTabState {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+function cookieImportWarnings(result: CookieImportResult): string[] {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const add = (warning: string) => {
+    if (seen.has(warning)) return;
+    seen.add(warning);
+    warnings.push(warning);
+  };
+  for (const warning of result.warnings) add(warning);
+  if (result.undecryptable > 0) {
+    add(
+      `${result.undecryptable} ${result.browser} cookies would not decrypt with the key ${result.browser} encrypted them with, so those sites will still ask you to sign in.`,
+    );
+  }
+  if (result.rejected > 0) {
+    add(`${result.rejected} cookies were rejected by this browser's cookie store.`);
+  }
+  return warnings;
+}
+
+const IMPORT_SUMMARY_NAMES = 4;
+
+function cookieSourceSummary(sources: CookieSource[]): string {
+  if (sources.length === 0) return "No supported browsers detected.";
+  const named = sources.slice(0, IMPORT_SUMMARY_NAMES).map((source) => source.displayName).join(", ");
+  const rest = sources.length - IMPORT_SUMMARY_NAMES;
+  return rest > 0 ? `Detected: ${named}, +${rest} more.` : `Detected: ${named}.`;
+}
+
+// Each import decrypts row by row and rewrites a whole cookie store, so every pane in this
+// process waits its turn rather than multiplying that work.
+let importingCookies = false;
+
 class Session {
   private readonly ctx: SessionContext;
   private readonly terminal: Terminal | null;
@@ -156,13 +205,25 @@ class Session {
   private finding: Promise<Pane | null> | null = null;
   private readonly argv: string[];
   private readonly hideToolbar: boolean;
-  private readonly noShortcuts: boolean;
+  /** --no-shortcuts at launch: a floor the runtime toggle never lifts. */
+  private readonly shortcutsDisabled: boolean;
+  /** The focus-mode toggle at runtime: every key goes to the page. */
+  private focusMode = false;
+  /** What every shortcut reads: the launch flag, or focus mode while it is on. */
+  private get noShortcuts(): boolean {
+    return this.shortcutsDisabled || this.focusMode;
+  }
   private readonly noContextMenu: boolean;
   private readonly noOverlays: boolean;
   private readonly noFrame: boolean;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
-  private readonly partition: string | null;
+  /**
+   * --partition pins this pane's storage directly, which puts it on no profile at all. --ssh
+   * pins it the same way, so a remote host's cookies never land in a local profile.
+   */
+  private readonly explicitPartition: string | null;
+  private profile: BrowserProfile | null;
   private readonly socksPort: number | null;
   private readonly preload: string | null;
   private readonly mainScript: string | null;
@@ -179,6 +240,11 @@ class Session {
   private findBinding: KeyBinding[] = [];
   private devtoolsBinding: KeyBinding[] = [];
   private consoleBinding: KeyBinding[] = [];
+  private screenshotBinding: KeyBinding[] = [];
+  private profilesBinding: KeyBinding[] = [];
+  private focusBinding: KeyBinding[] = [];
+  private backBinding: KeyBinding[] = [];
+  private forwardBinding: KeyBinding[] = [];
   private noSuper = false;
   private readonly tabs: TabManager;
   private readonly fallbackState: BrowserState;
@@ -231,6 +297,10 @@ class Session {
   private records = new Map<BrowserController, RecordSession>();
   private shownRecord: RecordSession | null = null;
   private recordStarting = false;
+  private importHintOpen = false;
+  private importSummary = "No supported browsers detected.";
+  private profileMenuOpen = false;
+  private profilePrompt: { kind: "create" | "rename"; text: string } | null = null;
 
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
@@ -238,7 +308,7 @@ class Session {
     this.marker = `terminal-browser:${ctx.key}`;
     this.argv = ctx.argv.includes("--app-mode") ? [...ctx.argv, ...APP_MODE_FLAGS] : ctx.argv;
     this.hideToolbar = this.argv.includes("--no-toolbar");
-    this.noShortcuts = this.argv.includes("--no-shortcuts");
+    this.shortcutsDisabled = this.argv.includes("--no-shortcuts");
     this.noContextMenu = this.argv.includes("--no-context-menu");
     this.noOverlays = this.argv.includes("--no-overlays");
     this.noFrame = this.argv.includes("--no-frame");
@@ -247,13 +317,17 @@ class Session {
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
-    this.partition =
+    this.explicitPartition =
       flagValue(this.argv, "--partition") ??
       (sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null);
+    this.profile = this.explicitPartition
+      ? null
+      : profileForNewPane(flagValue(this.argv, "--profile"), flagValue(this.argv, "--parent-tty"));
+    if (this.profile) noteProfileUsed(this.profile.slug);
     this.preload = flagValue(this.argv, "--preload");
     this.mainScript = flagValue(this.argv, "--main-script");
     this.fallbackState = initialBrowserState(this.initialUrl());
-    configureBrowserSession(this.partition, (progress) => this.showDownload(progress));
+    configureBrowserSession(this.sessionPartition(), (progress) => this.showDownload(progress));
     this.tabs = new TabManager(
       {
         createController: (url, visible, onState) =>
@@ -266,7 +340,7 @@ class Session {
             this.ctx.cwd,
             this.windowBg,
             visible,
-            this.partition,
+            this.sessionPartition(),
             this.tabsAsPopups,
             this.clipboardRead,
             this.ctx.key,
@@ -307,9 +381,10 @@ class Session {
   }
 
   async start(): Promise<void> {
-    if (this.socksPort) await routeThroughSocksProxy(this.partition, this.socksPort);
+    if (this.socksPort) await routeThroughSocksProxy(this.sessionPartition(), this.socksPort);
     if (process.platform === "darwin") app.dock?.hide();
     await this.loadDevtoolsSettings();
+    this.loadImportHint();
     if (!this.ctx.tty) process.stdout.write(`\x1b]2;${this.marker}\x07`);
     this.displayScale = this.hostDisplayScale();
     this.root = createRoot({
@@ -317,6 +392,9 @@ class Session {
       wrapper: this.terminal?.wrapper,
       sessionEnv: this.ctx.env,
       keyEventTypes: true,
+      // The engine's devtools inspect this chrome's own layout tree, which is not what a person
+      // clicking "devtools" in a browser is asking for. Kept for whoever works on the chrome.
+      devtools: process.env.TERMINAL_BROWSER_ENGINE_DEVTOOLS === "1",
       onKey: (event) => this.handleKey(event),
       onPaste: (text) => {
         const browser = this.tabs.activeController;
@@ -375,6 +453,7 @@ class Session {
       },
       splitDir: splitDirection(flagValue(this.argv, "--split-dir")),
       parentTty: flagValue(this.argv, "--parent-tty"),
+      profile: () => this.profile?.slug ?? null,
       state: () => this.tabs.activeState ?? this.fallbackState,
       openTab: (url, cwd) => this.tabs.create(url ? normalizeUrl(url, cwd) : DEFAULT_URL).id,
       activateTab: (id) => {
@@ -391,6 +470,17 @@ class Session {
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),
       targets: () => this.tabs.targets(),
+      importCookies: (request) => this.runCookieImport(request),
+      cookieSources: () => listCookieSources(),
+      createProfile: (name) => {
+        const created = createProfile(name);
+        this.render();
+        return created;
+      },
+      renameProfile: (selector, name) => this.renameBySelector(selector, name),
+      deleteProfile: (selector) => this.deleteBySelector(selector),
+      clearProfile: (selector) => this.clearBySelector(selector),
+      switchProfile: (selector) => this.switchProfile(selector),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
@@ -420,6 +510,11 @@ class Session {
     // we should use 2 shortcuts for console, also not sure if console actually works as expected
     this.devtoolsBinding = binding("--devtools-key", defaultKeys.devtools);
     this.consoleBinding = binding("--console-key", defaultKeys.console);
+    this.screenshotBinding = binding("--screenshot-key", defaultKeys.screenshot);
+    this.profilesBinding = binding("--profiles-key", defaultKeys.profiles);
+    this.focusBinding = binding("--focus-key", defaultKeys.focus);
+    this.backBinding = binding("--back-key", defaultKeys.back);
+    this.forwardBinding = binding("--forward-key", defaultKeys.forward);
   }
 
   private cmdHeld(event: EngineKeyEvent): boolean {
@@ -486,7 +581,7 @@ class Session {
       this.root?.setPointerShape("text");
     } catch { }
     try {
-      browserSession(this.partition).flushStorageData();
+      browserSession(this.sessionPartition()).flushStorageData();
     } catch { }
     this.registry?.dispose();
     this.registry = null;
@@ -542,11 +637,7 @@ class Session {
     if (!this.preload && !this.mainScript) return;
     ipcMain.on("terminal-browser:theme-request", this.onThemeRequest);
     ipcMain.on("terminal-browser:quit", this.onQuitRequest);
-    if (this.preload) {
-      const ses = browserSession(this.partition);
-      registerPreloadOnce(ses, apiPreloadPath());
-      registerPreloadOnce(ses, path.resolve(this.ctx.cwd, this.preload));
-    }
+    this.registerPreloads();
     if (this.mainScript) {
       const file = path.resolve(this.ctx.cwd, this.mainScript);
       try {
@@ -601,6 +692,10 @@ class Session {
             : null
         }
         pageMenu={this.pageMenuView()}
+        importHint={this.importHintView()}
+        profiles={this.profileMenuView()}
+        focusMode={this.noShortcuts}
+        focusPinned={this.shortcutsDisabled}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
@@ -713,6 +808,70 @@ class Session {
     },
     pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
+    focusModeToggle: () => this.toggleFocusMode(),
+    screenshotPage: () => void this.copyPageScreenshot(),
+    devtoolsToggle: () => this.toggleDevtools(),
+    importHintToggle: () => this.toggleImportHint(),
+    importRun: () => this.importFromHint(),
+    profileMenuToggle: () => {
+      this.profileMenuOpen = !this.profileMenuOpen;
+      this.profilePrompt = null;
+      this.render();
+    },
+    profileDelete: (slug) => {
+      // The storage wipe is awaited before the profile leaves the list, so the toast waits too.
+      void deleteProfile(slug)
+        .then(() => {
+          this.showToast(`deleted browser profile ${slug}`, "done");
+          this.render();
+        })
+        .catch((error: unknown) => this.showProfileFailure(error));
+    },
+    profileSwitch: (slug) => {
+      this.profileMenuOpen = false;
+      this.profilePrompt = null;
+      this.applyProfileSwitch(slug);
+    },
+    profileCreate: (name) => {
+      if (name === undefined) {
+        this.profilePrompt = { kind: "create", text: "" };
+        this.render();
+        return;
+      }
+      try {
+        // A profile made here is one the operator wants to be on, so move in the same gesture.
+        const created = createProfile(name);
+        this.profilePrompt = null;
+        this.profileMenuOpen = false;
+        this.applyProfileSwitch(created.slug);
+      } catch (error) {
+        this.showProfileFailure(error);
+      }
+    },
+    profileRename: (name) => {
+      const current = this.profile;
+      if (!current) {
+        // A pinned pane has no profile to hide this row, so say why instead of doing nothing.
+        this.showProfileFailure(
+          new Error(`this browser is pinned to --partition=${this.explicitPartition}`),
+        );
+        return;
+      }
+      if (current.builtIn) return;
+      if (name === undefined) {
+        this.profilePrompt = { kind: "rename", text: current.name };
+        this.render();
+        return;
+      }
+      try {
+        this.profile = renameProfile(current.slug, name);
+        this.profilePrompt = null;
+        this.profileMenuOpen = false;
+        this.render();
+      } catch (error) {
+        this.showProfileFailure(error);
+      }
+    },
     record: this.recordActions(),
   };
 
@@ -892,7 +1051,24 @@ class Session {
         return;
       }
       if (!this.findOpen && this.activeRecord()?.handleKey(event)) return;
+      // Outside the gate below on purpose: focus mode sends every other key to the page, so the
+      // key that turns it off has to keep working while it is on. A pane launched with
+      // --no-shortcuts never had the chord, so it does not get it back here.
+      if (!this.shortcutsDisabled && matchesBinding(event, this.focusBinding)) {
+        this.toggleFocusMode();
+        return;
+      }
       if (!this.noShortcuts) {
+        if (matchesBinding(event, this.screenshotBinding)) {
+          void this.copyPageScreenshot();
+          return;
+        }
+        if (matchesBinding(event, this.profilesBinding)) {
+          this.profileMenuOpen = !this.profileMenuOpen;
+          this.profilePrompt = null;
+          this.render();
+          return;
+        }
         if (isRecordKey(event)) {
           if (!this.activeRecord()) void this.startRecording();
           return;
@@ -905,7 +1081,7 @@ class Session {
           this.openPalette();
           return;
         }
-        if (this.accelHeld(event) && event.key === "l") {
+        if (this.accelHeld(event) && !event.mods.shift && event.key === "l") {
           this.openUrlEdit();
           return;
         }
@@ -936,11 +1112,11 @@ class Session {
           browser?.reload();
           return;
         }
-        if (this.accelHeld(event) && event.key === "[") {
+        if (matchesBinding(event, this.backBinding)) {
           browser?.back();
           return;
         }
-        if (this.accelHeld(event) && event.key === "]") {
+        if (matchesBinding(event, this.forwardBinding)) {
           browser?.forward();
           return;
         }
@@ -1034,6 +1210,172 @@ class Session {
     this.render();
   }
 
+  private async runCookieImport(request: CookieImportRequest): Promise<CookieImportResult> {
+    // A pinned pane is on no profile, so there is nothing to default to: guessing would write
+    // the operator's real logins into a store they never named.
+    if (this.explicitPartition && !request.toProfile) {
+      throw new Error(
+        `this browser is pinned to --partition=${this.explicitPartition}, which is on no profile — ` +
+          "name one with --to-profile",
+      );
+    }
+    if (importingCookies) {
+      throw new Error("a cookie import is already running — wait for it to finish");
+    }
+    importingCookies = true;
+    try {
+      // An import run from this pane signs this pane's own profile in, unless one was named.
+      const result = await importChromeCookies({
+        ...request,
+        toProfile: request.toProfile ?? this.profile?.slug,
+      });
+      return { ...result, warnings: cookieImportWarnings(result) };
+    } finally {
+      importingCookies = false;
+    }
+  }
+
+  /** One filesystem scan per session: detection walks every supported browser's profile dirs. */
+  private loadImportHint() {
+    try {
+      this.importSummary = cookieSourceSummary(listCookieSources());
+    } catch { }
+  }
+
+  private importHintView(): ImportHintView {
+    return {
+      open: this.importHintOpen,
+      summary: this.importSummary,
+    };
+  }
+
+  private toggleImportHint() {
+    this.importHintOpen = !this.importHintOpen;
+    this.render();
+  }
+
+
+  private importFromHint() {
+    this.importHintOpen = false;
+    this.importCookies();
+    this.render();
+  }
+
+  private importCookies() {
+    void this.runCookieImport({})
+      .then((report) => {
+        this.showToast(
+          `imported ${report.imported} cookies from ${report.browser} (${report.profileName})`,
+          report.warnings.length > 0 ? "alert" : "done",
+          report.warnings.join("\n") || undefined,
+        );
+        this.render();
+      })
+      .catch((error: unknown) => {
+        this.showToast("cookie import failed", "failed", error instanceof Error ? error.message : String(error));
+      });
+  }
+
+  private sessionPartition(): string | null {
+    if (this.explicitPartition) return this.explicitPartition;
+    return this.profile ? partitionFor(this.profile.slug) : null;
+  }
+
+  /** Preloads are registered per session, so a pane that switches profile needs them again. */
+  private registerPreloads(): void {
+    if (!this.preload) return;
+    const ses = browserSession(this.sessionPartition());
+    registerPreloadOnce(ses, apiPreloadPath());
+    registerPreloadOnce(ses, path.resolve(this.ctx.cwd, this.preload));
+  }
+
+  private profileMenuView(): ProfileMenuView {
+    return {
+      open: this.profileMenuOpen,
+      activeSlug: this.profile?.slug ?? "",
+      activeName: this.profile?.name ?? `partition ${this.explicitPartition}`,
+      items: listProfiles().map((profile) => ({
+        slug: profile.slug,
+        name: profile.name,
+        active: profile.slug === this.profile?.slug,
+      })),
+      prompt: this.profilePrompt,
+    };
+  }
+
+  private renameBySelector(selector: string, name: string): BrowserProfile {
+    const renamed = renameProfile(resolveProfile(selector).slug, name);
+    if (this.profile?.slug === renamed.slug) this.profile = renamed;
+    this.render();
+    return renamed;
+  }
+
+  private async deleteBySelector(selector: string): Promise<BrowserProfile> {
+    const target = resolveProfile(selector);
+    await deleteProfile(target.slug);
+    this.render();
+    return target;
+  }
+
+  private async clearBySelector(selector: string): Promise<BrowserProfile> {
+    const target = resolveProfile(selector);
+    await clearProfileData(target.slug);
+    this.render();
+    return target;
+  }
+
+  /**
+   * A view's session is fixed when it is built, so the pane changes profile by replacing its
+   * views: capture the urls, drop the old views, flip identity while none exists, build again.
+   */
+  private switchProfile(selector: string): { profile: BrowserProfile; url: string } {
+    if (this.explicitPartition) {
+      throw new Error(`this browser is pinned to --partition=${this.explicitPartition}`);
+    }
+    const target = resolveProfile(selector);
+    const url = this.tabs.activeState?.url ?? this.fallbackState.url;
+    // Already there: the caller asked for a state the pane is in, which is satisfied, not an
+    // error. Every caller wants the tab that follows to open.
+    if (target.slug === this.profile?.slug) {
+      noteProfileUsed(target.slug);
+      this.render();
+      return { profile: target, url };
+    }
+    this.findOpen = false;
+    this.urlEditOpen = false;
+    this.pageMenu = null;
+    this.newTab = null;
+    for (const record of this.records.values()) record.dispose();
+    this.records.clear();
+    this.shownRecord = null;
+    const carried = this.tabs.teardown();
+    this.profile = target;
+    noteProfileUsed(target.slug);
+    configureBrowserSession(this.sessionPartition(), (progress) => this.showDownload(progress));
+    this.registerPreloads();
+    this.tabs.restore(carried);
+    this.registry?.update();
+    this.render();
+    return { profile: target, url };
+  }
+
+  private applyProfileSwitch(slug: string) {
+    try {
+      this.switchProfile(slug);
+    } catch (error) {
+      this.showProfileFailure(error);
+    }
+  }
+
+  private showProfileFailure(error: unknown) {
+    this.showToast(
+      "profile failed",
+      "failed",
+      error instanceof Error ? error.message : String(error),
+    );
+    this.render();
+  }
+
   private showToast(text: string, state: "done" | "failed" | "alert", detail?: string) {
     if (this.noOverlays) return;
     this.toast = { text, detail, failed: state === "failed", alert: state === "alert" };
@@ -1084,6 +1426,35 @@ class Session {
     if (this.devtoolsWasFocused && browser?.devtools) browser.focusDevtools();
     else browser?.focusContent();
     this.syncCursor();
+  }
+
+  private toggleFocusMode() {
+    this.focusMode = !this.focusMode;
+    this.showToast(
+      this.noShortcuts ? "focus mode on — every key goes to the page" : "focus mode off",
+      "done",
+    );
+    this.render();
+  }
+
+  private async copyPageScreenshot() {
+    const browser = this.tabs.activeController;
+    if (!browser) return;
+    try {
+      await browser.attachCdp();
+      const shot = await browser.cdp("Page.captureScreenshot", { format: "png" });
+      const encoded = typeof shot.data === "string" ? shot.data : "";
+      const image = nativeImage.createFromBuffer(Buffer.from(encoded, "base64"));
+      if (image.isEmpty()) throw new Error("the page returned an empty frame");
+      clipboard.writeImage(image);
+      this.showToast("screenshot copied to clipboard", "done");
+    } catch (error) {
+      this.showToast(
+        "screenshot failed",
+        "failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   private toggleDevtools() {
@@ -1349,6 +1720,18 @@ class Session {
 
   private paletteActions(): PaletteAction[] {
     return [
+      {
+        id: "import-cookies",
+        label: "import cookies (sign in as your everyday browser profile)",
+        shortcut: "",
+        run: () => this.importCookies(),
+      },
+      {
+        id: "screenshot",
+        label: "copy a screenshot of the page to the clipboard",
+        shortcut: bindingLabel(this.screenshotBinding),
+        run: () => void this.copyPageScreenshot(),
+      },
       {
         id: "find",
         label: "find in page",

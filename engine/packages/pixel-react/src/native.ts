@@ -145,6 +145,8 @@ const binding = require("../native/pixel.node") as {
     width: number,
     height: number,
   ): Promise<Buffer>;
+  // Absent off macOS: `mod keychain` is gated out of the native library there.
+  chromiumSafeStorageSecret?(browser: string): string;
 };
 
 export function createNativeEngine(
@@ -199,4 +201,15 @@ export function captureFilmstrip(
 
 export function parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[] {
   return binding.parseMarkdown(source, streaming);
+}
+
+/**
+ * Reads a known Chromium-family browser's Safe Storage secret, named by the browser slug the
+ * cookie import detects. Deliberately not re-exported from the package index: this is not a
+ * general keychain read, and nothing outside the cookie import should reach it.
+ */
+export function chromiumSafeStorageSecret(browser: string): string {
+  const read = binding.chromiumSafeStorageSecret;
+  if (!read) throw new Error("reading a browser's Safe Storage key is only supported on macOS");
+  return read(browser);
 }

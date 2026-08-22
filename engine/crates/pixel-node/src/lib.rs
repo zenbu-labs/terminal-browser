@@ -4,6 +4,8 @@ mod events;
 mod highlight;
 #[cfg(target_os = "macos")]
 mod iosurface;
+#[cfg(target_os = "macos")]
+mod keychain;
 mod markdown;
 mod mend;
 mod ops;

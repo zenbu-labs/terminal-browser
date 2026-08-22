@@ -48,6 +48,21 @@ export interface PageMenuView {
   items: PageMenuItem[];
 }
 
+export interface ImportHintView {
+  open: boolean;
+  /** Already formatted by the session, e.g. "Detected: Google Chrome, Brave, +2 more." */
+  summary: string;
+}
+
+export interface ProfileMenuView {
+  open: boolean;
+  activeSlug: string;
+  activeName: string;
+  items: { slug: string; name: string; active: boolean }[];
+  /** Set while a name is being typed; null when no prompt is up. */
+  prompt: { kind: "create" | "rename"; text: string } | null;
+}
+
 export interface ChromeActions {
   back(): void;
   forward(): void;
@@ -81,6 +96,17 @@ export interface ChromeActions {
   devtoolsDividerHover(hovering: boolean): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
+  focusModeToggle(): void;
+  screenshotPage(): void;
+  devtoolsToggle(): void;
+  importHintToggle(): void;
+  importRun(): void;
+  profileMenuToggle(): void;
+  profileSwitch(slug: string): void;
+  /** No name opens the prompt; a name commits it. */
+  profileCreate(name?: string): void;
+  profileRename(name?: string): void;
+  profileDelete(slug: string): void;
   record: RecordActions;
 }
 

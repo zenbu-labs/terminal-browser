@@ -49,6 +49,8 @@ export const DAEMON_SOCKET = path.join(RUNTIME_HOME, APP_DIR_NAME, "daemon.sock"
 export const DB_FILE = path.join(DATA_DIR, "terminal-browser.db");
 
 export function ensureDataDir(): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  // Each browser's row names the debugging port that drives it, so this is not public.
+  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(DATA_DIR, 0o700);
   fs.writeFileSync(path.join(DATA_DIR, "install"), `${INSTALL_ROOT.root}\n`);
 }

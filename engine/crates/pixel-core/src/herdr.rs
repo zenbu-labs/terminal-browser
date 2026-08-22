@@ -10,6 +10,38 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(12);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 const SLOTS: u64 = 3;
 
+/// Frames handed to herdr carry the writing pid so a later start can tell whose is whose.
+const FRAME_PREFIX: &str = "px-";
+
+/// Direct-kitty file transport is reserved for herdr's default `primary` page
+/// layer; a named secondary layer would drop us back to inline RGBA.
+const LAYER: &str = "primary";
+
+/// The depth a kitty placement has to get under to be drawn beneath a cell's
+/// background and not just beneath its glyph: "Negative z-index values below
+/// INT32_MIN/2 (-1,073,741,824) will be drawn under cells with non-default
+/// background colors" (kitty `docs/graphics-protocol.rst:541`). Both
+/// implementations read that "below" as a strict `<` — kitty's `graphics.c:1397`
+/// and ghostty's `renderer/image.zig:384` each compare against `INT32_MIN/2` —
+/// so the limit itself is not in the class and the first depth that is sits one
+/// under it.
+const BELOW_BACKGROUND_LIMIT: i32 = i32::MIN / 2;
+
+/// herdr hands this number straight to the kitty placement it emits for us
+/// (`z: layer.z_index` in its `src/kitty_graphics.rs`, printed as the `z=` key).
+/// A merely negative `z` draws under glyphs but still over cell backgrounds, so
+/// at `z: -1` herdr's copy toast came out legible with its dark panel missing.
+/// One under the limit is therefore the shallowest depth that hides behind those
+/// panels, and taking the shallowest leaves every deeper placement below us.
+///
+/// Going under cell backgrounds is only safe because herdr does not paint a
+/// pane's cells itself — its `render_panes` only blits the pty grid, and blank
+/// cells keep the default background unless the program redefines it, which we
+/// never do. If herdr ever fills them, every app on this engine disappears at
+/// once, and the repair is to come back above the limit: any plain negative `z`
+/// still draws under text, at the cost of herdr's panel fills losing to the page.
+const Z_INDEX: i32 = BELOW_BACKGROUND_LIMIT - 1;
+
 #[derive(Clone, Debug)]
 pub(crate) struct HerdrTarget {
     pub(crate) pane: String,
@@ -68,20 +100,15 @@ impl Herdr {
         let stream = UnixStream::connect(socket).ok()?;
         stream.set_read_timeout(Some(OPEN_TIMEOUT)).ok()?;
         let mut frames = BufReader::new(stream);
-        write_line(
-            frames.get_mut(),
-            &format!(
-                r#"{{"id":"stream","method":"pane.graphics.stream","params":{{"pane_id":{},"layer_id":"primary","z_index":0}}}}"#,
-                // checkme: how does pane get here? 
-                quote(pane)
-            ),
-        )
-        .ok()?;
+        write_line(frames.get_mut(), &stream_request(pane)).ok()?;
         if !accepted(&read_line(&mut frames).ok()?) {
             return None;
         }
         frames.get_ref().set_read_timeout(Some(ACK_TIMEOUT)).ok()?;
 
+        // Frames in herdr's directory leak exactly the way ours in TMPDIR do when a process is
+        // killed, and they are just as large; clear out the ones nobody owns before adding more.
+        crate::terminal::sweep_dead_frame_files(&directory, FRAME_PREFIX, "");
         crate::logging::info("herdr", "frames go straight to herdr as files");
         Some(Self {
             frames,
@@ -149,7 +176,7 @@ impl Herdr {
             for slot in 0..SLOTS {
                 self.files.push(FrameFile::create(
                     self.directory.join(format!(
-                        "px-{}-{}-{}-{slot}",
+                        "{FRAME_PREFIX}{}-{}-{}-{slot}",
                         std::process::id(),
                         self.instance,
                         self.generation
@@ -177,6 +204,14 @@ fn is_wheel(kind: crate::terminal::MouseKind) -> bool {
 
 fn within_grid(ws: &crate::terminal::WindowSize, x: u32, y: u32) -> bool {
     x >= 1 && y >= 1 && x <= ws.cols && y <= ws.rows
+}
+
+/// The line that claims a pane's `primary` graphics layer, below herdr's overlays.
+fn stream_request(pane: &str) -> String {
+    format!(
+        r#"{{"id":"stream","method":"pane.graphics.stream","params":{{"pane_id":{},"layer_id":"{LAYER}","z_index":{Z_INDEX}}}}}"#,
+        quote(pane)
+    )
 }
 
 fn request(socket: &str, line: &str) -> io::Result<String> {
@@ -254,7 +289,7 @@ fn field_bool(json: &str, key: &str) -> Option<bool> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const INFO: &str = r#"{"id":"info","result":{"type":"pane_graphics_info","cell_width_px":9,"cell_height_px":19,"pane_visible":true,"file_frame_directory":"/tmp/herdr/frames/source","file_frame_formats":["rgba","bgra"],"max_layers_per_pane":16,"pixel_mouse":false,"file_frame_transport":"direct-kitty"}}"#;
@@ -298,9 +333,33 @@ mod tests {
         ));
     }
 
+    /// The request has to name the pane's own `primary` layer, and the depth it
+    /// asks for has to be the shallowest one kitty draws under a cell background
+    /// from — deeper than the limit, and no deeper than it has to be.
+    #[test]
+    fn the_stream_claims_the_primary_layer_under_herdrs_overlays() {
+        let line = stream_request("w1:p1");
+        assert!(line.contains(r#""method":"pane.graphics.stream""#), "{line}");
+        assert!(line.contains(r#""pane_id":"w1:p1""#), "{line}");
+        assert!(line.contains(r#""layer_id":"primary""#), "{line}");
+
+        let Some(z) = line
+            .rsplit_once(r#""z_index":"#)
+            .and_then(|(_, tail)| tail.trim_end_matches('}').parse::<i32>().ok())
+        else {
+            panic!("the request carries a parseable z_index: {line}");
+        };
+        assert!(z < BELOW_BACKGROUND_LIMIT, "must clear the below-background limit");
+        assert_eq!(
+            z + 1,
+            BELOW_BACKGROUND_LIMIT,
+            "and clear it by one: a deeper z puts every other placement above the page"
+        );
+    }
+
     /// Answers like herdr does: one info reply per connection, then a stream
     /// that acks every frame. Collects the frame headers it was sent.
-    pub(super) fn fake_herdr(
+    pub(crate) fn fake_herdr(
         directory: &std::path::Path,
         transport: &str,
     ) -> (PathBuf, std::sync::mpsc::Receiver<String>) {
@@ -335,7 +394,7 @@ mod tests {
         (socket, rx)
     }
 
-    pub(super) fn scratch(name: &str) -> PathBuf {
+    pub(crate) fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("pixel-herdr-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -397,6 +456,31 @@ mod tests {
 
         paths.dedup();
         assert_eq!(paths.len(), SLOTS as usize, "consecutive frames shared a file");
+    }
+
+    #[test]
+    fn attaching_clears_frames_herdr_still_holds_for_a_dead_process() {
+        let dir = scratch("dead-frames");
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+
+        // A session killed mid-frame leaves its mapped files behind in herdr's own directory,
+        // at a whole frame each; a later attach is what finally clears them.
+        let stale = dir.join(format!("{FRAME_PREFIX}{dead}-0-1-0"));
+        let live = dir.join(format!("{FRAME_PREFIX}{}-0-1-0", std::process::id()));
+        std::fs::write(&stale, [0u8; 4]).unwrap();
+        std::fs::write(&live, [0u8; 4]).unwrap();
+
+        let (socket, _frames) = fake_herdr(&dir, "direct-kitty");
+        let _herdr = Herdr::connect("w1:p1", &socket.to_string_lossy()).unwrap();
+
+        assert!(!stale.exists(), "frames whose writer is gone must not outlive it");
+        assert!(live.exists(), "panes share a process, so a live pid keeps its frames");
     }
 
     #[test]

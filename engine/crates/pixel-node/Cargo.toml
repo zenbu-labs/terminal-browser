@@ -29,6 +29,11 @@ mp4 = "0.14.0"
 png = "0.18.1"
 tiny-skia.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Only the cookie import uses this. Splitting it into its own crate would mean a second cdylib
+# and a second prebuilt .node to ship, so it stays here behind the macOS gate.
+security-framework = "3"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
 libc = { workspace = true }

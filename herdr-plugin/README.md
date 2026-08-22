@@ -15,6 +15,13 @@ herdr plugin install zenbu-labs/terminal-browser/herdr-plugin
 
 Open terminal-browser in a split to the right of your focused pane.
 
+#### `open-url`
+
+The handler behind ctrl-clicking a link. It opens the link as a tab in the browser already
+on screen in that herdr tab, or elsewhere in that workspace, and only splits a new browser
+in when the workspace has none. A browser in another workspace is left alone, so a click
+never sends a page to a space you are not looking at.
+
 ### Usage
 ```
 terminal-browser # launches the browser
