@@ -10,6 +10,15 @@ import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
 import {
+  adblockFiltersAge,
+  adblockHostAllowed,
+  adblockOn,
+  adblockUpdating,
+  setAdblockHostAllowed,
+  setAdblockOn,
+  updateAdblockFilters,
+} from "../page/adblock";
+import {
   browserSession,
   configureBrowserSession,
   routeThroughSocksProxy,
@@ -30,6 +39,7 @@ import { Registry } from "../registry";
 import { Chrome } from "../ui/chrome";
 import { ICONS } from "../ui/icons";
 import type {
+  AdblockView,
   ChromeActions,
   ChromeLayout,
   DownloadView,
@@ -37,7 +47,7 @@ import type {
   PageMenuView,
   PopupView,
 } from "../ui/types";
-import { normalizeUrl, searchOrUrl } from "../url";
+import { normalizeUrl, searchOrUrl, urlHost } from "../url";
 import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
 import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight } from "./layout";
@@ -162,6 +172,7 @@ class Session {
   private readonly noFrame: boolean;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
+  private readonly adblock: boolean;
   private readonly partition: string | null;
   private readonly socksPort: number | null;
   private readonly preload: string | null;
@@ -244,6 +255,7 @@ class Session {
     this.noFrame = this.argv.includes("--no-frame");
     this.tabsAsPopups = this.argv.includes("--open-tabs-in-popup-stack");
     this.clipboardRead = this.argv.includes("--allow-clipboard-read");
+    this.adblock = !this.argv.includes("--no-adblock");
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
@@ -269,6 +281,7 @@ class Session {
             this.partition,
             this.tabsAsPopups,
             this.clipboardRead,
+            this.adblock,
             this.ctx.key,
             onState,
           ),
@@ -601,6 +614,7 @@ class Session {
             : null
         }
         pageMenu={this.pageMenuView()}
+        adblock={this.adblockView()}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
@@ -711,6 +725,7 @@ class Session {
         this.syncDevtoolsLayout({ keepFrame: true });
       }
     },
+    adblockToggle: () => this.toggleAdblockForHost(),
     pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
     record: this.recordActions(),
@@ -1347,7 +1362,51 @@ class Session {
     chosen?.run();
   }
 
+  private adblockHost(): string | null {
+    const url = this.tabs.activeState?.url ?? "";
+    if (!this.adblock || !/^https?:\/\//i.test(url)) return null;
+    return urlHost(url) || null;
+  }
+
+  private adblockView(): AdblockView | null {
+    const host = this.adblockHost();
+    if (!host) return null;
+    return {
+      active: adblockOn() && !adblockHostAllowed(host),
+      blocked: this.tabs.activeState?.blocked ?? 0,
+    };
+  }
+
+  private toggleAdblockForHost() {
+    const host = this.adblockHost();
+    if (!host) return;
+    const allowed = !adblockHostAllowed(host);
+    setAdblockHostAllowed(host, allowed);
+    this.showToast(allowed ? `ads allowed on ${host}` : `ads blocked on ${host}`, "done");
+    this.tabs.activeController?.reload();
+    this.render();
+  }
+
+  private updateFilters() {
+    if (adblockUpdating()) return;
+    this.showToast("updating filters", "done");
+    this.render();
+    void updateAdblockFilters().then((updated) => {
+      this.showToast(updated ? "filters updated" : "filter update failed", updated ? "done" : "failed");
+      this.render();
+    });
+  }
+
+  private toggleAdblock() {
+    const on = !adblockOn();
+    setAdblockOn(on);
+    this.showToast(on ? "ad blocking on" : "ad blocking off", "done");
+    this.tabs.activeController?.reload();
+    this.render();
+  }
+
   private paletteActions(): PaletteAction[] {
+    const adblockHost = this.adblockHost();
     return [
       {
         id: "find",
@@ -1370,6 +1429,30 @@ class Session {
           else record.actions.stop();
         },
       },
+      ...(adblockHost
+        ? [
+          {
+            id: "adblock-site",
+            label: adblockHostAllowed(adblockHost)
+              ? `block ads on ${adblockHost}`
+              : `allow ads on ${adblockHost}`,
+            shortcut: "",
+            run: () => this.toggleAdblockForHost(),
+          },
+          {
+            id: "adblock",
+            label: adblockOn() ? "turn off ad blocking" : "turn on ad blocking",
+            shortcut: "",
+            run: () => this.toggleAdblock(),
+          },
+          {
+            id: "adblock-update",
+            label: adblockUpdating() ? "updating filters…" : `update filters${filterAgeLabel()}`,
+            shortcut: "",
+            run: () => this.updateFilters(),
+          },
+        ]
+        : []),
       {
         id: "devtools",
         label: this.tabs.activeController?.devtools ? "close devtools" : "open devtools",
@@ -1500,6 +1583,15 @@ function flagValue(argv: string[], flag: string): string | null {
   return (
     argv.find((argument) => argument.startsWith(`${flag}=`))?.slice(flag.length + 1) ?? null
   );
+}
+
+function filterAgeLabel(): string {
+  const age = adblockFiltersAge();
+  if (age === null) return "";
+  const hours = Math.floor(age / 3600000);
+  if (hours < 1) return " (updated just now)";
+  if (hours < 24) return ` (${hours}h old)`;
+  return ` (${Math.floor(hours / 24)}d old)`;
 }
 
 function rememberUrl(url: string) {
