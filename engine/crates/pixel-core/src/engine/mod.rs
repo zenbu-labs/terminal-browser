@@ -322,7 +322,7 @@ pub struct Engine {
     last_color_request: Option<Instant>,
     last_step: Instant,
     last_frame: Instant,
-    last_frame_bytes: usize,
+    last_frame_budget_bytes: Option<usize>,
     frame_deferred: bool,
     frame_budget_bytes_per_sec: f32,
     pub stats: FrameStats,
@@ -421,7 +421,7 @@ impl Engine {
             last_color_request: None,
             last_step: Instant::now(),
             last_frame: Instant::now(),
-            last_frame_bytes: 0,
+            last_frame_budget_bytes: None,
             frame_deferred: false,
             frame_budget_bytes_per_sec: frame_budget_bytes_per_sec(),
             stats: FrameStats::default(),
@@ -944,14 +944,7 @@ impl Engine {
     }
 
     fn frame_debt(&self) -> Duration {
-        if !self.term.frames_are_inline() {
-            return Duration::ZERO;
-        }
-        let budget = self.frame_budget_bytes_per_sec;
-        if budget <= 0.0 {
-            return Duration::ZERO;
-        }
-        Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2))
+        frame_debt(self.last_frame_budget_bytes, self.frame_budget_bytes_per_sec)
     }
 
     fn draws_something(&self) -> bool {
@@ -1038,7 +1031,9 @@ impl Engine {
             self.compose(&painted);
             let bytes = crate::profiler::span("draw", || self.term.draw(&self.comp.frame))?;
             crate::profiler::count("bytes", bytes as u64);
-            self.last_frame_bytes = bytes;
+            self.last_frame_budget_bytes = self
+                .term
+                .frame_budget_bytes(bytes, self.comp.frame.pixels.len());
 
             let gap = start.duration_since(self.last_frame).as_secs_f32();
             self.last_frame = start;
@@ -1075,6 +1070,16 @@ impl Engine {
 }
 
 const DEFAULT_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
+
+fn frame_debt(bytes: Option<usize>, budget: f32) -> Duration {
+    let Some(bytes) = bytes else {
+        return Duration::ZERO;
+    };
+    if budget <= 0.0 {
+        return Duration::ZERO;
+    }
+    Duration::from_secs_f32(bytes as f32 / budget)
+}
 
 fn frame_budget_bytes_per_sec() -> f32 {
     let configured = std::env::var("TERMINAL_BROWSER_FRAME_BUDGET_MBPS")
@@ -1127,5 +1132,17 @@ mod tests {
             height_px: 800,
         };
         assert_eq!(window_from(&ws, (11, 21)), (1045, 798));
+    }
+
+    #[test]
+    fn frame_debt_enforces_the_full_byte_budget() {
+        let bytes = Some(5_000_000);
+        assert_eq!(
+            frame_debt(bytes, 3_000_000.0),
+            Duration::from_secs_f32(5.0 / 3.0)
+        );
+        assert!(frame_debt(bytes, 3_000_000.0) > Duration::from_millis(200));
+        assert_eq!(frame_debt(None, 3_000_000.0), Duration::ZERO);
+        assert_eq!(frame_debt(bytes, 0.0), Duration::ZERO);
     }
 }
