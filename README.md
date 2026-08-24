@@ -97,6 +97,14 @@ The following options are the full set of app related options available for `ter
                         page instead.
   --allow-clipboard-read
                         Lets websites read from clipboard.
+  --allow-quit-url      Lets the primary page WebContents close its owning tab when
+                        Electron reports exactly terminal-browser://quit. Disabled
+                        by default. Raw spellings that Electron serializes to that
+                        same string are treated identically. All frames in that
+                        WebContents share the capability. Requests observed as
+                        originating from popup or foreign WebContents are denied,
+                        as are redirects. Under normal browser same-origin semantics,
+                        code executing in the owning page retains its capability.
   --no-toolbar          No toolbar or tab strip
   --no-shortcuts        No browser shortcuts, keys go to the page
   --no-context-menu     No right-click menu

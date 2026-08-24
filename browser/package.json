@@ -8,7 +8,9 @@
     "build": "tsc -p tsconfig.json",
     "build:engine": "pnpm --filter pixel-react build",
     "start": "pnpm build:engine && pnpm build && pnpm --filter terminal-browser-cli build && exec node ../cli/dist/main.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\"",
+    "test:electron": "tsc -p tsconfig.json && node --test test/electron-quit-url.test.js"
   },
   "dependencies": {
     "pixel-react": "workspace:*",
