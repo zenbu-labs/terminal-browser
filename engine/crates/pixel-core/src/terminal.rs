@@ -190,6 +190,35 @@ impl WindowSize {
     }
 }
 
+// Reconstructs a pixel position from a cell-based mouse report. Prefers the
+// window's real (possibly fractional, under non-integer display scaling)
+// per-cell pitch over the truncated `cell` cache: `cell` comes from
+// WindowSize::cell_size(), which floors width_px/cols and height_px/rows to
+// integers, and that error compounds over rows/cols until the reconstructed
+// point lands in the wrong cell.
+fn cell_from_index(
+    x: u32,
+    y: u32,
+    ws: Option<WindowSize>,
+    cell: Option<(u32, u32)>,
+) -> (u32, u32) {
+    let (cw, ch) = ws
+        .map(|ws| {
+            (
+                ws.width_px as f32 / ws.cols as f32,
+                ws.height_px as f32 / ws.rows as f32,
+            )
+        })
+        .or_else(|| cell.map(|(cw, ch)| (cw as f32, ch as f32)))
+        .unwrap_or((16.0, 32.0));
+    let x = x.saturating_sub(1) as f32;
+    let y = y.saturating_sub(1) as f32;
+    (
+        (x * cw + cw / 2.0).round() as u32,
+        (y * ch + ch / 2.0).round() as u32,
+    )
+}
+
 fn retry_intr<T>(mut call: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
     loop {
         match call() {
@@ -836,28 +865,11 @@ impl Terminal {
         if self.mouse_pixels {
             (x.saturating_sub(1), y.saturating_sub(1))
         } else {
-            // cell_size() truncates width_px/cols and height_px/rows to integers, which
-            // drifts from the terminal's real (often fractional, under non-integer display
-            // scaling) row/col pitch and accumulates into a full cell of error over enough
-            // rows/cols. Recompute in float precision here instead of reusing self.cell.
-            let (cw, ch) = self
+            let ws = self
                 .size()
                 .ok()
-                .filter(|ws| ws.cols > 0 && ws.rows > 0 && ws.width_px > 0 && ws.height_px > 0)
-                .map(|ws| {
-                    (
-                        ws.width_px as f32 / ws.cols as f32,
-                        ws.height_px as f32 / ws.rows as f32,
-                    )
-                })
-                .or_else(|| self.cell.map(|(cw, ch)| (cw as f32, ch as f32)))
-                .unwrap_or((16.0, 32.0));
-            let x = x.saturating_sub(1) as f32;
-            let y = y.saturating_sub(1) as f32;
-            (
-                (x * cw + cw / 2.0).round() as u32,
-                (y * ch + ch / 2.0).round() as u32,
-            )
+                .filter(|ws| ws.cols > 0 && ws.rows > 0 && ws.width_px > 0 && ws.height_px > 0);
+            cell_from_index(x, y, ws, self.cell)
         }
     }
 
@@ -1927,6 +1939,47 @@ fn parse_cell_size_report(buf: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cell_from_index_uses_fractional_pitch_under_non_integer_scale() {
+        // 1.25x scale on a 19px logical row height: 40 rows * 23.75px/row = 950px.
+        let ws = WindowSize {
+            cols: 80,
+            rows: 40,
+            width_px: 1520,
+            height_px: 950,
+        };
+        // cell_size() would floor this to (19, 23), which is what regressed.
+        assert_eq!(ws.cell_size(), Some((19, 23)));
+
+        // Row 36 (1-indexed) is far enough down for the 0.75px/row truncation
+        // error to have accumulated past a full cell.
+        let (_, y) = cell_from_index(1, 36, Some(ws), None);
+        let true_row = (y as f32 / 23.75).floor() as u32;
+        assert_eq!(true_row, 35, "fractional pitch resolves the intended row");
+
+        let truncated_ws = WindowSize {
+            width_px: ws.cols * 19,
+            height_px: ws.rows * 23,
+            ..ws
+        };
+        let (_, drifted_y) = cell_from_index(1, 36, Some(truncated_ws), None);
+        let drifted_row = (drifted_y as f32 / 23.75).floor() as u32;
+        assert_ne!(
+            drifted_row, true_row,
+            "truncated pitch drifts the click into a different row"
+        );
+    }
+
+    #[test]
+    fn cell_from_index_falls_back_to_cached_cell_without_window_size() {
+        assert_eq!(cell_from_index(3, 5, None, Some((10, 20))), (25, 90));
+    }
+
+    #[test]
+    fn cell_from_index_falls_back_to_default_without_any_size() {
+        assert_eq!(cell_from_index(1, 1, None, None), (8, 16));
+    }
 
     #[test]
     fn parses_probe_replies() {
