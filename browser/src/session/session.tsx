@@ -4,7 +4,7 @@ import path from "node:path";
 import { app, ipcMain, screen } from "electron";
 import { createRequire } from "node:module";
 import type { IpcMainEvent, Session as ElectronSession } from "electron";
-import { createRoot } from "pixel-react";
+import { appLog, createRoot } from "pixel-react";
 import type { DragEvent, EngineKeyEvent, PixelRoot, Surface } from "pixel-react";
 import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
@@ -16,6 +16,7 @@ import {
 } from "../page/browser-session";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
+import { DisplayScale } from "./display-scale";
 import { initOffscreenMode } from "../page/offscreen";
 import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
@@ -192,6 +193,7 @@ class Session {
   private surfaceLayout: BrowserSurfaceLayout | null = null;
   private devtoolsLayout: BrowserSurfaceLayout | null = null;
   private displayScale = 1;
+  private readonly display = new DisplayScale();
   private fontId = 0;
   private windowBg = "#1e2026";
 
@@ -270,6 +272,7 @@ class Session {
             this.tabsAsPopups,
             this.clipboardRead,
             this.ctx.key,
+            () => this.display.correction(),
             onState,
           ),
         onActivated: () => {
@@ -356,6 +359,19 @@ class Session {
     this.applyKeyBindings(this.root.info.kittyKeyboard);
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
+    // hostDisplayScale had to guess before the engine existed; basePx is known
+    // now, and this still runs before the layout and before any offscreen
+    // window is built
+    const start = this.display.startScale(this.root.info.basePx, this.displayScale);
+    this.displayScale = start.scale;
+    this.display.start(start.scale, this.root.info.basePx);
+    if (start.sure) this.display.learn();
+    appLog(
+      "info",
+      "scale",
+      `start ${start.scale}x (${start.why}), basePx ${this.root.info.basePx.toFixed(2)}, ` +
+        `point ${this.display.pointSize.toFixed(2)}`,
+    );
     this.followCellZoom();
     this.recalculateLayout();
     this.root.setPointerShape("default");
@@ -986,6 +1002,7 @@ class Session {
     if (!prev || !prev.basePx || !prev.height) return;
     const ratio = basePx / prev.basePx;
     if (!Number.isFinite(ratio) || ratio <= 0 || Math.abs(ratio - 1) < 0.01) return;
+    if (this.followCellScale(basePx)) return;
     const paneRatio = height / prev.height;
     if (Math.abs(paneRatio - ratio) < 0.04 * ratio) return;
     let hud: number | null = null;
@@ -996,6 +1013,51 @@ class Session {
     });
     if (active?.popup) hud = active.popup.scaleZoom(ratio);
     if (hud != null) this.showZoomHud(hud);
+  }
+
+  /**
+   * The terminal reported a new cell size. Returns true when that means the
+   * window moved to a display of a different density, in which case the caller
+   * must not also zoom the page.
+   */
+  private followCellScale(basePx: number): boolean {
+    const previous = this.display.pointSize;
+    const verdict = this.display.classify(basePx);
+    appLog(
+      "info",
+      "scale",
+      `basePx ${basePx.toFixed(2)} point ${previous.toFixed(2)} ` +
+        `scale ${this.display.current} -> ${verdict.scale} ${verdict.kind} (${verdict.why})`,
+    );
+    this.display.remember(basePx, verdict.scale);
+    if (verdict.kind === "display") {
+      this.setDisplayScale(verdict.scale);
+      return true;
+    }
+    // The cell is exactly what the current scale predicts, so in point terms
+    // nothing changed and the move has already been accounted for. A real font
+    // change always shifts the point size. Chromium keeps zoom per origin per
+    // partition, so two browsers on one host share a factor; without this the
+    // second would zoom the shared page a second time.
+    if (previous > 0 && Math.abs(basePx / this.display.current - previous) / previous < 0.01) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * An offscreen window's deviceScaleFactor cannot change after it is built,
+   * and layout.scale has to keep matching it or the painted frame stops
+   * matching the surface. So the new density is applied as a page zoom factor,
+   * which gives the page both the right CSS viewport and the right
+   * devicePixelRatio without rebuilding anything.
+   */
+  private setDisplayScale(scale: number) {
+    if (!this.display.setEffective(scale)) return;
+    this.tabs.eachController((controller) => controller.applyDisplayCorrection());
+    this.display.learn();
+    appLog("info", "scale", `display scale ${scale}x, correction ${this.display.correction()}`);
+    this.render();
   }
 
   private showZoomHud(factor: number) {

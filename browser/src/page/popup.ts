@@ -3,7 +3,7 @@ import type { BrowserWindow } from "electron";
 import type { Surface } from "pixel-react";
 import { cursorShapeFor } from "./cursor";
 import { PageInput } from "./input";
-import { scaleZoom, stepZoom } from "./zoom";
+import { clampUserZoom, stepUserZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
 export interface PopupState {
@@ -19,6 +19,8 @@ export class PopupWindow {
   cursorShape = "default";
   onCursorChange: (() => void) | null = null;
   private readonly window: BrowserWindow;
+  private readonly zoomCorrection: () => number;
+  private userZoom: number;
   private readonly surface: Surface;
   private readonly onChange: () => void;
   private readonly renderScale: number;
@@ -34,12 +36,16 @@ export class PopupWindow {
     size: { width: number; height: number },
     renderScale: number,
     scale: () => number,
+    zoomCorrection: () => number,
+    initialUserZoom: () => number,
     onChange: () => void,
     onClosed: () => void,
     openWindow?: (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse,
   ) {
     this.window = window;
     this.surface = surface;
+    this.zoomCorrection = zoomCorrection;
+    this.userZoom = initialUserZoom();
     this.onChange = onChange;
     this.renderScale = renderScale;
     this.stateValue = {
@@ -57,7 +63,10 @@ export class PopupWindow {
     });
     const contents = window.webContents;
     contents.on("page-title-updated", (_event, title) => this.update({ title }));
-    contents.on("did-navigate", (_event, url) => this.update({ url }));
+    contents.on("did-navigate", (_event, url) => {
+      this.setUserZoom(this.userZoom);
+      this.update({ url });
+    });
     contents.on("did-navigate-in-page", (_event, url, mainFrame) => {
       if (mainFrame) this.update({ url });
     });
@@ -94,11 +103,21 @@ export class PopupWindow {
   }
 
   zoom(direction: ZoomDirection): number {
-    return stepZoom(this.window.webContents, direction);
+    return this.setUserZoom(stepUserZoom(this.userZoom, direction));
   }
 
   scaleZoom(ratio: number): number {
-    return scaleZoom(this.window.webContents, ratio);
+    return this.setUserZoom(clampUserZoom(this.userZoom * ratio));
+  }
+
+  /** absolute, for the same reason BrowserController.applyZoom is */
+  setUserZoom(value: number): number {
+    this.userZoom = value;
+    if (this.destroyed) return this.userZoom;
+    const want = this.userZoom * this.zoomCorrection();
+    const contents = this.window.webContents;
+    if (Math.abs(contents.getZoomFactor() - want) > 1e-4) contents.setZoomFactor(want);
+    return this.userZoom;
   }
 
   setVisible(visible: boolean) {

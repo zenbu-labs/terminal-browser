@@ -23,3 +23,12 @@ export function lastUrl(): string | null {
 export function setLastUrl(url: string): void {
   setAppState("last-url", url);
 }
+
+export function displayPointSize(): number {
+  const value = Number(getAppState("display-point-size"));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function setDisplayPointSize(value: number): void {
+  if (value > 0) setAppState("display-point-size", String(value));
+}

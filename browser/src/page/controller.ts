@@ -20,7 +20,7 @@ import { BitmapPresenter, presentPaint, shmFrameOf } from "./paint";
 import { PopupWindow } from "./popup";
 import { cssSize, initialBrowserState } from "./types";
 import type { BrowserState, BrowserSurfaceLayout } from "./types";
-import { scaleZoom, stepZoom } from "./zoom";
+import { clampUserZoom, stepUserZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
 export class BrowserController {
@@ -29,6 +29,8 @@ export class BrowserController {
   private readonly devtoolsSurface: Surface;
   private readonly window: BrowserWindow;
   private readonly onState: (state: BrowserState) => void;
+  private readonly zoomCorrection: () => number;
+  private userZoom = 1;
   private renderScale: number;
   private layout: BrowserSurfaceLayout;
   private state: BrowserState;
@@ -87,12 +89,14 @@ export class BrowserController {
     tabsAsPopups: boolean,
     clipboardRead: boolean,
     sessionKey: string,
+    zoomCorrection: () => number,
     onState: (state: BrowserState) => void,
   ) {
     this.partition = partition ? persistentPartition(partition) : null;
     this.tabsAsPopups = tabsAsPopups;
     this.clipboardRead = clipboardRead;
     this.sessionKey = sessionKey;
+    this.zoomCorrection = zoomCorrection;
     this.cwd = cwd;
     this.surface = surface;
     this.bitmaps = new BitmapPresenter(surface);
@@ -180,6 +184,8 @@ export class BrowserController {
     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
+      // a cross-origin navigation drops back to the session default
+      this.applyZoom();
       this.updateNavigation(false, url);
     });
     this.window.webContents.on("page-favicon-updated", (_event, favicons) => {
@@ -254,15 +260,34 @@ export class BrowserController {
   }
 
   zoom(direction: ZoomDirection): number {
-    const factor = stepZoom(this.window.webContents, direction);
-    this.updateState({ zoom: factor });
-    return factor;
+    this.userZoom = stepUserZoom(this.userZoom, direction);
+    return this.applyZoom();
   }
 
   scaleZoom(ratio: number): number {
-    const factor = scaleZoom(this.window.webContents, ratio);
-    this.updateState({ zoom: factor });
-    return factor;
+    this.userZoom = clampUserZoom(this.userZoom * ratio);
+    return this.applyZoom();
+  }
+
+  /** the display density changed: re-assert, the correction is read fresh */
+  applyDisplayCorrection(): void {
+    this.applyZoom();
+  }
+
+  /**
+   * Write the zoom factor absolutely, never as a multiplication of what is
+   * already there. Chromium keeps zoom per origin per partition, so the factor
+   * read back may have been written by another browser showing the same host;
+   * multiplying that compounds on every monitor move.
+   */
+  private applyZoom(): number {
+    if (this.stopped) return this.userZoom;
+    const want = this.userZoom * this.zoomCorrection();
+    const contents = this.window.webContents;
+    if (Math.abs(contents.getZoomFactor() - want) > 1e-4) contents.setZoomFactor(want);
+    for (const popup of this.popups) popup.setUserZoom(this.userZoom);
+    this.updateState({ zoom: this.userZoom });
+    return this.userZoom;
   }
 
   osPid(): number {
@@ -558,7 +583,7 @@ export class BrowserController {
       loading,
       canGoBack: this.window.webContents.navigationHistory.canGoBack(),
       canGoForward: this.window.webContents.navigationHistory.canGoForward(),
-      zoom: this.window.webContents.getZoomFactor(),
+      zoom: this.userZoom,
     });
   }
 
@@ -631,6 +656,8 @@ export class BrowserController {
       size,
       this.renderScale,
       () => this.layout.scale,
+      this.zoomCorrection,
+      () => this.userZoom,
       () => this.onPopupChange?.(),
       () => {
         const at = this.popups.indexOf(popup);
