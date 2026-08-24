@@ -7,27 +7,23 @@ const ZOOM_PRESETS = [
 export type ZoomDirection = 1 | -1 | 0;
 
 
-export function stepZoom(contents: WebContents, direction: ZoomDirection): number {
-  const current = contents.getZoomFactor();
-  const factor =
-    direction === 0
-      ? 1
-      : direction === 1
-        ? (ZOOM_PRESETS.find((preset) => preset > current * 1.001) ?? ZOOM_PRESETS.at(-1)!)
-        : ([...ZOOM_PRESETS].reverse().find((preset) => preset < current * 0.999) ??
-          ZOOM_PRESETS[0]);
-  contents.setZoomFactor(factor);
-  return factor;
+/**
+ * The zoom factor Chromium holds is the user's zoom multiplied by the display
+ * correction (see DisplayScale), so callers track the user's own zoom and
+ * write the product. These helpers only move the user's number.
+ */
+export function stepUserZoom(current: number, direction: ZoomDirection): number {
+  if (direction === 0) return 1;
+  if (direction === 1) {
+    return ZOOM_PRESETS.find((preset) => preset > current * 1.001) ?? ZOOM_PRESETS.at(-1)!;
+  }
+  return [...ZOOM_PRESETS].reverse().find((preset) => preset < current * 0.999) ?? ZOOM_PRESETS[0];
 }
 
 
-export function scaleZoom(contents: WebContents, ratio: number): number {
-  const floor = ZOOM_PRESETS[0];
-  const ceiling = ZOOM_PRESETS.at(-1)!;
-  const exact = contents.getZoomFactor() * ratio;
-  const factor = Math.min(ceiling, Math.max(floor, Math.round(exact * 1000) / 1000));
-  contents.setZoomFactor(factor);
-  return factor;
+export function clampUserZoom(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  return Math.min(ZOOM_PRESETS.at(-1)!, Math.max(ZOOM_PRESETS[0], Math.round(value * 1000) / 1000));
 }
 
 

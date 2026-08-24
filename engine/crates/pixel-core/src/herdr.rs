@@ -29,6 +29,11 @@ pub(crate) struct Herdr {
     frames: BufReader<UnixStream>,
     directory: PathBuf,
     cell: (u32, u32),
+    /// kept so the cell size can be asked for again; it changes when the
+    /// terminal window moves to a display with a different pixel density
+    pane: String,
+    socket: String,
+    last_canvas: (u32, u32),
     files: Vec<FrameFile>,
     retired: Vec<FrameFile>,
     instance: u64,
@@ -87,6 +92,9 @@ impl Herdr {
             frames,
             directory,
             cell,
+            pane: pane.to_string(),
+            socket: socket.to_string(),
+            last_canvas: (0, 0),
             files: Vec::new(),
             retired: Vec::new(),
             instance: 0,
@@ -120,7 +128,50 @@ impl Herdr {
         (x.saturating_sub(1), y.saturating_sub(1))
     }
 
+    /// Ask herdr for the cell size again.
+    ///
+    /// It is read once, in `connect`, but it changes whenever the terminal
+    /// window moves to a display with a different pixel density: 15x31 on a 2x
+    /// panel against 7x16 on a 1x monitor. `present` divides the canvas by it
+    /// to get the placement grid, so a stale value puts the frame over roughly
+    /// half the columns and half the rows and leaves the page in a corner of
+    /// the pane.
+    fn refresh_cell(&mut self) {
+        let Ok(info) = request(
+            &self.socket,
+            &format!(
+                r#"{{"id":"info","method":"pane.graphics.info","params":{{"pane_id":{}}}}}"#,
+                quote(&self.pane)
+            ),
+        ) else {
+            return;
+        };
+        let (Some(width), Some(height)) = (
+            field_u32(&info, "cell_width_px"),
+            field_u32(&info, "cell_height_px"),
+        ) else {
+            return;
+        };
+        if width == 0 || height == 0 || (width, height) == self.cell {
+            return;
+        }
+        crate::logging::info(
+            "herdr",
+            format!(
+                "cell size {}x{} -> {}x{}",
+                self.cell.0, self.cell.1, width, height
+            ),
+        );
+        self.cell = (width, height);
+    }
+
     pub(crate) fn present(&mut self, canvas: &Canvas) -> io::Result<usize> {
+        // only on a resize, so the steady state costs nothing; a density change
+        // always resizes the canvas, because the pane pixel size changes
+        if self.last_canvas != (canvas.width, canvas.height) {
+            self.last_canvas = (canvas.width, canvas.height);
+            self.refresh_cell();
+        }
         let path = crate::profiler::span("herdr.handoff", || self.write_frame(&canvas.pixels))?;
         let header = format!(
             r#"{{"format":"rgba","image_width":{},"image_height":{},"file":{{"path":{}}},"sequence":{},"revision":0,"placement":{{"viewport_col":0,"viewport_row":0,"grid_cols":{},"grid_rows":{}}}}}"#,
