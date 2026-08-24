@@ -1,4 +1,5 @@
 import { BrowserWindow, screen } from "electron";
+import type { SearchEngineDefinition } from "pixel-store";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -36,6 +37,7 @@ export class BrowserController {
   private contentFocused = false;
   private readonly input: PageInput;
   private readonly partition: string | null;
+  private readonly searchEngine: SearchEngineDefinition;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
   private readonly sessionKey: string;
@@ -84,12 +86,14 @@ export class BrowserController {
     background: string,
     visible: boolean,
     partition: string | null,
+    searchEngine: SearchEngineDefinition,
     tabsAsPopups: boolean,
     clipboardRead: boolean,
     sessionKey: string,
     onState: (state: BrowserState) => void,
   ) {
     this.partition = partition ? persistentPartition(partition) : null;
+    this.searchEngine = searchEngine;
     this.tabsAsPopups = tabsAsPopups;
     this.clipboardRead = clipboardRead;
     this.sessionKey = sessionKey;
@@ -209,7 +213,7 @@ export class BrowserController {
       this.handleWindowOpen(details, this.window.webContents),
     );
     this.window.webContents.on("did-create-window", (child) => this.adoptPopup(child));
-    void this.window.loadURL(normalizeUrl(initialUrl, cwd));
+    void this.window.loadURL(normalizeUrl(initialUrl, cwd, this.searchEngine));
     this.onState(this.state);
   }
 
@@ -233,7 +237,7 @@ export class BrowserController {
   }
 
   navigate(value: string) {
-    void this.window.webContents.loadURL(normalizeUrl(value, this.cwd));
+    void this.window.webContents.loadURL(normalizeUrl(value, this.cwd, this.searchEngine));
   }
 
   back() {
@@ -251,6 +255,10 @@ export class BrowserController {
   reload() {
     if (this.state.loading) this.window.webContents.stop();
     else this.window.webContents.reload();
+  }
+
+  hardReload() {
+    this.window.webContents.reloadIgnoringCache();
   }
 
   zoom(direction: ZoomDirection): number {
@@ -685,4 +693,3 @@ function browserRenderScale(layout: BrowserSurfaceLayout) {
   const cssPixels = layout.width * layout.height / (layout.scale * layout.scale);
   return Math.max(0.5, Math.min(layout.scale, Math.sqrt(maxPixels / cssPixels)));
 }
-
