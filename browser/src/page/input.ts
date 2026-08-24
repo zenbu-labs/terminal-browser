@@ -22,7 +22,7 @@ export class PageInput {
   private activeClickCount = 1;
   private wheelRemainderX = 0;
   private wheelRemainderY = 0;
-  private sentKeys = new Set<string>();
+  private sentKeys = new Map<string, string>();
   private superHeld = false;
   private focusGate: Promise<void> | null = null;
 
@@ -178,11 +178,14 @@ export class PageInput {
     }
     const keyCode = electronKey(event.key);
     if (event.kind === "release") {
-      if (!keyCode || !this.sentKeys.delete(event.key)) return;
-      const modifiers = this.modifiers(event.mods);
+      const sent = this.sentKeys.get(event.key);
+      this.sentKeys.delete(event.key);
+      if (!sent) return;
+      let modifiers = this.modifiers(event.mods);
+      if (sent !== keyCode) modifiers = modifiers.filter((m) => m !== "shift");
       if (event.key.startsWith("left")) modifiers.push("left");
       if (event.key.startsWith("right")) modifiers.push("right");
-      this.send({ type: "keyUp", keyCode, modifiers });
+      this.send({ type: "keyUp", keyCode: sent, modifiers });
       return;
     }
     this.syncFocus();
@@ -192,13 +195,21 @@ export class PageInput {
       }
       return;
     }
-    const modifiers = this.modifiers(event.mods);
+    let modifiers = this.modifiers(event.mods);
+    const printable = !!event.text && !event.mods.ctrl && !event.mods.super && !event.mods.alt;
+    // Electron resolves keyCode+modifiers against a US layout. When the
+    // engine's layout-resolved text disagrees (AZERTY shift+`:` types `/`),
+    // send that text as the keyCode and let Electron infer shift from it, so
+    // pages reading keydown.key (xterm.js) see the typed character.
+    const layoutText = printable && event.text!.length === 1 ? event.text! : null;
+    const sendKeyCode =
+      layoutText && layoutText !== usLayoutText(event.key, event.mods.shift) ? layoutText : keyCode;
+    if (sendKeyCode !== keyCode) modifiers = modifiers.filter((m) => m !== "shift");
     if (event.key.startsWith("left")) modifiers.push("left");
     if (event.key.startsWith("right")) modifiers.push("right");
     if (event.kind === "repeat") modifiers.push("isautorepeat");
-    this.sentKeys.add(event.key);
-    this.send({ type: "rawKeyDown", keyCode, modifiers });
-    const printable = !!event.text && !event.mods.ctrl && !event.mods.super && !event.mods.alt;
+    this.sentKeys.set(event.key, sendKeyCode);
+    this.send({ type: "rawKeyDown", keyCode: sendKeyCode, modifiers });
     if (printable) {
       this.send({ type: "char", keyCode: event.text!, modifiers });
     }
@@ -241,9 +252,7 @@ export class PageInput {
   }
 
   releaseKeys() {
-    for (const key of this.sentKeys) {
-      const keyCode = electronKey(key);
-      if (!keyCode) continue;
+    for (const [key, keyCode] of this.sentKeys) {
       const modifiers: Electron.InputEvent["modifiers"] = [];
       if (key.startsWith("left")) modifiers.push("left");
       if (key.startsWith("right")) modifiers.push("right");
@@ -437,6 +446,37 @@ function controlEditingCommands(event: EngineKeyEvent): string[] | null {
     default:
       return null;
   }
+}
+
+const US_SHIFTED: Record<string, string> = {
+  "1": "!",
+  "2": "@",
+  "3": "#",
+  "4": "$",
+  "5": "%",
+  "6": "^",
+  "7": "&",
+  "8": "*",
+  "9": "(",
+  "0": ")",
+  "-": "_",
+  "=": "+",
+  "[": "{",
+  "]": "}",
+  "\\": "|",
+  ";": ":",
+  "'": '"',
+  ",": "<",
+  ".": ">",
+  "/": "?",
+  "`": "~",
+  " ": " ",
+};
+
+export function usLayoutText(key: string, shift: boolean): string | null {
+  if (key.length !== 1 || key < " " || key > "~") return null;
+  if (key >= "a" && key <= "z") return shift ? key.toUpperCase() : key;
+  return shift ? (US_SHIFTED[key] ?? null) : key;
 }
 
 export function electronKey(key: string) {
