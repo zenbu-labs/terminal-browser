@@ -270,6 +270,46 @@ mod tests {
         );
     }
 
+    /// The paths we drive ourselves - plain kitty by file, by shared memory, or
+    /// inline - place at the protocol's default z, over the terminal's text. Only
+    /// frames handed to herdr go under its overlays, and herdr emits those.
+    #[test]
+    fn the_sequences_we_emit_ourselves_carry_no_z_key() {
+        let file = kitty_transmit_named(
+            1,
+            40,
+            30,
+            "/tmp/px-1",
+            Medium::File,
+            Placement::Cursor,
+            Wrapper::None,
+        );
+        assert_eq!(
+            String::from_utf8(file).unwrap(),
+            "\x1b_Ga=T,f=32,s=40,v=30,t=f,i=1,p=1,C=1,q=2;L3RtcC9weC0x\x1b\\"
+        );
+        let shm = kitty_transmit_named(
+            7,
+            40,
+            30,
+            "/px-7",
+            Medium::Shared,
+            Placement::Cells { cols: 5, rows: 2 },
+            Wrapper::None,
+        );
+        assert_eq!(
+            String::from_utf8(shm).unwrap(),
+            "\x1b_Ga=T,f=32,s=40,v=30,t=s,i=7,U=1,c=5,r=2,q=2;L3B4LTc=\x1b\\"
+        );
+        let inline = kitty_transmit(1, 1, 1, &[0xff, 0x00, 0x00, 0xff]);
+        let query = kitty_query_medium(1, "/px-1", Medium::Shared, 1, 1, Wrapper::None);
+        for bytes in [inline, query] {
+            let text = String::from_utf8(bytes).unwrap();
+            let control = text.split_once(';').unwrap().0;
+            assert!(!control.contains("z="), "no z key belongs here: {control}");
+        }
+    }
+
     #[test]
     fn placeholder_grid_encodes_id_rows_and_columns() {
         let out = String::from_utf8(placeholder_grid(0x0a0b0c, 3, 2)).unwrap();

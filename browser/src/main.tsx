@@ -8,6 +8,7 @@ import { runDaemon } from "./daemon";
 import { LOGS_DIR, ensureDataDir } from "pixel-store";
 import { appLog } from "pixel-react";
 import { claimProfile } from "./profile";
+import { applyUserAgentPolicy } from "./user-agent";
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
@@ -23,7 +24,11 @@ app.commandLine.appendSwitch("enable-logging", "file");
 app.commandLine.appendSwitch("log-file", path.join(LOGS_DIR, "chromium.log"));
 app.setName("terminal-browser");
 claimProfile();
+applyUserAgentPolicy();
 
+// Every page is an offscreen window, so a pane rebuilding its views leaves the app with none for a
+// moment. Electron's default is to quit at that point, which would take the whole daemon with it.
+app.on("window-all-closed", () => {});
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {

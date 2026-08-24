@@ -19,5 +19,11 @@ export const migrations: { id: string; statements: string[] }[] = [
       "ALTER TABLE `instances` ADD `split_dir` text;",
       "ALTER TABLE `instances` ADD `parent_tty` text;"
     ]
+  },
+  {
+    "id": "0003_military_bloodstrike",
+    "statements": [
+      "ALTER TABLE `instances` ADD `profile` text;"
+    ]
   }
 ];

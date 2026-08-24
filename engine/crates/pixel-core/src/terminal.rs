@@ -230,6 +230,7 @@ pub struct Terminal {
     last_frame_size: Option<(u32, u32)>,
     mouse_pixels: bool,
     focused: bool,
+    mouse_tracking: bool,
     cell: Option<(u32, u32)>,
     cell_query_unsupported: bool,
     pending: Vec<u8>,
@@ -237,7 +238,7 @@ pub struct Terminal {
     transport: FrameTransport,
     herdr: Option<crate::herdr::Herdr>,
     herdr_target: Option<crate::herdr::HerdrTarget>,
-    herdr_retry: Option<(Instant, Duration)>,
+    herdr_retry: Option<HerdrRetry>,
     frame_files: Vec<FrameFile>,
     frame_seq: u64,
     wrapper: Wrapper,
@@ -333,6 +334,28 @@ impl SessionEnv {
     }
 }
 
+/// The reporting modes we switch on at startup: alternate screen, hidden cursor, any-event mouse
+/// tracking, the SGR and pixel mouse encodings, focus reporting, bracketed paste, in-band resize
+/// and the kitty keyboard protocol. Every mode named here has its inverse in `TEARDOWN`.
+const SETUP: &[u8] =
+    b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u";
+
+/// The inverse of `SETUP`, and `?1002l` on top of it: an unfocused pane sits in button-event
+/// tracking, so exiting while unfocused would otherwise strand that mode in the operator's shell.
+const TEARDOWN: &[u8] =
+    b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?25h\x1b[?1049l";
+
+/// Moves between any-event tracking (1003) and button-event tracking (1002). A terminal keeps one
+/// mouse mode, so the mode being left is reset before the wanted one is set; the order matters and
+/// a bare `?1003l` would leave the pane deaf to the mouse rather than merely quiet.
+const fn mouse_tracking_switch(any_event: bool) -> &'static [u8] {
+    if any_event {
+        b"\x1b[?1002l\x1b[?1003h"
+    } else {
+        b"\x1b[?1003l\x1b[?1002h"
+    }
+}
+
 impl Terminal {
     pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
         Self::with_handle(
@@ -351,15 +374,16 @@ impl Terminal {
     }
 
     fn with_handle(mut io: TtyHandle, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
+        // A frame file is only ever unlinked by its own Drop, so a process killed by a signal
+        // leaves its whole generation behind; a fresh session is the moment to clear them out.
+        sweep_dead_frame_files(&std::env::temp_dir(), FRAME_FILE_PREFIX, FRAME_FILE_SUFFIX);
         let saved = retry_intr(|| termios::tcgetattr(&io.read_fd()))?;
         let mut raw = saved.clone();
         raw.make_raw();
         retry_intr(|| termios::tcsetattr(&io.read_fd(), OptionalActions::Drain, &raw))?;
 
         // would prefer if they weren't magic and linked to some known doc on the internet
-        io.out().write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
-        )?; // enable many reporting modes so we get info about mouse/keyboard
+        io.out().write_all(SETUP)?;
         io.out().flush()?;
 
         let mut terminal = Self {
@@ -368,6 +392,7 @@ impl Terminal {
             last_frame_size: None,
             mouse_pixels: false,
             focused: true,
+            mouse_tracking: true,
             cell: None,
             cell_query_unsupported: false,
             pending: Vec::new(),
@@ -400,7 +425,7 @@ impl Terminal {
         terminal.clipboard_data = !wrapper.relayed() && terminal.probe_clipboard_data()?;
         terminal.connect_herdr();
         if terminal.herdr.is_none() && terminal.herdr_target.is_some() {
-            terminal.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
+            terminal.herdr_retry = Some(HerdrRetry::first());
         }
         terminal.transport = terminal.probe_transport()?;
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
@@ -431,6 +456,16 @@ impl Terminal {
     }
 
     fn probe_transport(&mut self) -> io::Result<FrameTransport> {
+        // Missing herdr is the expensive answer and it used to be silent, which is how a session
+        // spent a whole day here unnoticed. herdr reads our pixels where they lie; every
+        // transport below copies a whole frame per repaint.
+        if self.herdr_target.is_some() && self.herdr.is_none() {
+            crate::logging::warn(
+                "herdr",
+                "herdr did not answer, so every repaint writes a whole RGBA frame — megabytes \
+                 each — instead of handing herdr a file it reads in place",
+            );
+        }
         if let Some(forced) = std::env::var("TERMINAL_BROWSER_FRAMES")
             .ok()
             .and_then(|value| match value.trim() {
@@ -508,7 +543,7 @@ impl Terminal {
 
     fn frame_path(&self, slot: u64, generation: u64) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "terminal-browser-{}-{}-{generation}-{slot}.rgba",
+            "{FRAME_FILE_PREFIX}{}-{}-{generation}-{slot}{FRAME_FILE_SUFFIX}",
             std::process::id(),
             self.terminal_id
         ))
@@ -556,30 +591,50 @@ impl Terminal {
         }
     }
 
-    pub fn draw(&mut self, canvas: &Canvas) -> io::Result<usize> {
-        if self.herdr.is_none()
-            && let Some((at, backoff)) = self.herdr_retry
-            && Instant::now() >= at
-        {
-            self.connect_herdr();
-            match self.herdr {
-                Some(_) => self.herdr_retry = None,
-                None => {
-                    let backoff = (backoff * 2).min(HERDR_RETRY_MAX);
-                    self.herdr_retry = Some((Instant::now() + backoff, backoff));
-                }
-            }
+    /// Retries the herdr attach when one is due and upgrades this session in place if it lands.
+    /// Only event handling calls this; see [`HerdrRetry`] for why it must never be `draw`.
+    fn retry_herdr(&mut self) {
+        if self.herdr.is_some() || !self.herdr_retry.as_ref().is_some_and(HerdrRetry::due) {
+            return;
         }
+        self.connect_herdr();
+        if self.herdr.is_some() {
+            self.herdr_retry = None;
+            // Nothing reads the fallback files now, and they are a whole frame each.
+            self.frame_files.clear();
+            self.last_frame_size = None;
+            self.placeholders = None;
+            crate::logging::info("herdr", "herdr answered a later try, frames go straight to it");
+            return;
+        }
+        if let Some(retry) = self.herdr_retry.as_mut()
+            && !retry.failed()
+        {
+            self.herdr_retry = None;
+            crate::logging::info(
+                "herdr",
+                format!(
+                    "herdr never answered in {HERDR_RETRY_ATTEMPTS} tries, so this terminal is \
+                     not herdr and will not be asked again"
+                ),
+            );
+        }
+    }
+
+    pub fn draw(&mut self, canvas: &Canvas) -> io::Result<usize> {
         if let Some(herdr) = self.herdr.as_mut() {
             match herdr.present(canvas) {
                 Ok(written) => return Ok(written),
                 Err(err) => {
                     crate::logging::warn(
                         "herdr",
-                        format!("{err}, drawing it ourselves until herdr is back"),
+                        format!(
+                            "{err}, drawing it ourselves until herdr is back — \
+                             a whole RGBA frame per repaint until then"
+                        ),
                     );
                     self.herdr = None;
-                    self.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
+                    self.herdr_retry = Some(HerdrRetry::first());
                     self.last_frame_size = None;
                     self.placeholders = None;
                 }
@@ -687,9 +742,17 @@ impl Terminal {
                     RawEvent::Paste(text) => Event::Paste(text),
                     RawEvent::Focus(focused) => {
                         self.focused = focused;
+                        // Any-event tracking streams every motion, so an unfocused pane holding it
+                        // makes the multiplexer share the mouse with an app that cannot use it.
+                        // Button-event tracking drops that stream and keeps the clicks.
+                        self.set_mouse_tracking(focused)?;
+                        self.retry_herdr();
                         Event::Focus(focused)
                     }
-                    RawEvent::WindowSize(ws) => Event::WindowSize(ws),
+                    RawEvent::WindowSize(ws) => {
+                        self.retry_herdr();
+                        Event::WindowSize(ws)
+                    }
                     RawEvent::Mouse(kind, button, mods, x, y) => {
                         let (x, y) = match &self.herdr {
                             Some(herdr) => herdr.mouse_position_px(
@@ -942,6 +1005,20 @@ impl Terminal {
         Ok(self.read_report(150, parse_kitty_keyboard)?.unwrap_or(false))
     }
 
+    /// Any-event mouse tracking while focused, button-event tracking while unfocused, leaving the
+    /// SGR and pixel encodings alone so the stream comes back in the same shape it left in. An
+    /// unfocused pane still hears press, release and drag motion, so a click that refocuses it is
+    /// reported at the point the operator clicked and a drag interrupted by the blur still gets its
+    /// release; only the idle hover stream stops. Writes only when the state actually changes.
+    fn set_mouse_tracking(&mut self, on: bool) -> io::Result<()> {
+        if self.mouse_tracking == on {
+            return Ok(());
+        }
+        self.mouse_tracking = on;
+        self.io.out().write_all(mouse_tracking_switch(on))?;
+        self.io.out().flush()
+    }
+
     fn probe_mouse_pixels(&mut self) -> io::Result<bool> {
         self.io.out().write_all(b"\x1b[?1016$p")?;
         self.io.out().flush()?;
@@ -1113,6 +1190,88 @@ const FRAME_SLOTS: u64 = 8;
 
 const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);
 const HERDR_RETRY_MAX: Duration = Duration::from_secs(10);
+const HERDR_RETRY_ATTEMPTS: u32 = 6;
+
+/// A missed herdr attach used to last the whole session: a pane that came up before herdr was
+/// ready wrote a whole frame per repaint for hours instead of handing herdr one it reads in place.
+/// Retries ride focus and resize reports, never [`Terminal::draw`], because opening herdr blocks
+/// on a socket for up to its open timeout and a repaint cannot afford that. They stop after
+/// `HERDR_RETRY_ATTEMPTS` so a terminal that merely inherited `HERDR_*` from its parent is not
+/// probed for as long as it runs.
+struct HerdrRetry {
+    not_before: Instant,
+    backoff: Duration,
+    attempts: u32,
+}
+
+impl HerdrRetry {
+    /// The first attempt is due at once: the next focus or resize is already far enough from the
+    /// hot path, and the backoff exists only to keep a resize drag from hammering the socket.
+    fn first() -> Self {
+        Self {
+            not_before: Instant::now(),
+            backoff: HERDR_RETRY_MIN,
+            attempts: 0,
+        }
+    }
+
+    fn due(&self) -> bool {
+        Instant::now() >= self.not_before
+    }
+
+    /// Records a failed attempt, answering `false` once the attempts are spent.
+    fn failed(&mut self) -> bool {
+        self.attempts += 1;
+        if self.attempts >= HERDR_RETRY_ATTEMPTS {
+            return false;
+        }
+        self.not_before = Instant::now() + self.backoff;
+        self.backoff = (self.backoff * 2).min(HERDR_RETRY_MAX);
+        true
+    }
+}
+
+const FRAME_FILE_PREFIX: &str = "terminal-browser-";
+const FRAME_FILE_SUFFIX: &str = ".rgba";
+
+/// Whether the kernel has nothing behind this pid. `test_kill_process` answers `ESRCH` only for a
+/// pid with no process on it; `EPERM` means it is alive and someone else's, so it stays.
+fn pid_is_gone(pid: i32) -> bool {
+    let Some(pid) = rustix::process::Pid::from_raw(pid) else {
+        return false;
+    };
+    matches!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH)
+    )
+}
+
+/// Removes frame files whose owning process is gone. [`FrameFile::drop`] is the only thing that
+/// unlinks one, and nothing here handles SIGTERM or SIGKILL, so a process that dies on a signal
+/// strands every file it had mapped — one crash left 64MB of them in `TMPDIR`. The owning pid is
+/// in the name, so a later start can finish the job. A live pid's files are never touched:
+/// sessions share a process, and other processes may be running.
+pub(crate) fn sweep_dead_frame_files(dir: &std::path::Path, prefix: &str, suffix: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(prefix))
+            .and_then(|rest| rest.strip_suffix(suffix))
+        else {
+            continue;
+        };
+        let Some(pid) = rest.split('-').next().and_then(|pid| pid.parse::<i32>().ok()) else {
+            continue;
+        };
+        if pid_is_gone(pid) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameTransport {
@@ -1242,9 +1401,7 @@ impl Drop for Terminal {
         if self.color_scheme_updates {
             let _ = self.io.out().write_all(b"\x1b[?2031l");
         }
-        let _ = self.io.out().write_all(
-            b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
-        );
+        let _ = self.io.out().write_all(TEARDOWN);
         let _ = self.io.out().flush();
         let _ = retry_intr(|| {
             termios::tcsetattr(&self.io.read_fd(), OptionalActions::Flush, &self.saved)
@@ -1947,6 +2104,59 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_file_whose_pid_is_gone_is_swept_and_a_live_pid_keeps_its_own() {
+        let dir = std::env::temp_dir().join(format!("tb-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A child we have already reaped is the one pid we can be sure has nothing behind it,
+        // which is exactly the state a crashed session leaves its frame files in.
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+
+        let name = |pid: u32| dir.join(format!("{FRAME_FILE_PREFIX}{pid}-0-0-1{FRAME_FILE_SUFFIX}"));
+        let stale = name(dead);
+        let live = name(std::process::id());
+        // The browser puts other things under this prefix — a profile scratch directory, a
+        // cookie copy — and none of them carry a pid where a frame file does.
+        let unowned = dir.join(format!("{FRAME_FILE_PREFIX}cookies-{dead}{FRAME_FILE_SUFFIX}"));
+        let foreign = dir.join(format!("something-else-{dead}{FRAME_FILE_SUFFIX}"));
+        for path in [&stale, &live, &unowned, &foreign] {
+            std::fs::write(path, [0u8; 4]).unwrap();
+        }
+
+        sweep_dead_frame_files(&dir, FRAME_FILE_PREFIX, FRAME_FILE_SUFFIX);
+
+        assert!(!stale.exists(), "a frame file whose owner is gone must be swept");
+        assert!(live.exists(), "sessions share a process, so a live pid keeps its frames");
+        assert!(unowned.exists(), "only files naming a pid are frame files");
+        assert!(foreign.exists(), "another program's file is not ours to remove");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_reaped_pid_counts_as_gone() {
+        assert!(!pid_is_gone(std::process::id() as i32), "we are running");
+        assert!(!pid_is_gone(1), "launchd is alive and not ours to signal");
+        assert!(!pid_is_gone(0), "pid 0 names no process and must never be swept");
+
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        child.wait().unwrap();
+        assert!(pid_is_gone(pid));
+    }
+
+    #[test]
     #[allow(unsafe_code)]
     fn shm_roundtrip() {
         let name = format!("/px-test-{}", std::process::id());
@@ -2221,6 +2431,28 @@ mod tests {
 
     #[test]
     fn parses_modifiers_on_legacy_and_kitty_keys() {
+        // super+shift+arrow is the one arrow combination Ghostty forwards, so it is what
+        // back and forward can actually bind to; modifier 10 is super plus shift.
+        assert_eq!(
+            parse_event(b"\x1b[1;10:1D").map(|(event, _)| event),
+            Some(RawEvent::Key(KeyEvent {
+                key: Key::Left,
+                mods: Mods { sup: true, shift: true, ..Mods::default() },
+                kind: KeyKind::Press,
+                text: None,
+            })),
+        );
+        // super+punctuation matters because a terminal that forwards it restores the
+        // bracket shortcuts every browser uses; 91 is '[' and modifier 9 is super.
+        assert_eq!(
+            parse_event(b"\x1b[91;9u").map(|(event, _)| event),
+            Some(RawEvent::Key(KeyEvent {
+                key: Key::Char('['),
+                mods: Mods { sup: true, ..Mods::default() },
+                kind: KeyKind::Press,
+                text: None,
+            })),
+        );
         assert_eq!(
             parse_event(b"\x1b[1;2D"),
             Some((key_mods(Key::Left, SHIFT), 6))
@@ -2475,6 +2707,57 @@ mod tests {
         assert_eq!(read.items.len(), 1);
         assert_eq!(read.items[0].1, b"first-second");
     }
+
+    /// Every `CSI ? <mode> h|l` in a byte string, in order, as (mode, action).
+    fn dec_modes(bytes: &[u8]) -> Vec<(u32, u8)> {
+        let mut found = Vec::new();
+        let mut rest = bytes;
+        while let Some(at) = rest.windows(3).position(|w| w == b"\x1b[?") {
+            rest = &rest[at + 3..];
+            let end = rest.iter().position(|b| !b.is_ascii_digit()).unwrap();
+            let mode = std::str::from_utf8(&rest[..end]).unwrap().parse().unwrap();
+            found.push((mode, rest[end]));
+            rest = &rest[end + 1..];
+        }
+        found
+    }
+
+    #[test]
+    fn an_unfocused_pane_keeps_button_events_and_loses_only_hover() {
+        // 1003 reports every motion; 1002 reports press, release and drag motion. Going to 1002
+        // rather than to nothing is what keeps a click that refocuses the pane on a real point.
+        assert_eq!(mouse_tracking_switch(false), b"\x1b[?1003l\x1b[?1002h".as_slice());
+        assert_eq!(mouse_tracking_switch(true), b"\x1b[?1002l\x1b[?1003h".as_slice());
+        for any_event in [true, false] {
+            // A terminal holds one mouse mode, so the mode being left is reset before the wanted
+            // one is set. The other order ends on the reset and the pane goes deaf.
+            let switch = dec_modes(mouse_tracking_switch(any_event));
+            assert_eq!(switch.len(), 2, "a switch is one reset and one set");
+            assert_eq!(switch[0].1, b'l');
+            assert_eq!(switch[1].1, b'h');
+        }
+    }
+
+    #[test]
+    fn teardown_puts_back_every_mode_the_terminal_turns_on() {
+        let teardown = dec_modes(TEARDOWN);
+        // Blur leaves 1002 on, so exiting while unfocused owes it a reset that startup never asked
+        // for: the modes to undo are SETUP's plus that one.
+        let blur = dec_modes(mouse_tracking_switch(false));
+        let owed = dec_modes(SETUP)
+            .into_iter()
+            .chain(blur.into_iter().filter(|(_, act)| *act == b'h'));
+        let mut count = 0;
+        for (mode, action) in owed {
+            count += 1;
+            let inverse = if action == b'h' { b'l' } else { b'h' };
+            assert!(
+                teardown.contains(&(mode, inverse)),
+                "mode {mode} is left behind in the operator's shell",
+            );
+        }
+        assert_eq!(teardown.len(), count, "teardown touches a mode nothing turns on");
+    }
 }
 
 #[cfg(test)]
@@ -2613,5 +2896,166 @@ mod tty_tests {
         });
         let got = term.poll_event(None).unwrap();
         assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
+    }
+
+    fn herdr_env(socket: &std::path::Path) -> SessionEnv {
+        SessionEnv::of_session(std::collections::HashMap::from([
+            ("HERDR_PANE_ID".to_owned(), "w1:p1".to_owned()),
+            (
+                "HERDR_SOCKET_PATH".to_owned(),
+                socket.to_string_lossy().into_owned(),
+            ),
+        ]))
+    }
+
+    #[test]
+    fn a_session_that_missed_herdr_attaches_on_a_later_focus() {
+        use std::io::Write as _;
+        let dir = crate::herdr::tests::scratch("late-attach");
+        let socket = dir.join("herdr.sock");
+        let (mut master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+
+        // The pane came up before herdr was ready to answer, which is the whole bug: this
+        // session used to write a whole frame per repaint for the rest of its life.
+        let mut term = Terminal::open(&path, Wrapper::None, herdr_env(&socket)).unwrap();
+        assert!(term.herdr.is_none(), "nothing was listening yet");
+        assert!(term.herdr_retry.is_some(), "a missed attach has to stay retryable");
+
+        let (bound, _frames) = crate::herdr::tests::fake_herdr(&dir, "direct-kitty");
+        assert_eq!(bound, socket, "the fake must answer on the socket we handed the terminal");
+
+        master.write_all(b"\x1b[I").unwrap();
+        let event = term.poll_event(Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(event, Some(Event::Focus(true)));
+
+        assert!(
+            term.herdr.is_some(),
+            "herdr was there on the retry, so this session must be on the direct path now"
+        );
+        assert_eq!(term.cell, Some((10, 20)), "and it must take herdr's cell size");
+        assert!(term.herdr_retry.is_none(), "nothing left to retry");
+    }
+
+    #[test]
+    fn a_resize_is_also_a_retry_point() {
+        use std::io::Write as _;
+        let dir = crate::herdr::tests::scratch("late-attach-resize");
+        let socket = dir.join("herdr.sock");
+        let (mut master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+        let mut term = Terminal::open(&path, Wrapper::None, herdr_env(&socket)).unwrap();
+        assert!(term.herdr.is_none());
+
+        let (_bound, _frames) = crate::herdr::tests::fake_herdr(&dir, "direct-kitty");
+
+        // An in-band resize report, the other event a pane gets for free.
+        master.write_all(b"\x1b[48;30;100;630;1000t").unwrap();
+        let event = term.poll_event(Some(Duration::from_secs(5))).unwrap();
+        assert!(matches!(event, Some(Event::WindowSize(_))), "{event:?}");
+        assert!(term.herdr.is_some(), "a resize must upgrade the transport too");
+    }
+
+    #[test]
+    fn a_terminal_that_is_not_herdr_stops_being_probed() {
+        let dir = crate::herdr::tests::scratch("retry-bound");
+        let (master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+        // HERDR_* inherited from a parent, with no herdr behind it.
+        let mut term =
+            Terminal::open(&path, Wrapper::None, herdr_env(&dir.join("never.sock"))).unwrap();
+        assert!(term.herdr_retry.is_some());
+
+        // The backoff would spread these over half a minute; the bound is what is under test.
+        for _ in 0..HERDR_RETRY_ATTEMPTS + 2 {
+            if let Some(retry) = term.herdr_retry.as_mut() {
+                retry.not_before = Instant::now();
+            }
+            term.retry_herdr();
+        }
+
+        assert!(term.herdr.is_none());
+        assert!(
+            term.herdr_retry.is_none(),
+            "an unbounded retry probes a plain terminal for as long as it runs"
+        );
+    }
+
+    #[test]
+    fn falling_back_off_herdr_says_what_it_costs() {
+        let dir = crate::herdr::tests::scratch("fallback-warning");
+        let (master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+        let since = crate::logging::entries_after(0)
+            .last()
+            .map_or(0, |entry| entry.seq + 1);
+
+        let _term =
+            Terminal::open(&path, Wrapper::None, herdr_env(&dir.join("never.sock"))).unwrap();
+
+        let warned = crate::logging::entries_after(since).into_iter().any(|entry| {
+            entry.level == crate::logging::LogLevel::Warn
+                && entry.target == "herdr"
+                && entry.message.contains("megabytes")
+        });
+        assert!(warned, "a silent fallback is how this went unnoticed for a day");
+    }
+
+    /// Like `drain`, but the bytes come back while the terminal is alive. The slave fd is held open
+    /// for the whole test so the reader never sees EOF and can never be joined; the terminal still
+    /// needs it reading or Drop blocks, so the receiver has to outlive the terminal.
+    fn tap(master: &std::fs::File) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (chunks, seen) = std::sync::mpsc::channel();
+        let mut master = master.try_clone().unwrap();
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = master.read(&mut buf) {
+                if n == 0 || chunks.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        seen
+    }
+
+    /// The write lands on the tty before `poll_event` returns, but the reader collecting it is
+    /// another thread, so wait for the bytes rather than sampling once.
+    fn wrote(seen: &std::sync::mpsc::Receiver<Vec<u8>>, sink: &mut Vec<u8>, want: &[u8]) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if sink.windows(want.len()).any(|window| window == want) {
+                return true;
+            }
+            match seen.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(chunk) => sink.extend_from_slice(&chunk),
+                Err(_) => return false,
+            }
+        }
+    }
+
+    #[test]
+    fn blur_drops_to_button_event_tracking_and_focus_restores_any_event() {
+        use std::io::Write as _;
+        let (mut master, _slave, path) = open_pty();
+        let seen = tap(&master);
+        let mut written = Vec::new();
+        let mut term = Terminal::open(&path, Wrapper::None, SessionEnv::of_process()).unwrap();
+
+        master.write_all(b"\x1b[O").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(matches!(got, Some(Event::Focus(false))), "focus out: {got:?}");
+        assert!(
+            wrote(&seen, &mut written, b"\x1b[?1003l\x1b[?1002h"),
+            "an unfocused pane must lose the hover stream without going deaf to clicks",
+        );
+
+        master.write_all(b"\x1b[I").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(matches!(got, Some(Event::Focus(true))), "focus in: {got:?}");
+        assert!(
+            wrote(&seen, &mut written, b"\x1b[?1002l\x1b[?1003h"),
+            "regaining focus must restore any-event tracking",
+        );
     }
 }

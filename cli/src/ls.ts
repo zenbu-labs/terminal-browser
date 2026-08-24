@@ -11,6 +11,7 @@ interface Listed {
   socket: string;
   tty: string | null;
   pane: { tab: string | null; pane: string | null };
+  profile: string | null;
   splitDir: Browser["splitDir"];
   parentTty: string | null;
   inCurrentTab: boolean;
@@ -27,6 +28,7 @@ async function collect(list: Browser[]): Promise<Listed[]> {
       socket: browser.socket,
       tty: browser.tty,
       pane: { tab: browser.paneTab, pane: browser.pane },
+      profile: browser.profile,
       splitDir: browser.splitDir,
       parentTty: browser.parentTty,
       inCurrentTab: browser.inCurrentTab,
@@ -41,7 +43,9 @@ function render(list: Listed[]): string {
   const lines: string[] = [];
   for (const browser of list) {
     const where = browser.pane.pane ? `${browser.pane.tab}:${browser.pane.pane}` : "no pane";
-    lines.push(`${browser.key}  ${where}${browser.inCurrentTab ? "  (this tab)" : ""}`);
+    const here = browser.inCurrentTab ? "  (this tab)" : "";
+    const profile = browser.profile ? `profile ${browser.profile}` : "no profile";
+    lines.push(`${browser.key}  ${where}  ${profile}${here}`);
     for (const tab of browser.tabs) {
       const mark = tab.active ? "*" : " ";
       lines.push(`  ${mark} ${tab.id}  ${tab.title || tab.url}`);

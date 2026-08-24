@@ -7,10 +7,13 @@ import { app } from "electron";
 import { DAEMON_SOCKET } from "pixel-store";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
+import { prepareSocketDirectory, restrictSocketMode } from "./socket-permissions";
 
 // what
 const IDLE_EXIT_MS = 15_000;
-
+// An open request carries the caller's whole environment, so this ceiling is far above
+// the instance socket's: it only has to stop an unbounded newline-free stream.
+const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 
 interface OpenRequest {
   cmd: "open";
@@ -35,7 +38,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     app.exit(3);
     return;
   }
-  fs.mkdirSync(path.dirname(DAEMON_SOCKET), { recursive: true });
+  prepareSocketDirectory(DAEMON_SOCKET);
   fs.rmSync(DAEMON_SOCKET, { force: true });
 
   const build = buildStamp();
@@ -75,6 +78,10 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     let buffer = "";
     connection.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
+      if (buffer.length > MAX_REQUEST_BYTES) {
+        connection.destroy();
+        return;
+      }
       let newline = buffer.indexOf("\n");
       while (newline !== -1) {
         const line = buffer.slice(0, newline);
@@ -149,7 +156,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     process.stderr.write(`terminal-browser daemon socket error: ${error}\n`);
     app.exit(1);
   });
-  server.listen(DAEMON_SOCKET);
+  server.listen(DAEMON_SOCKET, () => restrictSocketMode(DAEMON_SOCKET));
 }
 
 function socketAlive(): Promise<boolean> {

@@ -4,8 +4,34 @@ export type KeyBinding = KeyMods & { key: string };
 
 export const defaultKeys =
   process.platform === "darwin"
-    ? { palette: "super+p", find: "super+shift+f", devtools: "super+shift+i", console: "super+alt+j" }
-    : { palette: "ctrl+k alt+k", find: "ctrl+shift+f", devtools: "ctrl+shift+i", console: "ctrl+alt+j" };
+    ? {
+        palette: "super+p",
+        find: "super+shift+f",
+        devtools: "super+shift+i",
+        console: "super+alt+j",
+        screenshot: "super+shift+s",
+        // b, not p: one shift away from the palette is a chord nobody means to press. Ghostty
+        // sends this one, unlike super+punctuation, which it never delivers.
+        profiles: "super+shift+b",
+        focus: "super+shift+k",
+        // Arrows, because they read as navigation and need no terminal config. Ghostty claims
+        // shift+arrow, super+arrow, super+alt+arrow and super+ctrl+arrow, and delivers neither
+        // super+punctuation nor anything else on the brackets - super+shift+arrow is what is left,
+        // and it is what arrives. The brackets stay for terminals that do send them.
+        back: "super+[ super+shift+left",
+        forward: "super+] super+shift+right",
+      }
+    : {
+        palette: "ctrl+k alt+k",
+        find: "ctrl+shift+f",
+        devtools: "ctrl+shift+i",
+        console: "ctrl+alt+j",
+        screenshot: "ctrl+shift+s",
+        profiles: "ctrl+shift+b",
+        focus: "ctrl+shift+k",
+        back: "ctrl+[ ctrl+shift+left",
+        forward: "ctrl+] ctrl+shift+right",
+      };
 
 export const recordKeyLabel = process.platform === "darwin" ? "ctrl+r" : "ctrl+shift+r";
 
