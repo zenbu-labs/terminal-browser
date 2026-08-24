@@ -836,11 +836,28 @@ impl Terminal {
         if self.mouse_pixels {
             (x.saturating_sub(1), y.saturating_sub(1))
         } else {
+            // cell_size() truncates width_px/cols and height_px/rows to integers, which
+            // drifts from the terminal's real (often fractional, under non-integer display
+            // scaling) row/col pitch and accumulates into a full cell of error over enough
+            // rows/cols. Recompute in float precision here instead of reusing self.cell.
             let (cw, ch) = self
-                .cell
-                .or_else(|| self.size().ok().and_then(|ws| ws.cell_size()))
-                .unwrap_or((16, 32));
-            ((x - 1) * cw + cw / 2, (y - 1) * ch + ch / 2)
+                .size()
+                .ok()
+                .filter(|ws| ws.cols > 0 && ws.rows > 0 && ws.width_px > 0 && ws.height_px > 0)
+                .map(|ws| {
+                    (
+                        ws.width_px as f32 / ws.cols as f32,
+                        ws.height_px as f32 / ws.rows as f32,
+                    )
+                })
+                .or_else(|| self.cell.map(|(cw, ch)| (cw as f32, ch as f32)))
+                .unwrap_or((16.0, 32.0));
+            let x = x.saturating_sub(1) as f32;
+            let y = y.saturating_sub(1) as f32;
+            (
+                (x * cw + cw / 2.0).round() as u32,
+                (y * ch + ch / 2.0).round() as u32,
+            )
         }
     }
 
