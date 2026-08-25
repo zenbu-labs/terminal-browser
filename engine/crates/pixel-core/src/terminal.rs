@@ -570,7 +570,7 @@ impl Terminal {
                 }
             }
         }
-        let current_cell = self.size().ok().and_then(|ws| ws.cell_size());
+        let current_cell = self.cell_size().ok().flatten();
         if let Some(herdr) = self.herdr.as_mut() {
             if let Some(cell) = current_cell {
                 herdr.update_cell(cell);
