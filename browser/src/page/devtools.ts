@@ -7,9 +7,8 @@ import { frameRate } from "./frame-rate";
 import { PageInput } from "./input";
 import { offscreenPreferences } from "./offscreen";
 import { BitmapPresenter, presentPaint, shmFrameOf } from "./paint";
-import { cssSize } from "./types";
-import type { BrowserSurfaceLayout } from "./types";
-
+import { cssSize, type BrowserSurfaceLayout } from "./types";
+import { browserRenderScale } from "./controller";
 export type DevtoolsAction = "close" | "dock-bottom" | "dock-right";
 
 export class DevtoolsWindow {
@@ -29,6 +28,7 @@ export class DevtoolsWindow {
   private pendingPanel: string | null = null;
   cursorShape = "default";
   onCursorChange: ((shape: string) => void) | null = null;
+  private renderScale: number;
   private readonly onDisplayChange = () => {
     if (this.destroyed) return;
     this.window.webContents.setFrameRate(this.visible ? frameRate() : 4);
@@ -49,6 +49,7 @@ export class DevtoolsWindow {
     this.bitmaps = new BitmapPresenter(surface);
     this.layout = layout;
     this.dock = dock;
+    this.renderScale = renderScale;
     this.onAction = onAction;
     this.window = new BrowserWindow({
       ...cssSize(layout.width, layout.height, layout.scale),
@@ -137,9 +138,20 @@ export class DevtoolsWindow {
       return;
     }
     this.layout = layout;
-    if (!options?.keepFrame) this.surface.clear();
+    this.renderScale = browserRenderScale(layout);
+    if (options?.keepFrame === false) this.surface.clear();
     const size = cssSize(layout.width, layout.height, layout.scale);
     this.window.setContentSize(size.width, size.height, false);
+    void this.attachCdp()
+      .then(() =>
+        this.cdp("Emulation.setDeviceMetricsOverride", {
+          width: size.width,
+          height: size.height,
+          deviceScaleFactor: this.renderScale,
+          mobile: false,
+        }),
+      )
+      .catch(() => {});
   }
 
   showPanel(panel: string) {
