@@ -27,6 +27,7 @@ import type { Direction, Terminal, TerminalCheck } from "pixel-terminals";
 import { actionCommand } from "./action";
 import { control } from "./control";
 import { setupCommand } from "./editors";
+import { ensureSetup, linkSkills, markSetupDone } from "./setup";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
@@ -716,6 +717,7 @@ async function main(): Promise<number> {
     process.stdout.write(commandHelp(command) ?? rootHelp());
     return 0;
   }
+  if (command !== "setup") ensureSetup();
   if (command === "open") {
     await openCommand(args);
     return 0;
@@ -729,7 +731,9 @@ async function main(): Promise<number> {
   }
   if (command === "setup") {
     const sandbox = apparmorSetup(electronBinary());
+    linkSkills();
     const editors = setupCommand();
+    markSetupDone();
     return editors !== 0 ? editors : sandbox;
   }
   if (command === "upgrade") return upgradeCommand();

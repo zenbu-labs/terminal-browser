@@ -77,6 +77,11 @@ export async function upgradeCommand(): Promise<number> {
     process.stdout.write(`already up to date (${current})\n`);
     return 0;
   }
+  if (process.env.TERMINAL_BROWSER_DIST_ROOT?.split(path.sep).includes("Caskroom")) {
+    process.stdout.write(`${latest.version} is available. This install is managed by Homebrew, run:\n`);
+    process.stdout.write("  brew upgrade --cask terminal-browser\n");
+    return 0;
+  }
   const open = await instances();
   if (open.length > 0 && process.stdin.isTTY && process.stdout.isTTY) {
     if (!(await confirmClose(latest.version, open))) {

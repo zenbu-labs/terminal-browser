@@ -36,7 +36,11 @@ function physical(dir: string): string {
 
 export const INSTALL_ROOT = installRoot();
 
-const suffix = crypto.createHash("sha256").update(INSTALL_ROOT.root).digest("hex").slice(0, 8);
+function stableIdentity(root: string): string {
+  return root.replace(/([/\\]Caskroom[/\\]terminal-browser[/\\])[^/\\]+/, "$1");
+}
+
+const suffix = crypto.createHash("sha256").update(stableIdentity(INSTALL_ROOT.root)).digest("hex").slice(0, 8);
 
 export const APP_DIR_NAME = `terminal-browser${INSTALL_ROOT.dev ? "-dev" : ""}-${suffix}`;
 

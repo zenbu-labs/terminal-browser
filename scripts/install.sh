@@ -8,6 +8,13 @@ PLATFORMS="__PLATFORMS__"
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) TARGET=darwin-arm64 ;;
+  Darwin-x86_64)
+    if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+      TARGET=darwin-arm64
+    else
+      TARGET=darwin-x64
+    fi
+    ;;
   Linux-x86_64|Linux-amd64) TARGET=linux-x64 ;;
   Linux-aarch64|Linux-arm64) TARGET=linux-arm64 ;;
   *)
@@ -74,70 +81,9 @@ if [ "$(uname -s)" = Linux ]; then
   fi
 fi
 
-AGENT_SKILLS="${AGENT_SKILLS_HOME:-$HOME/.agents/skills}"
-STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-RECEIPT="$STATE_HOME/terminal-browser/skills.links"
-WROTE="$(mktemp)"
-trap 'rm -rf "$TMP" "$WROTE"' EXIT
-
-link() {
-  mkdir -p "$(dirname "$2")"
-  ln -sfn "$1" "$2"
-  printf '%s\n' "$2" >> "$WROTE"
-}
-
-LINKED=""
-while read -r kind name location variant; do
-  [ "$kind" = agent ] || continue
-  DIR="$HOME/$location"
-  [ -d "$(dirname "$DIR")" ] || continue
-  mkdir -p "$DIR"
-  MADE=""
-  while read -r skind skill; do
-    [ "$skind" = skill ] || continue
-    TARGET="$APP/skills/${variant:-default}/$skill"
-    [ -d "$TARGET" ] || continue
-    LINK="$DIR/$skill"
-    if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
-      echo "leaving $LINK alone, it is not a link we made"
-      continue
-    fi
-    link "$TARGET" "$LINK"
-    MADE=1
-  done < "$APP/skills/manifest"
-  if [ -n "$MADE" ]; then LINKED="$LINKED $name"; fi
-done < "$APP/skills/manifest"
-
-while read -r kind skill; do
-  [ "$kind" = skill ] || continue
-  [ -d "$APP/skills/default/$skill" ] || continue
-  SHARED="$AGENT_SKILLS/$skill"
-  if [ -d "$SHARED" ] && [ ! -L "$SHARED" ]; then
-    rm -f "$SHARED/SKILL.md"
-    rmdir "$SHARED" 2>/dev/null || true
-  fi
-  if [ -e "$SHARED" ] && [ ! -L "$SHARED" ]; then
-    echo "leaving $SHARED alone, it holds files we did not put there"
-    continue
-  fi
-  link "$APP/skills/default/$skill" "$SHARED"
-done < "$APP/skills/manifest"
-
-if [ -f "$RECEIPT" ]; then
-  while read -r stale; do
-    [ -n "$stale" ] || continue
-    grep -qxF "$stale" "$WROTE" && continue
-    [ -L "$stale" ] || continue
-    case "$(readlink "$stale")" in "$APP"/*) rm -f "$stale"; echo "removed $stale" ;; esac
-  done < "$RECEIPT"
-fi
-mkdir -p "$(dirname "$RECEIPT")"
-sort -u "$WROTE" > "$RECEIPT"
-
 echo "installed terminal-browser $(cat "$APP/VERSION")${CHANNEL:+ ($CHANNEL)}"
-echo "skills $AGENT_SKILLS${LINKED:+ (linked into$LINKED)}"
 
-if [ -z "${TERMINAL_BROWSER_SKIP_EDITOR_SETUP:-}" ]; then
+if [ -z "${TERMINAL_BROWSER_SKIP_SETUP:-}" ]; then
   "$APP/bin/terminal-browser" setup || true
 fi
 case ":$PATH:" in

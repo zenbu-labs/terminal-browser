@@ -7,6 +7,7 @@ DEST="$(node -e 'const p=require("path");console.log(p.join(p.dirname(require.re
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM="darwin-arm64" ;;
+  Darwin-x86_64) PLATFORM="darwin-x64" ;;
   Linux-x86_64) PLATFORM="linux-x64" ;;
   Linux-aarch64) PLATFORM="linux-arm64" ;;
   *) echo "fetch-electron: unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;
