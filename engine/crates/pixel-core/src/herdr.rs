@@ -1,8 +1,8 @@
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead as _, BufReader, Write as _};
+use std::num::NonZeroU32;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
-
 use crate::canvas::Canvas;
 use crate::terminal::FrameFile;
 
@@ -28,7 +28,7 @@ impl HerdrTarget {
 pub(crate) struct Herdr {
     frames: BufReader<UnixStream>,
     directory: PathBuf,
-    cell: (u32, u32),
+    cell: (NonZeroU32, NonZeroU32),
     files: Vec<FrameFile>,
     retired: Vec<FrameFile>,
     instance: u64,
@@ -58,12 +58,9 @@ impl Herdr {
         }
         let directory = PathBuf::from(field_str(&info, "file_frame_directory")?);
         let cell = (
-            field_u32(&info, "cell_width_px")?,
-            field_u32(&info, "cell_height_px")?,
+            NonZeroU32::new(field_u32(&info, "cell_width_px")?)?,
+            NonZeroU32::new(field_u32(&info, "cell_height_px")?)?,
         );
-        if cell.0 == 0 || cell.1 == 0 {
-            return None;
-        }
 
         let stream = UnixStream::connect(socket).ok()?;
         stream.set_read_timeout(Some(OPEN_TIMEOUT)).ok()?;
@@ -96,7 +93,13 @@ impl Herdr {
     }
 
     pub(crate) fn cell(&self) -> (u32, u32) {
-        self.cell
+        (self.cell.0.get(), self.cell.1.get())
+    }
+
+    pub(crate) fn update_cell(&mut self, cell: (u32, u32)) {
+        if let (Some(w), Some(h)) = (NonZeroU32::new(cell.0), NonZeroU32::new(cell.1)) {
+            self.cell = (w, h);
+        }
     }
 
     pub(crate) fn mouse_position_px(
@@ -108,7 +111,7 @@ impl Herdr {
         pixel_mouse: bool,
         grid: impl FnOnce() -> Option<crate::terminal::WindowSize>,
     ) -> (u32, u32) {
-        let (cell_w, cell_h) = self.cell;
+        let (cell_w, cell_h) = (self.cell.0.get(), self.cell.1.get());
         let cell_center =
             |x: u32, y: u32| ((x - 1) * cell_w + cell_w / 2, (y - 1) * cell_h + cell_h / 2);
         if !pixel_mouse {
@@ -128,8 +131,8 @@ impl Herdr {
             canvas.height,
             quote(&path),
             self.seq,
-            canvas.width.div_ceil(self.cell.0).max(1),
-            canvas.height.div_ceil(self.cell.1).max(1),
+            canvas.width.div_ceil(self.cell.0.get()).max(1),
+            canvas.height.div_ceil(self.cell.1.get()).max(1),
         );
         self.seq += 1;
         write_line(self.frames.get_mut(), &header)?;

@@ -312,6 +312,7 @@ class Session {
     await this.loadDevtoolsSettings();
     if (!this.ctx.tty) process.stdout.write(`\x1b]2;${this.marker}\x07`);
     this.displayScale = this.hostDisplayScale();
+    if (this.shuttingDown) return;
     this.root = createRoot({
       tty: this.ctx.tty,
       wrapper: this.terminal?.wrapper,
@@ -353,6 +354,12 @@ class Session {
     });
     initOffscreenMode(this.root.sharedTextures);
     this.fontId = await this.root.registerFont(bundledFontPath());
+    if (this.shuttingDown) {
+      const root = this.root;
+      this.root = null;
+      root?.stop();
+      return;
+    }
     this.applyKeyBindings(this.root.info.kittyKeyboard);
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
@@ -361,6 +368,9 @@ class Session {
     this.root.setPointerShape("default");
     this.windowBg = this.themeBackground();
     this.installEmbedderApi();
+    screen.on("display-added", this.onDisplayChange);
+    screen.on("display-removed", this.onDisplayChange);
+    screen.on("display-metrics-changed", this.onDisplayChange);
     this.tabs.create(this.fallbackState.url);
     this.registry = new Registry({
       key: this.ctx.key,
@@ -479,6 +489,9 @@ class Session {
     this.shuttingDown = true;
     ipcMain.removeListener("terminal-browser:theme-request", this.onThemeRequest);
     ipcMain.removeListener("terminal-browser:quit", this.onQuitRequest);
+    screen.off("display-added", this.onDisplayChange);
+    screen.off("display-removed", this.onDisplayChange);
+    screen.off("display-metrics-changed", this.onDisplayChange);
     for (const record of this.records.values()) record.dispose();
     this.records.clear();
     this.shownRecord = null;
@@ -495,12 +508,18 @@ class Session {
       this.popupSurface?.close();
       this.devtoolsSurface?.close();
     } catch { }
-    this.root?.stop();
+    const root = this.root;
+    this.root = null;
+    root?.stop();
     this.ctx.onClose(code);
   }
-
   nudgeResize() {
     this.root?.nudgeResize();
+    this.followCellZoom();
+    this.recalculateLayout();
+    if (this.surfaceLayout) this.tabs.activeController?.resize(this.surfaceLayout, { keepFrame: true });
+    if (this.devtoolsLayout) this.tabs.activeController?.devtools?.resize(this.devtoolsLayout, { keepFrame: true });
+    this.render();
   }
 
   private themePayload(): {
@@ -1398,10 +1417,18 @@ class Session {
     const query = this.palette.query.toLowerCase();
     return this.paletteActions().filter((action) => action.label.toLowerCase().includes(query));
   }
+  private readonly onDisplayChange = () => {
+    this.recalculateLayout();
+    if (this.surfaceLayout) this.tabs.activeController?.resize(this.surfaceLayout, { keepFrame: true });
+    if (this.devtoolsLayout) this.tabs.activeController?.devtools?.resize(this.devtoolsLayout, { keepFrame: true });
+    this.render();
+  };
+
 
   private recalculateLayout(placement: DevtoolsPlacement | null = this.devtoolsPlacement()) {
     if (!this.root) return;
     const reviewing = this.activeRecord()?.reviewing ?? false;
+    this.displayScale = this.hostDisplayScale();
     const result = computeLayout(
       this.root.info,
       this.displayScale,
@@ -1441,13 +1468,18 @@ class Session {
       height: Math.max(60, Math.min(Math.round(popup.state.height * scale), maxH)),
     };
   }
-
   private hostDisplayScale() {
     const explicit = Number(this.ctx.env.TERMINAL_BROWSER_DISPLAY_SCALE);
     if (Number.isFinite(explicit) && explicit > 0) return explicit;
     if (this.terminal?.reportsCssPixels) return 1;
-    // this is a bit hacky i would like to improve on it
-    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).scaleFactor;
+    if (this.root?.info?.cellHeight) {
+      return this.root.info.cellHeight > 24 ? 2 : 1;
+    }
+    try {
+      return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).scaleFactor;
+    } catch {
+      return 1;
+    }
   }
 
   private initialUrl(): string {

@@ -73,7 +73,7 @@ export class BrowserController {
   onDevtoolsAction: ((action: DevtoolsAction) => void) | null = null;
   onContextMenu: ((params: Electron.ContextMenuParams) => void) | null = null;
   onClosed: (() => void) | null = null;
-
+  private resizeSeq = 0;
   constructor(
     surface: Surface,
     popupSurface: Surface,
@@ -226,10 +226,22 @@ export class BrowserController {
     }
     this.layout = layout;
     this.renderScale = browserRenderScale(layout);
-    // why keep frame?
-    if (!options?.keepFrame) this.surface.clear();
+    if (options?.keepFrame === false) this.surface.clear();
     const size = this.contentSize(layout);
     this.window.setContentSize(size.width, size.height, false);
+    const seq = ++this.resizeSeq;
+    void this.attachCdp()
+      .then(() => {
+        if (seq === this.resizeSeq) {
+          return this.cdp("Emulation.setDeviceMetricsOverride", {
+            width: size.width,
+            height: size.height,
+            deviceScaleFactor: this.renderScale,
+            mobile: false,
+          });
+        }
+      })
+      .catch(() => {});
   }
 
   navigate(value: string) {
@@ -674,8 +686,7 @@ export class BrowserController {
     };
   }
 }
-
-function browserRenderScale(layout: BrowserSurfaceLayout) {
+export function browserRenderScale(layout: BrowserSurfaceLayout) {
   const explicit = Number(process.env.TERMINAL_BROWSER_RENDER_SCALE);
   if (Number.isFinite(explicit) && explicit > 0) {
     return Math.max(0.5, Math.min(layout.scale, explicit));
