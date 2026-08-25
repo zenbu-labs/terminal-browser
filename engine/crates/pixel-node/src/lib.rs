@@ -311,7 +311,7 @@ impl PixelEngine {
         let mut engine = Engine::new(EngineConfig {
             fonts,
             cell_metrics_font: 1,
-            watch_resize: false,
+            watch_resize: tty.is_some(),
             tty,
             wrapper: pixel_core::wrapper::Wrapper::named(wrapper.as_deref()),
             session_env,

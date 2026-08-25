@@ -570,7 +570,11 @@ impl Terminal {
                 }
             }
         }
+        let current_cell = self.size().ok().and_then(|ws| ws.cell_size());
         if let Some(herdr) = self.herdr.as_mut() {
+            if let Some(cell) = current_cell {
+                herdr.update_cell(cell);
+            }
             match herdr.present(canvas) {
                 Ok(written) => return Ok(written),
                 Err(err) => {
