@@ -103,6 +103,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: scripts/release.sh "${{ needs.prepare.outputs.version }}" "${{ needs.prepare.outputs.channel }}"
 
       - uses: actions/upload-artifact@v4
@@ -111,6 +117,12 @@ jobs:
           path: |
             dist-release/terminal-browser-${{ matrix.target }}.tar.gz
             dist-release/manifest-${{ matrix.target }}.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest-${{ matrix.target }}
+          path: dist-release/manifest-${{ matrix.target }}.json
           if-no-files-found: error
 
   release:
@@ -172,6 +184,50 @@ jobs:
               echo '```'
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  homebrew:
+    runs-on: ubuntu-latest
+    needs: [prepare, release]
+    if: needs.prepare.outputs.channel == 'stable'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: manifest-*
+          merge-multiple: true
+          path: dist-release
+
+      - name: Update tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'zenbu-labs/homebrew-tap' }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, skipping the Homebrew tap update"
+            exit 0
+          fi
+          node scripts/render-cask.mjs dist-release > /tmp/terminal-browser.rb
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" /tmp/tap
+          mkdir -p /tmp/tap/Casks
+          cp /tmp/terminal-browser.rb /tmp/tap/Casks/terminal-browser.rb
+          cd /tmp/tap
+          git add Casks/terminal-browser.rb
+          if git diff --cached --quiet; then
+            echo "cask already at $VERSION"
+            exit 0
+          fi
+          git -c user.name="terminal-browser release" -c user.email="release@zenbu.dev" \
+            commit -m "terminal-browser $VERSION"
+          git push origin HEAD
 
   worker:
     runs-on: ubuntu-latest

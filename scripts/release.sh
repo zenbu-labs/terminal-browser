@@ -29,14 +29,10 @@ cp "${CARGO_TARGET_DIR:-$ROOT/engine/target}/release/$NATIVE_LIB" "$STAGE/browse
 if [ "$TARGET" = darwin-arm64 ]; then
   swiftc -O -target arm64-apple-macos11 "$ROOT/engine/crates/pixel-core/native-scroll-helper.swift" \
     -o "$STAGE/bin/native-scroll-helper"
-  codesign --force --sign - --timestamp=none "$STAGE/bin/native-scroll-helper" 2>/dev/null || true
 fi
 
 AGENT_BROWSER_BIN="$("$ROOT/scripts/agent-browser.sh" --path)"
 cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
-if [ "$TARGET" = darwin-arm64 ]; then
-  codesign --force --sign - --timestamp=none "$STAGE/agent-browser/bin/agent-browser" 2>/dev/null || true
-fi
 
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
 "$ROOT/scripts/bundle.sh" "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
@@ -63,7 +59,6 @@ if [ "$TARGET" = darwin-arm64 ]; then
     -c "Set :CFBundleDisplayName terminal-browser" \
     -c "Set :CFBundleIdentifier dev.zenbu.terminal-browser" \
     "$APP/Contents/Info.plist" >/dev/null
-  codesign --force --sign - --timestamp=none "$APP" 2>/dev/null
   ELECTRON_EXE="electron/terminal-browser.app/Contents/MacOS/terminal-browser"
   NATIVE_SCROLL='export NATIVE_SCROLL_HELPER="${NATIVE_SCROLL_HELPER:-$ROOT/bin/native-scroll-helper}"'
 else
@@ -72,9 +67,19 @@ else
   NATIVE_SCROLL=""
 fi
 
+# Homebrew installs this launcher as a symlink in its bin, so walk back to the
+# real file before resolving ROOT.
 cat > "$STAGE/bin/terminal-browser" <<EOF
 #!/bin/sh
-ROOT="\$(CDPATH= cd -- "\$(dirname -- "\$0")/.." && pwd -P)"
+SELF="\$0"
+while [ -L "\$SELF" ]; do
+  LINK="\$(readlink "\$SELF")"
+  case "\$LINK" in
+    /*) SELF="\$LINK" ;;
+    *) SELF="\$(dirname -- "\$SELF")/\$LINK" ;;
+  esac
+done
+ROOT="\$(CDPATH= cd -- "\$(dirname -- "\$SELF")/.." && pwd -P)"
 export TERMINAL_BROWSER_DIST_ROOT="\$ROOT"
 export ELECTRON_RUN_AS_NODE=1
 $NATIVE_SCROLL
@@ -83,6 +88,10 @@ EOF
 chmod +x "$STAGE/bin/terminal-browser"
 echo "$VERSION" > "$STAGE/VERSION"
 echo "$CHANNEL" > "$STAGE/CHANNEL"
+
+if [ "$TARGET" = darwin-arm64 ]; then
+  "$ROOT/scripts/macos-sign.sh" "$STAGE" "$CHANNEL"
+fi
 
 TARBALL="$OUT/terminal-browser-$TARGET.tar.gz"
 tar -czf "$TARBALL" -C "$OUT" terminal-browser
