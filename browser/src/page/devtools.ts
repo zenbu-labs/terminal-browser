@@ -29,6 +29,7 @@ export class DevtoolsWindow {
   cursorShape = "default";
   onCursorChange: ((shape: string) => void) | null = null;
   private renderScale: number;
+  private resizeSeq = 0;
   private readonly onDisplayChange = () => {
     if (this.destroyed) return;
     this.window.webContents.setFrameRate(this.visible ? frameRate() : 4);
@@ -142,15 +143,18 @@ export class DevtoolsWindow {
     if (options?.keepFrame === false) this.surface.clear();
     const size = cssSize(layout.width, layout.height, layout.scale);
     this.window.setContentSize(size.width, size.height, false);
+    const seq = ++this.resizeSeq;
     void this.attachCdp()
-      .then(() =>
-        this.cdp("Emulation.setDeviceMetricsOverride", {
-          width: size.width,
-          height: size.height,
-          deviceScaleFactor: this.renderScale,
-          mobile: false,
-        }),
-      )
+      .then(() => {
+        if (seq === this.resizeSeq) {
+          return this.cdp("Emulation.setDeviceMetricsOverride", {
+            width: size.width,
+            height: size.height,
+            deviceScaleFactor: this.renderScale,
+            mobile: false,
+          });
+        }
+      })
       .catch(() => {});
   }
 

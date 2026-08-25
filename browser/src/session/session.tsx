@@ -1471,7 +1471,15 @@ class Session {
   private hostDisplayScale() {
     const explicit = Number(this.ctx.env.TERMINAL_BROWSER_DISPLAY_SCALE);
     if (Number.isFinite(explicit) && explicit > 0) return explicit;
-    return 1;
+    if (this.terminal?.reportsCssPixels) return 1;
+    if (this.root?.info?.cellHeight) {
+      return this.root.info.cellHeight > 24 ? 2 : 1;
+    }
+    try {
+      return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).scaleFactor;
+    } catch {
+      return 1;
+    }
   }
 
   private initialUrl(): string {

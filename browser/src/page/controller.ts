@@ -73,7 +73,7 @@ export class BrowserController {
   onDevtoolsAction: ((action: DevtoolsAction) => void) | null = null;
   onContextMenu: ((params: Electron.ContextMenuParams) => void) | null = null;
   onClosed: (() => void) | null = null;
-
+  private resizeSeq = 0;
   constructor(
     surface: Surface,
     popupSurface: Surface,
@@ -229,15 +229,18 @@ export class BrowserController {
     if (options?.keepFrame === false) this.surface.clear();
     const size = this.contentSize(layout);
     this.window.setContentSize(size.width, size.height, false);
+    const seq = ++this.resizeSeq;
     void this.attachCdp()
-      .then(() =>
-        this.cdp("Emulation.setDeviceMetricsOverride", {
-          width: size.width,
-          height: size.height,
-          deviceScaleFactor: this.renderScale,
-          mobile: false,
-        }),
-      )
+      .then(() => {
+        if (seq === this.resizeSeq) {
+          return this.cdp("Emulation.setDeviceMetricsOverride", {
+            width: size.width,
+            height: size.height,
+            deviceScaleFactor: this.renderScale,
+            mobile: false,
+          });
+        }
+      })
       .catch(() => {});
   }
 
