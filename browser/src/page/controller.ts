@@ -1,4 +1,5 @@
 import { BrowserWindow, screen } from "electron";
+import type { Certificate } from "electron";
 import type {
   EngineKeyEvent,
   PastedImage,
@@ -19,7 +20,7 @@ import { offscreenPreferences } from "./offscreen";
 import { BitmapPresenter, presentPaint, shmFrameOf } from "./paint";
 import { PopupWindow } from "./popup";
 import { cssSize, initialBrowserState } from "./types";
-import type { BrowserState, BrowserSurfaceLayout } from "./types";
+import type { BrowserState, BrowserSurfaceLayout, CertificateWarning } from "./types";
 import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
@@ -50,6 +51,9 @@ export class BrowserController {
   private emitHandlers = new Map<string, (data: unknown) => void>();
   private cdpEventHandlers = new Map<string, (params: unknown) => void>();
   private framePinned = false;
+  private certificateWarningValue: CertificateWarning | null = null;
+  private certificateSafeUrl = "";
+  private readonly trustedCertificates = new Set<string>();
   private readonly onDisplayChange = () => {
     if (this.stopped) return;
     this.applyFrameRate();
@@ -209,6 +213,7 @@ export class BrowserController {
       this.handleWindowOpen(details, this.window.webContents),
     );
     this.window.webContents.on("did-create-window", (child) => this.adoptPopup(child));
+    this.window.webContents.on("certificate-error", this.onCertificateError);
     void this.window.loadURL(normalizeUrl(initialUrl, cwd));
     this.onState(this.state);
   }
@@ -233,10 +238,16 @@ export class BrowserController {
   }
 
   navigate(value: string) {
+    this.certificateWarningValue = null;
+    this.certificateSafeUrl = "";
     void this.window.webContents.loadURL(normalizeUrl(value, this.cwd));
   }
 
   back() {
+    if (this.certificateWarningValue) {
+      this.leaveCertificateWarning();
+      return;
+    }
     if (this.window.webContents.navigationHistory.canGoBack()) {
       this.window.webContents.navigationHistory.goBack();
     }
@@ -249,8 +260,43 @@ export class BrowserController {
   }
 
   reload() {
-    if (this.state.loading) this.window.webContents.stop();
-    else this.window.webContents.reload();
+    if (this.state.loading) {
+      this.window.webContents.stop();
+    } else if (this.certificateWarningValue) {
+      const url = this.certificateWarningValue.url;
+      this.certificateWarningValue = null;
+      this.certificateSafeUrl = "";
+      void this.window.webContents.loadURL(url);
+    } else {
+      this.window.webContents.reload();
+    }
+  }
+
+  get certificateWarning(): CertificateWarning | null {
+    return this.certificateWarningValue;
+  }
+
+  trustCertificate() {
+    const warning = this.certificateWarningValue;
+    if (!warning) return;
+    this.trustedCertificates.add(certificateKey(warning.url, warning.fingerprint));
+    this.certificateWarningValue = null;
+    this.updateState({ loading: true, favicon: null });
+    void this.window.webContents.loadURL(warning.url);
+  }
+
+  leaveCertificateWarning() {
+    const warning = this.certificateWarningValue;
+    if (!warning) return;
+    const safeUrl = this.certificateSafeUrl;
+    this.certificateWarningValue = null;
+    this.certificateSafeUrl = "";
+    if (safeUrl && safeUrl !== "about:blank" && safeUrl !== warning.url) {
+      this.updateNavigation(false, safeUrl);
+      this.window.webContents.invalidate();
+    } else {
+      void this.window.webContents.loadURL("about:blank");
+    }
   }
 
   zoom(direction: ZoomDirection): number {
@@ -520,6 +566,35 @@ export class BrowserController {
     this.onClosed?.();
   };
 
+  private readonly onCertificateError = (
+    event: Electron.Event,
+    url: string,
+    error: string,
+    certificate: Certificate,
+    callback: (isTrusted: boolean) => void,
+    isMainFrame: boolean,
+  ) => {
+    const key = certificateKey(url, certificate.fingerprint);
+    if (this.trustedCertificates.has(key)) {
+      event.preventDefault();
+      callback(true);
+      return;
+    }
+    callback(false);
+    if (!isMainFrame) return;
+    this.certificateSafeUrl = this.window.webContents.getURL();
+    this.certificateWarningValue = {
+      url,
+      error,
+      subject: certificate.subjectName,
+      issuer: certificate.issuerName,
+      fingerprint: certificate.fingerprint,
+      validStart: certificate.validStart,
+      validExpiry: certificate.validExpiry,
+    };
+    this.updateState({ url, loading: false, favicon: null });
+  };
+
   setVisible(visible: boolean) {
     if (this.stopped) return;
     if (this.visible === visible) return;
@@ -553,8 +628,9 @@ export class BrowserController {
   }
 
   private updateNavigation(loading: boolean, url = this.window.webContents.getURL()) {
+    const visibleUrl = this.certificateWarningValue?.url ?? url;
     this.updateState({
-      url,
+      url: visibleUrl,
       loading,
       canGoBack: this.window.webContents.navigationHistory.canGoBack(),
       canGoForward: this.window.webContents.navigationHistory.canGoForward(),
@@ -675,6 +751,14 @@ export class BrowserController {
   }
 }
 
+function certificateKey(url: string, fingerprint: string): string {
+  try {
+    return `${new URL(url).origin}\n${fingerprint}`;
+  } catch {
+    return `${url}\n${fingerprint}`;
+  }
+}
+
 function browserRenderScale(layout: BrowserSurfaceLayout) {
   const explicit = Number(process.env.TERMINAL_BROWSER_RENDER_SCALE);
   if (Number.isFinite(explicit) && explicit > 0) {
@@ -685,4 +769,3 @@ function browserRenderScale(layout: BrowserSurfaceLayout) {
   const cssPixels = layout.width * layout.height / (layout.scale * layout.scale);
   return Math.max(0.5, Math.min(layout.scale, Math.sqrt(maxPixels / cssPixels)));
 }
-
