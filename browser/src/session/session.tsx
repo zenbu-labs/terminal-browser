@@ -572,6 +572,7 @@ class Session {
     this.root.render(
       <Chrome
         state={this.tabs.activeState ?? this.fallbackState}
+        certificateWarning={this.tabs.activeController?.certificateWarning ?? null}
         actions={this.actions}
         layout={this.layout}
         colors={this.root.info.colors}
@@ -618,6 +619,8 @@ class Session {
       this.activeRecord()?.reloaded();
       this.tabs.activeController?.reload();
     },
+    certificateBack: () => this.tabs.activeController?.leaveCertificateWarning(),
+    certificateProceed: () => this.tabs.activeController?.trustCertificate(),
     urlEdit: () => this.openUrlEdit(),
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
@@ -1508,4 +1511,3 @@ function rememberUrl(url: string) {
     setLastUrl(url);
   } catch { }
 }
-

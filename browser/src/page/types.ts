@@ -11,6 +11,16 @@ export interface BrowserState {
   zoom: number;
 }
 
+export interface CertificateWarning {
+  url: string;
+  error: string;
+  subject: string;
+  issuer: string;
+  fingerprint: string;
+  validStart: number;
+  validExpiry: number;
+}
+
 export function initialBrowserState(url: string): BrowserState {
   return {
     url,

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Box, Text } from "pixel-react";
 import type { EngineInfo, Surface } from "pixel-react";
 import type { BrowserState } from "../page/types";
+import type { CertificateWarning } from "../page/types";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
 import { PageContextMenu } from "./context-menu";
@@ -16,7 +17,7 @@ import {
   ReviewToolbar,
 } from "./record-bar";
 import { TabStrip } from "./tab-strip";
-import { makeTheme } from "./theme";
+import { makeTheme, mix } from "./theme";
 import type { Theme } from "./theme";
 import type { RecordView } from "../record/types";
 import type {
@@ -32,6 +33,7 @@ import type {
 
 export function Chrome({
   state,
+  certificateWarning,
   actions,
   layout,
   colors,
@@ -54,6 +56,7 @@ export function Chrome({
   devtoolsSurface,
 }: {
   state: BrowserState;
+  certificateWarning: CertificateWarning | null;
   actions: ChromeActions;
   layout: ChromeLayout;
   colors: EngineInfo["colors"];
@@ -107,6 +110,7 @@ export function Chrome({
         surface={pageSurface}
         actions={actions}
         interactive={!record?.canvas}
+        certificateWarning={certificateWarning}
       />
       {layout.devtools && (
         <DevtoolsPane
@@ -235,12 +239,14 @@ function BrowserTabContents({
   surface,
   actions,
   interactive,
+  certificateWarning,
 }: {
   layout: ChromeLayout;
   theme: Theme;
   surface: Surface;
   actions: ChromeActions;
   interactive: boolean;
+  certificateWarning: CertificateWarning | null;
 }) {
   const dock = layout.devtools?.dock ?? null;
   return (
@@ -257,26 +263,210 @@ function BrowserTabContents({
           }}
         />
       )}
-      <Box
-        id="browser-surface"
-        surface={surface}
-        style={{
-          position: "absolute",
-          inset: { top: layout.page.y, left: layout.page.x },
-          width: layout.page.width,
-          height: layout.page.height,
-          cornerRadius: layout.frame
-            ? seamRadius(Math.max(2, layout.rem * 0.55 - 1), dock, "page")
-            : 0,
-          background: theme.bg,
-        }}
-        onPointer={interactive ? actions.pointer : undefined}
-        onWheel={interactive ? actions.wheel : undefined}
-        onMouseEnter={() => actions.pageHover(true)}
-        onMouseLeave={() => actions.pageHover(false)}
-      />
+      {certificateWarning ? (
+        <CertificateWarningPage
+          key={`${certificateWarning.url}:${certificateWarning.fingerprint}`}
+          warning={certificateWarning}
+          layout={layout}
+          theme={theme}
+          actions={actions}
+        />
+      ) : (
+        <Box
+          id="browser-surface"
+          surface={surface}
+          style={{
+            position: "absolute",
+            inset: { top: layout.page.y, left: layout.page.x },
+            width: layout.page.width,
+            height: layout.page.height,
+            cornerRadius: layout.frame
+              ? seamRadius(Math.max(2, layout.rem * 0.55 - 1), dock, "page")
+              : 0,
+            background: theme.bg,
+          }}
+          onPointer={interactive ? actions.pointer : undefined}
+          onWheel={interactive ? actions.wheel : undefined}
+          onMouseEnter={() => actions.pageHover(true)}
+          onMouseLeave={() => actions.pageHover(false)}
+        />
+      )}
     </>
   );
+}
+
+function CertificateWarningPage({
+  warning,
+  layout,
+  theme,
+  actions,
+}: {
+  warning: CertificateWarning;
+  layout: ChromeLayout;
+  theme: Theme;
+  actions: ChromeActions;
+}) {
+  const rem = layout.rem;
+  const host = certificateHost(warning.url);
+  return (
+    <Box
+      id="certificate-warning"
+      style={{
+        position: "absolute",
+        inset: { top: layout.page.y, left: layout.page.x },
+        width: layout.page.width,
+        height: layout.page.height,
+        flexDirection: "column",
+        alignItems: "center",
+        overflow: "scroll",
+        background: theme.bg,
+        padding: {
+          left: rem * 1.5,
+          right: rem * 1.5,
+          top: rem * 2.5,
+          bottom: rem * 2.5,
+        },
+      }}
+    >
+      <Box style={{ width: "100%", maxWidth: rem * 42, flexDirection: "column", gap: rem }}>
+        <Box
+          style={{
+            width: rem * 3.4,
+            height: rem * 3.4,
+            alignItems: "center",
+            justifyContent: "center",
+            cornerRadius: rem * 1.7,
+            background: mix(theme.bg, theme.red, 0.22),
+            border: { width: 1, color: mix(theme.bg, theme.red, 0.55) },
+          }}
+        >
+          <Text style={{ fontSize: rem * 2.2, color: theme.red, selectable: false }}>!</Text>
+        </Box>
+        <Text
+          style={{ fontSize: rem * 1.75, color: theme.fg, selectable: false }}
+          spans={[{ start: 0, end: 30, color: theme.fg, bold: true }]}
+        >
+          Your connection is not private
+        </Text>
+        <Text style={{ fontSize: rem, color: theme.muted }}>
+          {`The identity of ${host} could not be verified. Attackers might be trying to steal information you send to this site.`}
+        </Text>
+        <Text style={{ fontSize: rem * 0.82, color: theme.disabled }}>
+          {certificateErrorLabel(warning.error)}
+        </Text>
+        <Box style={{ flexDirection: "column", gap: rem * 0.55, padding: { top: rem * 0.4 } }}>
+          <CertificateButton
+            label="Back to safety"
+            primary
+            rem={rem}
+            theme={theme}
+            onClick={actions.certificateBack}
+          />
+          <CertificateButton
+            label={`Continue to ${host} (unsafe)`}
+            rem={rem}
+            theme={theme}
+            onClick={actions.certificateProceed}
+          />
+        </Box>
+        <Box
+          style={{
+            flexDirection: "column",
+            gap: rem * 0.35,
+            margin: { top: rem * 0.6 },
+            padding: rem,
+            cornerRadius: rem * 0.4,
+            background: theme.field,
+            border: { width: 1, color: theme.fieldBorder },
+          }}
+        >
+          <CertificateDetail label="Subject" value={warning.subject || "Unknown"} rem={rem} theme={theme} />
+          <CertificateDetail label="Issuer" value={warning.issuer || "Unknown"} rem={rem} theme={theme} />
+          <CertificateDetail
+            label="Valid"
+            value={`${certificateDate(warning.validStart)} – ${certificateDate(warning.validExpiry)}`}
+            rem={rem}
+            theme={theme}
+          />
+          <CertificateDetail
+            label="Fingerprint"
+            value={warning.fingerprint || "Unavailable"}
+            rem={rem}
+            theme={theme}
+          />
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function CertificateButton({
+  label,
+  primary = false,
+  rem,
+  theme,
+  onClick,
+}: {
+  label: string;
+  primary?: boolean;
+  rem: number;
+  theme: Theme;
+  onClick(): void;
+}) {
+  return (
+    <Box
+      style={{
+        alignItems: "center",
+        justifyContent: "center",
+        padding: { left: rem, right: rem, top: rem * 0.55, bottom: rem * 0.55 },
+        cornerRadius: rem * 0.35,
+        background: primary ? theme.accent : theme.field,
+        hoverBackground: primary ? mix(theme.accent, theme.fg, 0.18) : theme.hoverStrong,
+        border: primary ? undefined : { width: 1, color: theme.fieldBorder },
+      }}
+      onClick={onClick}
+    >
+      <Text style={{ color: primary ? theme.bg : theme.fg, wrap: false, selectable: false }}>
+        {label}
+      </Text>
+    </Box>
+  );
+}
+
+function CertificateDetail({
+  label,
+  value,
+  rem,
+  theme,
+}: {
+  label: string;
+  value: string;
+  rem: number;
+  theme: Theme;
+}) {
+  return (
+    <Box style={{ flexDirection: "column", gap: rem * 0.12 }}>
+      <Text style={{ fontSize: rem * 0.72, color: theme.disabled, selectable: false }}>{label}</Text>
+      <Text style={{ fontSize: rem * 0.82, color: theme.muted }}>{value}</Text>
+    </Box>
+  );
+}
+
+function certificateHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function certificateErrorLabel(error: string): string {
+  return error.toUpperCase();
+}
+
+function certificateDate(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "Unknown";
+  return new Date(seconds * 1000).toLocaleDateString();
 }
 
 const DIVIDER_ACTIVE = [58, 96, 168, 255] as const;
@@ -395,4 +585,3 @@ function ToolbarButton({
     </Box>
   );
 }
-

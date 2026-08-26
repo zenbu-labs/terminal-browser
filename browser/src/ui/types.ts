@@ -52,6 +52,8 @@ export interface ChromeActions {
   back(): void;
   forward(): void;
   reload(): void;
+  certificateBack(): void;
+  certificateProceed(): void;
   urlEdit(): void;
   urlEditCancel(): void;
   urlSubmit(text: string): void;
