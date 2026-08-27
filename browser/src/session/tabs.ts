@@ -5,11 +5,22 @@ import type { BrowserState } from "../page/types";
 import type { TabRow } from "../ui/types";
 import { displayUrl } from "../url";
 
+export interface TabApp {
+  name: string | null;
+  id: string;
+}
+
+export interface TabOptions {
+  app?: TabApp;
+  partition?: string | null;
+}
+
 export interface Tab {
   readonly id: number;
   state: BrowserState;
   controller: BrowserController;
   targetId: string | null;
+  app: TabApp | null;
 }
 
 export interface TabTarget {
@@ -18,6 +29,7 @@ export interface TabTarget {
   title: string;
   active: boolean;
   targetId: string | null;
+  app?: TabApp | null;
   timeOrigin?: number | null;
 }
 
@@ -27,6 +39,7 @@ export interface TabHost {
     url: string,
     visible: boolean,
     onState: (state: BrowserState) => void,
+    options: TabOptions & { tabId: number },
   ): BrowserController;
   onActivated(): void;
   onActiveState(state: BrowserState, urlChanged: boolean): void;
@@ -70,22 +83,27 @@ export class TabManager {
   }
 
   
-  create(url: string, activate = true): Tab {
-    const tab = { id: this.seq++, state: initialBrowserState(url), targetId: null } as Tab;
-    this.attachController(tab, url, activate);
+  create(url: string, activate = true, options: TabOptions = {}): Tab {
+    const tab = {
+      id: this.seq++,
+      state: initialBrowserState(url),
+      targetId: null,
+      app: options.app ?? null,
+    } as Tab;
+    this.attachController(tab, url, activate, options);
     this.tabs.push(tab);
     if (activate) this.activate(tab.id);
     this.host.onTabsChanged();
     return tab;
   }
 
-  private attachController(tab: Tab, url: string, visible: boolean) {
+  private attachController(tab: Tab, url: string, visible: boolean, options: TabOptions) {
     tab.controller = this.host.createController(url, visible, (state) => {
       const urlChanged = state.url !== tab.state.url;
       tab.state = state;
       if (tab.id === this.activeId) this.host.onActiveState(state, urlChanged);
       this.host.requestRender();
-    });
+    }, { ...options, tabId: tab.id });
     tab.controller.onCursorChange = () => {
       if (tab.id === this.activeId) this.host.onCursorChanged();
     };
@@ -144,16 +162,34 @@ export class TabManager {
     return this.tabs.some((tab) => tab.id === id);
   }
 
+  soleAppTab(): boolean {
+    return this.tabs.length === 1 && this.tabs[0].app != null;
+  }
+
+  appTab(id: string): Tab | null {
+    return this.tabs.find((tab) => tab.app?.id === id) ?? null;
+  }
+
+  findByContents(contentsId: number): Tab | null {
+    return this.tabs.find((tab) => tab.controller.hasContents(contentsId)) ?? null;
+  }
+
   stateFor(controller: BrowserController): BrowserState | null {
     return this.tabs.find((tab) => tab.controller === controller)?.state ?? null;
+  }
+
+  private label(tab: Tab): string {
+    if (tab.app?.name) return tab.app.name;
+    return tab.state.title || displayUrl(tab.state.url);
   }
 
   view(): TabRow[] {
     return this.tabs.map((tab) => ({
       id: tab.id,
-      title: tab.state.title || displayUrl(tab.state.url),
-      favicon: tab.state.favicon,
+      title: this.label(tab),
+      favicon: tab.app ? null : tab.state.favicon,
       active: tab.id === this.activeId,
+      app: tab.app != null,
     }));
   }
 
@@ -164,6 +200,7 @@ export class TabManager {
       title: tab.state.title,
       active: tab.id === this.activeId,
       targetId: tab.targetId,
+      app: tab.app,
     }));
   }
 
@@ -177,6 +214,7 @@ export class TabManager {
           title: tab.state.title,
           active: tab.id === this.activeId,
           targetId: tab.targetId,
+          app: tab.app,
           timeOrigin: await tab.controller.fingerprint(),
         };
       }),

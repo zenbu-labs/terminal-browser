@@ -92,7 +92,8 @@ export function TabStrip({
   const single = tabs.length <= 1;
   const [hovered, setHovered] = useState<number | null>(null);
   const activeLabel = displayUrl(state.url);
-  const label = (tab: TabRow) => (tab.active ? activeLabel : tab.title || "new tab");
+  const label = (tab: TabRow) =>
+    tab.app ? tab.title || "app" : tab.active ? activeLabel : tab.title || "new tab";
   const charW = rem * 0.82 * 0.6;
   const closeW = rem * 1.25;
   const closeGap = rem * 0.25;
@@ -132,7 +133,9 @@ export function TabStrip({
             flexShrink: 1,
             overflow: "hidden",
           }}
-          onClick={() => (tab.active ? actions.urlEdit() : actions.tabSwitch(tab.id))}
+          onClick={() =>
+            tab.active && !tab.app ? actions.urlEdit() : actions.tabSwitch(tab.id)
+          }
           onMouseEnter={() => setHovered(tab.id)}
           onMouseLeave={() => setHovered((id) => (id === tab.id ? null : id))}
         >

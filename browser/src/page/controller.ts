@@ -23,6 +23,17 @@ import type { BrowserState, BrowserSurfaceLayout } from "./types";
 import { scaleZoom, stepZoom } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
+export interface ControllerOptions {
+  cwd: string;
+  background: string;
+  visible: boolean;
+  partition: string | null;
+  tabsAsPopups: boolean;
+  clipboardRead: boolean;
+  sessionKey: string;
+  appTabId: number | null;
+}
+
 export class BrowserController {
   readonly surface: Surface;
   private readonly popupSurface: Surface;
@@ -39,6 +50,7 @@ export class BrowserController {
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
   private readonly sessionKey: string;
+  private readonly appTabId: number | null;
   private readonly cwd: string;
   private background: string;
   private pendingPopupSize: { width: number; height: number } | null = null;
@@ -80,26 +92,21 @@ export class BrowserController {
     devtoolsSurface: Surface,
     layout: BrowserSurfaceLayout,
     initialUrl: string,
-    cwd: string,
-    background: string,
-    visible: boolean,
-    partition: string | null,
-    tabsAsPopups: boolean,
-    clipboardRead: boolean,
-    sessionKey: string,
+    options: ControllerOptions,
     onState: (state: BrowserState) => void,
   ) {
-    this.partition = partition ? persistentPartition(partition) : null;
-    this.tabsAsPopups = tabsAsPopups;
-    this.clipboardRead = clipboardRead;
-    this.sessionKey = sessionKey;
-    this.cwd = cwd;
+    this.partition = options.partition ? persistentPartition(options.partition) : null;
+    this.tabsAsPopups = options.tabsAsPopups;
+    this.clipboardRead = options.clipboardRead;
+    this.sessionKey = options.sessionKey;
+    this.appTabId = options.appTabId;
+    this.cwd = options.cwd;
     this.surface = surface;
     this.bitmaps = new BitmapPresenter(surface);
     this.popupSurface = popupSurface;
     this.devtoolsSurface = devtoolsSurface;
-    this.background = background;
-    this.visible = visible;
+    this.background = options.background;
+    this.visible = options.visible;
     this.layout = layout;
     this.onState = onState;
     this.renderScale = browserRenderScale(layout);
@@ -126,10 +133,10 @@ export class BrowserController {
         contextIsolation: true,
         disableDialogs: true,
         backgroundThrottling: false,
-        additionalArguments: [`--terminal-browser-session=${this.sessionKey}`],
+        additionalArguments: this.preloadArgv(),
       },
     });
-    if (clipboardRead) allowClipboardRead(this.window.webContents);
+    if (this.clipboardRead) allowClipboardRead(this.window.webContents);
     this.input = new PageInput({
       contents: () => this.window.webContents,
       scale: () => this.layout.scale,
@@ -209,7 +216,7 @@ export class BrowserController {
       this.handleWindowOpen(details, this.window.webContents),
     );
     this.window.webContents.on("did-create-window", (child) => this.adoptPopup(child));
-    void this.window.loadURL(normalizeUrl(initialUrl, cwd));
+    void this.window.loadURL(normalizeUrl(initialUrl, this.cwd));
     this.onState(this.state);
   }
 
@@ -530,6 +537,12 @@ export class BrowserController {
     if (visible) this.window.webContents.invalidate();
   }
 
+  private preloadArgv(): string[] {
+    const argv = [`--terminal-browser-session=${this.sessionKey}`];
+    if (this.appTabId != null) argv.push(`--terminal-browser-app-tab=${this.appTabId}`);
+    return argv;
+  }
+
   private contentSize(layout: BrowserSurfaceLayout) {
     return cssSize(layout.width, layout.height, layout.scale);
   }
@@ -608,7 +621,7 @@ export class BrowserController {
             contextIsolation: true,
             disableDialogs: true,
             backgroundThrottling: false,
-            additionalArguments: [`--terminal-browser-session=${this.sessionKey}`],
+            additionalArguments: this.preloadArgv(),
           },
         },
       };

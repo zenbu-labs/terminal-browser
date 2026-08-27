@@ -44,7 +44,9 @@ function render(list: Listed[]): string {
     lines.push(`${browser.key}  ${where}${browser.inCurrentTab ? "  (this tab)" : ""}`);
     for (const tab of browser.tabs) {
       const mark = tab.active ? "*" : " ";
-      lines.push(`  ${mark} ${tab.id}  ${tab.title || tab.url}`);
+      const page = tab.title || tab.url;
+      const label = tab.app ? `${tab.app.name ?? page} (app)` : page;
+      lines.push(`  ${mark} ${tab.id}  ${label}`);
       lines.push(`      ${tab.url}`);
       lines.push(`      target ${tab.targetId ?? "pending"}`);
     }

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -21,8 +22,14 @@ import { initialBrowserState } from "../page/types";
 import type { BrowserState, BrowserSurfaceLayout } from "../page/types";
 import { zoomDirection } from "../page/zoom";
 import type { ZoomDirection } from "../page/zoom";
-import { lastUrl, setLastUrl, settings, store } from "pixel-store";
-import type { DevtoolsDock, InstanceRow } from "pixel-store";
+import { appId, lastUrl, listApps, setLastUrl, settings, store } from "pixel-store";
+import type {
+  DevtoolsDock,
+  InstanceRow,
+  OpenResult,
+  OpenSpec,
+  RegisteredApp,
+} from "pixel-store";
 
 import { RecordSession } from "../record/session";
 import type { RecordActions } from "../record/types";
@@ -38,12 +45,15 @@ import type {
   PopupView,
 } from "../ui/types";
 import { normalizeUrl, searchOrUrl } from "../url";
+import { fuzzyScore } from "./fuzzy";
 import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
 import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight } from "./layout";
 import type { DevtoolsPlacement } from "./layout";
 import { fetchSuggestions } from "./suggest";
 import { TabManager } from "./tabs";
+import type { TabApp } from "./tabs";
+import type { NewTabSuggestion } from "../ui/types";
 
 export interface SessionContext {
   tty?: string;
@@ -76,15 +86,14 @@ export function createSession(ctx: SessionContext): SessionHandle {
 
 const DEFAULT_URL = "https://github.com/zenbu-labs";
 
-const APP_MODE_FLAGS = [
-  "--no-toolbar",
-  "--no-shortcuts",
-  "--no-context-menu",
-  "--no-overlays",
-  "--no-frame",
-  "--allow-clipboard-read",
-  "--open-tabs-in-popup-stack",
-];
+const partitionPreloads = new Map<string, string | null>();
+function claimPartitionPreload(partition: string, preload: string | null) {
+  const existing = partitionPreloads.get(partition);
+  if (existing !== undefined && existing !== preload) {
+    throw new Error(`partition ${partition} already runs a different preload`);
+  }
+  partitionPreloads.set(partition, preload);
+}
 
 const FONT_FILE = path.join("assets", "fonts", "JetBrainsMono-Regular.ttf");
 
@@ -143,9 +152,29 @@ function bundledFontPath(): string {
 interface NewTabState {
   query: string;
   suggestions: string[];
+  apps: RegisteredApp[];
+  appMatches: RegisteredApp[];
   index: number;
   seq: number;
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+function safeListApps(): RegisteredApp[] {
+  try {
+    return listApps();
+  } catch {
+    return [];
+  }
+}
+
+function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
+  if (!query.trim()) return [];
+  return apps
+    .map((app) => ({ app, score: Math.max(fuzzyScore(query, app.name), fuzzyScore(query, app.id)) }))
+    .filter((entry) => entry.score >= 2)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((entry) => entry.app);
 }
 
 class Session {
@@ -156,12 +185,19 @@ class Session {
   private finding: Promise<Pane | null> | null = null;
   private readonly argv: string[];
   private readonly hideToolbar: boolean;
-  private readonly noShortcuts: boolean;
-  private readonly noContextMenu: boolean;
-  private readonly noOverlays: boolean;
   private readonly noFrame: boolean;
-  private readonly tabsAsPopups: boolean;
-  private readonly clipboardRead: boolean;
+  private readonly sessionFlags: {
+    noShortcuts: boolean;
+    noContextMenu: boolean;
+    noOverlays: boolean;
+    clipboardRead: boolean;
+    tabsAsPopups: boolean;
+  };
+  private readonly appIdentity: TabApp | null;
+  private readonly appPartitions: string[] = [];
+  private embedderIpc = false;
+  private wasBare = false;
+  private paletteApps: RegisteredApp[] = [];
   private readonly partition: string | null;
   private readonly socksPort: number | null;
   private readonly preload: string | null;
@@ -173,7 +209,9 @@ class Session {
   };
   private readonly onQuitRequest = (event: IpcMainEvent) => {
     if (!this.ownsSender(event)) return;
-    this.shutdown();
+    const tab = this.tabs.findByContents(event.sender.id);
+    if (tab?.app && this.tabs.count > 1) this.tabs.close(tab.id);
+    else this.shutdown();
   };
   private paletteBinding: KeyBinding[] = [];
   private findBinding: KeyBinding[] = [];
@@ -236,14 +274,21 @@ class Session {
     this.ctx = ctx;
     this.terminal = detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
-    this.argv = ctx.argv.includes("--app-mode") ? [...ctx.argv, ...APP_MODE_FLAGS] : ctx.argv;
+    this.argv = ctx.argv;
     this.hideToolbar = this.argv.includes("--no-toolbar");
-    this.noShortcuts = this.argv.includes("--no-shortcuts");
-    this.noContextMenu = this.argv.includes("--no-context-menu");
-    this.noOverlays = this.argv.includes("--no-overlays");
     this.noFrame = this.argv.includes("--no-frame");
-    this.tabsAsPopups = this.argv.includes("--open-tabs-in-popup-stack");
-    this.clipboardRead = this.argv.includes("--allow-clipboard-read");
+    this.sessionFlags = {
+      noShortcuts: this.argv.includes("--no-shortcuts"),
+      noContextMenu: this.argv.includes("--no-context-menu"),
+      noOverlays: this.argv.includes("--no-overlays"),
+      clipboardRead: this.argv.includes("--allow-clipboard-read"),
+      tabsAsPopups: this.argv.includes("--open-tabs-in-popup-stack"),
+    };
+    const appName = flagValue(this.argv, "--app-name");
+    this.appIdentity = this.argv.includes("--app-mode")
+      ? { name: appName, id: appId(flagValue(this.argv, "--app-id") ?? appName ?? "app") }
+      : null;
+    this.wasBare = this.appIdentity != null;
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
@@ -256,20 +301,23 @@ class Session {
     configureBrowserSession(this.partition, (progress) => this.showDownload(progress));
     this.tabs = new TabManager(
       {
-        createController: (url, visible, onState) =>
+        createController: (url, visible, onState, options) =>
           new BrowserController(
             this.root!.createSurface(),
             this.popupSurface!,
             this.devtoolsSurface!,
             this.surfaceLayout!,
             url,
-            this.ctx.cwd,
-            this.windowBg,
-            visible,
-            this.partition,
-            this.tabsAsPopups,
-            this.clipboardRead,
-            this.ctx.key,
+            {
+              cwd: this.ctx.cwd,
+              background: this.windowBg,
+              visible,
+              partition: options.partition !== undefined ? options.partition : this.partition,
+              tabsAsPopups: this.sessionFlags.tabsAsPopups || options.app != null,
+              clipboardRead: this.sessionFlags.clipboardRead || options.app != null,
+              sessionKey: this.ctx.key,
+              appTabId: options.app ? options.tabId : null,
+            },
             onState,
           ),
         onActivated: () => {
@@ -290,6 +338,7 @@ class Session {
         onTabClosed: (id) => this.closeOrShutdown(id),
         tabSwitchAllowed: () => !this.activeRecord()?.reviewing,
         onTabsChanged: () => {
+          this.syncChromeComposition();
           this.registry?.update();
           for (const record of [...this.records.values()]) {
             if (record.active && this.tabs.stateFor(record.controller) == null) record.tabClosed();
@@ -361,7 +410,11 @@ class Session {
     this.root.setPointerShape("default");
     this.windowBg = this.themeBackground();
     this.installEmbedderApi();
-    this.tabs.create(this.fallbackState.url);
+    if (this.appIdentity) {
+      this.tabs.create(this.fallbackState.url, true, { app: this.appIdentity });
+    } else {
+      this.tabs.create(this.fallbackState.url);
+    }
     this.registry = new Registry({
       key: this.ctx.key,
       tty: this.ctx.tty ?? null,
@@ -376,6 +429,11 @@ class Session {
       splitDir: splitDirection(flagValue(this.argv, "--split-dir")),
       parentTty: flagValue(this.argv, "--parent-tty"),
       state: () => this.tabs.activeState ?? this.fallbackState,
+      interop: () => ({
+        mode: this.appIdentity ? ("app" as const) : ("browser" as const),
+      }),
+      openAppTab: (spec, app) => this.openAppTab(spec, app),
+      hasTab: (id) => this.tabs.has(id),
       openTab: (url, cwd) => this.tabs.create(url ? normalizeUrl(url, cwd) : DEFAULT_URL).id,
       activateTab: (id) => {
         if (!this.tabs.has(id) || this.activeRecord()?.reviewing) return false;
@@ -474,6 +532,24 @@ class Session {
     else this.tabs.close(id);
   }
 
+  private appTabActive(): boolean {
+    return this.tabs.active?.app != null;
+  }
+
+  private bareChrome(): boolean {
+    if (this.tabs.count === 0) return this.appIdentity != null;
+    return this.tabs.soleAppTab();
+  }
+
+  private syncChromeComposition() {
+    const bare = this.bareChrome();
+    if (bare === this.wasBare) return;
+    this.wasBare = bare;
+    this.recalculateLayout();
+    this.resizeSplitWindows();
+    this.render();
+  }
+
   shutdown(code = 0) {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
@@ -488,6 +564,11 @@ class Session {
     try {
       browserSession(this.partition).flushStorageData();
     } catch { }
+    for (const partition of this.appPartitions) {
+      try {
+        browserSession(partition).flushStorageData();
+      } catch { }
+    }
     this.registry?.dispose();
     this.registry = null;
     this.tabs.stopAll();
@@ -530,7 +611,7 @@ class Session {
   }
 
   private broadcastTheme(): void {
-    if (!this.preload && !this.mainScript) return;
+    if (!this.embedderIpc) return;
     const payload = this.themePayload();
     if (!payload) return;
     this.tabs.eachController((controller) =>
@@ -538,10 +619,16 @@ class Session {
     );
   }
 
-  private installEmbedderApi(): void {
-    if (!this.preload && !this.mainScript) return;
+  private ensureEmbedderIpc(): void {
+    if (this.embedderIpc) return;
+    this.embedderIpc = true;
     ipcMain.on("terminal-browser:theme-request", this.onThemeRequest);
     ipcMain.on("terminal-browser:quit", this.onQuitRequest);
+  }
+
+  private installEmbedderApi(): void {
+    if (!this.preload && !this.mainScript) return;
+    this.ensureEmbedderIpc();
     if (this.preload) {
       const ses = browserSession(this.partition);
       registerPreloadOnce(ses, apiPreloadPath());
@@ -556,6 +643,50 @@ class Session {
           `main script failed: ${error instanceof Error ? error.message : String(error)}\n`,
         );
       }
+    }
+  }
+
+  private openAppTab(spec: OpenSpec, app: NonNullable<OpenSpec["app"]>): OpenResult {
+    const id = appId(app.id);
+    const partition = app.partition ?? `app-${id}`;
+    for (const file of [app.preload, app.mainScript]) {
+      if (file && !path.isAbsolute(file)) throw new Error(`${file} is not an absolute path`);
+    }
+    claimPartitionPreload(partition, app.preload ?? null);
+    const ses = configureBrowserSession(partition, (progress) => this.showDownload(progress));
+    if (app.preload) {
+      registerPreloadOnce(ses, apiPreloadPath());
+      registerPreloadOnce(ses, app.preload);
+    }
+    if (app.mainScript) createRequire(app.mainScript)(app.mainScript);
+    this.ensureEmbedderIpc();
+    if (!this.appPartitions.includes(partition)) this.appPartitions.push(partition);
+    const tab = this.tabs.create(spec.url ? normalizeUrl(spec.url) : DEFAULT_URL, true, {
+      app: { name: app.name ?? null, id },
+      partition,
+    });
+    return { tab: tab.id };
+  }
+
+  private launchApp(app: RegisteredApp) {
+    const existing = this.tabs.appTab(app.id);
+    if (existing) {
+      this.tabs.activate(existing.id);
+      return;
+    }
+    const env = { ...this.ctx.env };
+    if (this.registry) env.TERMINAL_BROWSER_INTEROP_TARGET = this.registry.socketPath;
+    try {
+      const child = spawn(app.bin, app.args, {
+        cwd: this.ctx.cwd,
+        detached: true,
+        stdio: "ignore",
+        env,
+      });
+      child.on("error", () => this.showToast(`could not launch ${app.name}`, "failed"));
+      child.unref();
+    } catch {
+      this.showToast(`could not launch ${app.name}`, "failed");
     }
   }
 
@@ -580,7 +711,7 @@ class Session {
         tabs={this.tabs.view()}
         newTab={
           this.newTab
-            ? { suggestions: this.newTab.suggestions, index: this.newTab.index }
+            ? { suggestions: this.newTabRows(), index: this.newTab.index }
             : null
         }
         urlEdit={this.urlEditOpen}
@@ -656,6 +787,7 @@ class Session {
       this.closeNewTabModal();
       if (text.trim()) this.tabs.create(searchOrUrl(text, this.ctx.cwd));
     },
+    newTabPick: (index) => this.pickNewTab(index),
     newTabCancel: () => this.closeNewTabModal(),
     popupPointer: (event) => this.tabs.activeController?.popup?.input.pointer(event),
     popupWheel: (event) => this.tabs.activeController?.popup?.input.wheel(event),
@@ -816,17 +948,18 @@ class Session {
   }
 
   private handleKey(event: EngineKeyEvent) {
+    const noShortcuts = this.sessionFlags.noShortcuts || this.appTabActive();
     const browser = this.tabs.activeController;
     if (browser?.popup) {
       if (event.kind !== "release" && event.key === "escape") {
         browser.popup.close();
         return;
       }
-      if (!this.noShortcuts && event.kind !== "release" && event.mods.ctrl && event.key === "q") {
+      if (!noShortcuts && event.kind !== "release" && event.mods.ctrl && event.key === "q") {
         this.shutdown();
         return;
       }
-      if (!this.noShortcuts && event.kind !== "release" && this.cmdHeld(event)) {
+      if (!noShortcuts && event.kind !== "release" && this.cmdHeld(event)) {
         const direction = zoomDirection(event.key);
         if (direction !== null) {
           this.applyZoom(direction);
@@ -842,7 +975,7 @@ class Session {
     if (event.kind !== "release") {
       const quitKey =
         event.key === "q" || (process.platform === "darwin" && event.key === "c");
-      if (!this.noShortcuts && event.mods.ctrl && quitKey) {
+      if (!noShortcuts && event.mods.ctrl && quitKey) {
         this.shutdown();
         return;
       }
@@ -869,7 +1002,7 @@ class Session {
         const step = listStep(event);
         if (event.key === "escape") this.closeNewTabModal();
         else if (step) {
-          const count = session.suggestions.length;
+          const count = this.newTabRows().length;
           if (count > 0) {
             session.index =
               step > 0
@@ -882,8 +1015,8 @@ class Session {
             this.render();
           }
         } else if (event.key === "enter") {
-          const text = session.index >= 0 ? session.suggestions[session.index] : session.query;
-          this.actions.newTabSubmit(text);
+          if (session.index >= 0) this.pickNewTab(session.index);
+          else this.actions.newTabSubmit(session.query);
         }
         return;
       }
@@ -892,7 +1025,7 @@ class Session {
         return;
       }
       if (!this.findOpen && this.activeRecord()?.handleKey(event)) return;
-      if (!this.noShortcuts) {
+      if (!noShortcuts) {
         if (isRecordKey(event)) {
           if (!this.activeRecord()) void this.startRecording();
           return;
@@ -930,7 +1063,7 @@ class Session {
         browser?.findNext(!event.mods.shift);
         return;
       }
-      if (!this.noShortcuts) {
+      if (!noShortcuts) {
         if (this.accelHeld(event) && event.key === "r") {
           this.activeRecord()?.reloaded();
           browser?.reload();
@@ -999,7 +1132,7 @@ class Session {
   }
 
   private showZoomHud(factor: number) {
-    if (this.noOverlays) return;
+    if (this.sessionFlags.noOverlays || this.appTabActive()) return;
     this.zoomHud = factor;
     if (this.zoomHudTimer) clearTimeout(this.zoomHudTimer);
     this.zoomHudTimer = setTimeout(() => {
@@ -1011,7 +1144,7 @@ class Session {
   }
 
   private showDownload(progress: DownloadProgress) {
-    if (this.noOverlays) return;
+    if (this.sessionFlags.noOverlays || this.appTabActive()) return;
     const percent =
       progress.total > 0 ? Math.round((progress.received / progress.total) * 100) : null;
     if (
@@ -1035,7 +1168,7 @@ class Session {
   }
 
   private showToast(text: string, state: "done" | "failed" | "alert", detail?: string) {
-    if (this.noOverlays) return;
+    if (this.sessionFlags.noOverlays || this.appTabActive()) return;
     this.toast = { text, detail, failed: state === "failed", alert: state === "alert" };
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => {
@@ -1165,7 +1298,7 @@ class Session {
   }
 
   private openPageMenu(params: Electron.ContextMenuParams) {
-    if (this.noContextMenu || !this.surfaceLayout) return;
+    if (this.sessionFlags.noContextMenu || this.appTabActive() || !this.surfaceLayout) return;
     if (this.palette || this.newTab || this.urlEditOpen) return;
     if (this.tabs.activeController?.popup) return;
     const scale = this.surfaceLayout.scale;
@@ -1261,10 +1394,43 @@ class Session {
 
   private openNewTabModal() {
     if (this.newTab) return;
-    this.newTab = { query: "", suggestions: [], index: -1, seq: 0, timer: null };
+    this.newTab = {
+      query: "",
+      suggestions: [],
+      apps: safeListApps(),
+      appMatches: [],
+      index: -1,
+      seq: 0,
+      timer: null,
+    };
     this.blurToOverlay();
     this.root?.setKeyCapture(["enter", "up", "down"]);
     this.render();
+  }
+
+  private newTabRows(): NewTabSuggestion[] {
+    const session = this.newTab;
+    if (!session) return [];
+    return [
+      ...session.appMatches.map((app) => ({
+        kind: "app" as const,
+        id: app.id,
+        name: app.name,
+      })),
+      ...session.suggestions.map((text) => ({ kind: "search" as const, text })),
+    ];
+  }
+
+  private pickNewTab(index: number) {
+    const row = this.newTabRows()[index];
+    if (!row) return;
+    if (row.kind === "app") {
+      const app = this.newTab?.apps.find((entry) => entry.id === row.id);
+      this.closeNewTabModal();
+      if (app) this.launchApp(app);
+      return;
+    }
+    this.actions.newTabSubmit(row.text);
   }
 
   private closeNewTabModal() {
@@ -1281,6 +1447,7 @@ class Session {
     if (!session) return;
     session.query = text;
     session.index = -1;
+    session.appMatches = matchApps(session.apps, text);
     if (session.timer) clearTimeout(session.timer);
     session.timer = null;
     if (!text.trim()) {
@@ -1301,7 +1468,7 @@ class Session {
       .then((suggestions) => {
         if (this.newTab !== session || session.seq !== seq) return;
         session.suggestions = suggestions;
-        if (session.index >= session.suggestions.length) session.index = -1;
+        if (session.index >= this.newTabRows().length) session.index = -1;
         this.render();
       })
       .catch(() => { });
@@ -1326,6 +1493,7 @@ class Session {
 
   private openPalette() {
     if (this.palette) return;
+    this.paletteApps = safeListApps();
     this.palette = { query: "", index: 0 };
     this.blurToOverlay();
     this.root?.setKeyCapture(["enter", "up", "down"]);
@@ -1390,6 +1558,12 @@ class Session {
           },
         ]
         : []),
+      ...this.paletteApps.map((app) => ({
+        id: `app:${app.id}`,
+        label: `open ${app.name}`,
+        shortcut: "",
+        run: () => this.launchApp(app),
+      })),
     ];
   }
 
@@ -1405,8 +1579,8 @@ class Session {
     const result = computeLayout(
       this.root.info,
       this.displayScale,
-      this.hideToolbar,
-      this.noFrame,
+      this.hideToolbar || this.bareChrome(),
+      this.noFrame || this.bareChrome(),
       reviewing ? null : placement,
       reviewing ? recordBarHeight(this.root.info) : 0,
     );

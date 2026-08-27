@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate && tsx scripts/embed-migrations.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.44.5"
+    "drizzle-orm": "^0.44.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

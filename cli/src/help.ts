@@ -40,13 +40,15 @@ Options:
   --allow-clipboard-read
                         Lets websites read from clipboard.
   --no-toolbar          No toolbar or tab strip
-  --no-shortcuts        No browser shortcuts, keys go to the page
+  --no-shortcuts        No browser shortcuts
   --no-context-menu     No right-click menu
   --no-overlays         No toasts or HUDs drawn over the page
-  --no-frame            No border or padding, the page fills the pane
-  --app-mode            Shorthand for --no-toolbar --no-shortcuts
-                        --no-context-menu --no-overlays --no-frame
-                        --allow-clipboard-read --open-tabs-in-popup-stack
+  --no-frame            No border or padding around the web page
+  --app-mode            Enables configuration to disable terminal-browser features to make optimal for application embedding
+  --app-name=<name>     The name of the application
+  --app-id=<id>         The identifier of the application
+  --no-merge            Do not open the terminal-browser instance as a tab in a neighbor terminal-browser
+
 
 Examples:
   terminal-browser open localhost:3000
@@ -68,12 +70,12 @@ Options:
 `,
   },
   setup: {
-    summary: "Configure installed terminals so terminal-browser works best",
+    summary: "Configure terminals and agents so terminal-browser works best",
     usage: "terminal-browser setup",
     body: `
-Finds the terminals on this machine and fixes any settings that would keep the
-browser from drawing in them. Editors built on vscode ship with terminal images
-switched off, so this turns "terminal.integrated.enableImages" on in each one.
+Sets up configuration to make terminal-browser work best, this includes:
+- installing agent skills
+- enabling configuration settings in terminals that is required for terminal-browser to work
 
 `,
   },
@@ -103,6 +105,30 @@ Options:
 Examples:
   terminal-browser new-tab github.com
   terminal-browser new-tab --browser 90107-1 localhost:3000
+`,
+  },
+  apps: {
+    summary: "Lists registered terminal-browser apps",
+    usage: "terminal-browser apps [--json]",
+    body: `
+Lists the id, name, and binary path of registered terminal-browser apps. Apps can be registered
+using terminal-browser register-app. If an app is registered it can be opened through the terminal-browser
+new tab command palette after searching for its name.
+`,
+  },
+  "register-app": {
+    summary: "Register a terminal-browser application",
+    usage: "terminal-browser register-app --name <name> --bin <path> [--id <id>] [--args \"…\"]",
+    body: `
+Registers metadata for a terminal-browser application to ~/.local/share/terminal-browser-interop/apps/<id>.json. This enables functionality
+when a user is using terminal-browser, and lets other applications discover terminal-browser apps.
+`,
+  },
+  "unregister-app": {
+    summary: "Unregister a terminal-browser application",
+    usage: "terminal-browser unregister-app <id>",
+    body: `
+Remove application metadata from ~/.local/share/terminal-browser-interop/apps/<id>.json.
 `,
   },
   shutdown: {

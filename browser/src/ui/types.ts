@@ -6,8 +6,12 @@ export interface PaletteView {
   items: { id: string; label: string; shortcut: string }[];
 }
 
+export type NewTabSuggestion =
+  | { kind: "search"; text: string }
+  | { kind: "app"; id: string; name: string };
+
 export interface NewTabView {
-  suggestions: string[];
+  suggestions: NewTabSuggestion[];
   index: number;
 }
 
@@ -16,6 +20,7 @@ export interface TabRow {
   title: string;
   favicon: string | null;
   active: boolean;
+  app: boolean;
 }
 
 export interface PopupView {
@@ -69,6 +74,7 @@ export interface ChromeActions {
   tabNew(): void;
   newTabQuery(text: string): void;
   newTabSubmit(text: string): void;
+  newTabPick(index: number): void;
   newTabCancel(): void;
   popupPointer(event: PointerEvent): void;
   popupWheel(event: WheelEvent): void;

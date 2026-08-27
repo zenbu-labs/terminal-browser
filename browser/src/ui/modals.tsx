@@ -235,14 +235,15 @@ export function NewTabCard({
       {view.suggestions.length > 0 && (
         <Box style={{ flexDirection: "column" }}>
           {view.suggestions.map((suggestion, i) => {
+            const text = suggestion.kind === "app" ? suggestion.name : suggestion.text;
             const maxChars = Math.floor((cardW - rem * 3.15) / (rem * 0.95 * 0.6));
             const shown =
-              suggestion.length > maxChars
-                ? `${suggestion.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`
-                : suggestion;
+              text.length > maxChars
+                ? `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`
+                : text;
             return (
               <Box
-                key={`${i}:${suggestion}`}
+                key={suggestion.kind === "app" ? `app:${suggestion.id}` : `${i}:${text}`}
                 style={{
                   height: rowH,
                   alignItems: "center",
@@ -252,9 +253,13 @@ export function NewTabCard({
                   hoverBackground: theme.hover,
                   cornerRadius: lastRowRadius(i === view.suggestions.length - 1, rem),
                 }}
-                onClick={() => actions.newTabSubmit(suggestion)}
+                onClick={() => actions.newTabPick(i)}
               >
-                <Icon icon="search" size={rem * 0.8} color={theme.disabled} />
+                <Icon
+                  icon={suggestion.kind === "app" ? "terminal" : "search"}
+                  size={rem * 0.8}
+                  color={theme.disabled}
+                />
                 <Text
                   style={{
                     flexGrow: 1,

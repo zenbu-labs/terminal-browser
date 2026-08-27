@@ -4,7 +4,17 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { DAEMON_SOCKET, LOGS_DIR, ensureDataDir } from "pixel-store";
+import {
+  DAEMON_SOCKET,
+  LOGS_DIR,
+  appId,
+  ensureDataDir,
+  instanceKey,
+  listApps,
+  registerApp,
+  unregisterApp,
+} from "pixel-store";
+import type { OpenSpec } from "pixel-store";
 import {
   callerTty,
   canSplit,
@@ -20,6 +30,7 @@ import { setupCommand } from "./editors";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
+import { findHosts, openAppInHost, openUrlInHost } from "./interop";
 import { lsCommand } from "./ls";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
@@ -445,6 +456,7 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
     print(await control(target.socket, where));
     return 0;
   }
+  if (!key && !mergeDisabled() && (await tryAdopt(url ? [url] : []))) return 0;
   await requireGraphics(check);
   const argv = url ? [url] : [];
   if (interactiveTty()) return openHere(argv);
@@ -478,6 +490,8 @@ const BROWSER_FLAGS = [
   "--ssh-bundle-dir=",
   "--preload=",
   "--main-script=",
+  "--app-name=",
+  "--app-id=",
   "--palette-key=",
   "--find-key=",
   "--devtools-key=",
@@ -525,16 +539,77 @@ function requirePaneAccess(): void {
   if (refusal) fail(refusal);
 }
 
+function mergeDisabled(): boolean {
+  return process.env.TERMINAL_BROWSER_NO_MERGE === "1";
+}
+
+async function tryAdopt(args: string[]): Promise<boolean> {
+  const terminal = (await currentTerminal()).terminal;
+  const hosts = await findHosts(terminal).catch(() => []);
+  if (hosts.length === 0) return false;
+  const url = args.find((arg) => !arg.startsWith("-"));
+  const resolved = url && fs.existsSync(url) ? path.resolve(url) : url;
+  if (!args.includes("--app-mode")) {
+    for (const host of hosts) {
+      try {
+        const opened = await openUrlInHost(host.socket, resolved);
+        print({ adopted: instanceKey(host), socket: host.socket, tab: opened.tab });
+        return true;
+      } catch {}
+    }
+    return false;
+  }
+  if (!resolved) return false;
+  const name = flagEq(args, "--app-name");
+  const idFlag = flagEq(args, "--app-id");
+  const app: NonNullable<OpenSpec["app"]> = { id: appId(idFlag ?? name ?? "app") };
+  if (name !== undefined) app.name = name;
+  const partition = flagEq(args, "--partition");
+  if (partition) app.partition = partition;
+  const preload = flagEq(args, "--preload");
+  if (preload) app.preload = path.resolve(preload);
+  const mainScript = flagEq(args, "--main-script");
+  if (mainScript) app.mainScript = path.resolve(mainScript);
+  const spec: OpenSpec = { url: resolved, app };
+  for (const host of hosts) {
+    let attachment;
+    try {
+      attachment = await openAppInHost(host.socket, spec);
+    } catch {
+      continue;
+    }
+    print({
+      adopted: instanceKey(host),
+      socket: host.socket,
+      tab: attachment.result.tab,
+    });
+    const finish = () => {
+      attachment.close();
+      process.exit(0);
+    };
+    process.on("SIGINT", finish);
+    process.on("SIGTERM", finish);
+    process.on("SIGHUP", finish);
+    await attachment.closed;
+    process.exit(0);
+  }
+  return false;
+}
+
 async function openCommand(args: string[]) {
   requirePaneAccess();
   const split = takeSplitFlag(args);
   const size = takeSizeFlag(args);
+  const noMerge = takeBoolFlag(args, "--no-merge") || mergeDisabled();
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
   takeSshFlags(args);
   rejectUnknownFlags(args);
   const positionals = args.filter((arg) => !arg.startsWith("-"));
   if (positionals.length > 1) {
     fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
+  }
+  if (!noMerge && !args.some((arg) => arg.startsWith("--ssh="))) {
+    if (await tryAdopt(args)) return;
   }
   await requireGraphics(await currentTerminal());
   if (!split && interactiveTty()) {
@@ -575,6 +650,57 @@ function asksForHelp(args: string[]): boolean {
   const end = args.indexOf("--");
   const own = end < 0 ? args : args.slice(0, end);
   return own.includes("--help") || own.includes("-h");
+}
+
+function registerAppCommand(args: string[]): number {
+  const idFlag = takeFlag(args, "--id");
+  const name = takeFlag(args, "--name");
+  const bin = takeFlag(args, "--bin");
+  const argsFlag = takeFlag(args, "--args");
+  if (!name) fail("register-app needs --name");
+  if (!bin) fail("register-app needs --bin");
+  const binPath = path.resolve(bin);
+  if (!fs.existsSync(binPath)) fail(`no such file ${binPath}`);
+  const id = appId(idFlag ?? name);
+  registerApp({
+    id,
+    name,
+    bin: binPath,
+    args: argsFlag ? argsFlag.split(/\s+/).filter(Boolean) : [],
+  });
+  process.stdout.write(`registered ${name} (${id})\n`);
+  return 0;
+}
+
+function unregisterAppCommand(args: string[]): number {
+  const id = args.find((arg) => !arg.startsWith("-"));
+  if (!id) fail("unregister-app needs an app id (terminal-browser apps)");
+  if (!unregisterApp(appId(id))) fail(`no registered app ${id}`);
+  process.stdout.write(`unregistered ${id}\n`);
+  return 0;
+}
+
+function appsCommand(args: string[]): number {
+  const json = takeBoolFlag(args, "--json");
+  const apps = listApps();
+  if (json) {
+    print(apps);
+    return 0;
+  }
+  if (apps.length === 0) {
+    process.stdout.write("no apps registered\n");
+    return 0;
+  }
+  const rows = apps.map((app) => [app.id, app.name, app.bin]);
+  const header = ["id", "name", "bin"];
+  const widths = header.map((label, col) =>
+    Math.max(label.length, ...rows.map((row) => row[col].length)),
+  );
+  for (const row of [header, ...rows]) {
+    const line = row.map((cell, col) => cell.padEnd(widths[col])).join("  ");
+    process.stdout.write(`${line.trimEnd()}\n`);
+  }
+  return 0;
 }
 
 function helpCommand(topic: string | undefined): number {
@@ -621,6 +747,9 @@ async function main(): Promise<number> {
   }
   if (command === "upgrade") return upgradeCommand();
   if (command === "shutdown") return shutdownDaemon();
+  if (command === "register-app") return registerAppCommand(args);
+  if (command === "unregister-app") return unregisterAppCommand(args);
+  if (command === "apps") return appsCommand(args);
   if (command === "new-tab") {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");

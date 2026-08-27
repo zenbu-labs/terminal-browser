@@ -11,6 +11,7 @@ export interface TabTarget {
   title: string;
   active: boolean;
   targetId: string | null;
+  app?: { name: string | null; id: string } | null;
   timeOrigin?: number | null;
 }
 

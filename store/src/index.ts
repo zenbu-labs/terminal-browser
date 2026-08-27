@@ -15,3 +15,20 @@ export { appState, instances, settings } from "./schema";
 export type { DevtoolsDock, InstanceRow, NewInstanceRow, SettingsRow } from "./schema";
 export { listInstances, removeInstance, upsertInstance } from "./instances";
 export { lastUrl, setLastUrl } from "./app-state";
+export {
+  INTEROP_APPS_DIR,
+  INTEROP_INSTANCES_DIR,
+  INTEROP_PROTOCOL_VERSIONS,
+  advertiseInstance,
+  appId,
+  instanceKey,
+  interopInstanceSchema,
+  listApps,
+  listInteropInstances,
+  openSpecSchema,
+  registerApp,
+  registeredAppSchema,
+  unregisterApp,
+  withdrawInstance,
+} from "./interop";
+export type { InteropInstance, OpenResult, OpenSpec, RegisteredApp } from "./interop";

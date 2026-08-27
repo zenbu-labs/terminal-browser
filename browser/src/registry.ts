@@ -3,8 +3,15 @@ import net from "node:net";
 import path from "node:path";
 
 import { callerTty } from "pixel-terminals";
-import { removeInstance, upsertInstance } from "pixel-store";
-import type { InstanceRow } from "pixel-store";
+import {
+  INTEROP_PROTOCOL_VERSIONS,
+  advertiseInstance,
+  openSpecSchema,
+  removeInstance,
+  upsertInstance,
+  withdrawInstance,
+} from "pixel-store";
+import type { InstanceRow, OpenResult, OpenSpec } from "pixel-store";
 
 import type { BrowserState } from "./page/types";
 import { INSTANCES_DIR } from "pixel-store";
@@ -15,6 +22,10 @@ export interface Where {
   pane: string | null;
 }
 
+export interface InteropInfo {
+  mode: "browser" | "app";
+}
+
 export interface ControlHost {
   key: string;
   tty: string | null;
@@ -22,15 +33,19 @@ export interface ControlHost {
   splitDir: InstanceRow["splitDir"];
   parentTty: string | null;
   state(): BrowserState;
+  interop(): InteropInfo;
+  openAppTab(spec: OpenSpec, app: NonNullable<OpenSpec["app"]>): OpenResult;
   openTab(url?: string, cwd?: string): number;
   activateTab(id: number): boolean;
   closeTab(id: number): boolean;
+  hasTab(id: number): boolean;
   tabs(): unknown;
   targets(): Promise<unknown>;
   viewport(): { width: number; height: number } | null;
 }
 
 interface ControlRequest {
+  id?: string;
   cmd: string;
   url?: string;
   cwd?: string;
@@ -39,12 +54,13 @@ interface ControlRequest {
 
 export class Registry {
   private readonly host: ControlHost;
-  private readonly socketPath: string;
+  readonly socketPath: string;
   private readonly tty: string | null;
   private readonly startedAt = Date.now();
   private cdpPort: number | null = null;
   private server: net.Server | null = null;
   private disposed = false;
+  private readonly watchers = new Map<net.Socket, { tab: number; id: string }>();
 
   constructor(host: ControlHost) {
     this.host = host;
@@ -56,6 +72,7 @@ export class Registry {
     this.server.on("error", () => {});
     this.server.listen(this.socketPath);
     this.write();
+    this.advertise();
   }
 
   setCdpPort(port: number | null) {
@@ -65,6 +82,7 @@ export class Registry {
 
   update() {
     this.write();
+    this.sweepWatchers("closed");
   }
 
   record(): InstanceRow {
@@ -86,9 +104,18 @@ export class Registry {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    for (const [connection, watched] of [...this.watchers]) {
+      this.watchers.delete(connection);
+      try {
+        connection.end(
+          `${JSON.stringify({ id: watched.id, event: "app-closed", tab: watched.tab, reason: "shutdown" })}\n`,
+        );
+      } catch {}
+    }
     this.server?.close();
     this.server = null;
     void removeInstance(this.host.key).catch(() => {});
+    withdrawInstance(this.host.key);
     fs.rmSync(this.socketPath, { force: true });
   }
 
@@ -97,29 +124,81 @@ export class Registry {
     void upsertInstance(this.record()).catch(() => {});
   }
 
+  private advertise() {
+    advertiseInstance(this.host.key, {
+      protocolVersions: INTEROP_PROTOCOL_VERSIONS,
+      mode: this.host.interop().mode,
+      pid: process.pid,
+      socket: this.socketPath,
+      startedAt: this.startedAt,
+    });
+  }
+
+  private sweepWatchers(reason: string) {
+    for (const [connection, watched] of [...this.watchers]) {
+      if (this.host.hasTab(watched.tab)) continue;
+      this.watchers.delete(connection);
+      try {
+        connection.end(
+          `${JSON.stringify({ id: watched.id, event: "app-closed", tab: watched.tab, reason })}\n`,
+        );
+      } catch {}
+    }
+  }
+
   private serve(connection: net.Socket) {
     let buffer = "";
     connection.setEncoding("utf8");
     connection.on("error", () => {});
+    connection.on("close", () => {
+      const watched = this.watchers.get(connection);
+      if (watched === undefined) return;
+      this.watchers.delete(connection);
+      if (this.host.hasTab(watched.tab)) this.host.closeTab(watched.tab);
+    });
     connection.on("data", (chunk: string) => {
       buffer += chunk;
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = buffer.slice(0, newline);
-      buffer = "";
-      void this.handle(line)
-        .then((data) => {
-          connection.end(`${JSON.stringify({ ok: true, data })}\n`);
-        })
-        .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          connection.end(`${JSON.stringify({ ok: false, error: message })}\n`);
-        });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf("\n");
+        if (line.trim()) void this.dispatch(line, connection);
+      }
     });
   }
 
-  private async handle(line: string): Promise<unknown> {
-    const request = JSON.parse(line) as ControlRequest;
+  private async dispatch(line: string, connection: net.Socket) {
+    let id: string | null = null;
+    try {
+      const request = JSON.parse(line) as ControlRequest;
+      id = typeof request.id === "string" && request.id.length > 0 ? request.id : null;
+      if (id === null) throw new Error("request id required");
+      if (request.cmd === "interop/1/open") {
+        const parsed = openSpecSchema.safeParse(request);
+        if (!parsed.success) throw new Error("malformed open request");
+        const spec = parsed.data;
+        if (!spec.app) {
+          const tab = this.host.openTab(spec.url);
+          connection.end(`${JSON.stringify({ id, ok: true, data: { tab } })}\n`);
+          return;
+        }
+        const result = this.host.openAppTab(spec, spec.app);
+        connection.write(`${JSON.stringify({ id, ok: true, data: result })}\n`);
+        this.watchers.set(connection, { tab: result.tab, id });
+        return;
+      }
+      const data = await this.handle(request);
+      connection.end(`${JSON.stringify({ id, ok: true, data })}\n`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        connection.end(`${JSON.stringify({ id, ok: false, error: message })}\n`);
+      } catch {}
+    }
+  }
+
+  private async handle(request: ControlRequest): Promise<unknown> {
     switch (request.cmd) {
       case "state":
         return this.record();
