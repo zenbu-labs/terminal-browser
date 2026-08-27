@@ -166,10 +166,6 @@ export class TabManager {
     return this.tabs.length === 1 && this.tabs[0].app != null;
   }
 
-  appTab(id: string): Tab | null {
-    return this.tabs.find((tab) => tab.app?.id === id) ?? null;
-  }
-
   findByContents(contentsId: number): Tab | null {
     return this.tabs.find((tab) => tab.controller.hasContents(contentsId)) ?? null;
   }

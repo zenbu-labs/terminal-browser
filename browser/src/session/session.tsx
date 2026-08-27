@@ -669,11 +669,6 @@ class Session {
   }
 
   private launchApp(app: RegisteredApp) {
-    const existing = this.tabs.appTab(app.id);
-    if (existing) {
-      this.tabs.activate(existing.id);
-      return;
-    }
     const env = { ...this.ctx.env };
     if (this.registry) env.TERMINAL_BROWSER_INTEROP_TARGET = this.registry.socketPath;
     try {
