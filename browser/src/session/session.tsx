@@ -1063,11 +1063,11 @@ class Session {
           browser?.reload();
           return;
         }
-        if (this.accelHeld(event) && event.key === "[") {
+        if ((this.accelHeld(event) || event.mods.ctrl) && event.key === "[") {
           browser?.back();
           return;
         }
-        if (this.accelHeld(event) && event.key === "]") {
+        if ((this.accelHeld(event) || event.mods.ctrl) && event.key === "]") {
           browser?.forward();
           return;
         }
@@ -1325,6 +1325,9 @@ class Session {
       case "copy-link":
         this.root?.setClipboard(menu.linkURL);
         return;
+      case "open-link-tab":
+        this.tabs.create(menu.linkURL);
+        return;
       case "inspect":
         this.openDevtools();
         if (browser.devtools) browser.inspect(menu.pageX, menu.pageY);
@@ -1350,10 +1353,10 @@ class Session {
           ]
         : []),
       ...(this.pageMenu.linkURL
-        ? [{ id: "copy-link", label: "copy link address", enabled: true, shortcut: "" }]
-        : []),
-      ...(this.pageMenu.selectionText || this.pageMenu.linkURL
-        ? [{ id: "sep-edit", separator: true } as const]
+        ? [
+            { id: "open-link-tab", label: "open link in new tab", enabled: true, shortcut: "" },
+            { id: "copy-link", label: "copy link address", enabled: true, shortcut: "" },
+          ]
         : []),
       {
         id: "record",

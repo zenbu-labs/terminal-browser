@@ -112,7 +112,7 @@ fn measure_wrapped_text(
     }
 }
 
-pub(super) fn to_taffy(style: &Style, hidden: bool) -> taffy::Style {
+pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool) -> taffy::Style {
     use taffy::prelude::{auto, length, percent};
 
     fn dimension(d: Dimension) -> taffy::Dimension {
@@ -167,6 +167,14 @@ pub(super) fn to_taffy(style: &Style, hidden: bool) -> taffy::Style {
         size: taffy::Size {
             width: dimension(style.width),
             height: dimension(style.height),
+        },
+        min_size: taffy::Size {
+            width: if input && !style.wrap {
+                length(0.0)
+            } else {
+                dimension(style.min_width)
+            },
+            height: auto(),
         },
         max_size: taffy::Size {
             width: dimension(style.max_width),

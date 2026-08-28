@@ -45,7 +45,7 @@ terminal-browser action # an agent-browser compatible cli for interacting with o
 | Find in page | cmd+shift+f | ctrl+shift+f |
 | Next / previous match | enter / shift+enter | enter / shift+enter |
 | Reload | cmd+r | ctrl+r |
-| Back / forward | cmd+[ / cmd+] | ctrl+[ / ctrl+] |
+| Back / forward | cmd+[ / cmd+] or ctrl+[ / ctrl+] | ctrl+[ / ctrl+] |
 | Zoom in / out / reset | your terminal's zoom keybind | your terminal's zoom keybind |
 | Devtools | cmd+shift+i or f12 | ctrl+shift+i or f12 |
 | Devtools console | cmd+alt+j | ctrl+alt+j |

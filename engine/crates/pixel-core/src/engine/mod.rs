@@ -295,6 +295,7 @@ pub struct Engine {
     pub emit_logs: bool,
     log_cursor: u64,
     drag: Option<(usize, DragTarget)>,
+    pending_click: Option<(usize, NodeId)>,
     pointer_capture: Option<(usize, NodeId)>,
     key_passthrough: bool,
     last_selection: Option<(
@@ -400,6 +401,7 @@ impl Engine {
             emit_logs: false,
             log_cursor: 0,
             drag: None,
+            pending_click: None,
             pointer_capture: None,
             key_passthrough: false,
             last_selection: None,

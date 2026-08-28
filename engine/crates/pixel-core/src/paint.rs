@@ -314,7 +314,16 @@ fn paint_node(
                 .layout(node.taffy)
                 .map(|l| (l.padding.left, l.padding.top, l.padding.right))
                 .unwrap_or((0.0, 0.0, 0.0));
-            let origin = (rect.x + padding.0, rect.y + padding.1);
+            let scroll_x = node
+                .input
+                .as_ref()
+                .map_or(0.0, |state| state.input.scroll_x());
+            let clips_text = node.input.is_some() && !node.style.wrap && !clips_children;
+            if clips_text {
+                canvas.push_clip(rect.x, rect.y, rect.w, rect.h);
+            }
+            let base_x = rect.x + padding.0;
+            let origin = (base_x - scroll_x, rect.y + padding.1);
             let wrap = node
                 .style
                 .wrap
@@ -473,7 +482,7 @@ fn paint_node(
                 && let Some(gutter) = state.gutter
             {
                 timed(stats.as_mut().map(|s| &mut s.glyphs), || {
-                    let gutter_right = origin.0 - px * 0.75;
+                    let gutter_right = base_x - px * 0.75;
                     let mut logical = 0usize;
                     for (i, line) in lines.iter().enumerate() {
                         let starts_logical = line.start == 0
@@ -533,6 +542,9 @@ fn paint_node(
                     [1.5; 4],
                     state.caret_color,
                 );
+            }
+            if clips_text {
+                canvas.pop_clip();
             }
         }
     }

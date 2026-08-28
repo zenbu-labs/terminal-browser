@@ -41,6 +41,7 @@ export interface Style {
   flexBasis?: number | `${number}%` | "auto";
   width?: number | `${number}%` | "auto";
   height?: number | `${number}%` | "auto";
+  minWidth?: number | `${number}%` | "auto";
   maxWidth?: number | `${number}%` | "auto";
   maxHeight?: number | `${number}%` | "auto";
   padding?: number | Edges;
@@ -111,6 +112,7 @@ export function serializeStyle(style: Style): Record<string, unknown> {
     flexBasis: style.flexBasis,
     width: style.width,
     height: style.height,
+    minWidth: style.minWidth,
     maxWidth: style.maxWidth,
     maxHeight: style.maxHeight,
     padding: style.padding,

@@ -183,11 +183,16 @@ export class BrowserController {
       this.lastFrameSize = size;
       this.onFrameSubmitted?.();
     });
-    this.window.webContents.on("did-start-loading", () => this.updateState({ loading: true }));
+    this.window.webContents.on(
+      "did-start-navigation",
+      (_event, _url, isInPlace, isMainFrame) => {
+        if (isMainFrame && !isInPlace) this.updateState({ loading: true });
+      },
+    );
     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
-      this.updateNavigation(false, url);
+      this.updateNavigation(this.state.loading, url);
     });
     this.window.webContents.on("page-favicon-updated", (_event, favicons) => {
       void this.loadFavicon(favicons);

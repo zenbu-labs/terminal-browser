@@ -82,6 +82,7 @@ impl Engine {
         }
         match mouse.kind {
             MouseKind::Down if mouse.button == MouseButton::Left => {
+                self.pending_click = None;
                 self.mark_pointer("click", point);
                 if self.handle_menu_click(point, out)? {
                     return Ok(());
@@ -169,22 +170,10 @@ impl Engine {
                         None
                     }
                 };
-                if let Some(node) = node {
-                    out.push(EngineEvent::Click {
-                        view,
-                        node,
-                        key: self.comp.views[view].tree.key_of(node).map(str::to_string),
-                        x: local.0,
-                        y: local.1,
-                        offset: self.comp.views[view].tree.offset_at_point(
-                            node,
-                            local,
-                            &self.fonts,
-                        ),
-                    });
-                }
+                self.pending_click = node.map(|node| (view, node));
             }
             MouseKind::Down if mouse.button == MouseButton::Right => {
+                self.pending_click = None;
                 self.mark_pointer("right-click", point);
                 self.close_menu();
                 if self.comp.on_divider(point.0) {
@@ -296,6 +285,34 @@ impl Engine {
             MouseKind::Up => {
                 self.comp.divider_drag = false;
                 self.bar_drag = None;
+                if mouse.button == MouseButton::Left
+                    && let Some((click_view, click_node)) = self.pending_click.take()
+                {
+                    let view = self.comp.view_at(point.0);
+                    let local = self.comp.to_local(view, point);
+                    let released_over = matches!(
+                        self.comp.views[view].tree.hit_target(local.0, local.1),
+                        Some(HitTarget::Input(id)) | Some(HitTarget::Click(id))
+                            if id == click_node
+                    );
+                    if view == click_view && released_over {
+                        out.push(EngineEvent::Click {
+                            view,
+                            node: click_node,
+                            key: self.comp.views[view]
+                                .tree
+                                .key_of(click_node)
+                                .map(str::to_string),
+                            x: local.0,
+                            y: local.1,
+                            offset: self.comp.views[view].tree.offset_at_point(
+                                click_node,
+                                local,
+                                &self.fonts,
+                            ),
+                        });
+                    }
+                }
                 if let Some((view, target)) = self.drag.take() {
                     match target {
                         DragTarget::Input(id) => {

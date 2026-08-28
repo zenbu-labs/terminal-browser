@@ -164,6 +164,7 @@ pub struct TextInput {
     clicks: ClickTracker,
     selecting: bool,
     marks: Vec<Mark>,
+    scroll_x: f32,
 }
 
 impl TextInput {
@@ -182,6 +183,14 @@ impl TextInput {
 
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    pub fn scroll_x(&self) -> f32 {
+        self.scroll_x
+    }
+
+    pub fn set_scroll_x(&mut self, x: f32) {
+        self.scroll_x = x.max(0.0);
     }
 
     pub fn selection(&self) -> Option<Range<usize>> {

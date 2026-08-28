@@ -351,6 +351,11 @@ impl Tree {
             return;
         }
         if self.focus != id {
+            if let Some(prev) = self.focus
+                && let Some(input) = self.input_mut(prev)
+            {
+                input.set_scroll_x(0.0);
+            }
             self.focus = id;
             self.needs_paint = true;
         }
@@ -387,7 +392,7 @@ impl Tree {
     pub fn create(&mut self, props: Props) -> NodeId {
         let taffy = self
             .taffy
-            .new_leaf(to_taffy(&props.style, props.hidden))
+            .new_leaf(to_taffy(&props.style, props.hidden, props.input.is_some()))
             .expect("taffy leaf");
         let (text, static_marks) = match (&props.input, props.text) {
             (Some(input), _) => (Some(input.initial.clone()), Vec::new()),
@@ -712,12 +717,12 @@ impl Tree {
             }
         }
         if style_changed {
-            let (taffy, style, hidden) = {
+            let (taffy, style, hidden, input) = {
                 let node = self.node(id);
-                (node.taffy, node.style.clone(), node.hidden)
+                (node.taffy, node.style.clone(), node.hidden, node.input.is_some())
             };
             self.taffy
-                .set_style(taffy, to_taffy(&style, hidden))
+                .set_style(taffy, to_taffy(&style, hidden, input))
                 .expect("taffy style");
             self.needs_layout = true;
         }
@@ -849,7 +854,7 @@ impl Tree {
         node.style.height = Dimension::Px(window.1);
         let (taffy, style, hidden) = (node.taffy, node.style.clone(), node.hidden);
         self.taffy
-            .set_style(taffy, to_taffy(&style, hidden))
+            .set_style(taffy, to_taffy(&style, hidden, false))
             .expect("taffy style");
         self.needs_layout = true;
     }
@@ -1019,7 +1024,7 @@ impl Tree {
                     let child = self.node(child);
                     (child.taffy, child.style.clone(), child.hidden)
                 };
-                let mut taffy_style = to_taffy(&style, hidden);
+                let mut taffy_style = to_taffy(&style, hidden, false);
                 taffy_style.size = taffy::Size {
                     width: length(size.width),
                     height: length(size.height),
@@ -1509,8 +1514,16 @@ impl Tree {
     }
 
     pub fn input_geometry(&self, id: NodeId) -> Option<InputGeometry> {
-        self.get(id)?.input.as_ref()?;
-        self.text_geometry(id)
+        let state = self.get(id)?.input.as_ref()?;
+        let mut geometry = self.text_geometry(id)?;
+        geometry.origin.0 -= state.input.scroll_x();
+        Some(geometry)
+    }
+
+    pub(crate) fn content_width(&self, id: NodeId) -> Option<f32> {
+        let node = self.get(id)?;
+        let layout = self.taffy.layout(node.taffy).ok()?;
+        Some((layout.size.width - layout.padding.left - layout.padding.right).max(0.0))
     }
 
     pub fn text_geometry(&self, id: NodeId) -> Option<InputGeometry> {

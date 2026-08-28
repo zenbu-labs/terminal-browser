@@ -1788,3 +1788,92 @@ fn failed_image_with_unknown_dims_occupies_a_square() {
         "failed image squares off its known dimension so the glyph shows"
     );
 }
+
+fn unwrapped_input(initial: &str) -> Vec<Desc> {
+    vec![Desc {
+        style: Style {
+            width: Dimension::Px(60.0),
+            height: Dimension::Px(30.0),
+            ..Style::default()
+        },
+        children: vec![Desc {
+            style: Style {
+                padding: Edges::all(4.0),
+                width: Dimension::Px(52.0),
+                wrap: false,
+                ..Style::default()
+            },
+            key: Some("in".into()),
+            input: Some(InputProps {
+                initial: initial.into(),
+                caret_color: [255, 0, 0, 255],
+                selection_color: [0, 255, 0, 255],
+                ..InputProps::default()
+            }),
+            ..Desc::default()
+        }],
+        ..Desc::default()
+    }]
+}
+
+#[test]
+fn input_scroll_x_shifts_geometry_and_hit_testing() {
+    let text = "hello world wide";
+    let mut tree = tree_of((60.0, 30.0), unwrapped_input(text));
+    let id = tree.find("in").unwrap();
+    let fonts = [font()];
+    let before = tree.input_geometry(id).unwrap();
+    let caret_before = before.caret_rect(text, &[], 5, &fonts);
+    tree.input_mut(id).unwrap().set_scroll_x(10.0);
+    let after = tree.input_geometry(id).unwrap();
+    assert_eq!(after.origin.0, before.origin.0 - 10.0);
+    let caret_after = after.caret_rect(text, &[], 5, &fonts);
+    assert_eq!(caret_after.x, caret_before.x - 10.0);
+    assert_eq!(
+        after.offset_at(text, &[], (caret_after.x + 0.1, caret_after.y + 1.0), &fonts),
+        5,
+        "clicks map to the same offset under scroll"
+    );
+}
+
+#[test]
+fn blur_resets_input_scroll_x() {
+    let mut tree = tree_of((60.0, 30.0), unwrapped_input("hello world wide"));
+    let id = tree.find("in").unwrap();
+    tree.set_focus(Some(id));
+    tree.input_mut(id).unwrap().set_scroll_x(12.0);
+    tree.set_focus(None);
+    assert_eq!(tree.input(id).unwrap().scroll_x(), 0.0);
+}
+
+#[test]
+fn unwrapped_input_does_not_grow_past_its_flex_width() {
+    let tree = tree_of(
+        (100.0, 30.0),
+        vec![Desc {
+            style: Style {
+                width: Dimension::Px(100.0),
+                height: Dimension::Px(30.0),
+                ..Style::default()
+            },
+            children: vec![Desc {
+                style: Style {
+                    flex_grow: 1.0,
+                    flex_basis: Dimension::Px(0.0),
+                    wrap: false,
+                    ..Style::default()
+                },
+                key: Some("in".into()),
+                input: Some(InputProps {
+                    initial: "a very long line of text much wider than the row".into(),
+                    ..InputProps::default()
+                }),
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        }],
+    );
+    let id = tree.find("in").unwrap();
+    let width = tree.content_width(id).unwrap();
+    assert!(width <= 100.0, "input clamped to the row, got {width}");
+}

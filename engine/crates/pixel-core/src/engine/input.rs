@@ -95,6 +95,7 @@ impl Engine {
         match reply {
             InputReply::None => {}
             InputReply::Selected => {
+                self.reveal = true;
                 self.comp.views[view].tree.mark_paint();
                 self.push_caret(view, id, out);
             }
@@ -273,6 +274,70 @@ impl Engine {
         let fonts = &self.fonts;
         let base_px = self.base_px;
         self.comp.views[view].tree.flush_layout(fonts, base_px);
+        self.reveal_caret_x(view, focus);
+        self.reveal_caret_y(view, focus);
+    }
+
+    fn reveal_caret_x(&mut self, view: usize, focus: NodeId) {
+        let fonts = &self.fonts;
+        let tree = &self.comp.views[view].tree;
+        let Some(geometry) = tree.input_geometry(focus) else {
+            return;
+        };
+        if geometry.max_width.is_some() {
+            return;
+        }
+        let Some(width) = tree.content_width(focus) else {
+            return;
+        };
+        let Some(input) = tree.input(focus) else {
+            return;
+        };
+        let font = &fonts[geometry.font.min(fonts.len() - 1)];
+        let px = geometry.px;
+        let text = input.text();
+        let marks = input.marks();
+        let current = input.scroll_x();
+        let widest = crate::wrap::wrap_lines(text, font, px, None, marks)
+            .into_iter()
+            .map(|line| crate::canvas::measure_marked(font, text, line, px, marks))
+            .fold(0.0f32, f32::max);
+        let max_scroll = (widest + crate::text_input::caret_width(px) - width).max(0.0);
+        let full_selection = input
+            .selection()
+            .is_some_and(|range| range.start == 0 && range.end == text.len());
+        let target = if full_selection {
+            0.0
+        } else {
+            let (caret_x, _) = crate::text_input::offset_to_point(
+                text,
+                input.cursor(),
+                font,
+                px,
+                None,
+                marks,
+            );
+            let caret_w = crate::text_input::caret_width(px);
+            let mut next = current;
+            if caret_x + caret_w - next > width {
+                next = caret_x + caret_w - width;
+            }
+            if caret_x < next {
+                next = caret_x;
+            }
+            next
+        };
+        let target = target.clamp(0.0, max_scroll);
+        if target != current {
+            let tree = &mut self.comp.views[view].tree;
+            if let Some(input) = tree.input_mut(focus) {
+                input.set_scroll_x(target);
+                tree.mark_paint();
+            }
+        }
+    }
+
+    fn reveal_caret_y(&mut self, view: usize, focus: NodeId) {
         let tree = &self.comp.views[view].tree;
         let Some(scroller) = tree.parent(focus).and_then(|p| tree.scroll_parent(p)) else {
             return;

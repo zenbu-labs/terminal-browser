@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text } from "pixel-react";
 import type { EngineInfo, Surface } from "pixel-react";
 import type { BrowserState } from "../page/types";
@@ -76,6 +76,7 @@ export function Chrome({
   devtoolsSurface: Surface;
 }) {
   const theme = useMemo(() => makeTheme(colors), [colors]);
+  const progress = useProgress(state.loading);
   return (
     <Box
       style={{
@@ -152,11 +153,103 @@ export function Chrome({
           surface={popupSurface}
         />
       )}
+      {progress != null && (
+        <Box
+          style={{
+            position: "absolute",
+            inset: { top: layout.page.y - 1, left: layout.page.x - 1 },
+            width: Math.round(Math.min(1, progress) * (layout.page.width + 2)),
+            height: Math.max(2, Math.round(layout.rem * 0.12)),
+            overflow: "hidden",
+          }}
+        >
+          <Box
+            style={{
+              width: layout.page.width + 2,
+              height: Math.round(layout.rem * 2),
+              flexShrink: 0,
+              cornerRadius: layout.frame ? layout.rem * 0.55 : 0,
+              border: {
+                width: Math.max(2, Math.round(layout.rem * 0.12)),
+                color: theme.accent,
+              },
+            }}
+          />
+        </Box>
+      )}
       {newTab && <NewTabCard view={newTab} actions={actions} layout={layout} theme={theme} />}
       {urlEdit && <UrlCard state={state} actions={actions} layout={layout} theme={theme} />}
       {palette && <PaletteCard view={palette} actions={actions} layout={layout} theme={theme} />}
     </Box>
   );
+}
+
+const RAMP_S = 1.4;
+const DONE_GRACE_MS = 250;
+const LINGER_MS = 200;
+
+function useProgress(loading: boolean): number | null {
+  const [progress, setProgress] = useState<number | null>(null);
+  const s = useRef({
+    start: 0,
+    doneAt: 0,
+    timer: null as ReturnType<typeof setInterval> | null,
+  }).current;
+  if (loading) {
+    if (!s.start) s.start = Date.now();
+    s.doneAt = 0;
+  } else if (s.start && !s.doneAt) {
+    s.doneAt = Date.now();
+  }
+  useEffect(() => {
+    if (!s.start || s.timer) return;
+    s.timer = setInterval(() => {
+      const now = Date.now();
+      if (s.doneAt && now - s.doneAt >= DONE_GRACE_MS + LINGER_MS) {
+        s.start = 0;
+        s.doneAt = 0;
+        clearInterval(s.timer!);
+        s.timer = null;
+        setProgress(null);
+        return;
+      }
+      if (s.doneAt && now - s.doneAt >= DONE_GRACE_MS) {
+        setProgress(1);
+        return;
+      }
+      const elapsed = (now - s.start) / 1000;
+      setProgress(0.08 + 0.87 * (1 - Math.exp(-elapsed / RAMP_S)));
+    }, 16);
+  });
+  useEffect(
+    () => () => {
+      if (s.timer) clearInterval(s.timer);
+    },
+    [],
+  );
+  return progress;
+}
+
+const STOP_ICON_MIN_MS = 250;
+
+function useStopIcon(loading: boolean): boolean {
+  const [show, setShow] = useState(loading);
+  const since = useRef(0);
+  useEffect(() => {
+    if (loading) {
+      since.current = Date.now();
+      setShow(true);
+      return;
+    }
+    const left = STOP_ICON_MIN_MS - (Date.now() - since.current);
+    if (left <= 0) {
+      setShow(false);
+      return;
+    }
+    const timer = setTimeout(() => setShow(false), left);
+    return () => clearTimeout(timer);
+  }, [loading]);
+  return show;
 }
 
 function Toolbar({
@@ -175,6 +268,14 @@ function Toolbar({
   record: RecordView | null;
 }) {
   const rem = layout.rem;
+  const stopIcon = useStopIcon(state.loading);
+  const nav = state.canGoBack || state.canGoForward;
+  const stripWidth =
+    layout.width -
+    rem * 0.8 -
+    rem * 1.75 -
+    (nav ? rem * 3.5 : 0) -
+    (record ? rem * 7.25 : 0);
   return (
     <Box
       style={{
@@ -204,13 +305,20 @@ function Toolbar({
         </>
       )}
       <ToolbarButton
-        icon={state.loading ? "close" : "reload"}
+        icon={stopIcon ? "close" : "reload"}
         enabled
         rem={rem}
         theme={theme}
         onClick={actions.reload}
       />
-      <TabStrip tabs={tabs} state={state} actions={actions} rem={rem} theme={theme} />
+      <TabStrip
+        tabs={tabs}
+        actions={actions}
+        rem={rem}
+        width={stripWidth}
+        url={state.url}
+        theme={theme}
+      />
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
     </Box>
   );

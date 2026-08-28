@@ -15,7 +15,18 @@ export function PageContextMenu({
 }) {
   const rem = layout.rem;
   const rowH = Math.round(rem * 1.55);
-  const width = Math.round(rem * 11);
+  const charW = rem * 0.82 * 0.6;
+  const shortcutW = rem * 0.72 * 0.6;
+  const hasIcons = view.items.some((item) => "icon" in item && item.icon);
+  const width = Math.round(
+    view.items.reduce((widest, item) => {
+      if ("separator" in item) return widest;
+      let row = rem * 1.4 + item.label.length * charW;
+      if (hasIcons) row += rem * 1.2;
+      if (item.shortcut) row += rem * 0.6 + item.shortcut.length * shortcutW;
+      return Math.max(widest, row);
+    }, rem * 9),
+  );
   const pad = Math.round(rem * 0.3);
   const height = view.items.reduce(
     (sum, item) => sum + ("separator" in item ? pad : rowH),
