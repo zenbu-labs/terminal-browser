@@ -345,7 +345,7 @@ function seamRadius(radius: number, dock: "bottom" | "right" | null, side: "page
     : { topRight: radius, bottomRight: radius, topLeft: 0, bottomLeft: 0 };
 }
 
-const GLOW_PEAK_ALPHA = 190;
+const GLOW_PEAK_ALPHA = 140;
 
 function AgentGlow({
   layout,
@@ -359,7 +359,7 @@ function AgentGlow({
   const dock = layout.devtools?.dock ?? null;
   const page = layout.page;
   const depth = Math.min(
-    Math.max(16, Math.round(layout.rem * 2.2)),
+    Math.max(12, Math.round(layout.rem * 1.6)),
     Math.floor(Math.min(page.width, page.height) / 2),
   );
   const base = layout.frame
