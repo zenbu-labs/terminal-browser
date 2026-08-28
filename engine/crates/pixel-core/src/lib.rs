@@ -45,7 +45,7 @@ pub use scrollbar::ScrollbarRects;
 pub use selection::{DocPos, DocSelection};
 pub use style::{
     Align, Border, BorderSide, Color, Dimension, Edges, FlexDirection, Inset, InsetValue, Justify,
-    Overflow, Position, ScrollbarStyle, SelectionMode, Style,
+    LinearGradient, Overflow, Paint, Position, ScrollbarStyle, SelectionMode, Style,
 };
 pub use terminal::{
     Event, Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors,

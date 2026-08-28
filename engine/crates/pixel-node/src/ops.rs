@@ -7,7 +7,8 @@ use std::collections::HashMap;
  */
 use pixel_core::{
     Align, Border, BorderSide, Color, Dimension, Edges, Engine, FlexDirection, Gutter,
-    HighlightArea, ImageProps, InputProps, Inset, InsetValue, Justify, LineCap, LineJoin, NodeId,
+    HighlightArea, ImageProps, InputProps, Inset, InsetValue, Justify, LineCap, LineJoin,
+    LinearGradient, NodeId, Paint,
     Overflow, Position, Props, ScrollbarStyle, SelectionMode, ShapeProps, ShapeStroke,
     SlotKind, Style, TextSpan, parse_path_data,
 };
@@ -419,6 +420,36 @@ impl ScrollbarDto {
 }
 
 #[derive(Deserialize)]
+struct GradientStopDto {
+    at: f32,
+    color: Color,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PaintDto {
+    Solid(Color),
+    Gradient {
+        from: (f32, f32),
+        to: (f32, f32),
+        stops: Vec<GradientStopDto>,
+    },
+}
+
+impl PaintDto {
+    fn into_paint(self) -> Paint {
+        match self {
+            PaintDto::Solid(color) => Paint::Solid(color),
+            PaintDto::Gradient { from, to, stops } => Paint::Gradient(LinearGradient {
+                from,
+                to,
+                stops: stops.into_iter().map(|s| (s.at, s.color)).collect(),
+            }),
+        }
+    }
+}
+
+#[derive(Deserialize)]
 #[serde(untagged)]
 enum CornerRadiusDto {
     Uniform(f32),
@@ -469,7 +500,7 @@ struct StyleDto {
     overflow: Option<String>,
     justify_content: Option<String>,
     align_items: Option<String>,
-    background: Option<Color>,
+    background: Option<PaintDto>,
     corner_radius: Option<CornerRadiusDto>,
     border: Option<BorderDto>,
     color: Option<Color>,
@@ -572,7 +603,7 @@ impl StyleDto {
                 "stretch" => Some(Align::Stretch),
                 _ => None,
             }),
-            background: self.background,
+            background: self.background.map(PaintDto::into_paint),
             corner_radius: self.corner_radius.map_or([0.0; 4], CornerRadiusDto::into_radii),
             border: self.border.map(BorderDto::into_border),
             color: self.color,

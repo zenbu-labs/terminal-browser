@@ -159,6 +159,7 @@ Examples:
   terminal-browser action -- click @e14
   terminal-browser action -- eval "document.title"
   terminal-browser action --browser 90107-1 --tab 2 -- fill @e3 "hello"
+  terminal-browser action done
 `,
   },
 };

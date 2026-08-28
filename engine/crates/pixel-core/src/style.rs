@@ -171,6 +171,19 @@ impl ScrollbarStyle {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    pub from: (f32, f32),
+    pub to: (f32, f32),
+    pub stops: Vec<(f32, Color)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Paint {
+    Solid(Color),
+    Gradient(LinearGradient),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Style {
     pub flex_direction: FlexDirection,
     pub flex_grow: f32,
@@ -189,7 +202,7 @@ pub struct Style {
     pub overflow: Overflow,
     pub justify_content: Option<Justify>,
     pub align_items: Option<Align>,
-    pub background: Option<Color>,
+    pub background: Option<Paint>,
     pub corner_radius: [f32; 4], // i dont love this, maybe deconstruct into sepearte api's
     pub border: Option<Border>,
     pub color: Option<Color>,

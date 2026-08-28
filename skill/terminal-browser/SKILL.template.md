@@ -16,4 +16,12 @@ tab ids the other commands take.
 tab that is already open. It targets this terminal tab's browser and its active
 tab unless you select another one.
 
+When you use the terminal-browser action sub command, the user will visually
+see in the browser tab an indication that you are acting on the browser tab. This
+will automatically hide after a preset duration, where the countdown resets
+everytime terminal-browser action is used. But its a much better experience
+for the user if after the last time you plan to use terminal-browser action you
+run terminal-browser action done, which immediately clears the indication
+that you are using the browser tab
+
 ## Command reference

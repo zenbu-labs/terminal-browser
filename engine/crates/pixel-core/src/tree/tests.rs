@@ -2,7 +2,7 @@ use super::*;
 use crate::canvas::Canvas;
 use crate::desc::Desc;
 use crate::paint::paint;
-use crate::style::{Align, Border, BorderSide, Edges, Position};
+use crate::style::{Align, Border, BorderSide, Edges, Paint, Position};
 
 static FONT_BYTES: &[u8] =
     include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
@@ -103,7 +103,7 @@ fn exposes_rects_by_key_and_paints_background() {
             style: Style {
                 width: Dimension::Px(100.0),
                 height: Dimension::Px(40.0),
-                background: Some([10, 20, 30, 255]),
+                background: Some(Paint::Solid([10, 20, 30, 255])),
                 ..Style::default()
             },
             key: Some("panel".into()),
@@ -123,7 +123,7 @@ fn hover_swaps_background_under_cursor() {
         style: Style {
             width: Dimension::Px(10.0),
             height: Dimension::Px(10.0),
-            background: Some([1, 1, 1, 255]),
+            background: Some(Paint::Solid([1, 1, 1, 255])),
             hover_background: Some([9, 9, 9, 255]),
             ..Style::default()
         },
@@ -145,7 +145,7 @@ fn scroller(clickable_second: bool) -> Vec<Desc> {
             width: Dimension::Px(40.0),
             height: Dimension::Px(40.0),
             flex_shrink: 0.0,
-            background: Some(color),
+            background: Some(Paint::Solid(color)),
             ..Style::default()
         },
         key: Some(key.into()),
@@ -236,7 +236,7 @@ fn absolute_nodes_place_by_inset_and_sit_on_top() {
                     inset: crate::style::Inset::top_left(30.0, 40.0),
                     width: Dimension::Px(20.0),
                     height: Dimension::Px(10.0),
-                    background: Some([9, 9, 9, 255]),
+                    background: Some(Paint::Solid([9, 9, 9, 255])),
                     ..Style::default()
                 },
                 key: Some("float".into()),
@@ -1497,7 +1497,7 @@ fn unified_bands_stay_visible_over_child_backgrounds() {
             },
             Desc {
                 style: Style {
-                    background: Some([40, 40, 40, 255]),
+                    background: Some(Paint::Solid([40, 40, 40, 255])),
                     border: Some(Border::hairline([80, 80, 80, 255])),
                     padding: Edges::all(6.0),
                     ..Style::default()
@@ -1565,7 +1565,7 @@ fn placeholder_slot_fills_the_image_rect_until_the_decode_lands() {
                 key: Some("img".into()),
                 children: vec![Desc {
                     style: Style {
-                        background: Some([50, 50, 50, 255]),
+                        background: Some(Paint::Solid([50, 50, 50, 255])),
                         ..Style::default()
                     },
                     slot: Some(SlotKind::Placeholder),
@@ -1733,7 +1733,7 @@ fn static_text_marks_place_widgets_like_inputs() {
             style: Style {
                 width: Dimension::Px(40.0),
                 height: Dimension::Px(10.0),
-                background: Some([200, 30, 30, 255]),
+                background: Some(Paint::Solid([200, 30, 30, 255])),
                 ..Style::default()
             },
             mark: Some(9),

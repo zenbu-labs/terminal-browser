@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Image, Text } from "pixel-react";
 import { displayUrl } from "../url";
 import { Icon } from "./icons";
+import { usePulse } from "./pulse";
+import { mix, withAlpha } from "./theme";
 import type { Theme } from "./theme";
 import type { ChromeActions, TabRow } from "./types";
 
@@ -145,6 +147,7 @@ export function TabStrip({
   const [hovered, setHovered] = useState<number | null>(null);
   const activeLabel = displayUrl(url);
   const pointerIn = useRef(false);
+  const dotPulse = usePulse(tabs.some((tab) => tab.agentControlled && !tab.active));
   const label = (tab: TabRow) =>
     tab.active && !tab.app
       ? activeLabel || tab.title || "new tab"
@@ -257,6 +260,25 @@ export function TabStrip({
               >
                 <Icon icon="close" size={rem * 0.8} color={theme.muted} />
               </Box>
+            ) : tab.agentControlled && !tab.active && !ghost ? (
+              <Box
+                style={{
+                  width: slotW,
+                  height: slotW,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <Box
+                  style={{
+                    width: slotW * 0.5,
+                    height: slotW * 0.5,
+                    cornerRadius: slotW * 0.25,
+                    background: withAlpha(theme.accent, Math.round(255 * dotPulse)),
+                  }}
+                />
+              </Box>
             ) : tab.favicon ? (
               <Image
                 src={tab.favicon}
@@ -274,7 +296,14 @@ export function TabStrip({
             <Text
               style={{
                 fontSize: rem * 0.82,
-                color: tab.active && !ghost ? theme.fg : theme.muted,
+                color:
+                  tab.agentControlled && !ghost
+                    ? tab.active
+                      ? theme.accent
+                      : mix(theme.muted, theme.accent, 0.6)
+                    : tab.active && !ghost
+                      ? theme.fg
+                      : theme.muted,
                 wrap: false,
                 selectable: false,
                 flexShrink: 1,

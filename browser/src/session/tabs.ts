@@ -21,6 +21,7 @@ export interface Tab {
   controller: BrowserController;
   targetId: string | null;
   app: TabApp | null;
+  agentControlAt: number | null;
 }
 
 export interface TabTarget {
@@ -31,6 +32,7 @@ export interface TabTarget {
   targetId: string | null;
   app?: TabApp | null;
   timeOrigin?: number | null;
+  agentControlled: boolean;
 }
 
 
@@ -54,10 +56,15 @@ export interface TabHost {
   requestRender(): void;
 }
 
+const parsedTtl = Number(process.env.TERMINAL_BROWSER_AGENT_CONTROL_MS);
+const AGENT_CONTROL_TTL_MS = Number.isFinite(parsedTtl) && parsedTtl > 0 ? parsedTtl : 20_000;
+const AGENT_CONTROL_SWEEP_MS = 500;
+
 export class TabManager {
   private tabs: Tab[] = [];
   private activeId = 0;
   private seq = 1;
+  private agentSweep: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly host: TabHost,
@@ -89,6 +96,7 @@ export class TabManager {
       state: initialBrowserState(url),
       targetId: null,
       app: options.app ?? null,
+      agentControlAt: null,
     } as Tab;
     this.attachController(tab, url, activate, options);
     this.tabs.push(tab);
@@ -162,6 +170,61 @@ export class TabManager {
     return this.tabs.some((tab) => tab.id === id);
   }
 
+  touchAgentControl(id: number): boolean {
+    const tab = this.tabs.find((t) => t.id === id);
+    if (!tab) return false;
+    const fresh = tab.agentControlAt == null;
+    tab.agentControlAt = Date.now();
+    this.startAgentSweep();
+    if (fresh) {
+      this.host.onTabsChanged();
+      this.host.requestRender();
+    }
+    return true;
+  }
+
+  releaseAgentControl() {
+    this.stopAgentSweep();
+    let changed = false;
+    for (const tab of this.tabs) {
+      if (tab.agentControlAt == null) continue;
+      tab.agentControlAt = null;
+      changed = true;
+    }
+    if (!changed) return;
+    this.host.onTabsChanged();
+    this.host.requestRender();
+  }
+
+  private startAgentSweep() {
+    if (this.agentSweep) return;
+    this.agentSweep = setInterval(() => {
+      const cutoff = Date.now() - AGENT_CONTROL_TTL_MS;
+      let changed = false;
+      let remaining = false;
+      for (const tab of this.tabs) {
+        if (tab.agentControlAt == null) continue;
+        if (tab.agentControlAt < cutoff) {
+          tab.agentControlAt = null;
+          changed = true;
+        } else {
+          remaining = true;
+        }
+      }
+      if (!remaining) this.stopAgentSweep();
+      if (changed) {
+        this.host.onTabsChanged();
+        this.host.requestRender();
+      }
+    }, AGENT_CONTROL_SWEEP_MS);
+  }
+
+  private stopAgentSweep() {
+    if (!this.agentSweep) return;
+    clearInterval(this.agentSweep);
+    this.agentSweep = null;
+  }
+
   soleAppTab(): boolean {
     return this.tabs.length === 1 && this.tabs[0].app != null;
   }
@@ -186,6 +249,7 @@ export class TabManager {
       favicon: tab.app ? null : tab.state.favicon,
       active: tab.id === this.activeId,
       app: tab.app != null,
+      agentControlled: tab.agentControlAt != null,
     }));
   }
 
@@ -197,6 +261,7 @@ export class TabManager {
       active: tab.id === this.activeId,
       targetId: tab.targetId,
       app: tab.app,
+      agentControlled: tab.agentControlAt != null,
     }));
   }
 
@@ -212,6 +277,7 @@ export class TabManager {
           targetId: tab.targetId,
           app: tab.app,
           timeOrigin: await tab.controller.fingerprint(),
+          agentControlled: tab.agentControlAt != null,
         };
       }),
     );
@@ -222,6 +288,7 @@ export class TabManager {
   }
 
   stopAll() {
+    this.stopAgentSweep();
     for (const tab of this.tabs) tab.controller.stop();
     this.tabs = [];
     this.activeId = 0;

@@ -16,8 +16,9 @@ import {
   ReviewToolbar,
 } from "./record-bar";
 import { TabStrip } from "./tab-strip";
-import { makeTheme } from "./theme";
+import { makeTheme, withAlpha } from "./theme";
 import type { Theme } from "./theme";
+import { usePulse } from "./pulse";
 import type { RecordView } from "../record/types";
 import type {
   ChromeActions,
@@ -79,6 +80,9 @@ export function Chrome({
 }) {
   const theme = useMemo(() => makeTheme(colors), [colors]);
   const progress = useProgress(!noOverlays && state.loading);
+  const agentActive =
+    !noOverlays && tabs.some((tab) => tab.active && tab.agentControlled);
+  const glowPulse = usePulse(agentActive);
   return (
     <Box
       style={{
@@ -110,7 +114,9 @@ export function Chrome({
         surface={pageSurface}
         actions={actions}
         interactive={!record?.canvas}
+        agentActive={agentActive}
       />
+      {agentActive && <AgentGlow layout={layout} theme={theme} intensity={glowPulse} />}
       {layout.devtools && (
         <DevtoolsPane
           layout={layout}
@@ -339,18 +345,114 @@ function seamRadius(radius: number, dock: "bottom" | "right" | null, side: "page
     : { topRight: radius, bottomRight: radius, topLeft: 0, bottomLeft: 0 };
 }
 
+const GLOW_PEAK_ALPHA = 190;
+
+function AgentGlow({
+  layout,
+  theme,
+  intensity,
+}: {
+  layout: ChromeLayout;
+  theme: Theme;
+  intensity: number;
+}) {
+  const dock = layout.devtools?.dock ?? null;
+  const page = layout.page;
+  const depth = Math.min(
+    Math.max(16, Math.round(layout.rem * 2.2)),
+    Math.floor(Math.min(page.width, page.height) / 2),
+  );
+  const base = layout.frame
+    ? seamRadius(Math.max(2, layout.rem * 0.55 - 1), dock, "page")
+    : 0;
+  const r =
+    typeof base === "number"
+      ? { topLeft: base, topRight: base, bottomRight: base, bottomLeft: base }
+      : base;
+  const level = (peak: number) =>
+    withAlpha(theme.accent, Math.round(GLOW_PEAK_ALPHA * intensity * peak));
+  const fade = (from: [number, number], to: [number, number]) => ({
+    from,
+    to,
+    stops: [
+      { at: 0, color: level(1) },
+      { at: 0.35, color: level(0.42) },
+      { at: 0.7, color: level(0.09) },
+      { at: 1, color: level(0) },
+    ],
+  });
+  const strip = (
+    key: string,
+    inset: { top: number; left: number },
+    width: number,
+    height: number,
+    cornerRadius: Record<string, number>,
+    axis: [[number, number], [number, number]],
+  ) => (
+    <Box
+      key={key}
+      style={{
+        position: "absolute",
+        inset,
+        width,
+        height,
+        cornerRadius,
+        background: fade(axis[0], axis[1]),
+      }}
+    />
+  );
+  return (
+    <>
+      {strip(
+        "top",
+        { top: page.y, left: page.x },
+        page.width,
+        depth,
+        { topLeft: r.topLeft, topRight: r.topRight },
+        [[0, 0], [0, 1]],
+      )}
+      {strip(
+        "bottom",
+        { top: page.y + page.height - depth, left: page.x },
+        page.width,
+        depth,
+        { bottomLeft: r.bottomLeft, bottomRight: r.bottomRight },
+        [[0, 1], [0, 0]],
+      )}
+      {strip(
+        "left",
+        { top: page.y, left: page.x },
+        depth,
+        page.height,
+        { topLeft: r.topLeft, bottomLeft: r.bottomLeft },
+        [[0, 0], [1, 0]],
+      )}
+      {strip(
+        "right",
+        { top: page.y, left: page.x + page.width - depth },
+        depth,
+        page.height,
+        { topRight: r.topRight, bottomRight: r.bottomRight },
+        [[1, 0], [0, 0]],
+      )}
+    </>
+  );
+}
+
 function BrowserTabContents({
   layout,
   theme,
   surface,
   actions,
   interactive,
+  agentActive,
 }: {
   layout: ChromeLayout;
   theme: Theme;
   surface: Surface;
   actions: ChromeActions;
   interactive: boolean;
+  agentActive: boolean;
 }) {
   const dock = layout.devtools?.dock ?? null;
   return (
@@ -363,7 +465,7 @@ function BrowserTabContents({
             width: layout.page.width + 2,
             height: layout.page.height + 2,
             cornerRadius: seamRadius(layout.rem * 0.55, dock, "page"),
-            border: { width: 1, color: theme.fieldBorder },
+            border: { width: 1, color: agentActive ? theme.accent : theme.fieldBorder },
           }}
         />
       )}

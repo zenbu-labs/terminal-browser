@@ -28,6 +28,7 @@ export interface ActionOptions {
   tabId?: number;
   targetId?: string;
   follow: boolean;
+  done: boolean;
   passthrough: string[];
 }
 
@@ -247,10 +248,17 @@ export async function actionCommand(terminal: Terminal | null, options: ActionOp
   const selection = await select(terminal, options);
   const { browser, tab } = selection;
 
+  if (options.done) {
+    const reply = await control(browser.socket, { cmd: "agent-release" });
+    process.stdout.write(`${JSON.stringify(reply, null, 2)}\n`);
+    return 0;
+  }
+
   if (options.passthrough.length === 0) {
     throw new Error("nothing to run — pass a command after --, e.g. terminal-browser action -- snapshot");
   }
   checkGuardrails(options.passthrough);
+  await control(browser.socket, { cmd: "agent-touch", tab: tab.id }).catch(() => {});
 
   const intercepted = await interceptTabLifecycle(selection, options.passthrough);
   if (intercepted !== null) {

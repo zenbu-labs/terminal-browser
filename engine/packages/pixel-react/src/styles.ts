@@ -30,6 +30,17 @@ export interface ScrollbarStyle {
 
 export type BorderSide = [width: number, color: Color];
 
+export interface GradientStop {
+  at: number;
+  color: Color;
+}
+
+export interface LinearGradient {
+  from: [number, number];
+  to: [number, number];
+  stops: GradientStop[];
+}
+
 export type Border =
   | { width: number; color: Color }
   | { top?: BorderSide; right?: BorderSide; bottom?: BorderSide; left?: BorderSide };
@@ -52,7 +63,7 @@ export interface Style {
   overflow?: "visible" | "hidden" | "scroll";
   justifyContent?: "start" | "center" | "end" | "space-between";
   alignItems?: "start" | "center" | "end" | "stretch";
-  background?: Color;
+  background?: Color | LinearGradient;
   cornerRadius?:
     | number
     | { topLeft?: number; topRight?: number; bottomRight?: number; bottomLeft?: number };
@@ -91,6 +102,15 @@ export function parseColor(color: Color | undefined): Rgba | undefined {
   return [int(0), int(2), int(4), hex.length === 8 ? int(6) : 255];
 }
 
+function serializePaint(paint: Color | LinearGradient): unknown {
+  if (Array.isArray(paint) || typeof paint === "string") return parseColor(paint);
+  return {
+    from: paint.from,
+    to: paint.to,
+    stops: paint.stops.map((stop) => ({ at: stop.at, color: parseColor(stop.color) })),
+  };
+}
+
 function serializeBorder(border: Border): Record<string, unknown> {
   if ("width" in border) {
     return { width: border.width, color: parseColor(border.color) };
@@ -123,7 +143,7 @@ export function serializeStyle(style: Style): Record<string, unknown> {
     overflow: style.overflow,
     justifyContent: style.justifyContent,
     alignItems: style.alignItems,
-    background: parseColor(style.background),
+    background: style.background === undefined ? undefined : serializePaint(style.background),
     cornerRadius: style.cornerRadius,
     border: style.border && serializeBorder(style.border),
     color: parseColor(style.color),

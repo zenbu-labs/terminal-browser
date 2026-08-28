@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use crate::canvas::{Canvas, measure_marked, measure_text};
 use crate::image_cache::ImageStatus;
-use crate::style::{Color, Overflow};
+use crate::style::{Color, Overflow, Paint};
 use crate::text_input::{Mark, caret_width, offset_to_point};
 use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
@@ -178,23 +178,32 @@ fn paint_node(
     let hovered = cursor.is_some_and(|(x, y)| visible.contains(x, y));
 
     let background = match (hovered, node.style.hover_background) {
-        (true, Some(bg)) => Some(bg),
-        _ => node.style.background,
+        (true, Some(bg)) => Some(Paint::Solid(bg)),
+        _ => node.style.background.clone(),
     };
     if background.is_some() || node.style.border.is_some() {
         if let Some(stats) = stats {
             stats.rect_count += background.is_some() as u64 + node.style.border.is_some() as u64;
         }
         timed(stats.as_mut().map(|s| &mut s.rects), || {
-            if let Some(bg) = background {
-                canvas.fill_rounded_rect(
+            match &background {
+                Some(Paint::Solid(bg)) => canvas.fill_rounded_rect(
                     rect.x,
                     rect.y,
                     rect.w,
                     rect.h,
                     node.style.corner_radius,
-                    bg,
-                );
+                    *bg,
+                ),
+                Some(Paint::Gradient(gradient)) => canvas.fill_rounded_rect_gradient(
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                    node.style.corner_radius,
+                    gradient,
+                ),
+                None => {}
             }
             if let Some(border) = node.style.border {
                 match border.uniform() {
@@ -923,7 +932,7 @@ mod tests {
             children: vec![Desc {
                 style: Style {
                     width: Dimension::Px(300.0),
-                    background: Some([20, 20, 20, 255]),
+                    background: Some(Paint::Solid([20, 20, 20, 255])),
                     ..Style::default()
                 },
                 text: Some("hello breakdown".into()),

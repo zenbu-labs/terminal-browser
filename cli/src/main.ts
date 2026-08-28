@@ -210,15 +210,14 @@ function nextReply(socket: net.Socket, onLine: (reply: DaemonReply) => void): vo
 
 
 async function openSession(argv: string[], tty: string): Promise<{ socket: net.Socket; reply: DaemonReply }> {
-  const request = `${JSON.stringify({
+  const payload = {
     cmd: "open",
     tty,
     argv,
     env: process.env,
     cwd: process.cwd(),
-    build: browserBuildStamp(),
-  })}\n`;
-  const ask = (socket: net.Socket) =>
+  };
+  const ask = (socket: net.Socket, build: string | null) =>
     new Promise<DaemonReply>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("daemon open timed out")), 20_000);
       nextReply(socket, (reply) => {
@@ -229,16 +228,20 @@ async function openSession(argv: string[], tty: string): Promise<{ socket: net.S
         clearTimeout(timer);
         reject(new Error("daemon closed the connection"));
       });
-      socket.write(request);
+      socket.write(`${JSON.stringify(build ? { ...payload, build } : payload)}\n`);
     });
   let socket = await daemonSocket();
-  let reply = await ask(socket);
+  let reply = await ask(socket, browserBuildStamp());
   if (reply.ok === false && reply.error === "stale") {
-    // the stale daemon steps aside when idle; give it a beat and respawn
     socket.destroy();
     await sleep(700);
     socket = await daemonSocket();
-    reply = await ask(socket);
+    reply = await ask(socket, browserBuildStamp());
+  }
+  if (reply.ok === false && reply.error === "stale") {
+    socket.destroy();
+    socket = await daemonSocket();
+    reply = await ask(socket, null);
   }
   return { socket, reply };
 }
@@ -748,8 +751,14 @@ async function main(): Promise<number> {
       tabId: takeTabFlag(own),
       targetId: takeFlag(own, "--target"),
       follow: takeBoolFlag(own, "--follow"),
+      done: false,
       passthrough,
     };
+    if (own[0] === "done") {
+      own.shift();
+      options.done = true;
+      if (passthrough.length > 0) fail("[PLACEHOLDER COPY]");
+    }
     if (own.length > 0) fail(`unexpected ${own[0]} — put agent-browser arguments after --`);
     return actionCommand((await currentTerminal()).terminal, options);
   }

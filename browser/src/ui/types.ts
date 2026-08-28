@@ -21,6 +21,7 @@ export interface TabRow {
   favicon: string | null;
   active: boolean;
   app: boolean;
+  agentControlled: boolean;
 }
 
 export interface PopupView {

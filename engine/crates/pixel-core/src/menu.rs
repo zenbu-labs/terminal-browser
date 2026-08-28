@@ -279,7 +279,7 @@ pub fn context_menu(
                         style: Style {
                             height: Dimension::Px(1.0),
                             margin: Edges::symmetric(0.0, separator_margin),
-                            background: Some(style.border),
+                            background: Some(crate::style::Paint::Solid(style.border)),
                             ..Style::default()
                         },
                         ..Desc::default()
@@ -335,7 +335,7 @@ pub fn context_menu(
             inset: Inset::top_left(x, y),
             flex_direction: FlexDirection::Column,
             padding: Edges::all(pad),
-            background: Some(style.background),
+            background: Some(crate::style::Paint::Solid(style.background)),
             corner_radius: [px * 0.5; 4],
             border: Some(Border::hairline(style.border)),
             ..Style::default()

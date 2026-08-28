@@ -38,6 +38,8 @@ export interface ControlHost {
   openTab(url?: string, cwd?: string): number;
   activateTab(id: number): boolean;
   closeTab(id: number): boolean;
+  agentTouch(id: number): boolean;
+  agentRelease(): void;
   tabs(): unknown;
   targets(): Promise<unknown>;
   viewport(): { width: number; height: number } | null;
@@ -185,6 +187,15 @@ export class Registry {
       case "close-tab": {
         if (request.tab === undefined) throw new Error("close-tab needs a tab id");
         if (!this.host.closeTab(request.tab)) throw new Error(`no tab ${request.tab}`);
+        return { ...this.record(), tabs: await this.host.targets() };
+      }
+      case "agent-touch": {
+        if (request.tab === undefined) throw new Error("agent-touch needs a tab id");
+        if (!this.host.agentTouch(request.tab)) throw new Error(`no tab ${request.tab}`);
+        return this.record();
+      }
+      case "agent-release": {
+        this.host.agentRelease();
         return { ...this.record(), tabs: await this.host.targets() };
       }
       default:

@@ -444,6 +444,8 @@ class Session {
         this.tabs.close(id);
         return true;
       },
+      agentTouch: (id) => this.tabs.touchAgentControl(id),
+      agentRelease: () => this.tabs.releaseAgentControl(),
       viewport: () =>
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),

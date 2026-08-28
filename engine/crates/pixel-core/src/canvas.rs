@@ -608,6 +608,50 @@ impl Canvas {
         }
     }
 
+    pub fn fill_rounded_rect_gradient(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: [f32; 4],
+        gradient: &crate::style::LinearGradient,
+    ) {
+        if w <= 0.0 || h <= 0.0 || gradient.stops.is_empty() {
+            return;
+        }
+        if self.clipped_out(x, y, w, h) || self.occluded(x, y, w, h) {
+            return;
+        }
+        let point = |(fx, fy): (f32, f32)| tiny_skia::Point::from_xy(x + fx * w, y + fy * h);
+        let stops = gradient
+            .stops
+            .iter()
+            .map(|&(at, c)| {
+                tiny_skia::GradientStop::new(
+                    at.clamp(0.0, 1.0),
+                    tiny_skia::Color::from_rgba8(c[0], c[1], c[2], c[3]),
+                )
+            })
+            .collect();
+        let Some(shader) = tiny_skia::LinearGradient::new(
+            point(gradient.from),
+            point(gradient.to),
+            stops,
+            tiny_skia::SpreadMode::Pad,
+            tiny_skia::Transform::identity(),
+        ) else {
+            return;
+        };
+        let Some(path) = rounded_rect_path(x, y, w, h, radius) else {
+            return;
+        };
+        let mut paint = tiny_skia::Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        self.paint_path_with(&path, paint, None);
+    }
+
     fn blend_fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
         if w <= 0.0 || h <= 0.0 {
             return;
@@ -918,6 +962,15 @@ impl Canvas {
         color: [u8; 4],
         stroke: Option<tiny_skia::Stroke>,
     ) {
+        self.paint_path_with(path, solid_paint(color), stroke);
+    }
+
+    fn paint_path_with(
+        &mut self,
+        path: &tiny_skia::Path,
+        paint: tiny_skia::Paint<'static>,
+        stroke: Option<tiny_skia::Stroke>,
+    ) {
         let (cx1, cy1, cx2, cy2) = self.clip_bounds();
         if cx1 == cx2 || cy1 == cy2 {
             return;
@@ -940,7 +993,7 @@ impl Canvas {
                 && bounds.bottom() + pad <= cy2 as f32);
         if !inside {
             tally(|s| &s.paths_clipped);
-            self.paint_path_clipped(path, color, stroke, (cx1, cy1, cx2, cy2), pad);
+            self.paint_path_clipped(path, paint, stroke, (cx1, cy1, cx2, cy2), pad);
             return;
         }
         let Some(mut pixmap) =
@@ -948,7 +1001,6 @@ impl Canvas {
         else {
             return;
         };
-        let paint = solid_paint(color);
         match stroke {
             None => pixmap.fill_path(
                 path,
@@ -970,7 +1022,7 @@ impl Canvas {
     fn paint_path_clipped(
         &mut self,
         path: &tiny_skia::Path,
-        color: [u8; 4],
+        paint: tiny_skia::Paint<'static>,
         stroke: Option<tiny_skia::Stroke>,
         clip: (u32, u32, u32, u32),
         pad: f32,
@@ -989,7 +1041,6 @@ impl Canvas {
         scratch.clear();
         scratch.resize(w as usize * h as usize * 4, 0);
         if let Some(mut pixmap) = tiny_skia::PixmapMut::from_bytes(&mut scratch, w, h) {
-            let paint = solid_paint(color);
             let shift = tiny_skia::Transform::from_translate(-(x1 as f32), -(y1 as f32));
             match stroke {
                 None => pixmap.fill_path(path, &paint, tiny_skia::FillRule::Winding, shift, None),
@@ -1314,5 +1365,24 @@ mod tests {
         let mut canvas = Canvas::new(2, 2);
         canvas.blend_mask(-1, -1, 3, 3, &[255; 9], [10, 20, 30, 255], 0, 0.0);
         assert_eq!(&canvas.pixels[0..4], &[10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn gradient_fill_fades_along_its_axis_and_respects_the_silhouette() {
+        let mut canvas = Canvas::new(100, 100);
+        canvas.fill([255, 255, 255, 255]);
+        let gradient = crate::style::LinearGradient {
+            from: (0.0, 0.0),
+            to: (1.0, 0.0),
+            stops: vec![(0.0, [93, 156, 255, 200]), (1.0, [93, 156, 255, 0])],
+        };
+        canvas.fill_rounded_rect_gradient(10.0, 10.0, 60.0, 60.0, [12.0; 4], &gradient);
+        // over white, the red channel dips where the blue lands
+        let red = |x: u32, y: u32| canvas.pixels[((y * 100 + x) * 4) as usize];
+        assert!(red(11, 40) < 200, "start edge barely tinted: {}", red(11, 40));
+        assert!(red(11, 40) < red(30, 40), "{} !< {}", red(11, 40), red(30, 40));
+        assert!(red(30, 40) < red(60, 40), "{} !< {}", red(30, 40), red(60, 40));
+        assert_eq!(red(80, 40), 255, "painted outside the rect");
+        assert_eq!(red(11, 11), 255, "painted outside the rounded corner");
     }
 }
