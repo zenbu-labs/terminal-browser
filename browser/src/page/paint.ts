@@ -76,9 +76,14 @@ function presentShmFrame(
     if (info.pixelFormat !== "bgra") return false;
     if (info.contentRect.x !== 0 || info.contentRect.y !== 0) return false;
     const update = info.metadata.captureUpdateRect;
-    if (update && update.width <= 0 && update.height <= 0 && !wholeSurface) return false;
     const damage =
-      wholeSurface || dirtyRect.width <= 0 || dirtyRect.height <= 0 ? undefined : dirtyRect;
+      wholeSurface
+        ? undefined
+        : update && update.width > 0 && update.height > 0
+          ? update
+          : dirtyRect.width > 0 && dirtyRect.height > 0
+            ? dirtyRect
+            : undefined;
     try {
       surface.present({
         shm: {
