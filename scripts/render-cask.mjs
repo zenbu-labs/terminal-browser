@@ -43,11 +43,10 @@ process.stdout.write(`cask "terminal-browser" do
          arm64_linux:  "${sha("linux-arm64")}",
          x86_64_linux: "${sha("linux-x64")}"
 
-  url "https://terminal-browser.sh/install/dl/stable/v#{version}/terminal-browser-#{os}-#{arch}.tar.gz",
-      verified: "terminal-browser.sh/install/dl/"
+  url "https://terminal-browser.sh/install/dl/stable/v#{version}/terminal-browser-#{os}-#{arch}.tar.gz"
   name "terminal-browser"
-  desc "A browser inside your terminal"
-  homepage "https://github.com/zenbu-labs/terminal-browser"
+  desc "Terminal-based web browser"
+  homepage "https://terminal-browser.sh"
 
   livecheck do
     url "https://terminal-browser.sh/install/latest.json"
@@ -57,8 +56,6 @@ process.stdout.write(`cask "terminal-browser" do
   end
 
   binary "terminal-browser/bin/terminal-browser"
-
-  caveats "run terminal-browser setup to configure agent skills"
 
   zap trash: [
     "~/.agents/skills/terminal-browser",
