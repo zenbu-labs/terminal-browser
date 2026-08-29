@@ -49,6 +49,7 @@ pub struct Compositor {
     pub relayout: bool,
     panes: [usize; 2],
     divider_hover: bool,
+    last_divider: Option<(u32, bool)>,
 }
 
 impl Compositor {
@@ -63,6 +64,7 @@ impl Compositor {
             relayout: true,
             panes: [0, 1],
             divider_hover: false,
+            last_divider: None,
         }
     }
 
@@ -175,12 +177,25 @@ impl Compositor {
         self.apply_layout(false)
     }
 
+    fn divider_state(&self) -> Option<(u32, bool)> {
+        self.divider_x()
+            .map(|x| (x, self.divider_hover || self.divider_drag))
+    }
+
+    pub(crate) fn compositor_changed(&self) -> bool {
+        self.last_divider != self.divider_state()
+    }
+
     pub(crate) fn compose(&mut self, painted: &[(usize, Rect)], whole_frame: bool) {
         let resized = (self.frame.width, self.frame.height) != self.window;
         if resized {
             self.frame = Canvas::new(self.window.0, self.window.1);
         }
-        let everything = resized || whole_frame || std::mem::take(&mut self.relayout);
+        let divider = self.divider_state();
+        let everything = resized
+            || whole_frame
+            || self.last_divider != divider
+            || std::mem::take(&mut self.relayout);
         for view in self.active_views() {
             let size = self.views[view].size;
             let rect = if everything {
@@ -199,6 +214,7 @@ impl Compositor {
             blit(frame, canvas, origin, rect);
         }
         self.draw_divider();
+        self.last_divider = divider;
     }
 
     fn draw_divider(&mut self) {
@@ -256,4 +272,24 @@ fn blit(dst: &mut Canvas, src: &Canvas, origin_x: u32, region: Rect) {
         },
         |(), ()| (),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn divider_state_change_requires_composition() {
+        let mut comp = Compositor::new((400, 20));
+        comp.set_split(Some(0.5));
+        comp.apply_layout(false);
+        comp.compose(&[], true);
+        comp.dirty = false;
+
+        assert!(!comp.compositor_changed());
+        comp.divider_drag = true;
+        assert!(comp.compositor_changed());
+        comp.compose(&[], false);
+        assert!(!comp.compositor_changed());
+    }
 }
