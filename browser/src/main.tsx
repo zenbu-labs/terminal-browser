@@ -12,6 +12,9 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 
+if (process.platform === "linux" && process.env.TERMINAL_BROWSER_HEADLESS === "1") {
+  app.commandLine.appendSwitch("ozone-platform", "headless");
+}
 if (process.env.TERMINAL_BROWSER_DISABLE_GPU === "1") {
   app.commandLine.appendSwitch("disable-gpu");
 }
