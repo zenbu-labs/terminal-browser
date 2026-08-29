@@ -44,7 +44,7 @@ import type {
   PageMenuView,
   PopupView,
 } from "../ui/types";
-import { normalizeUrl, searchOrUrl } from "../url";
+import { displayUrl, normalizeUrl, searchOrUrl } from "../url";
 import { fuzzyScore } from "./fuzzy";
 import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
@@ -198,7 +198,6 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
 class Session {
   private readonly ctx: SessionContext;
   private readonly terminal: Terminal | null;
-  private readonly marker: string;
   private ownPane: Pane | null = null;
   private finding: Promise<Pane | null> | null = null;
   private readonly argv: string[];
@@ -271,6 +270,7 @@ class Session {
     selectionText: string;
   } | null = null;
   private sentCursor: string | null = null;
+  private sentTerminalTitle: string | null = null;
 
   private findOpen = false;
   private urlEditOpen = false;
@@ -291,7 +291,6 @@ class Session {
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
     this.terminal = detect(ctx.env);
-    this.marker = `terminal-browser:${ctx.key}`;
     this.argv = ctx.argv;
     this.hideToolbar = this.argv.includes("--no-toolbar");
     this.noFrame = this.argv.includes("--no-frame");
@@ -345,6 +344,7 @@ class Session {
           this.syncDevtoolsLayout();
           this.syncCursor();
           this.registry?.update();
+          this.emitTerminalTitle(this.tabs.activeState ?? this.fallbackState);
         },
         onDevtoolsChanged: () => this.syncDevtoolsLayout(),
         onDevtoolsAction: (action) => {
@@ -365,6 +365,7 @@ class Session {
         onActiveState: (state, urlChanged) => {
           if (urlChanged) rememberUrl(state.url);
           this.registry?.update();
+          this.emitTerminalTitle(state);
         },
         onCursorChanged: () => this.syncCursor(),
         requestRender: () => this.render(),
@@ -379,7 +380,6 @@ class Session {
     if (process.platform === "darwin") app.dock?.hide();
     await this.loadDevtoolsSettings();
     if (this.shuttingDown) throw new Error("session closed during startup");
-    if (!this.ctx.tty) process.stdout.write(`\x1b]2;${this.marker}\x07`);
     this.displayScale = this.hostDisplayScale();
     this.root = createRoot({
       tty: this.ctx.tty,
@@ -477,6 +477,14 @@ class Session {
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
     this.render();
+  }
+
+  private emitTerminalTitle(state: BrowserState) {
+    if (this.shuttingDown) return;
+    const title = state.title || displayUrl(state.url);
+    if (!title || title === this.sentTerminalTitle) return;
+    this.root?.setTerminalTitle(title);
+    this.sentTerminalTitle = title;
   }
 
   private findOwnPane(): Promise<Pane | null> {

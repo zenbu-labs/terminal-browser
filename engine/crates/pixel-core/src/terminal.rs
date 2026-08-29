@@ -333,6 +333,30 @@ impl SessionEnv {
     }
 }
 
+const TERMINAL_TITLE_MAX_BYTES: usize = 1024;
+
+fn terminal_title_sequence(title: &str) -> Vec<u8> {
+    let mut sequence = Vec::with_capacity(title.len().min(TERMINAL_TITLE_MAX_BYTES) + 6);
+    sequence.extend_from_slice(b"\x1b]2;");
+    let mut payload_bytes = 0;
+    for character in title.chars() {
+        let safe = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        let mut encoded = [0; 4];
+        let encoded = safe.encode_utf8(&mut encoded).as_bytes();
+        if payload_bytes + encoded.len() > TERMINAL_TITLE_MAX_BYTES {
+            break;
+        }
+        sequence.extend_from_slice(encoded);
+        payload_bytes += encoded.len();
+    }
+    sequence.extend_from_slice(b"\x1b\\");
+    sequence
+}
+
 impl Terminal {
     pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
         Self::with_handle(
@@ -1029,6 +1053,11 @@ impl Terminal {
         }
         self.io.out()
             .write_all(format!("\x1b]22;{shape}\x1b\\").as_bytes())?;
+        self.io.out().flush()
+    }
+
+    pub fn set_terminal_title(&mut self, title: &str) -> io::Result<()> {
+        self.io.out().write_all(&terminal_title_sequence(title))?;
         self.io.out().flush()
     }
 
@@ -1911,6 +1940,20 @@ fn parse_cell_size_report(buf: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_title_replaces_controls_without_splitting_utf8() {
+        let title = format!("A\u{1b}\u{7f}\u{85}{}é", "x".repeat(1019));
+        let sequence = terminal_title_sequence(&title);
+        assert!(sequence.starts_with(b"\x1b]2;"));
+        assert!(sequence.ends_with(b"\x1b\\"));
+        let payload = &sequence[4..sequence.len() - 2];
+        assert_eq!(payload.len(), 1023);
+        assert_eq!(
+            std::str::from_utf8(payload).unwrap(),
+            format!("A   {}", "x".repeat(1019))
+        );
+    }
 
     #[test]
     fn parses_probe_replies() {

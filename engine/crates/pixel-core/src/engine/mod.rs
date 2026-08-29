@@ -917,6 +917,12 @@ impl Engine {
         Ok(())
     }
 
+    pub fn set_terminal_title(&mut self, title: &str) {
+        if let Err(error) = self.term.set_terminal_title(title) {
+            logging::warn("engine", format!("terminal title write failed: {error}"));
+        }
+    }
+
     pub fn set_clipboard(&mut self, text: &str) {
         if let Err(error) = self.term.set_clipboard(text) {
             logging::warn("engine", format!("clipboard write failed: {error}"));
