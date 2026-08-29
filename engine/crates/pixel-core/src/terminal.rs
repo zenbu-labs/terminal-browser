@@ -1181,7 +1181,8 @@ impl FrameFile {
     }
 
     pub(crate) fn write(&mut self, data: &[u8]) {
-        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.map.as_ptr(), self.len) };
+        assert_eq!(data.len(), self.len);
+        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.map.as_ptr(), data.len()) };
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -1944,6 +1945,16 @@ mod tests {
 
         drop(file);
         assert!(!path.exists(), "the frame file outlived the terminal");
+    }
+
+    #[test]
+    #[should_panic]
+    fn frame_file_rejects_oversized_writes() {
+        let path =
+            std::env::temp_dir().join(format!("tb-frame-length-test-{}.rgba", std::process::id()));
+        let mut file = FrameFile::create(path, 8).unwrap();
+
+        file.write(&[0; 9]);
     }
 
     #[test]
