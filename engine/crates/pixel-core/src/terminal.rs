@@ -832,7 +832,13 @@ impl Terminal {
         }
     }
 
-    fn mouse_position_px(&self, x: u32, y: u32) -> (u32, u32) {
+    fn mouse_position_px(&mut self, x: u32, y: u32) -> (u32, u32) {
+        if !self.mouse_pixels
+            && let Ok(ws) = self.size()
+            && (x > ws.cols || y > ws.rows)
+        {
+            self.mouse_pixels = true;
+        }
         if self.mouse_pixels {
             (x.saturating_sub(1), y.saturating_sub(1))
         } else {
