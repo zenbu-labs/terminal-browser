@@ -66,6 +66,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   const server = net.createServer((connection) => {
     let key: string | null = null;
     let session: SessionHandle | null = null;
+    let openReplied = false;
     const reply = (value: unknown) => {
       try {
         connection.write(`${JSON.stringify(value)}\n`);
@@ -111,8 +112,10 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
               cdpPort,
               onClose: (code) => {
                 sessions.delete(sessionKey);
-                reply({ event: "closed", code });
-                connection.end();
+                if (openReplied) {
+                  reply({ event: "closed", code });
+                  connection.end();
+                }
                 scheduleIdleExit();
               },
             });
@@ -122,8 +125,24 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
             scheduleIdleExit();
             return;
           }
-          sessions.set(sessionKey, session);
-          reply({ ok: true, session: sessionKey, pid: process.pid });
+          const opening = session;
+          sessions.set(sessionKey, opening);
+          void opening.ready.then(
+            () => {
+              if (session !== opening || !sessions.has(sessionKey)) return;
+              openReplied = true;
+              reply({ ok: true, session: sessionKey, pid: process.pid });
+            },
+            (error) => {
+              sessions.delete(sessionKey);
+              reply({
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              connection.end();
+              scheduleIdleExit();
+            },
+          );
         } else if (message.cmd === "resize") {
           session?.nudgeResize();
         } else if (message.cmd === "close") {

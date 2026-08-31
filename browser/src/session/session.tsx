@@ -44,7 +44,7 @@ import type {
   PageMenuView,
   PopupView,
 } from "../ui/types";
-import { normalizeUrl, searchOrUrl } from "../url";
+import { displayUrl, normalizeUrl, searchOrUrl } from "../url";
 import { fuzzyScore } from "./fuzzy";
 import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
@@ -72,11 +72,29 @@ export interface SessionHandle {
 }
 
 export function createSession(ctx: SessionContext): SessionHandle {
-  const session = new Session(ctx);
-  const ready = session.start().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-    session.shutdown(1);
+  let startupSettled = false;
+  let rejectClosed: (error: Error) => void = () => {};
+  const closed = new Promise<never>((_, reject) => {
+    rejectClosed = reject;
   });
+  const session = new Session({
+    ...ctx,
+    onClose: (code) => {
+      if (!startupSettled) {
+        rejectClosed(new Error(`session closed with code ${code} before startup completed`));
+      }
+      ctx.onClose(code);
+    },
+  });
+  const ready = Promise.race([session.start(), closed])
+    .then(() => {
+      startupSettled = true;
+    })
+    .catch((error) => {
+      process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+      session.shutdown(1);
+      throw error;
+    });
   return {
     ready,
     close: (code = 0) => session.shutdown(code),
@@ -180,7 +198,6 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
 class Session {
   private readonly ctx: SessionContext;
   private readonly terminal: Terminal | null;
-  private readonly marker: string;
   private ownPane: Pane | null = null;
   private finding: Promise<Pane | null> | null = null;
   private readonly argv: string[];
@@ -253,6 +270,7 @@ class Session {
     selectionText: string;
   } | null = null;
   private sentCursor: string | null = null;
+  private sentTerminalTitle: string | null = null;
 
   private findOpen = false;
   private urlEditOpen = false;
@@ -273,7 +291,6 @@ class Session {
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
     this.terminal = detect(ctx.env);
-    this.marker = `terminal-browser:${ctx.key}`;
     this.argv = ctx.argv;
     this.hideToolbar = this.argv.includes("--no-toolbar");
     this.noFrame = this.argv.includes("--no-frame");
@@ -327,6 +344,7 @@ class Session {
           this.syncDevtoolsLayout();
           this.syncCursor();
           this.registry?.update();
+          this.emitTerminalTitle(this.tabs.activeState ?? this.fallbackState);
         },
         onDevtoolsChanged: () => this.syncDevtoolsLayout(),
         onDevtoolsAction: (action) => {
@@ -347,6 +365,7 @@ class Session {
         onActiveState: (state, urlChanged) => {
           if (urlChanged) rememberUrl(state.url);
           this.registry?.update();
+          this.emitTerminalTitle(state);
         },
         onCursorChanged: () => this.syncCursor(),
         requestRender: () => this.render(),
@@ -357,9 +376,10 @@ class Session {
 
   async start(): Promise<void> {
     if (this.socksPort) await routeThroughSocksProxy(this.partition, this.socksPort);
+    if (this.shuttingDown) throw new Error("session closed during startup");
     if (process.platform === "darwin") app.dock?.hide();
     await this.loadDevtoolsSettings();
-    if (!this.ctx.tty) process.stdout.write(`\x1b]2;${this.marker}\x07`);
+    if (this.shuttingDown) throw new Error("session closed during startup");
     this.displayScale = this.hostDisplayScale();
     this.root = createRoot({
       tty: this.ctx.tty,
@@ -400,8 +420,13 @@ class Session {
         this.shutdown(error ? 1 : 0);
       },
     });
+    if (this.shuttingDown) {
+      this.root.stop();
+      throw new Error("session closed during startup");
+    }
     initOffscreenMode(this.root.sharedTextures);
     this.fontId = await this.root.registerFont(bundledFontPath());
+    if (this.shuttingDown) throw new Error("session closed during startup");
     this.applyKeyBindings(this.root.info.kittyKeyboard);
     this.popupSurface = this.root.createSurface();
     this.devtoolsSurface = this.root.createSurface();
@@ -454,6 +479,14 @@ class Session {
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
     this.render();
+  }
+
+  private emitTerminalTitle(state: BrowserState) {
+    if (this.shuttingDown) return;
+    const title = state.title || displayUrl(state.url);
+    if (!title || title === this.sentTerminalTitle) return;
+    this.root?.setTerminalTitle(title);
+    this.sentTerminalTitle = title;
   }
 
   private findOwnPane(): Promise<Pane | null> {

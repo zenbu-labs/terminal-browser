@@ -333,6 +333,30 @@ impl SessionEnv {
     }
 }
 
+const TERMINAL_TITLE_MAX_BYTES: usize = 1024;
+
+fn terminal_title_sequence(title: &str) -> Vec<u8> {
+    let mut sequence = Vec::with_capacity(title.len().min(TERMINAL_TITLE_MAX_BYTES) + 6);
+    sequence.extend_from_slice(b"\x1b]2;");
+    let mut payload_bytes = 0;
+    for character in title.chars() {
+        let safe = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        let mut encoded = [0; 4];
+        let encoded = safe.encode_utf8(&mut encoded).as_bytes();
+        if payload_bytes + encoded.len() > TERMINAL_TITLE_MAX_BYTES {
+            break;
+        }
+        sequence.extend_from_slice(encoded);
+        payload_bytes += encoded.len();
+    }
+    sequence.extend_from_slice(b"\x1b\\");
+    sequence
+}
+
 impl Terminal {
     pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
         Self::with_handle(
@@ -1032,6 +1056,11 @@ impl Terminal {
         self.io.out().flush()
     }
 
+    pub fn set_terminal_title(&mut self, title: &str) -> io::Result<()> {
+        self.io.out().write_all(&terminal_title_sequence(title))?;
+        self.io.out().flush()
+    }
+
     pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
         use base64::Engine as _;
         let payload = base64::engine::general_purpose::STANDARD.encode(text);
@@ -1181,7 +1210,8 @@ impl FrameFile {
     }
 
     pub(crate) fn write(&mut self, data: &[u8]) {
-        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.map.as_ptr(), self.len) };
+        assert_eq!(data.len(), self.len);
+        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.map.as_ptr(), data.len()) };
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -1912,6 +1942,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn terminal_title_replaces_controls_without_splitting_utf8() {
+        let title = format!("A\u{1b}\u{7f}\u{85}{}é", "x".repeat(1019));
+        let sequence = terminal_title_sequence(&title);
+        assert!(sequence.starts_with(b"\x1b]2;"));
+        assert!(sequence.ends_with(b"\x1b\\"));
+        let payload = &sequence[4..sequence.len() - 2];
+        assert_eq!(payload.len(), 1023);
+        assert_eq!(
+            std::str::from_utf8(payload).unwrap(),
+            format!("A   {}", "x".repeat(1019))
+        );
+    }
+
+    #[test]
     fn parses_probe_replies() {
         let parse = |buf: &[u8]| parse_probe_reply(buf, b"Gi=299;");
         assert_eq!(parse(b"\x1b_Gi=299;OK\x1b\\"), Some(true));
@@ -1944,6 +1988,16 @@ mod tests {
 
         drop(file);
         assert!(!path.exists(), "the frame file outlived the terminal");
+    }
+
+    #[test]
+    #[should_panic]
+    fn frame_file_rejects_oversized_writes() {
+        let path =
+            std::env::temp_dir().join(format!("tb-frame-length-test-{}.rgba", std::process::id()));
+        let mut file = FrameFile::create(path, 8).unwrap();
+
+        file.write(&[0; 9]);
     }
 
     #[test]
