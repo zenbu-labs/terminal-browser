@@ -17,6 +17,15 @@ importers:
 
   browser:
     dependencies:
+      '@ghostery/adblocker':
+        specifier: ^2.18.2
+        version: 2.18.2
+      '@ghostery/adblocker-electron':
+        specifier: ^2.18.2
+        version: 2.18.2(electron@43.3.0)
+      '@ghostery/adblocker-electron-preload':
+        specifier: ^2.18.2
+        version: 2.18.2(electron@43.3.0)
       pixel-react:
         specifier: workspace:*
         version: link:../engine/packages/pixel-react
@@ -29,6 +38,9 @@ importers:
       react:
         specifier: ^18.3.1
         version: 18.3.1
+      tldts-experimental:
+        specifier: ^7.4.9
+        version: 7.4.10
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -679,6 +691,28 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@ghostery/adblocker-content@2.18.2':
+    resolution: {integrity: sha512-TOe/b4KOBFEc9OjLG+wvgamGcSTIPSDBAL5YSa8lzjBsoSl8IDnfOjeJDldlLacsC/JEUMLkZIDDNknEolJVqg==}
+
+  '@ghostery/adblocker-electron-preload@2.18.2':
+    resolution: {integrity: sha512-l941hNABXsUMx1oqVSHjRMQXWFCmlC/DF8rHBBOH+A0uxLjL6r62Fl6KsL7F4hxlg3dyWrDPEIcKzaxWqRdfOg==}
+    peerDependencies:
+      electron: '>11'
+
+  '@ghostery/adblocker-electron@2.18.2':
+    resolution: {integrity: sha512-lpPh7EmFLDIW+OyUKaYCUUUHwVfVXpwlwfxzo6Ilc+oH6N+rCTViT08olX4jXsfxezZ6zfyCG5SL9iLBU1wrng==}
+    peerDependencies:
+      electron: '>11'
+
+  '@ghostery/adblocker-extended-selectors@2.18.2':
+    resolution: {integrity: sha512-doKNShBk3+czQL08UkrysHkCPeG/kNPlXvz3DH7SXxD9Y78ovWkEAhjeR+upoan3fomJJuK3dD+IrlofnjckYw==}
+
+  '@ghostery/adblocker@2.18.2':
+    resolution: {integrity: sha512-x6zEkf1dHSN0t4ExLmuN6nIgH0oAi6laoKe5yGsiIB4jkEvutea1PJgxgRUIjWfNbDRmkf4GjUtuqQFZgvQG1w==}
+
+  '@ghostery/url-parser@1.3.1':
+    resolution: {integrity: sha512-QKqGi+7aDQ4RcyHyCwgEk6B9vWnsBP4Q7htaN0zPJV3ATqTKEQDtSTb9c/AN586oJUDs24YXKcwFYwNweY/YjQ==}
+
   '@img/sharp-darwin-arm64@0.33.5':
     resolution: {integrity: sha512-UT4p+iz/2H4twwAoLCqfA9UH5pI6DggwKEGuaPy7nCVQ8ZsiY5PIcrRvD1DzuY3qYL07NtIQcWnBSY/heikIFQ==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
@@ -761,6 +795,24 @@ packages:
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     cpu: [x64]
     os: [win32]
+
+  '@remusao/guess-url-type@2.1.0':
+    resolution: {integrity: sha512-zI3dlTUxpjvx2GCxp9nLOSK5yEIqDCpxlAVGwb2Y49RKkS72oeNaxxo+VWS5+XQ5+Mf8Zfp9ZXIlk+G5eoEN8A==}
+
+  '@remusao/small@2.1.0':
+    resolution: {integrity: sha512-Y1kyjZp7JU7dXdyOdxHVNfoTr1XLZJTyQP36/esZUU/WRWq9XY0PV2HsE3CsIHuaTf4pvgWv2pvzvnZ//UHIJQ==}
+
+  '@remusao/smaz-compress@2.2.0':
+    resolution: {integrity: sha512-TXpTPgILRUYOt2rEe0+9PC12xULPvBqeMpmipzB9A7oM4fa9Ztvy9lLYzPTd7tiQEeoNa1pmxihpKfJtsxnM/w==}
+
+  '@remusao/smaz-decompress@2.2.0':
+    resolution: {integrity: sha512-ERAPwxPaA0/yg4hkNU7T2S+lnp9jj1sApcQMtOyROvOQyo+Zuh6Hn/oRcXr8mmjlYzyRaC7E6r3mT1nrdHR6pg==}
+
+  '@remusao/smaz@2.2.0':
+    resolution: {integrity: sha512-eSd3Qs0ELP/e7tU1SI5RWXcCn9KjDgvBY+KtWbL4i2QvvHhJOfdIt4v0AA3S5BbLWAr5dCEC7C4LUfogDm6q/Q==}
+
+  '@remusao/trie@2.1.0':
+    resolution: {integrity: sha512-Er3Q8q0/2OcCJPQYJOPLmCuqO0wu7cav3SPtpjlxSbjFi1x+A1pZkkLD6c9q2rGEkGW/tkrRzfrhNMt8VQjzXg==}
 
   '@types/better-sqlite3@7.6.13':
     resolution: {integrity: sha512-NMv9ASNARoKksWtsq/SHakpYAYnhBrQgGD8zkLYk/jaK8jUGn08CfEdTRgYhMypUQAfzSP8W6gNLe0q19/t4VA==}
@@ -1118,6 +1170,12 @@ packages:
     resolution: {integrity: sha512-ujeqbceABgwMZxEJnk2HDY2DlnUZ+9oEcb1KzTVfYHio0UE6dG71n60d8D2I4qNvleWrrXpmjpt7vZeF1LnMZQ==}
     engines: {node: '>=6'}
 
+  tldts-core@7.4.10:
+    resolution: {integrity: sha512-KnQjp53ZekKgm/r3l+u8kJGGzYgrWdP8+Mql7a4vijh2WE0IrZWspQj/TpTxDho/YxO+AnOZnIjQcCD+q6iJsw==}
+
+  tldts-experimental@7.4.10:
+    resolution: {integrity: sha512-l+FUGTqw3cYLnM6uL45IhdIG1ue9N7ZnMe9ZFC0S3/ROTL6xkJrUFQvsjfqSD9YzywDvgWj9uRZTXib3v3bnHw==}
+
   tsx@4.23.0:
     resolution: {integrity: sha512-eUdUIaCr963q2h5u3+QwvYp0+eqPvn+egeqZUm0hwERCqqx1E3kK5ehbGCvqSE5MQAULr67ww0cA3jKc3YkM1w==}
     engines: {node: '>=18.0.0'}
@@ -1433,6 +1491,38 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
+  '@ghostery/adblocker-content@2.18.2':
+    dependencies:
+      '@ghostery/adblocker-extended-selectors': 2.18.2
+
+  '@ghostery/adblocker-electron-preload@2.18.2(electron@43.3.0)':
+    dependencies:
+      '@ghostery/adblocker-content': 2.18.2
+      electron: 43.3.0
+
+  '@ghostery/adblocker-electron@2.18.2(electron@43.3.0)':
+    dependencies:
+      '@ghostery/adblocker': 2.18.2
+      '@ghostery/adblocker-electron-preload': 2.18.2(electron@43.3.0)
+      electron: 43.3.0
+      tldts-experimental: 7.4.10
+
+  '@ghostery/adblocker-extended-selectors@2.18.2': {}
+
+  '@ghostery/adblocker@2.18.2':
+    dependencies:
+      '@ghostery/adblocker-content': 2.18.2
+      '@ghostery/adblocker-extended-selectors': 2.18.2
+      '@ghostery/url-parser': 1.3.1
+      '@remusao/guess-url-type': 2.1.0
+      '@remusao/small': 2.1.0
+      '@remusao/smaz': 2.2.0
+      tldts-experimental: 7.4.10
+
+  '@ghostery/url-parser@1.3.1':
+    dependencies:
+      tldts-experimental: 7.4.10
+
   '@img/sharp-darwin-arm64@0.33.5':
     optionalDependencies:
       '@img/sharp-libvips-darwin-arm64': 1.0.4
@@ -1491,6 +1581,23 @@ snapshots:
 
   '@img/sharp-win32-x64@0.33.5':
     optional: true
+
+  '@remusao/guess-url-type@2.1.0': {}
+
+  '@remusao/small@2.1.0': {}
+
+  '@remusao/smaz-compress@2.2.0':
+    dependencies:
+      '@remusao/trie': 2.1.0
+
+  '@remusao/smaz-decompress@2.2.0': {}
+
+  '@remusao/smaz@2.2.0':
+    dependencies:
+      '@remusao/smaz-compress': 2.2.0
+      '@remusao/smaz-decompress': 2.2.0
+
+  '@remusao/trie@2.1.0': {}
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
@@ -1873,6 +1980,12 @@ snapshots:
       inherits: 2.0.4
       readable-stream: 3.6.2
     optional: true
+
+  tldts-core@7.4.10: {}
+
+  tldts-experimental@7.4.10:
+    dependencies:
+      tldts-core: 7.4.10
 
   tsx@4.23.0:
     dependencies:

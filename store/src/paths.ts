@@ -47,6 +47,7 @@ export const APP_DIR_NAME = `terminal-browser${INSTALL_ROOT.dev ? "-dev" : ""}-$
 export const DATA_DIR = path.join(DATA_HOME, APP_DIR_NAME);
 export const LOGS_DIR = path.join(STATE_HOME, APP_DIR_NAME, "logs");
 export const FAVICONS_DIR = path.join(CACHE_HOME, APP_DIR_NAME, "favicons");
+export const ADBLOCK_DIR = path.join(CACHE_HOME, APP_DIR_NAME, "adblock");
 export const INSTANCES_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "instances");
 export const AGENT_SOCKETS_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "agent-browser");
 export const DAEMON_SOCKET = path.join(RUNTIME_HOME, APP_DIR_NAME, "daemon.sock");

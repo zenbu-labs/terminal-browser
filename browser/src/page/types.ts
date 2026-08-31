@@ -9,6 +9,7 @@ export interface BrowserState {
   canGoForward: boolean;
   findMatches: { active: number; total: number } | null;
   zoom: number;
+  blocked: number;
 }
 
 export function initialBrowserState(url: string): BrowserState {
@@ -22,6 +23,7 @@ export function initialBrowserState(url: string): BrowserState {
     canGoForward: false,
     findMatches: null,
     zoom: 1,
+    blocked: 0,
   };
 }
 

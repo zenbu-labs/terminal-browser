@@ -32,6 +32,11 @@ export interface PopupView {
   height: number;
 }
 
+export interface AdblockView {
+  active: boolean;
+  blocked: number;
+}
+
 export interface DownloadView {
   name: string;
   percent: number | null;
@@ -86,6 +91,7 @@ export interface ChromeActions {
   devtoolsHover(hovering: boolean): void;
   devtoolsDividerDrag(event: DragEvent): void;
   devtoolsDividerHover(hovering: boolean): void;
+  adblockToggle(): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
   record: RecordActions;

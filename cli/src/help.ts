@@ -39,6 +39,7 @@ Options:
                         page instead.
   --allow-clipboard-read
                         Lets websites read from clipboard.
+  --no-adblock          Turn off ad and tracker blocking for this browser
   --no-toolbar          No toolbar or tab strip
   --no-shortcuts        No browser shortcuts
   --no-context-menu     No right-click menu
