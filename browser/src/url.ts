@@ -13,12 +13,28 @@ function localFile(input: string, cwd?: string): string | null {
   return fs.existsSync(absolute) ? absolute : null;
 }
 
+/** Hosts a dev server listens on, which a browser has to reach over http. */
+function servedLocally(host: string): boolean {
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "0.0.0.0" ||
+    host.endsWith(".localhost")
+  );
+}
+
+function barePort(input: string): string | null {
+  const port = Number(input);
+  return /^\d+$/.test(input) && port >= 1 && port <= 65535 ? input : null;
+}
+
 export function searchOrUrl(text: string, cwd?: string): string {
   const trimmed = text.trim();
   if (HAS_AUTHORITY.test(trimmed) || SCHEMES_WITHOUT_HOST.test(trimmed)) return trimmed;
   if (localFile(trimmed, cwd)) return trimmed;
   if (!trimmed.includes(" ") && trimmed.includes(".")) return trimmed;
   if (/^[\w-]+:\d+(\/.*)?$/.test(trimmed)) return trimmed;
+  if (servedLocally(trimmed.split(/[:/?#]/)[0].toLowerCase())) return trimmed;
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
@@ -32,9 +48,13 @@ export function normalizeUrl(value: string, cwd?: string): string {
   }
   const file = localFile(input, cwd);
   if (file) return pathToFileURL(file).toString();
+  // a bare port is a dev server; without this the url parser reads the digits
+  // as an ipv4 address, so `3000` would load https://0.0.11.184
+  const port = barePort(input);
+  if (port) return new URL(`http://localhost:${port}`).toString();
   if (/^[\w.-]+(?::\d+)?(?:\/.*)?$/.test(input)) {
     const host = input.split(/[:/]/)[0].toLowerCase();
-    const scheme = host === "localhost" || host === "127.0.0.1" ? "http" : "https";
+    const scheme = servedLocally(host) ? "http" : "https";
     return new URL(`${scheme}://${input}`).toString();
   }
   return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
