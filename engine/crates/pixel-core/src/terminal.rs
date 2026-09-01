@@ -358,7 +358,7 @@ impl Terminal {
 
         // would prefer if they weren't magic and linked to some known doc on the internet
         io.out().write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
+            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>5u",
         )?; // enable many reporting modes so we get info about mouse/keyboard
         io.out().flush()?;
 
@@ -426,7 +426,7 @@ impl Terminal {
     pub fn set_key_event_types(&mut self, enabled: bool) -> io::Result<()> {
         self.io.out().write_all(b"\x1b[<u")?;
         self.io.out()
-            .write_all(if enabled { b"\x1b[>27u" } else { b"\x1b[>1u" })?;
+            .write_all(if enabled { b"\x1b[>31u" } else { b"\x1b[>5u" })?;
         self.io.out().flush()
     }
 
@@ -1637,8 +1637,20 @@ fn parse_kitty_key(params: &[u8]) -> KeyEvent {
         key: key_from_codepoint(code),
         mods,
         kind,
-        text: associated_text(params),
+        text: associated_text(params).or_else(|| shifted_key_text(params, mods, kind)),
     }
+}
+
+/// On non-US layouts shift can produce a character the unshifted codepoint
+/// does not hint at (AZERTY shift+`:` types `/`). When the terminal reports
+/// the shifted key but no associated text, that shifted key is the text.
+fn shifted_key_text(params: &[u8], mods: Mods, kind: KeyKind) -> Option<String> {
+    if !mods.shift || mods.ctrl || mods.alt || mods.sup || kind == KeyKind::Release {
+        return None;
+    }
+    let shifted = char::from_u32(subparam(params, 0, 1)?)?;
+    (!shifted.is_control() && !('\u{e000}'..='\u{f8ff}').contains(&shifted))
+        .then(|| shifted.to_string())
 }
 
 fn key_from_codepoint(code: u32) -> Key {
@@ -2258,9 +2270,36 @@ mod tests {
         assert_eq!(
             parse_event(b"\x1b[99:67;5u"),
             Some((key_mods(Key::Char('c'), CTRL), 10)),
-            "sub-parameters (shifted key) are ignored"
+            "the shifted key is not text while ctrl is held"
         );
         assert_eq!(parse_event(b"\x1b[57428;1u"), Some((key(Key::Unknown), 10)));
+    }
+
+    #[test]
+    fn shifted_key_stands_in_for_missing_associated_text() {
+        let (event, _) = parse_event(b"\x1b[58:47;2u").unwrap();
+        assert!(
+            matches!(
+                &event,
+                RawEvent::Key(KeyEvent {
+                    key: Key::Char(':'),
+                    mods: SHIFT,
+                    text: Some(text),
+                    ..
+                }) if text == "/"
+            ),
+            "AZERTY shift+`:` types `/`: {event:?}"
+        );
+        let (event, _) = parse_event(b"\x1b[58:47;2;63u").unwrap();
+        assert!(
+            matches!(&event, RawEvent::Key(KeyEvent { text: Some(text), .. }) if text == "?"),
+            "associated text wins over the shifted key: {event:?}"
+        );
+        let (event, _) = parse_event(b"\x1b[58:47;2:3u").unwrap();
+        assert!(
+            matches!(&event, RawEvent::Key(KeyEvent { kind: KeyKind::Release, text: None, .. })),
+            "releases carry no text: {event:?}"
+        );
     }
 
     #[test]
