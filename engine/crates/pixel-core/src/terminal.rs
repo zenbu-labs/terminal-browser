@@ -1805,6 +1805,11 @@ fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<(MouseKind, MouseButton
     } else {
         MouseKind::Up
     };
+    // a mouse's side buttons arrive as 128 + button, and their low bits look
+    // exactly like a left or middle click
+    if b & 128 != 0 && kind != MouseKind::Move {
+        return None;
+    }
     Some((kind, button, mods, x, y))
 }
 
@@ -2039,6 +2044,21 @@ mod tests {
         );
         assert_eq!(parse_sgr_mouse(b"0;1;1", true), None);
         assert_eq!(parse_sgr_mouse(b"<0;0;1", true), None);
+        assert_eq!(
+            parse_sgr_mouse(b"<128;1;1", true),
+            None,
+            "the back side button is not a left click"
+        );
+        assert_eq!(
+            parse_sgr_mouse(b"<129;1;1", false),
+            None,
+            "the forward side button is not a middle click"
+        );
+        assert_eq!(
+            parse_sgr_mouse(b"<160;1;1", true).unwrap().0,
+            MouseKind::Move,
+            "motion still tracks while a side button is held"
+        );
     }
 
     #[test]
