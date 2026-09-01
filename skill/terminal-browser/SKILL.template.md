@@ -9,6 +9,10 @@ new pane beside the human, which is how you show a page next to the
 conversation. A path to a local html file works the same as a url, so writing a
 page and opening it is a way to show something you built.
 
+Pass `--partition=<name>` to give a browser its own storage profile — cookies
+and site data are kept on disk between runs, so a logged-in session survives
+restarts.
+
 `terminal-browser ls` shows the browsers and tabs in this terminal tab, with the
 tab ids the other commands take.
 
