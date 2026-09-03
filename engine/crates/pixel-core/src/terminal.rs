@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 use rustix::termios::{self, OptionalActions, Termios};
 
 use crate::canvas::Canvas;
+use crate::kitty::{Placement, TransmitOptions};
 use crate::wrapper::Wrapper;
-use crate::kitty::Placement;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -585,6 +585,7 @@ impl Terminal {
                 }
             }
         }
+        let acknowledged = self.herdr_target.is_some() && self.herdr.is_none();
         let shrank = self
             .last_frame_size
             .is_some_and(|(w, h)| canvas.width < w || canvas.height < h);
@@ -610,6 +611,11 @@ impl Terminal {
             frame.extend_from_slice(b"\x1b[H");
             Placement::Cursor
         };
+        let transmit = TransmitOptions {
+            placement,
+            wrapper: self.wrapper,
+            wait_for_response: acknowledged,
+        };
         /*
          we eventualy need to be more principled about
          being generic over graphcis protocols to support
@@ -630,8 +636,7 @@ impl Terminal {
                 canvas.height,
                 &name,
                 medium,
-                placement,
-                self.wrapper,
+                transmit,
             ));
         } else {
             frame.extend_from_slice(&crate::kitty::kitty_transmit_placed(
@@ -639,8 +644,7 @@ impl Terminal {
                 canvas.width,
                 canvas.height,
                 &canvas.pixels,
-                placement,
-                self.wrapper,
+                transmit,
             ));
         }
         if let Placement::Cells { cols, rows } = placement
@@ -654,6 +658,18 @@ impl Terminal {
             self.io.out().write_all(&frame)?;
             self.io.out().flush()
         })?;
+        if acknowledged {
+            match self.wait_for_graphics_ack()? {
+                Some(true) => {}
+                Some(false) => return Err(io::Error::other("herdr rejected a fallback frame")),
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "herdr did not acknowledge a fallback frame",
+                    ));
+                }
+            }
+        }
         Ok(frame.len())
     }
 
@@ -858,8 +874,13 @@ impl Terminal {
         self.mouse_pixels
     }
 
-    pub fn frames_are_inline(&self) -> bool {
-        self.transport == FrameTransport::Inline
+    pub fn frame_budget_bytes(&self, written: usize, pixels: usize) -> Option<usize> {
+        budgeted_frame_bytes(
+            self.transport,
+            self.herdr_target.is_some() && self.herdr.is_none(),
+            written,
+            pixels,
+        )
     }
 
     pub fn forget_cell_size(&mut self) {
@@ -1023,6 +1044,37 @@ impl Terminal {
         }
     }
 
+    fn wait_for_graphics_ack(&mut self) -> io::Result<Option<bool>> {
+        let deadline = Instant::now() + HERDR_FALLBACK_ACK_TIMEOUT;
+        let needle = format!("Gi={}", self.image_id);
+        let mut buf = Vec::new();
+        loop {
+            if let Some(reply) = take_graphics_reply(&mut buf, needle.as_bytes()) {
+                self.pending.extend_from_slice(&buf);
+                return Ok(Some(reply));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.pending.extend_from_slice(&buf);
+                return Ok(None);
+            }
+            if !self.wait_for_input(Some(remaining))? {
+                continue;
+            }
+            let mut chunk = [0u8; 64];
+            let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
+                Ok(n) => n,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if n == 0 {
+                self.pending.extend_from_slice(&buf);
+                return Ok(None);
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+
     pub fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {
         if !shape.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
             return Ok(());
@@ -1113,12 +1165,28 @@ const FRAME_SLOTS: u64 = 8;
 
 const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);
 const HERDR_RETRY_MAX: Duration = Duration::from_secs(10);
+const HERDR_FALLBACK_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameTransport {
     File,
     Shared,
     Inline,
+}
+
+fn budgeted_frame_bytes(
+    transport: FrameTransport,
+    herdr_fallback: bool,
+    written: usize,
+    pixels: usize,
+) -> Option<usize> {
+    if herdr_fallback {
+        Some(pixels)
+    } else if transport == FrameTransport::Inline {
+        Some(written)
+    } else {
+        None
+    }
 }
 
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1143,6 +1211,42 @@ fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
         return None;
     }
     Some(rest.starts_with(b"OK"))
+}
+
+fn take_graphics_reply(buf: &mut Vec<u8>, needle: &[u8]) -> Option<bool> {
+    let envelopes: &[(&[u8], &[u8])] = &[
+        (b"\x1b_", b"\x1b\\"),
+        (b"\x1b[27;3;95~", b"\x1b[27;3;92~"),
+        (b"\x1b[95;3u", b"\x1b[92;3u"),
+    ];
+    for found in buf
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(at, window)| (window == needle).then_some(at))
+    {
+        let Some((opener, terminator)) = envelopes
+            .iter()
+            .copied()
+            .find(|(opener, _)| buf[..found].ends_with(opener))
+        else {
+            continue;
+        };
+        let start = found - opener.len();
+        let params = found + needle.len();
+        if !matches!(buf.get(params), Some(b';' | b',')) {
+            continue;
+        }
+        let terminator_at = buf[params..]
+            .windows(terminator.len())
+            .position(|window| window == terminator)?;
+        let end = params + terminator_at + terminator.len();
+        let reply = &buf[params..params + terminator_at];
+        let separator = reply.iter().position(|byte| *byte == b';')?;
+        let accepted = reply[separator + 1..].starts_with(b"OK");
+        buf.drain(start..end);
+        return Some(accepted);
+    }
+    None
 }
 
 #[allow(unsafe_code)]
@@ -1912,6 +2016,75 @@ mod tests {
     use super::*;
 
     #[test]
+    fn herdr_fallback_budgets_full_pixels_for_every_terminal_transport() {
+        for transport in [
+            FrameTransport::File,
+            FrameTransport::Shared,
+            FrameTransport::Inline,
+        ] {
+            assert_eq!(
+                budgeted_frame_bytes(transport, true, 120, 2_400_000),
+                Some(2_400_000)
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_terminal_transports_keep_the_existing_budget_policy() {
+        assert_eq!(
+            budgeted_frame_bytes(FrameTransport::File, false, 120, 2_400_000),
+            None
+        );
+        assert_eq!(
+            budgeted_frame_bytes(FrameTransport::Shared, false, 120, 2_400_000),
+            None
+        );
+        assert_eq!(
+            budgeted_frame_bytes(FrameTransport::Inline, false, 3_200_000, 2_400_000),
+            Some(3_200_000)
+        );
+    }
+
+    #[test]
+    fn graphics_reply_is_removed_without_losing_neighboring_input() {
+        let mut buf = b"before\x1b_Gi=1;OK\x1b\\after".to_vec();
+        assert_eq!(take_graphics_reply(&mut buf, b"Gi=1"), Some(true));
+        assert_eq!(buf, b"beforeafter");
+
+        let mut rejected = b"\x1b_Gi=1;ENOENT:not found\x1b\\".to_vec();
+        assert_eq!(take_graphics_reply(&mut rejected, b"Gi=1"), Some(false));
+        assert!(rejected.is_empty());
+
+        let mut placed = b"before\x1b_Gi=1,p=1;OK\x1b\\after".to_vec();
+        assert_eq!(take_graphics_reply(&mut placed, b"Gi=1"), Some(true));
+        assert_eq!(placed, b"beforeafter");
+
+        let mut partial = b"\x1b_Gi=1;O".to_vec();
+        assert_eq!(take_graphics_reply(&mut partial, b"Gi=1"), None);
+        assert_eq!(partial, b"\x1b_Gi=1;O");
+
+        let mut relayed = b"before\x1b[27;3;95~Gi=1;OK\x1b[27;3;92~after".to_vec();
+        assert_eq!(take_graphics_reply(&mut relayed, b"Gi=1"), Some(true));
+        assert_eq!(relayed, b"beforeafter");
+
+        let mut csi_u = b"before\x1b[95;3uGi=1;OK\x1b[92;3uafter".to_vec();
+        assert_eq!(take_graphics_reply(&mut csi_u, b"Gi=1"), Some(true));
+        assert_eq!(csi_u, b"beforeafter");
+
+        let mut text = b"Gi=1;OK before\x1b_Gi=1;OK\x1b\\after".to_vec();
+        assert_eq!(take_graphics_reply(&mut text, b"Gi=1"), Some(true));
+        assert_eq!(text, b"Gi=1;OK beforeafter");
+
+        let mut text = b"Gi=1;OK".to_vec();
+        assert_eq!(take_graphics_reply(&mut text, b"Gi=1"), None);
+        assert_eq!(text, b"Gi=1;OK");
+
+        let mut wrong_image = b"\x1b_Gi=10,p=1;OK\x1b\\".to_vec();
+        assert_eq!(take_graphics_reply(&mut wrong_image, b"Gi=1"), None);
+        assert_eq!(wrong_image, b"\x1b_Gi=10,p=1;OK\x1b\\");
+    }
+
+    #[test]
     fn parses_probe_replies() {
         let parse = |buf: &[u8]| parse_probe_reply(buf, b"Gi=299;");
         assert_eq!(parse(b"\x1b_Gi=299;OK\x1b\\"), Some(true));
@@ -2613,5 +2786,66 @@ mod tty_tests {
         });
         let got = term.poll_event(None).unwrap();
         assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
+    }
+
+    #[test]
+    fn herdr_fallback_waits_for_a_tmux_csi_u_reply() {
+        use std::io::{Read as _, Write as _};
+        use std::os::fd::AsFd as _;
+
+        let (master, _slave, path) = open_pty();
+        let env = SessionEnv::of_session(Default::default());
+        let mut term = Terminal::open(&path, Wrapper::Tmux, env).unwrap();
+        term.herdr_target = Some(crate::herdr::HerdrTarget {
+            pane: "test".into(),
+            socket: "test".into(),
+        });
+        term.transport = FrameTransport::File;
+
+        let image_id = term.image_id;
+        let mut peer = master.try_clone().unwrap();
+        let responder = std::thread::spawn(move || {
+            let marker = format!("i={image_id},U=1,c=1,r=1,q=0;");
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut output = Vec::new();
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(!remaining.is_zero(), "frame request was not written");
+                let timeout = rustix::event::Timespec::try_from(remaining).unwrap();
+                let peer_fd = peer.as_fd();
+                let mut fds = [rustix::event::PollFd::new(
+                    &peer_fd,
+                    rustix::event::PollFlags::IN,
+                )];
+                assert!(
+                    rustix::event::poll(&mut fds, Some(&timeout)).unwrap() > 0,
+                    "frame request was not written"
+                );
+                let mut chunk = [0u8; 4096];
+                let n = peer.read(&mut chunk).unwrap();
+                assert!(n > 0, "terminal closed before writing a frame");
+                output.extend_from_slice(&chunk[..n]);
+                if output
+                    .windows(marker.len())
+                    .any(|window| window == marker.as_bytes())
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                    write!(peer, "x\x1b[95;3uGi={image_id},p=1;OK\x1b[92;3uy").unwrap();
+                    return output;
+                }
+            }
+        });
+
+        let started = Instant::now();
+        term.draw(&Canvas::new(1, 1)).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(20));
+        responder.join().unwrap();
+
+        let first = term.poll_event(Some(Duration::ZERO)).unwrap();
+        assert!(matches!(&first, Some(Event::Key(key)) if key.key == Key::Char('x')));
+        let second = term.poll_event(Some(Duration::ZERO)).unwrap();
+        assert!(matches!(&second, Some(Event::Key(key)) if key.key == Key::Char('y')));
+
+        let _drain = drain(&master);
     }
 }
