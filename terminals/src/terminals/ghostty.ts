@@ -8,6 +8,8 @@ import { panePixels } from "../graphics";
 import { setPaneWorkingDirectory, shellQuote, sleep } from "../shared";
 import type { Detect, Direction, Pane, PaneContext, PaneDetails } from "../terminal";
 
+// one line per split: window, tab, terminal, pid, tty, cwd. Plural specifiers fetch a whole
+// tab in one Apple Event; pid/tty only exist on Ghostty newer than 1.3.1 and stay empty here
 const LIST_SCRIPT = `
 on run argv
   set out to ""
@@ -18,18 +20,23 @@ on run argv
         set wid to id of w
         repeat with tb in tabs of w
           try
-            repeat with term in terminals of tb
+            set tid to id of tb
+            set ids to id of every terminal of tb
+            set cwds to working directory of every terminal of tb
+            set pids to {}
+            set ttys to {}
+            try
+              set pids to pid of every terminal of tb
+              set ttys to tty of every terminal of tb
+            end try
+            repeat with i from 1 to count of ids
+              set pd to ""
+              set ty to ""
               try
-                set pd to ""
-                set ty to ""
-                try
-                  set pd to (pid of term) as text
-                end try
-                try
-                  set ty to tty of term
-                end try
-                set out to out & wid & sep & (id of tb) & sep & (id of term) & sep & pd & sep & ty & sep & (working directory of term) & linefeed
+                set pd to (item i of pids) as text
+                set ty to item i of ttys
               end try
+              set out to out & wid & sep & tid & sep & (item i of ids) & sep & pd & sep & ty & sep & (item i of cwds) & linefeed
             end repeat
           end try
         end repeat
@@ -37,31 +44,6 @@ on run argv
     end repeat
   end tell
   return out
-end run
-`;
-
-const FIND_BY_DIRECTORY_SCRIPT = `
-on run argv
-  set wanted to item 1 of argv
-  tell application "Ghostty"
-    set windowList to windows
-    repeat with w in windowList
-      try
-        set tabList to tabs of w
-        repeat with tb in tabList
-          try
-            set termList to terminals of tb
-            repeat with term in termList
-              try
-                if (working directory of term) is wanted then return (id of term) as text
-              end try
-            end repeat
-          end try
-        end repeat
-      end try
-    end repeat
-  end tell
-  return ""
 end run
 `;
 
@@ -114,8 +96,6 @@ const FOCUS_SCRIPT = byId("    focus term");
 
 const RESIZE_SCRIPT = onPane(`            set r to perform action (item 2 of argv) on term
             return r as text`);
-
-const MARKER_ATTEMPTS = 6;
 
 
 function markerDirectory(): string {
@@ -206,24 +186,63 @@ export const ghostty: Detect = (env, run) => {
   const panes = (): Promise<Pane[]> => listPanes();
 
   const paneByTty = new Map<string, string>();
+  const missedAt = new Map<string, number>();
+  const MISS_MEMORY_MS = 60_000;
 
-  async function markPane(tty: string, cwd: string, listed: PaneDetails[]): Promise<string | null> {
-    const marker = markerDirectory();
-    let restoreTo = cwd;
-    try {
-      for (let attempt = 0; attempt < MARKER_ATTEMPTS; attempt++) {
+  async function cwdByPane(): Promise<Map<string, string>> {
+    const cwds = new Map<string, string>();
+    for (const line of (await osascript(LIST_SCRIPT, [])).split("\n")) {
+      if (!line.trim()) continue;
+      const [, , pane, , , ...directory] = line.split("\t");
+      cwds.set(pane, directory.join("\t"));
+    }
+    return cwds;
+  }
+
+  async function mapTtys(ttys: string[], listed: Pane[]): Promise<void> {
+    const alive = new Set(listed.map((pane) => pane.id));
+    const pending = ttys.filter((tty) => {
+      const known = paneByTty.get(tty);
+      if (known && alive.has(known)) return false;
+      return Date.now() - (missedAt.get(tty) ?? 0) > MISS_MEMORY_MS;
+    });
+    if (pending.length === 0) return;
+    const markers = new Map<string, string>();
+    for (const tty of pending) {
+      const marker = markerDirectory();
+      try {
         setPaneWorkingDirectory(tty, marker);
-        if (attempt > 0) await sleep(120);
-        const id = await osascript(FIND_BY_DIRECTORY_SCRIPT, [marker]);
-        if (!id) continue;
-        restoreTo = directories.get(id) ?? restoreTo;
-        paneByTty.set(tty, id);
-        return listed.some((pane) => pane.id === id) ? id : null;
+        markers.set(tty, marker);
+      } catch {
+        missedAt.set(tty, Date.now());
+        fs.rmSync(marker, { recursive: true, force: true });
       }
-      return null;
+    }
+    const mapped = new Map<string, string>();
+    try {
+      // Ghostty applies OSC 7 as soon as it reads it, so one listing normally sees every
+      // marker; a second look only happens when the first saw none at all
+      for (let attempt = 0; attempt < 2 && mapped.size === 0 && markers.size > 0; attempt++) {
+        if (attempt > 0) await sleep(120);
+        for (const [pane, cwd] of await cwdByPane()) {
+          for (const [tty, marker] of markers) {
+            if (cwd === marker && alive.has(pane)) mapped.set(tty, pane);
+          }
+        }
+      }
     } finally {
-      setPaneWorkingDirectory(tty, restoreTo);
-      fs.rmSync(marker, { recursive: true, force: true });
+      for (const [tty, marker] of markers) {
+        const pane = mapped.get(tty);
+        if (pane) {
+          paneByTty.set(tty, pane);
+          try {
+            setPaneWorkingDirectory(tty, directories.get(pane) ?? os.homedir());
+          } catch {}
+        } else {
+          missedAt.set(tty, Date.now());
+        }
+        fs.rmSync(marker, { recursive: true, force: true });
+      }
     }
   }
 
@@ -245,15 +264,11 @@ export const ghostty: Detect = (env, run) => {
   }
 
   async function listPanesWithAgents(): Promise<PaneDetails[]> {
-    const listed = await listPanes();
+    const [listed, agents] = await Promise.all([listPanes(), agentTtys()]);
     if (listed.some((pane) => pane.tty)) return listed;
-    for (const [tty, command] of await agentTtys()) {
-      const known = paneByTty.get(tty);
-      const id =
-        known && listed.some((pane) => pane.id === known)
-          ? known
-          : await markPane(tty, "/", listed).catch(() => null);
-      const pane = listed.find((candidate) => candidate.id === id);
+    await mapTtys([...agents.keys()], listed);
+    for (const [tty, command] of agents) {
+      const pane = listed.find((candidate) => candidate.id === paneByTty.get(tty));
       if (!pane) continue;
       pane.tty = tty;
       pane.command = command;
@@ -261,18 +276,21 @@ export const ghostty: Detect = (env, run) => {
     return listed;
   }
 
-  async function getCurrentPane({ tty, cwd }: PaneContext): Promise<Pane | null> {
+  async function getCurrentPane({ tty }: PaneContext): Promise<Pane | null> {
     if (!tty) return null;
     const before = await listPanes();
     const byTty = before.find((pane) => pane.tty === tty);
     if (byTty) return byTty;
-    const id = await markPane(tty, cwd, before);
-    if (!id) {
+    missedAt.delete(tty);
+    await mapTtys([tty], before);
+    const id = paneByTty.get(tty);
+    const found = id ? before.find((pane) => pane.id === id) : null;
+    if (!found) {
       throw new Error(
         `could not find this pane in Ghostty — we marked ${tty} and no Ghostty pane reported it back, so ${tty} is not a Ghostty pane (a shell inside tmux or a remote session looks like this)`,
       );
     }
-    return before.find((pane) => pane.id === id) ?? null;
+    return found;
   }
 
   async function sizeSplit(pane: string, direction: Direction, size: number) {
