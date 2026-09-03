@@ -19,6 +19,7 @@ mod selection;
 mod style;
 pub mod surfaces;
 mod terminal;
+mod tty;
 mod text_input;
 mod throttle;
 pub mod wrapper;
@@ -49,8 +50,9 @@ pub use style::{
 };
 pub use terminal::{
     Event, Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors,
-    Waker, WindowSize,
+    WindowSize,
 };
+pub use tty::Waker;
 pub use text_input::{
     Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput, line_height,
     offset_to_point, point_to_offset,
