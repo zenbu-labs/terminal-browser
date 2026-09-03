@@ -194,7 +194,7 @@ async function heldTunnel(
   let ended: number | null = null;
   child.once("exit", (code) => (ended = code ?? 1));
   child.once("error", () => (ended = 1));
-  await listening(socksPort, destination, () => ended);
+  await proxyReady(socksPort, destination, () => ended);
   return {
     destination,
     socksPort,
@@ -207,10 +207,13 @@ async function heldTunnel(
   };
 }
 
-/** The proxy is not listening the moment ssh starts: it has to authenticate
+/** The proxy is not there the moment ssh starts: it has to authenticate
  * first, which can wait on a person typing. Giving up early would report a
- * refused password as a timeout, so a connection that ends is its own answer. */
-function listening(
+ * refused password as a timeout, so a connection that ends is its own answer.
+ *
+ * Something answering the port is not proof that it is our proxy — anything
+ * else listening would pass a plain connect — so it is asked to speak socks. */
+function proxyReady(
   port: number,
   destination: string,
   ended: () => number | null,
@@ -220,18 +223,25 @@ function listening(
     const attempt = () => {
       if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
       const socket = net.connect(port, "127.0.0.1");
-      socket.once("connect", () => {
-        socket.end();
-        if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
-        resolve();
-      });
-      socket.once("error", () => {
+      let settled = false;
+      const again = () => {
+        if (settled) return;
+        settled = true;
         socket.destroy();
         if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
         if (Date.now() >= deadline) {
-          return reject(new Error(`the ssh proxy for ${destination} never started listening`));
+          return reject(new Error(`the ssh proxy for ${destination} never answered`));
         }
         setTimeout(attempt, 100);
+      };
+      socket.setTimeout(PROXY_REPLY_MS, again);
+      socket.once("error", again);
+      socket.once("connect", () => socket.write(SOCKS_GREETING));
+      socket.once("data", (reply) => {
+        if (reply[0] !== SOCKS_VERSION || reply[1] !== SOCKS_NO_PASSWORD) return again();
+        settled = true;
+        socket.destroy();
+        resolve();
       });
     };
     attempt();
@@ -258,6 +268,13 @@ export function validateBundleDir(dir: string): void {
 }
 
 const CONNECT_TIMEOUT_MS = 120_000;
+
+const PROXY_REPLY_MS = 1_000;
+
+const SOCKS_VERSION = 5;
+const SOCKS_NO_PASSWORD = 0;
+/** Socks 5, offering one way of identifying ourselves: not at all. */
+const SOCKS_GREETING = Buffer.from([SOCKS_VERSION, 1, SOCKS_NO_PASSWORD]);
 
 const READY_TIMEOUT_MS = 120_000;
 
