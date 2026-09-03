@@ -7,6 +7,14 @@ export interface Pane {
   tab: string;
 }
 
+export interface PaneDetails extends Pane {
+  tty: string | null;
+  title: string | null;
+  command: string | null;
+  agent: string | null;
+  focused: boolean;
+}
+
 export interface PaneContext {
   tty: string | null;
   cwd: string;
@@ -55,6 +63,9 @@ export interface Terminal {
    * 
    */
   split?(request: SplitRequest): Promise<void>;
+  listPanes?(): Promise<PaneDetails[]>;
+  sendText?(pane: string, text: string): Promise<void>;
+  focusPane?(pane: string): Promise<void>;
 }
 
 export type Detect = (env: NodeJS.ProcessEnv, run: Run) => Terminal | null;

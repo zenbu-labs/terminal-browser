@@ -15,6 +15,9 @@ import {
   configureBrowserSession,
   routeThroughSocksProxy,
 } from "../page/browser-session";
+import { bundledAsset } from "../assets";
+import { Grab, reactGrabPreloadPath } from "../grab/grab";
+import { AgentPaneFinder } from "../grab/target";
 import type { DownloadProgress } from "../page/browser-session";
 import { BrowserController } from "../page/controller";
 import { initOffscreenMode } from "../page/offscreen";
@@ -46,7 +49,7 @@ import type {
 } from "../ui/types";
 import { normalizeUrl, searchOrUrl } from "../url";
 import { fuzzyScore } from "./fuzzy";
-import { bindingLabel, defaultKeys, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
+import { bindingLabel, defaultKeys, grabKeyLabel, isGrabKey, isRecordKey, listStep, matchesBinding, parseKeyBindings, recordKeyLabel } from "./keybindings";
 import type { KeyBinding } from "./keybindings";
 import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight } from "./layout";
 import type { DevtoolsPlacement } from "./layout";
@@ -95,7 +98,7 @@ function claimPartitionPreload(partition: string, preload: string | null) {
   partitionPreloads.set(partition, preload);
 }
 
-const FONT_FILE = path.join("assets", "fonts", "JetBrainsMono-Regular.ttf");
+const FONT_FILE = path.join("fonts", "JetBrainsMono-Regular.ttf");
 
 const API_PRELOAD_SOURCE = `if (process.isMainFrame) {
   const { ipcRenderer } = require("electron");
@@ -139,13 +142,9 @@ function registerPreloadOnce(ses: ElectronSession, filePath: string) {
 }
 
 function bundledFontPath(): string {
-  for (let dir = __dirname; ; dir = path.dirname(dir)) {
-    const candidate = path.join(dir, FONT_FILE);
-    if (fs.existsSync(candidate)) return candidate;
-    if (path.dirname(dir) === dir) {
-      throw new Error(`bundled font missing: ${FONT_FILE} (searched up from ${__dirname})`);
-    }
-  }
+  const found = bundledAsset(FONT_FILE);
+  if (!found) throw new Error(`bundled font missing: ${FONT_FILE} (searched up from ${__dirname})`);
+  return found;
 }
 
 
@@ -244,14 +243,18 @@ class Session {
   private dividerHover = false;
   private dividerDragging = false;
   private dividerResizeAt = 0;
-  private pageMenu: {
-    x: number;
-    y: number;
-    pageX: number;
-    pageY: number;
-    linkURL: string;
-    selectionText: string;
-  } | null = null;
+  private pageMenu:
+    | {
+        kind: "page";
+        x: number;
+        y: number;
+        pageX: number;
+        pageY: number;
+        linkURL: string;
+        selectionText: string;
+      }
+    | { kind: "toolbar" }
+    | null = null;
   private sentCursor: string | null = null;
 
   private findOpen = false;
@@ -267,6 +270,9 @@ class Session {
     null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private records = new Map<BrowserController, RecordSession>();
+  private grabs = new Map<BrowserController, Grab>();
+  private readonly grabIcon = bundledAsset(path.join("react-grab", "logo.png"));
+  private readonly agentPanes: AgentPaneFinder;
   private shownRecord: RecordSession | null = null;
   private recordStarting = false;
 
@@ -275,6 +281,12 @@ class Session {
     this.terminal = detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
     this.argv = ctx.argv;
+    this.agentPanes = new AgentPaneFinder({
+      terminal: this.terminal,
+      parentTty: flagValue(this.argv, "--parent-tty"),
+      cwd: ctx.cwd,
+      self: () => this.findOwnPane(),
+    });
     this.hideToolbar = this.argv.includes("--no-toolbar");
     this.noFrame = this.argv.includes("--no-frame");
     this.sessionFlags = {
@@ -298,7 +310,10 @@ class Session {
     this.preload = flagValue(this.argv, "--preload");
     this.mainScript = flagValue(this.argv, "--main-script");
     this.fallbackState = initialBrowserState(this.initialUrl());
-    configureBrowserSession(this.partition, (progress) => this.showDownload(progress));
+    registerPreloadOnce(
+      configureBrowserSession(this.partition, (progress) => this.showDownload(progress)),
+      reactGrabPreloadPath(),
+    );
     this.tabs = new TabManager(
       {
         createController: (url, visible, onState, options) =>
@@ -342,6 +357,11 @@ class Session {
           this.registry?.update();
           for (const record of [...this.records.values()]) {
             if (record.active && this.tabs.stateFor(record.controller) == null) record.tabClosed();
+          }
+          for (const [controller, grab] of [...this.grabs]) {
+            if (this.tabs.stateFor(controller) != null) continue;
+            grab.dispose();
+            this.grabs.delete(controller);
           }
         },
         onActiveState: (state, urlChanged) => {
@@ -777,6 +797,7 @@ class Session {
     tabSwitch: (id) => this.tabs.activate(id),
     tabClose: (id) => this.closeOrShutdown(id),
     tabNew: () => this.openNewTabModal(),
+    tabMenu: () => this.toggleToolbarMenu(),
     newTabQuery: (text) => this.newTabQuery(text),
     newTabSubmit: (text) => {
       this.closeNewTabModal();
@@ -1023,6 +1044,10 @@ class Session {
       if (!noShortcuts) {
         if (isRecordKey(event)) {
           if (!this.activeRecord()) void this.startRecording();
+          return;
+        }
+        if (isGrabKey(event)) {
+          void this.toggleGrab();
           return;
         }
         if ((this.cmdHeld(event) || event.mods.ctrl) && event.key === "t") {
@@ -1298,6 +1323,7 @@ class Session {
     if (this.tabs.activeController?.popup) return;
     const scale = this.surfaceLayout.scale;
     this.pageMenu = {
+      kind: "page",
       x: this.surfaceLayout.x + params.x * scale,
       y: this.surfaceLayout.y + params.y * scale,
       pageX: params.x,
@@ -1314,11 +1340,35 @@ class Session {
     this.render();
   }
 
+  private toggleToolbarMenu() {
+    if (this.pageMenu?.kind === "toolbar") {
+      this.closePageMenu();
+      return;
+    }
+    if (this.palette || this.newTab || this.urlEditOpen) return;
+    this.pageMenu = { kind: "toolbar" };
+    this.render();
+  }
+
   private runPageMenu(id: string) {
     const menu = this.pageMenu;
     this.closePageMenu();
     const browser = this.tabs.activeController;
     if (!menu || !browser) return;
+    switch (id) {
+      case "grab":
+        void this.toggleGrab();
+        return;
+      case "record":
+        if (this.activeRecord()) this.activeRecord()?.actions.complete();
+        else void this.startRecording();
+        return;
+      case "inspect":
+        this.openDevtools();
+        if (menu.kind === "page" && browser.devtools) browser.inspect(menu.pageX, menu.pageY);
+        return;
+    }
+    if (menu.kind !== "page") return;
     switch (id) {
       case "copy":
         this.root?.setClipboard(menu.selectionText);
@@ -1329,19 +1379,84 @@ class Session {
       case "open-link-tab":
         this.tabs.create(menu.linkURL);
         return;
-      case "inspect":
-        this.openDevtools();
-        if (browser.devtools) browser.inspect(menu.pageX, menu.pageY);
-        return;
-      case "record":
-        if (this.activeRecord()) this.activeRecord()?.actions.complete();
-        else void this.startRecording();
-        return;
     }
   }
 
+  private activeGrab(): Grab | null {
+    const controller = this.tabs.activeController;
+    return controller ? this.grabs.get(controller) ?? null : null;
+  }
+
+  private grabFor(controller: BrowserController): Grab {
+    let grab = this.grabs.get(controller);
+    if (!grab) {
+      grab = new Grab(controller, {
+        selected: (content) => void this.sendGrab(content),
+      });
+      this.grabs.set(controller, grab);
+    }
+    return grab;
+  }
+
+  private async toggleGrab() {
+    const controller = this.tabs.activeController;
+    if (!controller) return;
+    const grab = this.grabFor(controller);
+    try {
+      if (grab.active) await grab.deactivate();
+      else {
+        this.agentPanes.warm();
+        await grab.activate();
+      }
+    } catch (error) {
+      this.showToast(error instanceof Error ? error.message : String(error), "failed");
+    }
+  }
+
+  private async sendGrab(content: string) {
+    this.root?.setClipboard(content);
+    try {
+      const target = await this.agentPanes.send(`> ${content.replace(/\s+/g, " ").trim()}\n\n`);
+      this.showToast(target ? "Sent to agent" : "copied to clipboard", "done");
+    } catch (error) {
+      this.showToast(error instanceof Error ? error.message : String(error), "failed");
+    }
+  }
+
+  private grabMenuItem(): PageMenuItem {
+    return {
+      id: "grab",
+      label: this.activeGrab()?.active ? "stop grabbing" : "grab",
+      enabled: true,
+      shortcut: grabKeyLabel,
+      icon: this.grabIcon ? { kind: "image", src: this.grabIcon } : undefined,
+    };
+  }
+
+  private toolMenuItems(): PageMenuItem[] {
+    return [
+      this.grabMenuItem(),
+      {
+        id: "record",
+        label: this.activeRecord() ? "complete recording" : "record",
+        enabled: true,
+        shortcut: this.activeRecord() ? "" : recordKeyLabel,
+        icon: { kind: "path", d: ICONS.record, tint: "red", weight: 4.5 },
+      },
+      {
+        id: "inspect",
+        label: "inspect",
+        enabled: true,
+        shortcut: bindingLabel(this.devtoolsBinding),
+      },
+    ];
+  }
+
   private pageMenuView(): PageMenuView | null {
-    if (!this.pageMenu) return null;
+    if (!this.pageMenu || !this.layout) return null;
+    if (this.pageMenu.kind === "toolbar") {
+      return { x: this.layout.width, y: this.layout.toolbarHeight, items: this.toolMenuItems() };
+    }
     const items: PageMenuItem[] = [
       ...(this.pageMenu.selectionText
         ? [
@@ -1359,19 +1474,7 @@ class Session {
             { id: "copy-link", label: "copy link address", enabled: true, shortcut: "" },
           ]
         : []),
-      {
-        id: "record",
-        label: this.activeRecord() ? "complete recording" : "record",
-        enabled: true,
-        shortcut: "",
-        icon: { d: ICONS.record, tint: "red" as const, weight: 4.5 },
-      },
-      {
-        id: "inspect",
-        label: "inspect",
-        enabled: true,
-        shortcut: bindingLabel(this.devtoolsBinding),
-      },
+      ...this.toolMenuItems(),
     ];
     return { x: this.pageMenu.x, y: this.pageMenu.y, items };
   }
@@ -1535,6 +1638,12 @@ class Session {
           else if (record.reviewing) record.actions.complete();
           else record.actions.stop();
         },
+      },
+      {
+        id: "grab",
+        label: this.activeGrab()?.active ? "stop grabbing" : "grab",
+        shortcut: grabKeyLabel,
+        run: () => void this.toggleGrab(),
       },
       {
         id: "devtools",

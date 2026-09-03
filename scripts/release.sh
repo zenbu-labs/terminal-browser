@@ -45,6 +45,11 @@ cp -R "$ROOT/skill/build" "$STAGE/skills"
 
 cp "$ROOT/assets/fonts/JetBrainsMono-Regular.ttf" "$STAGE/assets/fonts/"
 
+mkdir -p "$STAGE/assets/react-grab"
+REACT_GRAB_JS="$(node -e 'console.log(require.resolve("react-grab/dist/index.global.js",{paths:[process.argv[1]]}))' "$ROOT/browser")"
+cp "$REACT_GRAB_JS" "$STAGE/assets/react-grab/index.global.js"
+cp "$ROOT/assets/react-grab/logo.png" "$STAGE/assets/react-grab/"
+
 ELECTRON_DIST="$(node -e 'const p=require("path");console.log(p.join(p.dirname(require.resolve("electron/package.json",{paths:[process.argv[1]]})),"dist"))' "$ROOT/browser")"
 if [ ! -f "$ELECTRON_DIST/.zenbu-electron-sha256" ]; then
   echo "refusing to build: installed electron does not come from https://github.com/zenbu-labs/electron-releases" >&2

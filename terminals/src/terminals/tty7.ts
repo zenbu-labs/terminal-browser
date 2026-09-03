@@ -1,11 +1,12 @@
 import { paneById, shellQuote } from "../shared";
-import type { Detect, Pane } from "../terminal";
+import type { Detect, Pane, PaneDetails } from "../terminal";
 
 interface Tty7Pane {
   pane: number;
   workspace?: string | null;
   tab?: string;
   title?: string;
+  live?: boolean | null;
 }
 
 export const tty7: Detect = (env, run) => {
@@ -31,9 +32,32 @@ export const tty7: Detect = (env, run) => {
       }));
   }
 
+  async function listPanes(): Promise<PaneDetails[]> {
+    const [placed, running] = await Promise.all([
+      list(["pane", "ls", "--json"]),
+      list(["pane", "ls", "--all", "--json"]),
+    ]);
+    const titles = new Map(running.filter((pane) => pane.live).map((pane) => [pane.pane, pane.title]));
+    return placed
+      .filter((pane) => titles.has(pane.pane))
+      .map((pane) => ({
+        id: String(pane.pane),
+        tab: `${pane.workspace ?? ""}:${pane.tab ?? ""}`,
+        tty: null,
+        title: titles.get(pane.pane) || null,
+        command: titles.get(pane.pane) || null,
+        agent: null,
+        focused: false,
+      }));
+  }
+
   return {
     name: "tty7",
     getCurrentPane: () => paneById(panes, selfId()),
+    listPanes,
+    async sendText(pane, text) {
+      await tty7(["send", `%${pane}`, text]);
+    },
     async split({ from, direction, command, size }) {
       if (direction !== "right" && direction !== "down") {
         throw new Error("tty7 only splits right and down");

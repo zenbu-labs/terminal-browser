@@ -9,6 +9,18 @@ export const defaultKeys =
 
 export const recordKeyLabel = process.platform === "darwin" ? "ctrl+r" : "ctrl+shift+r";
 
+export const grabKeyLabel = "ctrl+g";
+
+export function isGrabKey(event: EngineKeyEvent): boolean {
+  return (
+    event.key.toLowerCase() === "g" &&
+    event.mods.ctrl &&
+    !event.mods.super &&
+    !event.mods.alt &&
+    !event.mods.shift
+  );
+}
+
 export function isRecordKey(event: EngineKeyEvent): boolean {
   return (
     event.key.toLowerCase() === "r" &&

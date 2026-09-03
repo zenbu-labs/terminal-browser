@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { paneById } from "../shared";
-import type { Detect, Pane } from "../terminal";
+import type { Detect, Pane, PaneDetails } from "../terminal";
 
 // todo: do this automatically
 const SETUP_HINT = [
@@ -15,11 +15,16 @@ const SETUP_HINT = [
 interface KittyWindow {
   id: number;
   title: string;
+  pid?: number | null;
+  is_active?: boolean;
+  is_focused?: boolean;
+  foreground_processes?: { pid?: number; cmdline?: string[] }[];
 }
 
 interface KittyTab {
   id: number;
   is_active: boolean;
+  is_focused?: boolean;
   layout: string;
   enabled_layouts: string[];
   windows: KittyWindow[];
@@ -27,6 +32,8 @@ interface KittyTab {
 
 interface KittyOsWindow {
   id: number;
+  is_active?: boolean;
+  is_focused?: boolean;
   tabs: KittyTab[];
 }
 
@@ -57,14 +64,15 @@ export const kitty: Detect = (env, run) => {
 
   let cachedBin: string | null | undefined;
 
-  async function kitten(args: string[]): Promise<string> {
+  async function kitten(args: string[], input?: string): Promise<string> {
     if (cachedBin === undefined) cachedBin = findKitten(env);
     if (!cachedBin) {
       throw new Error("kitty's `kitten` command was not found — install kitty, or add kitten to PATH");
     }
-    const to = env.KITTY_LISTEN_ON ? ["--to", env.KITTY_LISTEN_ON] : [];
+    const listenOn = env.KITTY_LISTEN_ON && !env.KITTY_LISTEN_ON.startsWith("fd:") ? env.KITTY_LISTEN_ON : null;
+    const to = listenOn ? ["--to", listenOn] : [];
     try {
-      return await run(cachedBin, ["@", ...to, ...args]);
+      return await run(cachedBin, ["@", ...to, ...args], input);
     } catch (error) {
       const stderr = String((error as { stderr?: unknown }).stderr ?? "");
       if (stderr.includes("Remote control is disabled")) throw new Error(SETUP_HINT);
@@ -89,6 +97,47 @@ export const kitty: Detect = (env, run) => {
     return panes;
   }
 
+  async function listPanes(): Promise<PaneDetails[]> {
+    const listed: { pane: PaneDetails; pid: number | null }[] = [];
+    for (const osWindow of await osWindows()) {
+      for (const tab of osWindow.tabs) {
+        for (const window of tab.windows) {
+          const pid = window.pid ?? window.foreground_processes?.[0]?.pid ?? null;
+          listed.push({
+            pid,
+            pane: {
+              id: String(window.id),
+              tab: `${osWindow.id}:${tab.id}`,
+              tty: null,
+              title: window.title || null,
+              command:
+                (window.foreground_processes ?? [])
+                  .map((process) => (process.cmdline ?? []).join(" "))
+                  .join("\n") || null,
+              agent: null,
+              focused:
+                window.is_focused === true ||
+                (osWindow.is_active === true && tab.is_active && window.is_active === true),
+            },
+          });
+        }
+      }
+    }
+    const pids = listed.map((entry) => entry.pid).filter((pid): pid is number => pid != null);
+    if (pids.length > 0) {
+      const byPid = new Map<number, string>();
+      const out = await run("ps", ["-o", "pid=,tty=", "-p", pids.join(",")]).catch(() => "");
+      for (const line of out.split("\n")) {
+        const [pid, tty] = line.trim().split(/\s+/);
+        if (pid && tty && tty !== "??") byPid.set(Number(pid), `/dev/${tty}`);
+      }
+      for (const entry of listed) {
+        if (entry.pid != null) entry.pane.tty = byPid.get(entry.pid) ?? null;
+      }
+    }
+    return listed.map((entry) => entry.pane);
+  }
+
   /** kitty can only place splits in a layout that has them. */
   async function ensureSplitsLayout(paneId: string): Promise<void> {
     const self = Number(paneId);
@@ -108,6 +157,20 @@ export const kitty: Detect = (env, run) => {
   return {
     name: "kitty",
     getCurrentPane: () => paneById(panes, env.KITTY_WINDOW_ID),
+    listPanes,
+    async sendText(pane, text) {
+      const target = ["send-text", "--match", `id:${pane}`, "--stdin"];
+      try {
+        await kitten([...target, "--bracketed-paste", "auto"], text);
+      } catch (error) {
+        const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+        if (!/bracketed-paste/.test(stderr)) throw error;
+        await kitten(target, text);
+      }
+    },
+    async focusPane(pane) {
+      await kitten(["focus-window", "--match", `id:${pane}`]);
+    },
     async split({ from, direction, command, size }) {
       await ensureSplitsLayout(from.id);
       const location = direction === "right" || direction === "left" ? "vsplit" : "hsplit";

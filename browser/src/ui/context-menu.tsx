@@ -1,6 +1,6 @@
-import { Box, Path, Text } from "pixel-react";
+import { Box, Image, Path, Text } from "pixel-react";
 import type { Theme } from "./theme";
-import type { ChromeActions, ChromeLayout, PageMenuItem, PageMenuView } from "./types";
+import type { ChromeActions, ChromeLayout, PageMenuIcon, PageMenuItem, PageMenuView } from "./types";
 
 export function PageContextMenu({
   view,
@@ -17,21 +17,16 @@ export function PageContextMenu({
   const rowH = Math.round(rem * 1.55);
   const charW = rem * 0.82 * 0.6;
   const shortcutW = rem * 0.72 * 0.6;
-  const hasIcons = view.items.some((item) => "icon" in item && item.icon);
+  const hasIcons = view.items.some((item) => item.icon);
   const width = Math.round(
     view.items.reduce((widest, item) => {
-      if ("separator" in item) return widest;
       let row = rem * 1.4 + item.label.length * charW;
       if (hasIcons) row += rem * 1.2;
       if (item.shortcut) row += rem * 0.6 + item.shortcut.length * shortcutW;
       return Math.max(widest, row);
     }, rem * 9),
   );
-  const pad = Math.round(rem * 0.3);
-  const height = view.items.reduce(
-    (sum, item) => sum + ("separator" in item ? pad : rowH),
-    0,
-  );
+  const height = view.items.length * rowH;
   const x = Math.max(2, Math.min(view.x, layout.width - width - 4));
   const y = Math.max(2, Math.min(view.y, layout.height - height - 4));
   return (
@@ -57,30 +52,19 @@ export function PageContextMenu({
           overflow: "hidden",
         }}
       >
-        {view.items.map((item, i) =>
-          "separator" in item ? (
-            <Box
-              key={item.id}
-              style={{
-                height: 1,
-                margin: { top: Math.floor((pad - 1) / 2), bottom: Math.ceil((pad - 1) / 2) },
-                background: theme.hairline,
-              }}
-            />
-          ) : (
-            <MenuRow
-              key={item.id}
-              item={item}
-              rowH={rowH}
-              rem={rem}
-              theme={theme}
-              actions={actions}
-              first={i === 0}
-              last={i === view.items.length - 1}
-              alignIcons={view.items.some((other) => "icon" in other && other.icon)}
-            />
-          ),
-        )}
+        {view.items.map((item, i) => (
+          <MenuRow
+            key={item.id}
+            item={item}
+            rowH={rowH}
+            rem={rem}
+            theme={theme}
+            actions={actions}
+            first={i === 0}
+            last={i === view.items.length - 1}
+            alignIcons={hasIcons}
+          />
+        ))}
       </Box>
     </>
   );
@@ -96,7 +80,7 @@ function MenuRow({
   last,
   alignIcons,
 }: {
-  item: Extract<PageMenuItem, { label: string }>;
+  item: PageMenuItem;
   rowH: number;
   rem: number;
   theme: Theme;
@@ -124,26 +108,7 @@ function MenuRow({
       onClick={item.enabled ? () => actions.pageMenuAction(item.id) : undefined}
     >
       {item.icon ? (
-        <Path
-          d={item.icon.d}
-          viewBox={24}
-          stroke={{
-            width: item.icon.weight ?? 2.2,
-            color: item.enabled
-              ? item.icon.tint === "red"
-                ? theme.red
-                : theme.muted
-              : theme.disabled,
-            cap: "round",
-            join: "round",
-          }}
-          style={{
-            width: rem * 0.75,
-            height: rem * 0.75,
-            flexShrink: 0,
-            margin: { right: rem * 0.45 },
-          }}
-        />
+        <MenuIcon icon={item.icon} enabled={item.enabled} rem={rem} theme={theme} />
       ) : (
         alignIcons && <Box style={{ width: rem * 1.2, flexShrink: 0 }} />
       )}
@@ -173,4 +138,53 @@ function MenuRow({
       )}
     </Box>
   );
+}
+
+function MenuIcon({
+  icon,
+  enabled,
+  rem,
+  theme,
+}: {
+  icon: PageMenuIcon;
+  enabled: boolean;
+  rem: number;
+  theme: Theme;
+}) {
+  switch (icon.kind) {
+    case "image": {
+      const size = rem * 0.95;
+      return (
+        <Image
+          src={icon.src}
+          error={<Box style={{ width: size, height: size }} />}
+          style={{
+            width: size,
+            height: size,
+            flexShrink: 0,
+            margin: { left: -rem * 0.1, right: rem * 0.35 },
+          }}
+        />
+      );
+    }
+    case "path":
+      return (
+        <Path
+          d={icon.d}
+          viewBox={24}
+          stroke={{
+            width: icon.weight ?? 2.2,
+            color: enabled ? (icon.tint === "red" ? theme.red : theme.muted) : theme.disabled,
+            cap: "round",
+            join: "round",
+          }}
+          style={{
+            width: rem * 0.75,
+            height: rem * 0.75,
+            flexShrink: 0,
+            margin: { right: rem * 0.45 },
+          }}
+        />
+      );
+  }
 }

@@ -275,7 +275,7 @@ function Toolbar({
   const stripWidth =
     layout.width -
     rem * 0.8 -
-    rem * 1.75 -
+    rem * 3.3 -
     (nav ? rem * 3.5 : 0) -
     (record ? rem * 7.25 : 0);
   return (

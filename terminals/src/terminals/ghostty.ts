@@ -5,23 +5,39 @@ import path from "node:path";
 import { appleScript } from "../applescript";
 import { panePixels } from "../graphics";
 import { setPaneWorkingDirectory, shellQuote, sleep } from "../shared";
-import type { Detect, Direction, Pane, PaneContext } from "../terminal";
+import type { Detect, Direction, Pane, PaneContext, PaneDetails } from "../terminal";
 
 const LIST_SCRIPT = `
 on run argv
   set out to ""
   set sep to tab
   tell application "Ghostty"
-    set windowList to windows
-    repeat with w in windowList
+    set frontId to ""
+    try
+      set frontId to id of front window
+    end try
+    repeat with w in windows
       try
-        set tabList to tabs of w
-        repeat with tb in tabList
+        set wid to id of w
+        repeat with tb in tabs of w
           try
-            set termList to terminals of tb
-            repeat with term in termList
+            set tabSelected to selected of tb
+            set focusedId to ""
+            try
+              set focusedId to id of (focused terminal of tb)
+            end try
+            repeat with term in terminals of tb
               try
-                set out to out & (id of w) & sep & (id of tb) & sep & (id of term) & sep & (working directory of term) & sep & (name of term) & linefeed
+                set tid to id of term
+                set pd to ""
+                set ty to ""
+                try
+                  set pd to (pid of term) as text
+                end try
+                try
+                  set ty to tty of term
+                end try
+                set out to out & wid & sep & (id of tb) & sep & tid & sep & (working directory of term) & sep & pd & sep & ty & sep & (tid is focusedId) & sep & (tabSelected and (wid is frontId)) & sep & (name of term) & linefeed
               end try
             end repeat
           end try
@@ -92,6 +108,19 @@ const splitScript = (direction: Direction) =>
   onPane(`            set opened to split term direction ${direction} with configuration {initial working directory:(item 3 of argv), initial input:(item 2 of argv) & linefeed}
             return (id of opened) as text`);
 
+const byId = (body: string) => `
+on run argv
+  tell application "Ghostty"
+    set term to terminal id (item 1 of argv)
+${body}
+  end tell
+  return "ok"
+end run
+`;
+
+const SEND_TEXT_SCRIPT = byId("    input text (item 2 of argv) to term");
+const FOCUS_SCRIPT = byId("    focus term");
+
 const RESIZE_SCRIPT = onPane(`            set r to perform action (item 2 of argv) on term
             return r as text`);
 
@@ -155,21 +184,49 @@ export const ghostty: Detect = (env, run) => {
     return scale;
   }
 
-  async function panes(): Promise<Pane[]> {
-    const listed: Pane[] = [];
+  async function listPanes(): Promise<PaneDetails[]> {
+    const listed: PaneDetails[] = [];
+    const pids = new Map<string, string>();
     directories.clear();
     for (const line of (await osascript(LIST_SCRIPT, [])).split("\n")) {
       if (!line.trim()) continue;
-      const [window, tab, pane, directory, ...title] = line.split("\t");
+      const [window, tab, pane, directory, pid, tty, focusedInTab, visible, ...title] = line.split("\t");
       directories.set(pane, directory);
-      listed.push({ id: pane, tab: `${window}:${tab}` });
+      if (pid && !tty) pids.set(pane, pid);
+      listed.push({
+        id: pane,
+        tab: `${window}:${tab}`,
+        tty: tty || null,
+        title: title.join("\t") || null,
+        command: null,
+        agent: null,
+        focused: focusedInTab === "true" && visible === "true",
+      });
+    }
+    if (pids.size > 0) {
+      const byPid = new Map<string, string>();
+      const listing = await run("ps", ["-o", "pid=,tty=", "-p", [...pids.values()].join(",")]).catch(
+        () => "",
+      );
+      for (const line of listing.split("\n")) {
+        const [pid, tty] = line.trim().split(/\s+/);
+        if (pid && tty && tty !== "??") byPid.set(pid, `/dev/${tty}`);
+      }
+      for (const pane of listed) {
+        const pid = pids.get(pane.id);
+        if (pid) pane.tty = byPid.get(pid) ?? null;
+      }
     }
     return listed;
   }
 
+  const panes = (): Promise<Pane[]> => listPanes();
+
   async function getCurrentPane({ tty, cwd }: PaneContext): Promise<Pane | null> {
     if (!tty) return null;
-    const before = await panes();
+    const before = await listPanes();
+    const byTty = before.find((pane) => pane.tty === tty);
+    if (byTty) return byTty;
     const marker = markerDirectory();
     let restoreTo = cwd;
     try {
@@ -211,7 +268,15 @@ export const ghostty: Detect = (env, run) => {
   return {
     name: "ghostty",
     getCurrentPane,
-    
+    listPanes,
+    async sendText(pane, text) {
+      const result = await osascript(SEND_TEXT_SCRIPT, [pane, text]);
+      if (result !== "ok") throw new Error(`Ghostty could not type into pane ${pane}`);
+    },
+    async focusPane(pane) {
+      const result = await osascript(FOCUS_SCRIPT, [pane]);
+      if (result !== "ok") throw new Error(`Ghostty could not focus pane ${pane}`);
+    },
     async split({ from, direction, command, size }) {
       const startDir = directories.get(from.id) ?? process.cwd();
       const opened = await osascript(splitScript(direction), [

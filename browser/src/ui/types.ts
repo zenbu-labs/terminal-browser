@@ -37,15 +37,17 @@ export interface DownloadView {
   state: "progressing" | "done" | "failed";
 }
 
-export interface PageMenuIcon {
-  d: string;
-  tint?: "red";
-  weight?: number;
-}
+export type PageMenuIcon =
+  | { kind: "path"; d: string; tint?: "red"; weight?: number }
+  | { kind: "image"; src: string };
 
-export type PageMenuItem =
-  | { id: string; label: string; enabled: boolean; shortcut: string; icon?: PageMenuIcon }
-  | { id: string; separator: true };
+export interface PageMenuItem {
+  id: string;
+  label: string;
+  enabled: boolean;
+  shortcut: string;
+  icon?: PageMenuIcon;
+}
 
 export interface PageMenuView {
   x: number;
@@ -72,6 +74,7 @@ export interface ChromeActions {
   tabSwitch(id: number): void;
   tabClose(id: number): void;
   tabNew(): void;
+  tabMenu(): void;
   newTabQuery(text: string): void;
   newTabSubmit(text: string): void;
   newTabPick(index: number): void;

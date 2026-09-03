@@ -1,4 +1,4 @@
-export type { Detect, Direction, Pane, PaneContext, SplitRequest, Terminal } from "./terminal";
+export type { Detect, Direction, Pane, PaneContext, PaneDetails, SplitRequest, Terminal } from "./terminal";
 export { canSplit } from "./terminal";
 export type { Run } from "./run";
 export { shellIn } from "./run";
@@ -7,3 +7,4 @@ export type { TerminalCheck } from "./detect";
 export { cannotOpenPanes, checkTerminal, detect } from "./detect";
 export type { GraphicsSupport } from "./graphics";
 export { probeGraphics, unsupportedGraphicsMessage, SKIP_ENV as GRAPHICS_SKIP_ENV } from "./graphics";
+export { codingAgent } from "./agents";

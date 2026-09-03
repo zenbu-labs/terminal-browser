@@ -154,7 +154,7 @@ export function TabStrip({
   const padX = rem * 0.7;
   const innerGap = rem * 0.35;
   const gap = rem * 0.3;
-  const avail = Math.max(0, width - rem * 1.55) - gap * tabs.length;
+  const avail = Math.max(0, width - rem * 3.1) - gap * tabs.length;
   const minInactive = padX * 2 + slotW;
   const capInactive = rem * 10;
   const minActive = Math.min(rem * 10, avail);
@@ -299,6 +299,20 @@ export function TabStrip({
         onClick={actions.tabNew}
       >
         <Icon icon="plus" size={rem * 1} color={theme.muted} />
+      </Box>
+      <Box
+        style={{
+          width: rem * 1.3,
+          height: rem * 1.3,
+          alignItems: "center",
+          justifyContent: "center",
+          cornerRadius: rem * 0.65,
+          hoverBackground: theme.hover,
+          flexShrink: 0,
+        }}
+        onClick={actions.tabMenu}
+      >
+        <Icon icon="more" size={rem * 1} color={theme.muted} />
       </Box>
     </Box>
   );
