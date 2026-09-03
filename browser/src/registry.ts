@@ -1,6 +1,4 @@
-import fs from "node:fs";
 import net from "node:net";
-import path from "node:path";
 
 import { callerTty } from "pixel-terminals";
 import {
@@ -14,7 +12,7 @@ import {
 import type { InstanceRow, OpenResult, OpenSpec } from "pixel-store";
 
 import type { BrowserState } from "./page/types";
-import { INSTANCES_DIR } from "pixel-store";
+import { makeRoomForSocket, removeSocket, socketPath } from "pixel-store";
 
 export interface Where {
   terminal: string | null;
@@ -65,9 +63,8 @@ export class Registry {
   constructor(host: ControlHost) {
     this.host = host;
     this.tty = host.tty ?? callerTty().path;
-    this.socketPath = path.join(INSTANCES_DIR, `${host.key}.sock`);
-    fs.mkdirSync(INSTANCES_DIR, { recursive: true });
-    fs.rmSync(this.socketPath, { force: true });
+    this.socketPath = socketPath("instances", `${host.key}.sock`);
+    makeRoomForSocket(this.socketPath);
     this.server = net.createServer((connection) => this.serve(connection));
     this.server.on("error", () => {});
     this.server.listen(this.socketPath);
@@ -107,7 +104,7 @@ export class Registry {
     this.server = null;
     void removeInstance(this.host.key).catch(() => {});
     withdrawInstance(this.host.key);
-    fs.rmSync(this.socketPath, { force: true });
+    removeSocket(this.socketPath);
   }
 
   private write() {

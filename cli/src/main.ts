@@ -325,11 +325,13 @@ async function attachHere(argv: string[]): Promise<never> {
   });
   socket.on("close", () => process.exit(0));
   socket.on("error", () => process.exit(1));
-  process.on("SIGWINCH", () => {
-    try {
-      socket.write('{"cmd":"resize"}\n');
-    } catch {}
-  });
+  if (process.platform !== "win32") {
+    process.on("SIGWINCH", () => {
+      try {
+        socket.write('{"cmd":"resize"}\n');
+      } catch {}
+    });
+  }
   const requestClose = () => {
     try {
       socket.write('{"cmd":"close"}\n');

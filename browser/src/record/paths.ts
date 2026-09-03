@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { urlHost } from "../url";
 
-const OUTPUT_ROOT = "/tmp/recordings";
+const OUTPUT_ROOT =
+  process.platform === "win32" ? path.join(os.tmpdir(), "recordings") : "/tmp/recordings";
 
 export function newRecordingDir(pageUrl: string): string {
   const now = new Date();

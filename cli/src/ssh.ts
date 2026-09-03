@@ -381,7 +381,7 @@ function freshControlPath(): string {
   const name = `${process.pid.toString(36)}-${Date.now().toString(36).slice(-5)}`;
   const dir = path.join(os.tmpdir(), "tb-ssh");
   const candidate = path.join(dir, name);
-  if (candidate.length <= 80) {
+  if (process.platform === "win32" || candidate.length <= 80) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     return candidate;
   }
