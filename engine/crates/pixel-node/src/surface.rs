@@ -145,6 +145,7 @@ mod tests {
         let SurfaceCommand::Frame(frame) = &commands[0] else {
             panic!("expected a frame");
         };
+        #[cfg_attr(windows, allow(irrefutable_let_patterns))]
         let SurfacePixels::Owned { bgra, .. } = &frame.pixels else {
             panic!("expected owned pixels");
         };
