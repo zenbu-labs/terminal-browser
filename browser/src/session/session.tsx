@@ -1641,7 +1641,7 @@ class Session {
       },
       {
         id: "grab",
-        label: this.activeGrab()?.active ? "[placeholder copy: stop sending to agent]" : "send to agent",
+        label: this.activeGrab()?.active ? "stop selection" : "send to agent",
         shortcut: grabKeyLabel,
         run: () => void this.toggleGrab(),
       },

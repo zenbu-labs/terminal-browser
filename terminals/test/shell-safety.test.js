@@ -7,15 +7,13 @@ const { test } = require("node:test");
 
 const { bracketedPaste, shellLiteral } = require("../dist/shared.js");
 
-// Types bytes into an interactive shell on a real pty, the way a raw-byte terminal backend
-// delivers sendText. Execution is detected by a marker file the payload tries to create.
 function typeIntoShell(argv, inputs) {
   const spec = JSON.stringify({ argv, inputs, settle_ms: 700 });
   const run = spawnSync("python3", [path.join(__dirname, "pty-shell.py"), spec], {
     encoding: "utf8",
     timeout: 20000,
   });
-  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.status, 0, run.stderr || `pty-shell exited ${run.status}`);
   return run.stdout;
 }
 
@@ -53,14 +51,13 @@ for (const [name, argv] of SHELLS) {
     assert.ok(/not found|no such file/i.test(output), `shell should reject the word as a command, got ${JSON.stringify(output.slice(-300))}`);
   });
 
-  test(`${name}: multi-line text wrapped in bracketed paste is inserted, not executed`, () => {
-    const file = marker();
-    typeIntoShell(argv, [bracketedPaste(`> touch ${file}\n\n`), ""]);
-    const ran = fs.existsSync(file);
-    fs.rmSync(file, { force: true });
-    // bash 3.x (macOS /bin/bash) predates bracketed paste, so the wrapped newline is Enter
-    // there; that is why newlines are only ever appended for agent panes, never shells
-    if (name === "bash") return;
-    assert.equal(ran, false, "zsh honours bracketed paste, the pasted newline must not submit");
-  });
+  if (name === "zsh") {
+    test(`${name}: multi-line text wrapped in bracketed paste is inserted, not executed`, () => {
+      const file = marker();
+      typeIntoShell(argv, [bracketedPaste(`> touch ${file}\n\n`), ""]);
+      const ran = fs.existsSync(file);
+      fs.rmSync(file, { force: true });
+      assert.equal(ran, false, "zsh honours bracketed paste, the pasted newline must not submit");
+    });
+  }
 }

@@ -7,12 +7,16 @@ cancelled with ctrl-c and the shell is asked to exit. Everything the shell print
 import json
 import os
 import select
+import shutil
 import sys
+import tempfile
 import time
 
 spec = json.loads(sys.argv[1])
+scratch = tempfile.mkdtemp(prefix="pty-shell-")
 pid, fd = os.forkpty()
 if pid == 0:
+    os.chdir(scratch)
     os.environ["TERM"] = "xterm-256color"
     os.environ["PS1"] = "$ "
     os.execvp(spec["argv"][0], spec["argv"])
@@ -48,4 +52,9 @@ try:
     os.kill(pid, 9)
 except OSError:
     pass
+leftovers = os.listdir(scratch)
+shutil.rmtree(scratch, ignore_errors=True)
+if leftovers:
+    sys.stderr.write("shell created files: " + ", ".join(sorted(leftovers)) + "\n")
+    sys.exit(3)
 sys.stdout.buffer.write(output)

@@ -74,7 +74,7 @@ export class AgentPaneFinder {
       if (!target) return null;
       await terminal.sendText(target.pane, chatMessage(content, target));
     }
-    await terminal.focusPane?.(target.pane);
+    await terminal.focusPane?.(target.pane).catch(() => {});
     return target;
   }
 

@@ -31,19 +31,13 @@ export const tmux: Detect = (env, run) => {
       "list-panes",
       "-a",
       "-F",
-      "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_tty}\t#{pane_current_command}",
+      "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_tty}",
     ]);
     const panes: PaneDetails[] = [];
     for (const line of listing.split("\n")) {
       if (!line.trim()) continue;
-      const [session, window, pane, tty, command] = line.split("\t");
-      panes.push({
-        id: pane,
-        tab: `${session}:${window}`,
-        tty: tty || null,
-        // pane_current_command is a process name, not argv; ps on the tty fills in the rest
-        command: command || null,
-      });
+      const [session, window, pane, tty] = line.split("\t");
+      panes.push({ id: pane, tab: `${session}:${window}`, tty: tty || null, command: null });
     }
     return panes;
   }
