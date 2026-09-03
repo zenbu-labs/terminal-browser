@@ -19,6 +19,7 @@ const GRANTED = new Set([
   "pointerLock",
   "clipboard-sanitized-write",
   "midi",
+  "local-network-access",
 ]);
 
 const configured = new WeakSet<Session>();
