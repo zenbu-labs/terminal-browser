@@ -200,7 +200,7 @@ pub struct Terminal {
     lone_escape_since: Option<Instant>,
     transport: FrameTransport,
     herdr: Option<crate::herdr::Herdr>,
-    herdr_target: Option<crate::herdr::HerdrTarget>,
+    herdr_target: Option<HerdrTarget>,
     herdr_retry: Option<(Instant, Duration)>,
     frame_files: Vec<FrameFile>,
     frame_seq: u64,
@@ -227,6 +227,22 @@ struct ClipRead {
 const CLIP_READ_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const LONE_ESCAPE_WAIT: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Debug)]
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) struct HerdrTarget {
+    pub(crate) pane: String,
+    pub(crate) socket: String,
+}
+
+impl HerdrTarget {
+    pub(crate) fn from_env(env: &SessionEnv) -> Option<Self> {
+        Some(Self {
+            pane: env.var("HERDR_PANE_ID")?,
+            socket: env.var("HERDR_SOCKET_PATH")?,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct SessionEnv {
@@ -277,7 +293,7 @@ impl Terminal {
             lone_escape_since: None,
             transport: FrameTransport::Inline,
             herdr: None,
-            herdr_target: crate::herdr::HerdrTarget::from_env(&env),
+            herdr_target: HerdrTarget::from_env(&env),
             herdr_retry: None,
             frame_files: Vec::new(),
             frame_seq: 0,
@@ -982,6 +998,7 @@ fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
     Some(rest.starts_with(b"OK"))
 }
 
+#[cfg(unix)]
 #[allow(unsafe_code)]
 pub(crate) struct FrameFile {
     path: std::path::PathBuf,
@@ -989,6 +1006,7 @@ pub(crate) struct FrameFile {
     len: usize,
 }
 
+#[cfg(unix)]
 #[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
 impl FrameFile {
     pub(crate) fn create(path: std::path::PathBuf, len: usize) -> io::Result<Self> {
@@ -1030,6 +1048,7 @@ impl FrameFile {
     }
 }
 
+#[cfg(unix)]
 #[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
 impl Drop for FrameFile {
     fn drop(&mut self) {
@@ -1040,6 +1059,40 @@ impl Drop for FrameFile {
     }
 }
 
+#[cfg(windows)]
+pub(crate) struct FrameFile {
+    path: std::path::PathBuf,
+    file: std::fs::File,
+    len: usize,
+}
+
+#[cfg(windows)]
+impl FrameFile {
+    pub(crate) fn create(path: std::path::PathBuf, len: usize) -> io::Result<Self> {
+        let _ = std::fs::remove_file(&path);
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.set_len(len as u64)?;
+        Ok(Self { path, file, len })
+    }
+
+    pub(crate) fn write(&mut self, data: &[u8]) {
+        use std::io::{Seek as _, Write as _};
+        let _ = self.file.rewind().and_then(|()| self.file.write_all(data));
+    }
+}
+
+#[cfg(windows)]
+impl Drop for FrameFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(unix)]
 #[allow(unsafe_code)]
 pub(crate) fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
     let fd = rustix::shm::open(
@@ -1063,9 +1116,18 @@ pub(crate) fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+pub(crate) fn write_shm(_name: &str, _data: &[u8]) -> io::Result<()> {
+    Err(io::Error::other("shared memory frames need a unix terminal"))
+}
+
+#[cfg(unix)]
 fn unlink_shm(name: &str) {
     let _ = rustix::shm::unlink(name);
 }
+
+#[cfg(windows)]
+fn unlink_shm(_name: &str) {}
 
 impl Drop for Terminal {
     fn drop(&mut self) {
@@ -1782,6 +1844,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     #[allow(unsafe_code)]
     fn shm_roundtrip() {
         let name = format!("/px-test-{}", std::process::id());
@@ -2312,7 +2375,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tty_tests {
     use super::*;
 

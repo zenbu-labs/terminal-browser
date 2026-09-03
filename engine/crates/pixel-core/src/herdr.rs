@@ -4,26 +4,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::canvas::Canvas;
-use crate::terminal::FrameFile;
+use crate::terminal::{FrameFile, HerdrTarget};
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(12);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 const SLOTS: u64 = 3;
-
-#[derive(Clone, Debug)]
-pub(crate) struct HerdrTarget {
-    pub(crate) pane: String,
-    pub(crate) socket: String,
-}
-
-impl HerdrTarget {
-    pub(crate) fn from_env(env: &crate::terminal::SessionEnv) -> Option<Self> {
-        Some(Self {
-            pane: env.var("HERDR_PANE_ID")?,
-            socket: env.var("HERDR_SOCKET_PATH")?,
-        })
-    }
-}
 
 pub(crate) struct Herdr {
     frames: BufReader<UnixStream>,
