@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { codingAgent } from "../agents";
 import { appleScript } from "../applescript";
 import { panePixels } from "../graphics";
 import { setPaneWorkingDirectory, shellQuote, sleep } from "../shared";
@@ -12,23 +13,13 @@ on run argv
   set out to ""
   set sep to tab
   tell application "Ghostty"
-    set frontId to ""
-    try
-      set frontId to id of front window
-    end try
     repeat with w in windows
       try
         set wid to id of w
         repeat with tb in tabs of w
           try
-            set tabSelected to selected of tb
-            set focusedId to ""
-            try
-              set focusedId to id of (focused terminal of tb)
-            end try
             repeat with term in terminals of tb
               try
-                set tid to id of term
                 set pd to ""
                 set ty to ""
                 try
@@ -37,7 +28,7 @@ on run argv
                 try
                   set ty to tty of term
                 end try
-                set out to out & wid & sep & (id of tb) & sep & tid & sep & (working directory of term) & sep & pd & sep & ty & sep & (tid is focusedId) & sep & (tabSelected and (wid is frontId)) & sep & (name of term) & linefeed
+                set out to out & wid & sep & (id of tb) & sep & (id of term) & sep & pd & sep & ty & sep & (working directory of term) & linefeed
               end try
             end repeat
           end try
@@ -190,18 +181,10 @@ export const ghostty: Detect = (env, run) => {
     directories.clear();
     for (const line of (await osascript(LIST_SCRIPT, [])).split("\n")) {
       if (!line.trim()) continue;
-      const [window, tab, pane, directory, pid, tty, focusedInTab, visible, ...title] = line.split("\t");
-      directories.set(pane, directory);
+      const [window, tab, pane, pid, tty, ...directory] = line.split("\t");
+      directories.set(pane, directory.join("\t"));
       if (pid && !tty) pids.set(pane, pid);
-      listed.push({
-        id: pane,
-        tab: `${window}:${tab}`,
-        tty: tty || null,
-        title: title.join("\t") || null,
-        command: null,
-        agent: null,
-        focused: focusedInTab === "true" && visible === "true",
-      });
+      listed.push({ id: pane, tab: `${window}:${tab}`, tty: tty || null, command: null });
     }
     if (pids.size > 0) {
       const byPid = new Map<string, string>();
@@ -222,11 +205,9 @@ export const ghostty: Detect = (env, run) => {
 
   const panes = (): Promise<Pane[]> => listPanes();
 
-  async function getCurrentPane({ tty, cwd }: PaneContext): Promise<Pane | null> {
-    if (!tty) return null;
-    const before = await listPanes();
-    const byTty = before.find((pane) => pane.tty === tty);
-    if (byTty) return byTty;
+  const paneByTty = new Map<string, string>();
+
+  async function markPane(tty: string, cwd: string, listed: PaneDetails[]): Promise<string | null> {
     const marker = markerDirectory();
     let restoreTo = cwd;
     try {
@@ -236,15 +217,62 @@ export const ghostty: Detect = (env, run) => {
         const id = await osascript(FIND_BY_DIRECTORY_SCRIPT, [marker]);
         if (!id) continue;
         restoreTo = directories.get(id) ?? restoreTo;
-        return before.find((pane) => pane.id === id) ?? null;
+        paneByTty.set(tty, id);
+        return listed.some((pane) => pane.id === id) ? id : null;
       }
-      throw new Error(
-        `could not find this pane in Ghostty — we marked ${tty} and no Ghostty pane reported it back, so ${tty} is not a Ghostty pane (a shell inside tmux or a remote session looks like this)`,
-      );
+      return null;
     } finally {
       setPaneWorkingDirectory(tty, restoreTo);
       fs.rmSync(marker, { recursive: true, force: true });
     }
+  }
+
+  async function agentTtys(): Promise<Map<string, string>> {
+    const byTty = new Map<string, string[]>();
+    const listing = await run("ps", ["-e", "-o", "tty=,args="]).catch(() => "");
+    for (const line of listing.split("\n")) {
+      const parts = line.trim().match(/^(\S+)\s+(.*)$/);
+      if (!parts || parts[1].startsWith("?")) continue;
+      const tty = `/dev/${parts[1]}`;
+      byTty.set(tty, [...(byTty.get(tty) ?? []), parts[2]]);
+    }
+    const agents = new Map<string, string>();
+    for (const [tty, commands] of byTty) {
+      const command = commands.join("\n");
+      if (codingAgent(command)) agents.set(tty, command);
+    }
+    return agents;
+  }
+
+  async function listPanesWithAgents(): Promise<PaneDetails[]> {
+    const listed = await listPanes();
+    if (listed.some((pane) => pane.tty)) return listed;
+    for (const [tty, command] of await agentTtys()) {
+      const known = paneByTty.get(tty);
+      const id =
+        known && listed.some((pane) => pane.id === known)
+          ? known
+          : await markPane(tty, "/", listed).catch(() => null);
+      const pane = listed.find((candidate) => candidate.id === id);
+      if (!pane) continue;
+      pane.tty = tty;
+      pane.command = command;
+    }
+    return listed;
+  }
+
+  async function getCurrentPane({ tty, cwd }: PaneContext): Promise<Pane | null> {
+    if (!tty) return null;
+    const before = await listPanes();
+    const byTty = before.find((pane) => pane.tty === tty);
+    if (byTty) return byTty;
+    const id = await markPane(tty, cwd, before);
+    if (!id) {
+      throw new Error(
+        `could not find this pane in Ghostty — we marked ${tty} and no Ghostty pane reported it back, so ${tty} is not a Ghostty pane (a shell inside tmux or a remote session looks like this)`,
+      );
+    }
+    return before.find((pane) => pane.id === id) ?? null;
   }
 
   async function sizeSplit(pane: string, direction: Direction, size: number) {
@@ -268,7 +296,7 @@ export const ghostty: Detect = (env, run) => {
   return {
     name: "ghostty",
     getCurrentPane,
-    listPanes,
+    listPanes: listPanesWithAgents,
     async sendText(pane, text) {
       const result = await osascript(SEND_TEXT_SCRIPT, [pane, text]);
       if (result !== "ok") throw new Error(`Ghostty could not type into pane ${pane}`);

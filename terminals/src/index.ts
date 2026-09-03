@@ -2,7 +2,7 @@ export type { Detect, Direction, Pane, PaneContext, PaneDetails, SplitRequest, T
 export { canSplit } from "./terminal";
 export type { Run } from "./run";
 export { shellIn } from "./run";
-export { callerTty } from "./shared";
+export { bracketedPaste, callerTty, shellLiteral } from "./shared";
 export type { TerminalCheck } from "./detect";
 export { cannotOpenPanes, checkTerminal, detect } from "./detect";
 export type { GraphicsSupport } from "./graphics";

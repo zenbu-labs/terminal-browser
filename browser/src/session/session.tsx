@@ -1416,7 +1416,7 @@ class Session {
   private async sendGrab(content: string) {
     this.root?.setClipboard(content);
     try {
-      const target = await this.agentPanes.send(`> ${content.replace(/\s+/g, " ").trim()}\n\n`);
+      const target = await this.agentPanes.send(content);
       this.showToast(target ? "Sent to agent" : "copied to clipboard", "done");
     } catch (error) {
       this.showToast(error instanceof Error ? error.message : String(error), "failed");
@@ -1426,7 +1426,7 @@ class Session {
   private grabMenuItem(): PageMenuItem {
     return {
       id: "grab",
-      label: this.activeGrab()?.active ? "stop grabbing" : "grab",
+      label: this.activeGrab()?.active ? "stop selection" : "send to agent",
       enabled: true,
       shortcut: grabKeyLabel,
       icon: this.grabIcon ? { kind: "image", src: this.grabIcon } : undefined,
@@ -1641,7 +1641,7 @@ class Session {
       },
       {
         id: "grab",
-        label: this.activeGrab()?.active ? "stop grabbing" : "grab",
+        label: this.activeGrab()?.active ? "[placeholder copy: stop sending to agent]" : "send to agent",
         shortcut: grabKeyLabel,
         run: () => void this.toggleGrab(),
       },

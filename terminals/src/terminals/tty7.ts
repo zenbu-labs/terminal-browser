@@ -1,4 +1,4 @@
-import { paneById, shellQuote } from "../shared";
+import { bracketedPaste, paneById, shellQuote } from "../shared";
 import type { Detect, Pane, PaneDetails } from "../terminal";
 
 interface Tty7Pane {
@@ -37,17 +37,15 @@ export const tty7: Detect = (env, run) => {
       list(["pane", "ls", "--json"]),
       list(["pane", "ls", "--all", "--json"]),
     ]);
-    const titles = new Map(running.filter((pane) => pane.live).map((pane) => [pane.pane, pane.title]));
+    // tty7 reports the foreground process name as the pane title
+    const commands = new Map(running.filter((pane) => pane.live).map((pane) => [pane.pane, pane.title]));
     return placed
-      .filter((pane) => titles.has(pane.pane))
+      .filter((pane) => commands.has(pane.pane))
       .map((pane) => ({
         id: String(pane.pane),
         tab: `${pane.workspace ?? ""}:${pane.tab ?? ""}`,
         tty: null,
-        title: titles.get(pane.pane) || null,
-        command: titles.get(pane.pane) || null,
-        agent: null,
-        focused: false,
+        command: commands.get(pane.pane) || null,
       }));
   }
 
@@ -56,7 +54,7 @@ export const tty7: Detect = (env, run) => {
     getCurrentPane: () => paneById(panes, selfId()),
     listPanes,
     async sendText(pane, text) {
-      await tty7(["send", `%${pane}`, text]);
+      await tty7(["send", `%${pane}`, bracketedPaste(text)]);
     },
     async split({ from, direction, command, size }) {
       if (direction !== "right" && direction !== "down") {

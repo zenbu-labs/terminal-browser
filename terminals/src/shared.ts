@@ -52,3 +52,12 @@ export function shellQuote(argv: string[]): string {
 }
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function shellLiteral(text: string): string {
+  return `'${text.replace(/['\\]/g, (char) => (char === "'" ? "'\\''" : "'\\\\'"))}'`;
+}
+
+export function bracketedPaste(text: string): string {
+  if (!text.includes("\n")) return text;
+  return `\x1b[200~${text.replaceAll("\x1b[201~", "")}\x1b[201~`;
+}

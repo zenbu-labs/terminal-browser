@@ -31,22 +31,10 @@ export const supacode: Detect = (env, run) => {
     const worktrees = env.SUPACODE_WORKTREE_ID ? [env.SUPACODE_WORKTREE_ID] : await lines(["worktree", "list"]);
     const found: PaneDetails[] = [];
     for (const worktree of worktrees) {
-      const [tabs, focusedTabs] = await Promise.all([
-        lines(["tab", "list", "-w", worktree]),
-        lines(["tab", "list", "-w", worktree, "-f"]).catch(() => [] as string[]),
-      ]);
-      for (const tab of tabs) {
+      for (const tab of await lines(["tab", "list", "-w", worktree])) {
         for (const surface of await lines(["surface", "list", "-w", worktree, "-t", tab])) {
           homes.set(surface, { worktree, tab });
-          found.push({
-            id: surface,
-            tab,
-            tty: null,
-            title: null,
-            command: null,
-            agent: null,
-            focused: focusedTabs.includes(tab),
-          });
+          found.push({ id: surface, tab, tty: null, command: null });
         }
       }
     }

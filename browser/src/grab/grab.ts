@@ -115,10 +115,12 @@ export class Grab {
 
   private receive(message: GrabMessage) {
     if (message.type === "active") {
-      this.active = message.active;
+      if (!message.active) this.active = false;
       return;
     }
     if (message.type === "selected") {
+      if (!this.active) return;
+      this.active = false;
       this.hooks.selected(message.content);
       void this.deactivate();
     }

@@ -8,12 +8,11 @@ interface Listed {
 }
 
 interface CmuxTree {
-  active?: { surface_id?: string };
   windows?: {
     workspaces?: {
       id: string;
       panes?: {
-        surfaces?: { id: string; type?: string; title?: string; tty?: string | null }[];
+        surfaces?: { id: string; type?: string; tty?: string | null }[];
       }[];
     }[];
   }[];
@@ -55,10 +54,7 @@ export const cmux: Detect = (env, run) => {
               id: surface.id,
               tab: workspace.id,
               tty: surface.tty || null,
-              title: surface.title || null,
               command: null,
-              agent: null,
-              focused: surface.id === tree.active?.surface_id,
             });
           }
         }
@@ -72,7 +68,7 @@ export const cmux: Detect = (env, run) => {
     getCurrentPane: () => paneById(panes, env.CMUX_SURFACE_ID),
     listPanes,
     async sendText(pane, text) {
-      await cmux(["send", "--surface", pane, "--", text]);
+      await cmux(["rpc", "terminal.paste", JSON.stringify({ text, surface_id: pane, submit_key: "none" })]);
     },
     async focusPane(pane) {
       await cmux(["focus-panel", "--panel", pane]);

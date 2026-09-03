@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { shellQuote } from "../shared";
+import { bracketedPaste, shellQuote } from "../shared";
 import type { Detect, Direction, PaneDetails } from "../terminal";
 
 interface HerdrPaneSplitResult {
@@ -14,10 +14,6 @@ interface HerdrPane {
   pane_id: string;
   tab_id: string;
   workspace_id?: string;
-  focused?: boolean;
-  terminal_title_stripped?: string;
-  terminal_title?: string;
-  agent?: string;
 }
 
 interface HerdrProcessInfo {
@@ -93,11 +89,8 @@ export const herdr: Detect = (env, run) => {
       id: pane.pane_id,
       tab: pane.tab_id,
       tty: processes[i].shell_pid != null ? ttyByPid.get(processes[i].shell_pid!) ?? null : null,
-      title: pane.terminal_title_stripped || pane.terminal_title || null,
       command:
         (processes[i].foreground_processes ?? []).map((process) => process.cmdline ?? "").join("\n") || null,
-      agent: pane.agent || null,
-      focused: pane.focused === true,
     }));
   }
 
@@ -147,7 +140,7 @@ export const herdr: Detect = (env, run) => {
     getCurrentPane: async () => ({ id: env.HERDR_PANE_ID!, tab: env.HERDR_TAB_ID! }),
     listPanes,
     async sendText(pane, text) {
-      await herdr(["pane", "send-text", pane, text]);
+      await herdr(["pane", "send-text", pane, bracketedPaste(text)]);
     },
     focusPane,
     async split({ from, direction, command, size }) {

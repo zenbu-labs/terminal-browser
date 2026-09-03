@@ -9,10 +9,7 @@ export interface Pane {
 
 export interface PaneDetails extends Pane {
   tty: string | null;
-  title: string | null;
   command: string | null;
-  agent: string | null;
-  focused: boolean;
 }
 
 export interface PaneContext {

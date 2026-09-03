@@ -14,17 +14,13 @@ const SETUP_HINT = [
 
 interface KittyWindow {
   id: number;
-  title: string;
   pid?: number | null;
-  is_active?: boolean;
-  is_focused?: boolean;
   foreground_processes?: { pid?: number; cmdline?: string[] }[];
 }
 
 interface KittyTab {
   id: number;
   is_active: boolean;
-  is_focused?: boolean;
   layout: string;
   enabled_layouts: string[];
   windows: KittyWindow[];
@@ -32,8 +28,6 @@ interface KittyTab {
 
 interface KittyOsWindow {
   id: number;
-  is_active?: boolean;
-  is_focused?: boolean;
   tabs: KittyTab[];
 }
 
@@ -109,15 +103,10 @@ export const kitty: Detect = (env, run) => {
               id: String(window.id),
               tab: `${osWindow.id}:${tab.id}`,
               tty: null,
-              title: window.title || null,
               command:
                 (window.foreground_processes ?? [])
                   .map((process) => (process.cmdline ?? []).join(" "))
                   .join("\n") || null,
-              agent: null,
-              focused:
-                window.is_focused === true ||
-                (osWindow.is_active === true && tab.is_active && window.is_active === true),
             },
           });
         }
