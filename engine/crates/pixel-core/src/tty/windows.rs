@@ -9,7 +9,8 @@ use windows_sys::Win32::Foundation::{
     FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_FAILED, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::Console::{
-    CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
+    ATTACH_PARENT_PROCESS, AttachConsole, CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO,
+    DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
     ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT,
     ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode,
     GetConsoleScreenBufferInfo, GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
@@ -125,6 +126,7 @@ pub(crate) struct Tty {
 
 impl Tty {
     pub(crate) fn stdio() -> io::Result<Self> {
+        adopt_parent_console();
         let console_in = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
         let console_out = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
         if console_in == INVALID_HANDLE_VALUE || console_out == INVALID_HANDLE_VALUE {
@@ -250,6 +252,18 @@ impl Drop for Tty {
         let _ = set_console_mode(self.console_in, self.saved_in);
         let _ = set_console_mode(self.console_out, self.saved_out);
     }
+}
+
+// A program that opens windows is given no console of its own, even when it
+// was started from one and handed its handles, and the console calls below
+// only answer for a console this process has joined.
+fn adopt_parent_console() {
+    let mut mode = 0;
+    let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if unsafe { GetConsoleMode(input, &mut mode) } != 0 {
+        return;
+    }
+    unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
 }
 
 fn console_mode(handle: HANDLE) -> io::Result<CONSOLE_MODE> {

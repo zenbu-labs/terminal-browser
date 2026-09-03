@@ -73,11 +73,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const ELECTRON_DIST_BIN =
   process.platform === "darwin"
     ? ["terminal-browser.app", "Contents", "MacOS", "terminal-browser"]
-    : ["electron"];
+    : process.platform === "win32"
+      ? ["terminal-browser.exe"]
+      : ["electron"];
 const ELECTRON_DEV_BIN =
   process.platform === "darwin"
     ? ["Electron.app", "Contents", "MacOS", "Electron"]
-    : ["electron"];
+    : process.platform === "win32"
+      ? ["electron.exe"]
+      : ["electron"];
 
 function browserDirectory(): string {
   return path.resolve(__dirname, "..", "..", "browser");
@@ -89,7 +93,7 @@ function electronBinary(): string {
     : path.join(browserDirectory(), "node_modules", "electron", "dist", ...ELECTRON_DEV_BIN);
 }
 
-function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
+function browserProcess(argv: string[]): { file: string; args: string[]; cwd: string } {
   const browserDir = browserDirectory();
   const electron = electronBinary();
   const main = path.join(browserDir, "dist", "main.js");
@@ -112,13 +116,29 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
     argv = [...argv, "--ozone-platform=headless", "--screen-info={8192x8192}"];
   }
   ensureDataDir();
-  const logDir = LOGS_DIR;
-  fs.mkdirSync(logDir, { recursive: true });
-  const quoted = [electron, main, ...argv]
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+  return { file: electron, args: [main, ...argv], cwd: browserDir };
+}
+
+function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
+  const { file, args, cwd } = browserProcess(argv);
+  const quoted = [file, ...args]
     .map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`)
     .join(" ");
-  const line = `exec ${quoted} 2>>'${logDir.replaceAll("'", `'\\''`)}/stderr.log'`;
-  return { command: ["/bin/sh", "-c", line], cwd: browserDir };
+  const line = `exec ${quoted} 2>>'${LOGS_DIR.replaceAll("'", `'\\''`)}/stderr.log'`;
+  return { command: ["/bin/sh", "-c", line], cwd };
+}
+
+// Chromium talks on stderr, which would land in the middle of a frame, so it
+// goes to the same log the daemon writes. The console itself is the browser's.
+function runInThisTerminal(argv: string[]): Promise<never> {
+  const { file, args, cwd } = browserProcess([...argv, "--foreground"]);
+  const log = fs.openSync(path.join(LOGS_DIR, "stderr.log"), "a");
+  const child = spawn(file, args, { cwd, stdio: ["inherit", "inherit", log] });
+  return new Promise<never>((_resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+  });
 }
 
 function clientLaunchCommand(argv: string[]): string[] {
@@ -143,6 +163,13 @@ function ownTtyPath(): string | null {
 function interactiveTty(): string | null {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
   return ownTtyPath();
+}
+
+// Windows has no path naming this console, so there is nothing to ask for
+// beyond whether we are attached to one.
+function canDrawHere(): boolean {
+  if (process.platform === "win32") return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  return interactiveTty() !== null;
 }
 
 function browserBuildStamp(): string {
@@ -350,7 +377,8 @@ async function openHere(argv: string[]): Promise<never> {
   await sshSetup(argv).catch((error) =>
     fail(error instanceof Error ? error.message : String(error)),
   );
-  return attachHere(argv).catch((error) => fail(`could not start the browser: ${String(error)}`));
+  const here = process.platform === "win32" ? runInThisTerminal(argv) : attachHere(argv);
+  return here.catch((error) => fail(`could not start the browser: ${String(error)}`));
 }
 
 function flagEq(argv: string[], flag: string): string | undefined {
@@ -465,7 +493,7 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
   if (!key && !mergeDisabled() && (await tryAdopt(url ? [url] : []))) return 0;
   await requireGraphics(check);
   const argv = url ? [url] : [];
-  if (interactiveTty()) return openHere(argv);
+  if (canDrawHere()) return openHere(argv);
   if (!canSplit(check.terminal)) fail(cannotOpenPanes(check.terminal));
   const split = url && fs.existsSync(url) ? [path.resolve(url)] : argv;
   split.push("--split-dir=right");
@@ -600,12 +628,12 @@ async function openCommand(args: string[]) {
     fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
   }
   const targeted = Boolean(process.env.TERMINAL_BROWSER_INTEROP_TARGET);
-  const wouldSplit = split !== null || !interactiveTty();
+  const wouldSplit = split !== null || !canDrawHere();
   if (!noMerge && (wouldSplit || targeted) && !args.some((arg) => arg.startsWith("--ssh="))) {
     if (await tryAdopt(args)) return;
   }
   await requireGraphics(await currentTerminal());
-  if (!split && interactiveTty()) {
+  if (!split && canDrawHere()) {
     return openHere(args);
   }
   const terminal = (await currentTerminal()).terminal;
