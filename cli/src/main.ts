@@ -74,7 +74,7 @@ const ELECTRON_DIST_BIN =
   process.platform === "darwin"
     ? ["terminal-browser.app", "Contents", "MacOS", "terminal-browser"]
     : process.platform === "win32"
-      ? ["terminal-browser.exe"]
+      ? ["electron.exe"]
       : ["electron"];
 const ELECTRON_DEV_BIN =
   process.platform === "darwin"
