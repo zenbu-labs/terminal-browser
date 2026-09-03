@@ -8,7 +8,8 @@ import path from "node:path";
 export interface SshTunnel {
   destination: string;
   socksPort: number;
-  controlPath: string;
+  /** What to put in front of a command to reach the host again. */
+  dial: string[];
   stop(): void;
 }
 
@@ -131,14 +132,8 @@ export async function openSshTunnel(
 ): Promise<SshTunnel> {
   const { destination, hostArgs, aliasCommand } = resolveSshTarget(target);
   if (aliasCommand) status(`${target} is an alias for ssh ${aliasCommand}`);
-  const controlPath = freshControlPath();
   const socksPort = await freePort();
-  const args = [
-    "-f",
-    "-N",
-    "-M",
-    "-S",
-    controlPath,
+  const forwarding = [
     "-D",
     `127.0.0.1:${socksPort}`,
     "-o",
@@ -151,8 +146,19 @@ export async function openSshTunnel(
     destination,
   ];
   status(`connecting to ${destination}`);
+  if (process.platform === "win32") {
+    const tunnel = await heldTunnel(destination, [...hostArgs, destination], socksPort, [
+      "-N",
+      ...forwarding,
+    ]);
+    status(`connected ${destination}`);
+    return tunnel;
+  }
+  const controlPath = freshControlPath();
   const code = await new Promise<number>((resolve, reject) => {
-    const child = spawn("ssh", args, { stdio: "inherit" });
+    const child = spawn("ssh", ["-f", "-N", "-M", "-S", controlPath, ...forwarding], {
+      stdio: "inherit",
+    });
     child.once("error", reject);
     child.once("exit", (exitCode) => resolve(exitCode ?? 1));
   });
@@ -162,7 +168,7 @@ export async function openSshTunnel(
   return {
     destination,
     socksPort,
-    controlPath,
+    dial: ["-S", controlPath, destination],
     stop: () => {
       try {
         spawnSync("ssh", ["-S", controlPath, "-O", "exit", destination], {
@@ -172,6 +178,64 @@ export async function openSshTunnel(
       } catch {}
     },
   };
+}
+
+/** Windows ssh cannot share one connection between commands, so the tunnel is
+ * a child we keep: killing it is what closes the connection, and everything
+ * afterwards dials the host again. With a key or an agent those extra
+ * connections cost nothing; with a password they each ask for it. */
+async function heldTunnel(
+  destination: string,
+  dial: string[],
+  socksPort: number,
+  args: string[],
+): Promise<SshTunnel> {
+  const child = spawn("ssh", args, { stdio: ["pipe", "inherit", "inherit"] });
+  let ended: number | null = null;
+  child.once("exit", (code) => (ended = code ?? 1));
+  child.once("error", () => (ended = 1));
+  await listening(socksPort, destination, () => ended);
+  return {
+    destination,
+    socksPort,
+    dial,
+    stop: () => {
+      try {
+        child.kill();
+      } catch {}
+    },
+  };
+}
+
+/** The proxy is not listening the moment ssh starts: it has to authenticate
+ * first, which can wait on a person typing. Giving up early would report a
+ * refused password as a timeout, so a connection that ends is its own answer. */
+function listening(
+  port: number,
+  destination: string,
+  ended: () => number | null,
+): Promise<void> {
+  const deadline = Date.now() + CONNECT_TIMEOUT_MS;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
+      const socket = net.connect(port, "127.0.0.1");
+      socket.once("connect", () => {
+        socket.end();
+        if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
+        resolve();
+      });
+      socket.once("error", () => {
+        socket.destroy();
+        if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
+        if (Date.now() >= deadline) {
+          return reject(new Error(`the ssh proxy for ${destination} never started listening`));
+        }
+        setTimeout(attempt, 100);
+      });
+    };
+    attempt();
+  });
 }
 
 export function validateBundleDir(dir: string): void {
@@ -192,6 +256,8 @@ export function validateBundleDir(dir: string): void {
     throw new Error(`--ssh-bundle ${dir}/start is not executable`);
   }
 }
+
+const CONNECT_TIMEOUT_MS = 120_000;
 
 const READY_TIMEOUT_MS = 120_000;
 
@@ -252,7 +318,7 @@ function run(
   command: string,
   options: { input?: Buffer; stdio?: "inherit" | "ignore"; timeout?: number } = {},
 ): ReturnType<typeof spawnSync> {
-  return spawnSync("ssh", ["-S", tunnel.controlPath, tunnel.destination, command], {
+  return spawnSync("ssh", [...tunnel.dial, command], {
     input: options.input,
     stdio: options.input ? undefined : options.stdio ?? "ignore",
     timeout: options.timeout,
@@ -300,9 +366,7 @@ function launch(
     "ssh",
     [
       "-tt",
-      "-S",
-      tunnel.controlPath,
-      tunnel.destination,
+      ...tunnel.dial,
       `cd "${remoteDir}" || exit 9; [ -x ./stop ] && ./stop >/dev/null 2>&1; exec ./start`,
     ],
     { stdio: ["ignore", "pipe", "ignore"] },
