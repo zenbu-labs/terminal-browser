@@ -1,4 +1,5 @@
 mod capture;
+mod console;
 mod diff;
 mod events;
 mod highlight;
@@ -261,7 +262,7 @@ fn load_font(candidates: &[&str], fallback: &'static [u8]) -> fontdue::Font {
     parse(fallback).expect("bundled font parses")
 }
 
-fn err(e: impl std::fmt::Display) -> Error {
+pub(crate) fn err(e: impl std::fmt::Display) -> Error {
     Error::from_reason(e.to_string())
 }
 

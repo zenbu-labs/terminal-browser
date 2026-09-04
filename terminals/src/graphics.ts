@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import type { Terminal } from "./terminal";
 
@@ -28,8 +29,46 @@ function graphicsReply(buffer: string): boolean | null {
   return rest.startsWith("OK");
 }
 
+interface NativeConsole {
+  graphics(timeoutMs: number): GraphicsSupport;
+  close(): void;
+}
+
+function nativeModule(): { Console: new () => NativeConsole } | null {
+  const relatives = ["browser/native/pixel.node", "engine/packages/pixel-react/native/pixel.node"];
+  for (let dir = __dirname; ; dir = path.dirname(dir)) {
+    for (const relative of relatives) {
+      const candidate = path.join(dir, relative);
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      if (fs.existsSync(candidate)) return require(candidate);
+    }
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+// A program that opens windows is given no console, so on windows the question
+// goes to the engine, which opens one by name.
+function askTheEngine(): GraphicsSupport | null {
+  try {
+    const native = nativeModule();
+    if (!native) return null;
+    const console = new native.Console();
+    try {
+      return console.graphics(PROBE_TIMEOUT_MS);
+    } finally {
+      console.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** Asks the terminal whether it can draw images. Only works on a real tty. */
 export function probeGraphics(terminal: Terminal | null): Promise<GraphicsSupport> {
+  if (process.platform === "win32") {
+    const answer = askTheEngine();
+    if (answer) return Promise.resolve(answer);
+  }
   const stdin = process.stdin;
   if (!stdin.isTTY || !process.stdout.isTTY || !stdin.setRawMode) {
     return Promise.resolve("unknown");

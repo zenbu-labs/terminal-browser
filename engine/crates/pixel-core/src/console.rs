@@ -4,17 +4,11 @@ use std::time::{Duration, Instant};
 use crate::terminal::{WindowSize, parse_cell_size_report, parse_probe_reply};
 use crate::tty::{Tty, Waker};
 
-/// The terminal as bytes and nothing else: raw mode, reads, writes, and how
-/// big it is. What those bytes mean belongs to Terminal, which is why the
-/// sequences that put a terminal into its drawing modes live there and not
-/// here — two things sending those to one terminal would be arguing.
-///
-/// Only one of these should be open at a time, since they all reach the same
-/// console.
+/// The terminal as bytes and nothing else. What those bytes mean belongs to
+/// Terminal. Only one of these at a time: they all reach the same console.
 pub struct Console(Tty);
 
-/// What a terminal said when asked whether it can draw images. Nothing said
-/// is not the same as no.
+/// Nothing said is not the same as no.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Graphics {
     Supported,
@@ -50,8 +44,7 @@ impl Console {
         self.0.waker()
     }
 
-    /// How big one cell is, which is the only way to say how big the terminal
-    /// is in pixels on a platform that reports it as zero.
+    /// The only way to size the terminal in pixels where it reports zero.
     pub fn cell_size(&mut self, timeout_ms: u64) -> io::Result<Option<(u32, u32)>> {
         self.write(b"\x1b[16t")?;
         self.reply(timeout_ms, parse_cell_size_report)
