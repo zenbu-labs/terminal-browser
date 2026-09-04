@@ -262,7 +262,8 @@ export function validateBundleDir(dir: string): void {
   } catch {
     throw new Error(`--ssh-bundle ${dir} has no start script`);
   }
-  if (!start.isFile() || !(start.mode & 0o111)) {
+  const runnable = process.platform === "win32" || (start.mode & 0o111) !== 0;
+  if (!start.isFile() || !runnable) {
     throw new Error(`--ssh-bundle ${dir}/start is not executable`);
   }
 }
@@ -353,7 +354,15 @@ function upload(tunnel: SshTunnel, dir: string, remoteDir: string): void {
     maxBuffer: 256 * 1024 * 1024,
   });
   if (tar.status !== 0 || !tar.stdout) throw new Error(`could not pack ${dir}`);
-  const result = run(tunnel, `mkdir -p "${remoteDir}" && tar -xz -C "${remoteDir}"`, {
+  const unpack = `mkdir -p "${remoteDir}" && tar -xz -C "${remoteDir}"`;
+  // A bundle packed on windows carries no executable bit, because there is
+  // none to carry, so the scripts a bundle promises are made runnable once
+  // they reach somewhere that has one. A bundle without a stop script is fine.
+  const command =
+    process.platform === "win32"
+      ? `${unpack} && cd "${remoteDir}" && { chmod +x start setup stop 2>/dev/null || true; }`
+      : unpack;
+  const result = run(tunnel, command, {
     input: tar.stdout,
   });
   if (result.status !== 0) {
