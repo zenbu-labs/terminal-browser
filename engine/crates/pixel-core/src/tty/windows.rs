@@ -10,7 +10,7 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::Console::{
     ATTACH_PARENT_PROCESS, AttachConsole, CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO,
-    DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
+    DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, STD_HANDLE,
     ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT,
     ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode,
     GetConsoleScreenBufferInfo, GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
@@ -115,6 +115,8 @@ enum Out {
 
 pub(crate) struct Tty {
     out: Out,
+    /// The console itself, when what this program was handed was not it.
+    console: Option<std::fs::File>,
     console_in: HANDLE,
     console_out: HANDLE,
     saved_in: CONSOLE_MODE,
@@ -127,17 +129,38 @@ pub(crate) struct Tty {
 impl Tty {
     pub(crate) fn stdio() -> io::Result<Self> {
         adopt_parent_console();
-        let console_in = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-        let console_out = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-        if console_in == INVALID_HANDLE_VALUE || console_out == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
+        match console_of(STD_INPUT_HANDLE, "CONIN$")? {
+            Given::Handed => Self::raw(
+                unsafe { GetStdHandle(STD_INPUT_HANDLE) },
+                unsafe { GetStdHandle(STD_OUTPUT_HANDLE) },
+                Input::console()?,
+                Out::Stdout(io::stdout()),
+            ),
+            Given::Opened(reading) => {
+                let writing = match console_of(STD_OUTPUT_HANDLE, "CONOUT$")? {
+                    Given::Opened(file) => Out::File(file),
+                    Given::Handed => Out::Stdout(io::stdout()),
+                };
+                let console_out = match &writing {
+                    Out::File(file) => file.as_raw_handle(),
+                    Out::Stdout(_) => unsafe { GetStdHandle(STD_OUTPUT_HANDLE) },
+                };
+                let console_in = reading.as_raw_handle();
+                let source = reading.try_clone()?;
+                Self::raw(
+                    console_in,
+                    console_out,
+                    Input::start(Box::new(source))?,
+                    writing,
+                )
+                .map(|tty| tty.holding(reading))
+            }
         }
-        Self::raw(
-            console_in,
-            console_out,
-            Input::console()?,
-            Out::Stdout(io::stdout()),
-        )
+    }
+
+    fn holding(mut self, console: std::fs::File) -> Self {
+        self.console = Some(console);
+        self
     }
 
     pub(crate) fn open(path: &str) -> io::Result<Self> {
@@ -169,6 +192,7 @@ impl Tty {
         )?;
         Ok(Self {
             out,
+            console: None,
             console_in,
             console_out,
             saved_in,
@@ -252,6 +276,26 @@ impl Drop for Tty {
         let _ = set_console_mode(self.console_in, self.saved_in);
         let _ = set_console_mode(self.console_out, self.saved_out);
     }
+}
+
+enum Given {
+    /// What the program was handed is the console.
+    Handed,
+    /// It was handed something else, so the console was opened by name.
+    Opened(std::fs::File),
+}
+
+// A program started by one that opens windows is handed that program's idea of
+// input, which is not the console even when there is one. Whatever it was
+// handed, the console can still be opened by name once this process has joined
+// it.
+fn console_of(which: STD_HANDLE, name: &str) -> io::Result<Given> {
+    let handed = unsafe { GetStdHandle(which) };
+    if handed != INVALID_HANDLE_VALUE && console_mode(handed).is_ok() {
+        return Ok(Given::Handed);
+    }
+    let file = std::fs::File::options().read(true).write(true).open(name)?;
+    Ok(Given::Opened(file))
 }
 
 // A program that opens windows is given no console of its own, even when it
