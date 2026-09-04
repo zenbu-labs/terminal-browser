@@ -8,11 +8,17 @@ A real browser that runs inside your terminal
 <video src="https://github.com/user-attachments/assets/abe2f43e-fc50-4866-b753-33388967945d" controls></video>
 
 
-
-### Install (macOS & Linux):
+## Installation
+### curl (macOS & Linux):
 
 ```bash
 curl -fsSL https://terminal-browser.sh/install | bash
+```
+> Note: Run `terminal-browser upgrade` to install the latest version
+
+### Homebrew
+```
+brew install terminal-browser
 ```
 
 ### Usage
