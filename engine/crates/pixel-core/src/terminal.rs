@@ -989,7 +989,7 @@ fn frame_image_id(relayed: bool) -> u32 {
     }
 }
 
-fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
+pub(crate) fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
     let pos = buf.windows(needle.len()).position(|w| w == needle)?;
     let rest = &buf[pos + needle.len()..];
     if rest.len() < 2 {
@@ -1791,7 +1791,7 @@ fn parse_osc_color_reply(seq: &[u8]) -> Option<(ColorSlot, [u8; 4])> {
     Some((slot, parse_rgb_spec(&spec)?))
 }
 
-fn parse_cell_size_report(buf: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn parse_cell_size_report(buf: &[u8]) -> Option<(u32, u32)> {
     let start = buf.windows(4).position(|w| w == b"\x1b[6;")? + 4;
     let end = start + buf[start..].iter().position(|&b| b == b't')?;
     let mut parts = buf[start..end].split(|&b| b == b';');

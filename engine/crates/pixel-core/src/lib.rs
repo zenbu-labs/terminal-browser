@@ -1,4 +1,5 @@
 mod canvas;
+mod console;
 pub mod clipboard_image;
 mod desc;
 mod engine;
@@ -28,6 +29,7 @@ mod tree;
 mod wrap;
 
 pub use canvas::{Canvas, measure_text};
+pub use console::{Console, Graphics};
 pub use desc::Desc;
 pub use engine::{
     ChangeSource, DragPhase, Engine, EngineConfig, EngineEvent, FrameStats, HighlightArea, MarkRef,

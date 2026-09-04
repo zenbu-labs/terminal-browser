@@ -89,15 +89,20 @@ impl Input {
         Some(n)
     }
 
-    // A process has one console, so successive terminals share one reader
-    // rather than racing each other for the same bytes.
-    fn console() -> io::Result<Arc<Self>> {
+    // A process has one console, so every terminal that reads it shares one
+    // reader rather than racing the others for the same bytes. That holds
+    // however the console was reached: a reader started for one terminal
+    // outlives it, and a second reader would take turns with the first,
+    // losing every other keypress to a terminal nobody is using any more.
+    fn console(
+        open: impl FnOnce() -> io::Result<Box<dyn io::Read + Send>>,
+    ) -> io::Result<Arc<Self>> {
         static CONSOLE: Mutex<Option<Arc<Input>>> = Mutex::new(None);
         let mut shared = CONSOLE.lock().unwrap();
         if let Some(input) = shared.as_ref() {
             return Ok(Arc::clone(input));
         }
-        let input = Self::start(Box::new(io::stdin()))?;
+        let input = Self::start(open()?)?;
         *shared = Some(Arc::clone(&input));
         Ok(input)
     }
@@ -133,7 +138,7 @@ impl Tty {
             Given::Handed => Self::raw(
                 unsafe { GetStdHandle(STD_INPUT_HANDLE) },
                 unsafe { GetStdHandle(STD_OUTPUT_HANDLE) },
-                Input::console()?,
+                Input::console(|| Ok(Box::new(io::stdin())))?,
                 Out::Stdout(io::stdout()),
             ),
             Given::Opened(reading) => {
@@ -150,7 +155,7 @@ impl Tty {
                 Self::raw(
                     console_in,
                     console_out,
-                    Input::start(Box::new(source))?,
+                    Input::console(move || Ok(Box::new(source)))?,
                     writing,
                 )
                 .map(|tty| tty.holding(reading))
