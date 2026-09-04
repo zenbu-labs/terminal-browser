@@ -135,5 +135,10 @@ export function unsupportedGraphicsMessage(color = false): string {
     "",
     `  ${sgr("2", "Note: any terminal that supports the kitty graphics protocol is supported")}`,
     "",
+    // Windows cannot run this check from inside a program that opens windows,
+    // so a terminal that does draw images has no way to say so here.
+    ...(process.platform === "win32"
+      ? [`  ${sgr("2", `If this terminal does draw images, set ${SKIP_ENV}=1`)}`, ""]
+      : []),
   ].join("\n");
 }

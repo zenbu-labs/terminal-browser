@@ -165,10 +165,10 @@ function interactiveTty(): string | null {
   return ownTtyPath();
 }
 
-// Windows has no path naming this console, so there is nothing to ask for
-// beyond whether we are attached to one.
+// Windows has no path naming this console, only whether there is one to draw
+// into. Input is left out because the browser reads the console itself.
 function canDrawHere(): boolean {
-  if (process.platform === "win32") return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  if (process.platform === "win32") return process.stdout.isTTY === true;
   return interactiveTty() !== null;
 }
 
