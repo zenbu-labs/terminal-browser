@@ -14,7 +14,7 @@ A real browser that runs inside your terminal
 ```bash
 curl -fsSL https://terminal-browser.sh/install | bash
 ```
-> Note: Run `terminal-browser upgrade` to install the latest version
+> Note: Run `terminal-browser upgrade` to upgrade versions
 
 ### Homebrew
 ```
