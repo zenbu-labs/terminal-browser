@@ -2,11 +2,11 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crate::terminal::{WindowSize, parse_cell_size_report, parse_probe_reply};
-use crate::tty::{Tty, Waker};
+use crate::tty::Probe;
 
 /// The terminal as bytes and nothing else. What those bytes mean belongs to
 /// Terminal. Only one of these at a time: they all reach the same console.
-pub struct Console(Tty);
+pub struct Console(Probe);
 
 /// Nothing said is not the same as no.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,14 +20,14 @@ const PROBE_ID: u32 = 4207;
 
 impl Console {
     pub fn open() -> io::Result<Self> {
-        Ok(Self(Tty::stdio()?))
+        Ok(Self(Probe::probe()?))
     }
 
-    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+    pub fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.0.read(buf)
     }
 
-    pub fn wait(&self, until: Option<Duration>) -> io::Result<bool> {
+    pub fn wait(&mut self, until: Option<Duration>) -> io::Result<bool> {
         self.0.wait_for_input(until)
     }
 
@@ -38,10 +38,6 @@ impl Console {
 
     pub fn size(&self) -> io::Result<WindowSize> {
         self.0.window_size()
-    }
-
-    pub fn waker(&mut self) -> io::Result<Waker> {
-        self.0.waker()
     }
 
     /// The only way to size the terminal in pixels where it reports zero.

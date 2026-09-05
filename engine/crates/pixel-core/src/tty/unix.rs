@@ -83,6 +83,10 @@ impl Tty {
         })
     }
 
+    pub(crate) fn probe() -> io::Result<Self> {
+        Self::stdio()
+    }
+
     pub(crate) fn open(path: &str) -> io::Result<Self> {
         let file = std::fs::File::options().read(true).write(true).open(path)?;
         Self::raw(Handle::File(file))

@@ -3,7 +3,7 @@
 use std::io::{self, Read as _};
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
     FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_FAILED, WAIT_OBJECT_0,
@@ -13,10 +13,11 @@ use windows_sys::Win32::System::Console::{
     DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, STD_HANDLE,
     ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT,
     ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode,
-    GetConsoleScreenBufferInfo, GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
+    GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
+    KEY_EVENT, ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, INFINITE, ResetEvent, SetEvent, WaitForMultipleObjects,
+    CreateEventW, INFINITE, ResetEvent, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
 
 use crate::terminal::WindowSize;
@@ -181,20 +182,7 @@ impl Tty {
         input: Arc<Input>,
         out: Out,
     ) -> io::Result<Self> {
-        let saved_in = console_mode(console_in)?;
-        let saved_out = console_mode(console_out)?;
-        set_console_mode(
-            console_in,
-            (saved_in & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
-                | ENABLE_VIRTUAL_TERMINAL_INPUT,
-        )?;
-        set_console_mode(
-            console_out,
-            saved_out
-                | ENABLE_PROCESSED_OUTPUT
-                | ENABLE_VIRTUAL_TERMINAL_PROCESSING
-                | DISABLE_NEWLINE_AUTO_RETURN,
-        )?;
+        let (saved_in, saved_out) = make_raw(console_in, console_out)?;
         Ok(Self {
             out,
             console: None,
@@ -225,17 +213,7 @@ impl Tty {
     }
 
     pub(crate) fn window_size(&self) -> io::Result<WindowSize> {
-        let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { std::mem::zeroed() };
-        if unsafe { GetConsoleScreenBufferInfo(self.console_out, &mut info) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let window = info.srWindow;
-        Ok(WindowSize {
-            cols: (window.Right - window.Left + 1).max(0) as u32,
-            rows: (window.Bottom - window.Top + 1).max(0) as u32,
-            width_px: 0,
-            height_px: 0,
-        })
+        window_size_of(self.console_out)
     }
 
     pub(crate) fn waker(&mut self) -> io::Result<Waker> {
@@ -283,6 +261,125 @@ impl Drop for Tty {
     }
 }
 
+// A terminal cannot know how many bytes are waiting, so a thread does its
+// blocking reads. A probe asks one question and leaves, and a thread it cannot
+// stop would outlive it and take the answers meant for whoever asks next --
+// including a child process handed the same console. So this reads the input
+// records itself and leaves nothing behind.
+pub(crate) struct Probe {
+    output: std::fs::File,
+    console_in: HANDLE,
+    console_out: HANDLE,
+    saved_in: CONSOLE_MODE,
+    saved_out: CONSOLE_MODE,
+    pending: std::collections::VecDeque<u8>,
+    // Held because closing it would close the handle the fields above use.
+    _input: std::fs::File,
+}
+
+impl Probe {
+    pub(crate) fn probe() -> io::Result<Self> {
+        adopt_parent_console();
+        let input = std::fs::File::options().read(true).write(true).open("CONIN$")?;
+        let output = std::fs::File::options().read(true).write(true).open("CONOUT$")?;
+        let console_in = input.as_raw_handle();
+        let console_out = output.as_raw_handle();
+        let (saved_in, saved_out) = make_raw(console_in, console_out)?;
+        Ok(Self {
+            output,
+            console_in,
+            console_out,
+            saved_in,
+            saved_out,
+            pending: std::collections::VecDeque::new(),
+            _input: input,
+        })
+    }
+
+    pub(crate) fn out(&mut self) -> &mut dyn io::Write {
+        &mut self.output
+    }
+
+    pub(crate) fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let taken = buf.len().min(self.pending.len());
+        for slot in buf.iter_mut().take(taken) {
+            *slot = self.pending.pop_front().expect("checked the length");
+        }
+        Ok(taken)
+    }
+
+    pub(crate) fn window_size(&self) -> io::Result<WindowSize> {
+        window_size_of(self.console_out)
+    }
+
+    pub(crate) fn wait_for_input(&mut self, wait: Option<Duration>) -> io::Result<bool> {
+        let deadline = wait.map(|wait| Instant::now() + wait);
+        loop {
+            if !self.pending.is_empty() {
+                return Ok(true);
+            }
+            let remaining = match deadline {
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Ok(false);
+                    }
+                    Some(left)
+                }
+                None => None,
+            };
+            match unsafe { WaitForSingleObject(self.console_in, timeout_ms(remaining)) } {
+                WAIT_FAILED => return Err(io::Error::last_os_error()),
+                WAIT_OBJECT_0 => self.collect()?,
+                _ => return Ok(false),
+            }
+        }
+    }
+
+    // The console signals for every kind of event, so a wait that wakes may
+    // still have no characters behind it.
+    fn collect(&mut self) -> io::Result<()> {
+        let mut waiting = 0u32;
+        if unsafe { GetNumberOfConsoleInputEvents(self.console_in, &mut waiting) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if waiting == 0 {
+            return Ok(());
+        }
+        let mut records = vec![unsafe { std::mem::zeroed::<INPUT_RECORD>() }; waiting as usize];
+        let mut read = 0u32;
+        if unsafe { ReadConsoleInputW(self.console_in, records.as_mut_ptr(), waiting, &mut read) }
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let mut units = Vec::new();
+        for record in &records[..read as usize] {
+            if u32::from(record.EventType) != KEY_EVENT {
+                continue;
+            }
+            let key = unsafe { record.Event.KeyEvent };
+            let unit = unsafe { key.uChar.UnicodeChar };
+            if key.bKeyDown != 0 && unit != 0 {
+                units.push(unit);
+            }
+        }
+        for character in char::decode_utf16(units) {
+            let character = character.unwrap_or(char::REPLACEMENT_CHARACTER);
+            let mut bytes = [0u8; 4];
+            self.pending.extend(character.encode_utf8(&mut bytes).as_bytes());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Probe {
+    fn drop(&mut self) {
+        let _ = set_console_mode(self.console_in, self.saved_in);
+        let _ = set_console_mode(self.console_out, self.saved_out);
+    }
+}
+
 enum Given {
     /// What the program was handed is the console.
     Handed,
@@ -313,6 +410,39 @@ fn adopt_parent_console() {
         return;
     }
     unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+}
+
+// Answers with the modes that were there, since whoever set raw puts them back.
+fn make_raw(console_in: HANDLE, console_out: HANDLE) -> io::Result<(CONSOLE_MODE, CONSOLE_MODE)> {
+    let saved_in = console_mode(console_in)?;
+    let saved_out = console_mode(console_out)?;
+    set_console_mode(
+        console_in,
+        (saved_in & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
+            | ENABLE_VIRTUAL_TERMINAL_INPUT,
+    )?;
+    set_console_mode(
+        console_out,
+        saved_out
+            | ENABLE_PROCESSED_OUTPUT
+            | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            | DISABLE_NEWLINE_AUTO_RETURN,
+    )?;
+    Ok((saved_in, saved_out))
+}
+
+fn window_size_of(console_out: HANDLE) -> io::Result<WindowSize> {
+    let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { std::mem::zeroed() };
+    if unsafe { GetConsoleScreenBufferInfo(console_out, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let window = info.srWindow;
+    Ok(WindowSize {
+        cols: (window.Right - window.Left + 1).max(0) as u32,
+        rows: (window.Bottom - window.Top + 1).max(0) as u32,
+        width_px: 0,
+        height_px: 0,
+    })
 }
 
 fn console_mode(handle: HANDLE) -> io::Result<CONSOLE_MODE> {
