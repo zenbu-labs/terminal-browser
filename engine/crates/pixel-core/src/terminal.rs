@@ -312,7 +312,15 @@ impl Terminal {
             terminal.io.out().write_all(b"\x1b[>4;2m")?;
             terminal.io.out().flush()?;
         }
-        terminal.mouse_pixels = !wrapper.relayed() && terminal.probe_mouse_pixels()?;
+        // A herdr pane says pixel mouse is on and then sends cell coordinates,
+        // so believing it puts every click in the top-left corner whatever was
+        // clicked. Asking it is pointless until it answers honestly:
+        // zenbu-labs/terminal-browser#97, item 4. Delete this line's middle term
+        // the day it does -- and note that if herdr starts sending real pixels
+        // while this is still here, clicks break the other way instead.
+        terminal.mouse_pixels = !wrapper.relayed()
+            && terminal.herdr_target.is_none()
+            && terminal.probe_mouse_pixels()?;
         terminal.clipboard_data = !wrapper.relayed() && terminal.probe_clipboard_data()?;
         terminal.connect_herdr();
         if terminal.herdr.is_none() && terminal.herdr_target.is_some() {
