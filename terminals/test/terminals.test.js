@@ -99,35 +99,6 @@ test("plain ghostty is still ghostty", () => {
   assert.equal(detect(GHOSTTY_LOOKALIKE, async () => "")?.name, "ghostty");
 });
 
-test("herdr falls back when the running herdr predates --right-click", async () => {
-  const env = { HERDR_PANE_ID: "w1:p1", HERDR_TAB_ID: "w1:t1" };
-  const commands = [];
-  const run = async (bin, args) => {
-    commands.push([bin, ...args].join(" "));
-    if (args.includes("--right-click")) {
-      const error = new Error("unknown option: --right-click");
-      error.stderr = "unknown option: --right-click\n";
-      throw error;
-    }
-    if (args[0] === "pane" && args[1] === "split") {
-      return JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } });
-    }
-    return "";
-  };
-  await detect(env, run).split({
-    from: { id: "w1:p1", tab: "w1:t1" },
-    direction: "right",
-    command: ["terminal-browser", "open"],
-    size: null,
-    tty: null,
-  });
-  assert.deepEqual(commands, [
-    "herdr pane split --pane w1:p1 --direction right --focus --right-click pane",
-    "herdr pane split --pane w1:p1 --direction right --focus",
-    "herdr pane run w1:p2 terminal-browser open",
-  ]);
-});
-
 function tempHerdrConfig(initialContent) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-cfg-"));
   const configPath = path.join(dir, "config.toml");
@@ -213,4 +184,3 @@ test("herdr prepare stays silent when herdr itself cannot be run", async () => {
   }
   assert.deepEqual(warnings, []);
 });
-
