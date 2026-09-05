@@ -10,6 +10,8 @@ export interface CallerTty {
 }
 
 export function callerTty(): CallerTty {
+  // No console on windows has a path, so there is no ancestor to ask about.
+  if (process.platform === "win32") return { path: null, denied: false };
   let pid = process.pid;
   for (let hops = 0; hops < 30 && pid > 1; hops++) {
     let out: string;

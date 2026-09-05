@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { app } from "electron";
 
-import { DAEMON_SOCKET } from "pixel-store";
+import { DAEMON_SOCKET, makeRoomForSocket } from "pixel-store";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 
@@ -35,8 +35,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     app.exit(3);
     return;
   }
-  fs.mkdirSync(path.dirname(DAEMON_SOCKET), { recursive: true });
-  fs.rmSync(DAEMON_SOCKET, { force: true });
+  makeRoomForSocket(DAEMON_SOCKET);
 
   const build = buildStamp();
   const sessions = new Map<string, SessionHandle>();

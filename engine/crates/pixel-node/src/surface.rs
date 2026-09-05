@@ -54,6 +54,7 @@ impl SurfaceMailbox {
         let damage: Option<Rect> = match slot.pending.take() {
             Some(Pending::Frame(dropped)) => {
                 self.coalesced.fetch_add(1, Ordering::Relaxed);
+                #[cfg_attr(windows, allow(irrefutable_let_patterns))]
                 if let SurfacePixels::Owned { bgra, .. } = dropped.pixels {
                     slot.spare = Some(bgra);
                 }
@@ -98,6 +99,7 @@ impl SurfaceMailbox {
     pub fn recycle(&self, frame: SurfaceFrame, rows: u32) {
         self.presented.fetch_add(1, Ordering::Relaxed);
         self.rows.fetch_add(u64::from(rows), Ordering::Relaxed);
+        #[cfg_attr(windows, allow(irrefutable_let_patterns))]
         if let SurfacePixels::Owned { bgra, .. } = frame.pixels {
             let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
             let slot = slots.entry(frame.id).or_default();
@@ -143,6 +145,7 @@ mod tests {
         let SurfaceCommand::Frame(frame) = &commands[0] else {
             panic!("expected a frame");
         };
+        #[cfg_attr(windows, allow(irrefutable_let_patterns))]
         let SurfacePixels::Owned { bgra, .. } = &frame.pixels else {
             panic!("expected owned pixels");
         };

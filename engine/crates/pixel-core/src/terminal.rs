@@ -1,9 +1,8 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use rustix::termios::{self, OptionalActions, Termios};
-
 use crate::canvas::Canvas;
+use crate::tty::{Tty, Waker};
 use crate::wrapper::Wrapper;
 use crate::kitty::Placement;
 
@@ -190,43 +189,8 @@ impl WindowSize {
     }
 }
 
-fn retry_intr<T>(mut call: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
-    loop {
-        match call() {
-            Err(rustix::io::Errno::INTR) => continue,
-            other => return other,
-        }
-    }
-}
-
-enum TtyHandle {
-    Stdio {
-        stdin: io::Stdin,
-        stdout: io::Stdout,
-    },
-    File(std::fs::File),
-}
-
-impl TtyHandle {
-    fn read_fd(&self) -> rustix::fd::BorrowedFd<'_> {
-        use rustix::fd::AsFd as _;
-        match self {
-            TtyHandle::Stdio { stdin, .. } => stdin.as_fd(),
-            TtyHandle::File(file) => file.as_fd(),
-        }
-    }
-
-    fn out(&mut self) -> &mut dyn io::Write {
-        match self {
-            TtyHandle::Stdio { stdout, .. } => stdout,
-            TtyHandle::File(file) => file,
-        }
-    }
-}
-
 pub struct Terminal {
-    io: TtyHandle,
-    saved: Termios,
+    io: Tty,
     last_frame_size: Option<(u32, u32)>,
     mouse_pixels: bool,
     focused: bool,
@@ -236,16 +200,13 @@ pub struct Terminal {
     lone_escape_since: Option<Instant>,
     transport: FrameTransport,
     herdr: Option<crate::herdr::Herdr>,
-    herdr_target: Option<crate::herdr::HerdrTarget>,
+    herdr_target: Option<HerdrTarget>,
     herdr_retry: Option<(Instant, Duration)>,
     frame_files: Vec<FrameFile>,
     frame_seq: u64,
     wrapper: Wrapper,
     image_id: u32,
     placeholders: Option<(u32, u32)>,
-    wake_rx: Option<rustix::fd::OwnedFd>,
-    waker: Option<Waker>,
-    resize_slot: Option<usize>,
     terminal_id: u64,
     // if the terminal supports https://sw.kovidgoyal.net/kitty/clipboard/
     clipboard_data: bool,
@@ -267,47 +228,19 @@ const CLIP_READ_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const LONE_ESCAPE_WAIT: Duration = Duration::from_millis(50);
 
-const RESIZE_WAKE_SLOTS: usize = 64;
-static RESIZE_WAKE_FDS: [std::sync::atomic::AtomicI32; RESIZE_WAKE_SLOTS] =
-    [const { std::sync::atomic::AtomicI32::new(-1) }; RESIZE_WAKE_SLOTS];
-
-fn claim_resize_slot(fd: i32) -> Option<usize> {
-    for (i, slot) in RESIZE_WAKE_FDS.iter().enumerate() {
-        if slot
-            .compare_exchange(
-                -1,
-                fd,
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            return Some(i);
-        }
-    }
-    None
+#[derive(Clone, Debug)]
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) struct HerdrTarget {
+    pub(crate) pane: String,
+    pub(crate) socket: String,
 }
 
-#[allow(unsafe_code)]
-extern "C" fn sigwinch_handler(_: libc::c_int) {
-    for slot in &RESIZE_WAKE_FDS {
-        let fd = slot.load(std::sync::atomic::Ordering::Relaxed);
-        if fd >= 0 {
-            unsafe {
-                libc::write(fd, [1u8].as_ptr().cast(), 1);
-            }
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Waker {
-    fd: std::sync::Arc<rustix::fd::OwnedFd>,
-}
-
-impl Waker {
-    pub fn wake(&self) {
-        let _ = rustix::io::write(&*self.fd, &[1]);
+impl HerdrTarget {
+    pub(crate) fn from_env(env: &SessionEnv) -> Option<Self> {
+        Some(Self {
+            pane: env.var("HERDR_PANE_ID")?,
+            socket: env.var("HERDR_SOCKET_PATH")?,
+        })
     }
 }
 
@@ -335,27 +268,14 @@ impl SessionEnv {
 
 impl Terminal {
     pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
-        Self::with_handle(
-            TtyHandle::Stdio {
-                stdin: io::stdin(),
-                stdout: io::stdout(),
-            },
-            wrapper,
-            env,
-        )
+        Self::with_tty(Tty::stdio()?, wrapper, env)
     }
 
     pub fn open(tty_path: &str, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
-        let file = std::fs::File::options().read(true).write(true).open(tty_path)?;
-        Self::with_handle(TtyHandle::File(file), wrapper, env)
+        Self::with_tty(Tty::open(tty_path)?, wrapper, env)
     }
 
-    fn with_handle(mut io: TtyHandle, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
-        let saved = retry_intr(|| termios::tcgetattr(&io.read_fd()))?;
-        let mut raw = saved.clone();
-        raw.make_raw();
-        retry_intr(|| termios::tcsetattr(&io.read_fd(), OptionalActions::Drain, &raw))?;
-
+    fn with_tty(mut io: Tty, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
         // would prefer if they weren't magic and linked to some known doc on the internet
         io.out().write_all(
             b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
@@ -364,7 +284,6 @@ impl Terminal {
 
         let mut terminal = Self {
             io,
-            saved,
             last_frame_size: None,
             mouse_pixels: false,
             focused: true,
@@ -374,16 +293,13 @@ impl Terminal {
             lone_escape_since: None,
             transport: FrameTransport::Inline,
             herdr: None,
-            herdr_target: crate::herdr::HerdrTarget::from_env(&env),
+            herdr_target: HerdrTarget::from_env(&env),
             herdr_retry: None,
             frame_files: Vec::new(),
             frame_seq: 0,
             wrapper,
             image_id: frame_image_id(wrapper.relayed()),
             placeholders: None,
-            wake_rx: None,
-            waker: None,
-            resize_slot: None,
             terminal_id: NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             clipboard_data: false,
             clip_read: None,
@@ -502,7 +418,7 @@ impl Terminal {
         let reply = self.read_report(FRAME_PROBE_TIMEOUT_MS, |buf| {
             parse_probe_reply(buf, b"Gi=299;")
         })?;
-        let _ = rustix::shm::unlink(&name);
+        unlink_shm(&name);
         Ok(reply.unwrap_or(false))
     }
 
@@ -541,7 +457,7 @@ impl Terminal {
     fn write_shm_frame(&mut self, data: &[u8]) -> io::Result<String> {
         let name = self.shm_name(self.frame_seq % FRAME_SLOTS);
         self.frame_seq += 1;
-        let _ = rustix::shm::unlink(&name);
+        unlink_shm(&name);
         write_shm(&name, data)?;
         Ok(name)
     }
@@ -743,10 +659,10 @@ impl Terminal {
                 return Ok(None);
             }
             let mut chunk = [0u8; 256];
-            let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
+            let n = match self.io.read(&mut chunk) {
                 Ok(n) => n,
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(e) => return Err(e.into()),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             };
             if n == 0 {
                 return Err(io::ErrorKind::UnexpectedEof.into());
@@ -764,72 +680,15 @@ impl Terminal {
     }
 
     pub fn waker(&mut self) -> io::Result<Waker> {
-        if let Some(waker) = &self.waker {
-            return Ok(waker.clone());
-        }
-        let (rx, tx) = rustix::pipe::pipe()?;
-        rustix::fs::fcntl_setfl(&rx, rustix::fs::OFlags::NONBLOCK)?;
-        rustix::fs::fcntl_setfl(&tx, rustix::fs::OFlags::NONBLOCK)?;
-        self.wake_rx = Some(rx);
-        let waker = Waker {
-            fd: std::sync::Arc::new(tx),
-        };
-        self.waker = Some(waker.clone());
-        Ok(waker)
+        self.io.waker()
     }
 
-    #[allow(unsafe_code)]
     pub fn watch_resize(&mut self) -> io::Result<()> {
-        use rustix::fd::AsRawFd as _;
-        let waker = self.waker()?;
-        self.resize_slot = claim_resize_slot(waker.fd.as_raw_fd());
-        unsafe {
-            let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = sigwinch_handler as *const () as usize;
-            action.sa_flags = libc::SA_RESTART;
-            if libc::sigaction(libc::SIGWINCH, &action, std::ptr::null_mut()) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-        }
-        Ok(())
+        self.io.watch_resize()
     }
 
     fn wait_for_input(&self, wait: Option<Duration>) -> io::Result<bool> {
-        let timeout = match wait {
-            Some(w) => Some(
-                rustix::event::Timespec::try_from(w)
-                    .map_err(|_| io::Error::other("timeout out of range"))?,
-            ),
-            None => None,
-        };
-        let poll = |fds: &mut [rustix::event::PollFd<'_>]| match rustix::event::poll(
-            fds,
-            timeout.as_ref(),
-        ) {
-            Ok(n) => Ok(n),
-            Err(rustix::io::Errno::INTR) => Ok(0),
-            Err(e) => Err(io::Error::from(e)),
-        };
-        let stdin_borrow = self.io.read_fd();
-        let stdin_fd = rustix::event::PollFd::new(&stdin_borrow, rustix::event::PollFlags::IN);
-        match &self.wake_rx {
-            None => {
-                let mut fds = [stdin_fd];
-                Ok(poll(&mut fds)? > 0)
-            }
-            Some(wake) => {
-                let mut fds = [
-                    stdin_fd,
-                    rustix::event::PollFd::new(wake, rustix::event::PollFlags::IN),
-                ];
-                poll(&mut fds)?;
-                if fds[1].revents().contains(rustix::event::PollFlags::IN) {
-                    let mut sink = [0u8; 64];
-                    while matches!(rustix::io::read(wake, &mut sink), Ok(n) if n > 0) {}
-                }
-                Ok(fds[0].revents().contains(rustix::event::PollFlags::IN))
-            }
-        }
+        self.io.wait_for_input(wait)
     }
 
     fn mouse_position_px(&self, x: u32, y: u32) -> (u32, u32) {
@@ -845,13 +704,7 @@ impl Terminal {
     }
 
     pub fn size(&self) -> io::Result<WindowSize> {
-        let ws = retry_intr(|| termios::tcgetwinsize(&self.io.read_fd()))?;
-        Ok(WindowSize {
-            cols: u32::from(ws.ws_col),
-            rows: u32::from(ws.ws_row),
-            width_px: u32::from(ws.ws_xpixel),
-            height_px: u32::from(ws.ws_ypixel),
-        })
+        self.io.window_size()
     }
 
     pub fn reports_pixel_mouse(&self) -> bool {
@@ -914,10 +767,10 @@ impl Terminal {
                 break;
             }
             let mut chunk = [0u8; 256];
-            let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
+            let n = match self.io.read(&mut chunk) {
                 Ok(n) => n,
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(e) => return Err(e.into()),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             };
             if n == 0 {
                 break;
@@ -1008,10 +861,10 @@ impl Terminal {
                 return Ok(None);
             }
             let mut chunk = [0u8; 64];
-            let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
+            let n = match self.io.read(&mut chunk) {
                 Ok(n) => n,
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(e) => return Err(e.into()),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             };
             if n == 0 {
                 return Ok(None);
@@ -1145,6 +998,7 @@ fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
     Some(rest.starts_with(b"OK"))
 }
 
+#[cfg(unix)]
 #[allow(unsafe_code)]
 pub(crate) struct FrameFile {
     path: std::path::PathBuf,
@@ -1152,6 +1006,7 @@ pub(crate) struct FrameFile {
     len: usize,
 }
 
+#[cfg(unix)]
 #[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
 impl FrameFile {
     pub(crate) fn create(path: std::path::PathBuf, len: usize) -> io::Result<Self> {
@@ -1193,6 +1048,7 @@ impl FrameFile {
     }
 }
 
+#[cfg(unix)]
 #[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
 impl Drop for FrameFile {
     fn drop(&mut self) {
@@ -1203,6 +1059,40 @@ impl Drop for FrameFile {
     }
 }
 
+#[cfg(windows)]
+pub(crate) struct FrameFile {
+    path: std::path::PathBuf,
+    file: std::fs::File,
+    len: usize,
+}
+
+#[cfg(windows)]
+impl FrameFile {
+    pub(crate) fn create(path: std::path::PathBuf, len: usize) -> io::Result<Self> {
+        let _ = std::fs::remove_file(&path);
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.set_len(len as u64)?;
+        Ok(Self { path, file, len })
+    }
+
+    pub(crate) fn write(&mut self, data: &[u8]) {
+        use std::io::{Seek as _, Write as _};
+        let _ = self.file.rewind().and_then(|()| self.file.write_all(data));
+    }
+}
+
+#[cfg(windows)]
+impl Drop for FrameFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(unix)]
 #[allow(unsafe_code)]
 pub(crate) fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
     let fd = rustix::shm::open(
@@ -1226,13 +1116,23 @@ pub(crate) fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+pub(crate) fn write_shm(_name: &str, _data: &[u8]) -> io::Result<()> {
+    Err(io::Error::other("shared memory frames need a unix terminal"))
+}
+
+#[cfg(unix)]
+fn unlink_shm(name: &str) {
+    let _ = rustix::shm::unlink(name);
+}
+
+#[cfg(windows)]
+fn unlink_shm(_name: &str) {}
+
 impl Drop for Terminal {
     fn drop(&mut self) {
-        if let Some(slot) = self.resize_slot.take() {
-            RESIZE_WAKE_FDS[slot].store(-1, std::sync::atomic::Ordering::Release);
-        }
         for slot in 0..FRAME_SLOTS {
-            let _ = rustix::shm::unlink(self.shm_name(slot));
+            unlink_shm(&self.shm_name(slot));
         }
         let delete = crate::kitty::kitty_delete(self.image_id, self.wrapper);
         let _ = self.io.out().write_all(&delete);
@@ -1246,9 +1146,6 @@ impl Drop for Terminal {
             b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
         );
         let _ = self.io.out().flush();
-        let _ = retry_intr(|| {
-            termios::tcsetattr(&self.io.read_fd(), OptionalActions::Flush, &self.saved)
-        });
     }
 }
 
@@ -1947,6 +1844,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     #[allow(unsafe_code)]
     fn shm_roundtrip() {
         let name = format!("/px-test-{}", std::process::id());
@@ -2477,7 +2375,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tty_tests {
     use super::*;
 
@@ -2554,14 +2452,13 @@ mod tty_tests {
 
         a.watch_resize().unwrap();
         b.watch_resize().unwrap();
-        assert_ne!(a.resize_slot, b.resize_slot);
-        assert!(a.resize_slot.is_some() && b.resize_slot.is_some());
+        assert_ne!(a.io.resize_slot(), b.io.resize_slot());
+        assert!(a.io.resize_slot().is_some() && b.io.resize_slot().is_some());
 
-        let slot_a = a.resize_slot.unwrap();
+        let slot_a = a.io.resize_slot().unwrap();
         drop(a);
-        assert_eq!(
-            RESIZE_WAKE_FDS[slot_a].load(std::sync::atomic::Ordering::Relaxed),
-            -1,
+        assert!(
+            Tty::resize_slot_is_free(slot_a),
             "dropping a terminal must release its resize slot"
         );
     }
