@@ -402,7 +402,7 @@ impl Terminal {
         if terminal.herdr.is_none() && terminal.herdr_target.is_some() {
             terminal.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
         }
-        terminal.transport = terminal.probe_transport()?;
+        terminal.transport = terminal.probe_transport(&env)?;
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
         if terminal.color_scheme_updates {
             terminal.io.out().write_all(b"\x1b[?2031h")?;
@@ -430,9 +430,8 @@ impl Terminal {
         self.io.out().flush()
     }
 
-    fn probe_transport(&mut self) -> io::Result<FrameTransport> {
-        if let Some(forced) = std::env::var("TERMINAL_BROWSER_FRAMES")
-            .ok()
+    fn probe_transport(&mut self, env: &SessionEnv) -> io::Result<FrameTransport> {
+        if let Some(forced) = env.var("TERMINAL_BROWSER_FRAMES")
             .and_then(|value| match value.trim() {
                 "file" => Some(FrameTransport::File),
                 "shared" | "shm" => Some(FrameTransport::Shared),
@@ -2528,6 +2527,24 @@ mod tty_tests {
             }
             sink
         })
+    }
+
+    #[test]
+    fn frame_transport_uses_session_env() {
+        for (value, expected) in [
+            ("inline", FrameTransport::Inline),
+            ("shared", FrameTransport::Shared),
+            ("file", FrameTransport::File),
+        ] {
+            let (master, _slave, path) = open_pty();
+            let _drain = drain(&master);
+            let env = SessionEnv::of_session(std::collections::HashMap::from([(
+                "TERMINAL_BROWSER_FRAMES".into(),
+                value.into(),
+            )]));
+            let terminal = Terminal::open(&path, Wrapper::None, env).unwrap();
+            assert_eq!(terminal.transport, expected);
+        }
     }
 
     #[test]
