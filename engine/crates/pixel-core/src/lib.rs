@@ -1,8 +1,10 @@
 mod canvas;
+mod console;
 pub mod clipboard_image;
 mod desc;
 mod engine;
 pub mod ghostty;
+#[cfg_attr(windows, path = "herdr_windows.rs")]
 mod herdr;
 mod image_cache;
 mod kitty;
@@ -19,6 +21,7 @@ mod selection;
 mod style;
 pub mod surfaces;
 mod terminal;
+mod tty;
 mod text_input;
 mod throttle;
 pub mod wrapper;
@@ -26,6 +29,7 @@ mod tree;
 mod wrap;
 
 pub use canvas::{Canvas, measure_text};
+pub use console::{Console, Graphics};
 pub use desc::Desc;
 pub use engine::{
     ChangeSource, DragPhase, Engine, EngineConfig, EngineEvent, FrameStats, HighlightArea, MarkRef,
@@ -49,8 +53,9 @@ pub use style::{
 };
 pub use terminal::{
     Event, Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors,
-    Waker, WindowSize,
+    WindowSize,
 };
+pub use tty::Waker;
 pub use text_input::{
     Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput, line_height,
     offset_to_point, point_to_offset,

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
@@ -314,6 +313,25 @@ pub struct Segment {
     clock: u64,
 }
 
+#[cfg(unix)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    use std::os::unix::fs::FileExt as _;
+    file.read_exact_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    use std::os::windows::fs::FileExt as _;
+    let mut done = 0;
+    while done < buf.len() {
+        match file.seek_read(&mut buf[done..], offset + done as u64)? {
+            0 => return Err(io::ErrorKind::UnexpectedEof.into()),
+            read => done += read,
+        }
+    }
+    Ok(())
+}
+
 impl Segment {
     fn new(metas: Vec<FrameMeta>, seg: File, drops: u64, duration_us: u64) -> Segment {
         Segment {
@@ -436,7 +454,7 @@ impl Segment {
             return Ok(());
         }
         self.compressed.resize(meta.len as usize, 0);
-        self.seg.read_exact_at(&mut self.compressed, meta.offset)?;
+        read_exact_at(&self.seg, &mut self.compressed, meta.offset)?;
         self.rows.resize(expected, 0);
         let written = lz4_flex::block::decompress_into(&self.compressed, &mut self.rows)
             .map_err(io::Error::other)?;
@@ -498,6 +516,7 @@ impl Registry {
         Ok(id)
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn wants(&self, surface: u32) -> bool {
         self.active.load(Ordering::Relaxed) > 0
             && self.lock().by_surface.contains_key(&surface)

@@ -80,24 +80,48 @@ pub fn image_path_from_paste(text: &str) -> Option<PastedImage> {
     if trimmed.is_empty() || trimmed.contains('\n') {
         return None;
     }
-    let unquoted = trimmed.trim_matches(|c| c == '\'' || c == '"');
-    let path = match unquoted.strip_prefix("file://") {
-        Some(rest) => percent_decode(rest),
-        None => unescape(unquoted),
-    };
-    if !path.starts_with('/') && !path.starts_with('~') {
-        return None;
-    }
-    let path = match path.strip_prefix("~/") {
-        Some(rest) => Path::new(&std::env::var("HOME").ok()?).join(rest),
-        None => PathBuf::from(path),
-    };
+    let path = pasted_path(trimmed.trim_matches(|c| c == '\'' || c == '"'))?;
     if !path.is_file() {
         return None;
     }
     from_file(&path, PasteSource::File)
 }
 
+#[cfg(unix)]
+fn pasted_path(text: &str) -> Option<PathBuf> {
+    let path = match text.strip_prefix("file://") {
+        Some(rest) => percent_decode(rest),
+        None => unescape(text),
+    };
+    if !path.starts_with('/') && !path.starts_with('~') {
+        return None;
+    }
+    match path.strip_prefix("~/") {
+        Some(rest) => Some(Path::new(&std::env::var("HOME").ok()?).join(rest)),
+        None => Some(PathBuf::from(path)),
+    }
+}
+
+#[cfg(windows)]
+fn pasted_path(text: &str) -> Option<PathBuf> {
+    let path = match text.strip_prefix("file://") {
+        Some(rest) => url_path(&percent_decode(rest)),
+        None => PathBuf::from(text),
+    };
+    path.is_absolute().then_some(path)
+}
+
+// file:///C:/pictures/a.png names a drive, while file://box/share/a.png names
+// another machine, and windows spells those two very differently.
+#[cfg(windows)]
+fn url_path(rest: &str) -> PathBuf {
+    match rest.strip_prefix('/') {
+        Some(drive) => PathBuf::from(drive),
+        None => PathBuf::from(format!(r"\\{}", rest.replace('/', "\\"))),
+    }
+}
+
+#[cfg(unix)]
 fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -157,18 +181,58 @@ mod tests {
     }
 
     #[test]
-    fn quoted_and_escaped_paths_normalize() {
+    fn quoted_paths_normalize() {
         let path = temp_png("with space.png");
-        let raw = path.to_string_lossy();
-        assert!(image_path_from_paste(&format!("'{raw}'")).is_some());
-        assert!(image_path_from_paste(&raw.replace(' ', "\\ ")).is_some());
+        assert!(image_path_from_paste(&format!("'{}'", path.to_string_lossy())).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaped_spaces_normalize() {
+        let path = temp_png("with space.png");
+        assert!(image_path_from_paste(&path.to_string_lossy().replace(' ', "\\ ")).is_some());
     }
 
     #[test]
     fn file_urls_percent_decode() {
         let path = temp_png("url space.png");
-        let url = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
+        let escaped = path.to_string_lossy().replace(' ', "%20");
+        #[cfg(unix)]
+        let url = format!("file://{escaped}");
+        #[cfg(windows)]
+        let url = format!("file:///{}", escaped.replace('\\', "/"));
         assert!(image_path_from_paste(&url).is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_take_either_separator() {
+        let path = temp_png("slashes.png");
+        let raw = path.to_string_lossy().into_owned();
+        assert!(image_path_from_paste(&raw).is_some());
+        assert!(image_path_from_paste(&raw.replace('\\', "/")).is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn file_urls_naming_a_machine_become_share_paths() {
+        assert_eq!(
+            pasted_path("file://box/share/shot.png"),
+            Some(PathBuf::from(r"\\box\share\shot.png"))
+        );
+        assert_eq!(
+            pasted_path("file:///C:/pictures/shot.png"),
+            Some(PathBuf::from("C:/pictures/shot.png"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_without_a_path_is_not_a_path() {
+        assert!(pasted_path("C:").is_none());
+        assert!(pasted_path("C:shot.png").is_none());
+        assert!(pasted_path("shot.png").is_none());
+        assert!(pasted_path("/pictures/shot.png").is_none());
     }
 
     #[test]

@@ -6,8 +6,6 @@ publish.workspace = true
 
 [dependencies]
 rayon = "1"
-rustix = { workspace = true }
-libc = { workspace = true }
 base64 = { workspace = true }
 fontdue = { workspace = true }
 miniz_oxide = { workspace = true }
@@ -18,5 +16,12 @@ arboard = { workspace = true }
 
 [lints]
 workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

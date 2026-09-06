@@ -47,9 +47,30 @@ export const APP_DIR_NAME = `terminal-browser${INSTALL_ROOT.dev ? "-dev" : ""}-$
 export const DATA_DIR = path.join(DATA_HOME, APP_DIR_NAME);
 export const LOGS_DIR = path.join(STATE_HOME, APP_DIR_NAME, "logs");
 export const FAVICONS_DIR = path.join(CACHE_HOME, APP_DIR_NAME, "favicons");
-export const INSTANCES_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "instances");
 export const AGENT_SOCKETS_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "agent-browser");
-export const DAEMON_SOCKET = path.join(RUNTIME_HOME, APP_DIR_NAME, "daemon.sock");
+
+// Windows listens on named pipes instead of socket files, and every pipe name
+// is visible to the whole machine, where the unix directory already belongs to
+// one user, so the name carries the user.
+export function socketPath(...parts: string[]): string {
+  if (process.platform === "win32") {
+    return ["\\\\.\\pipe", `${APP_DIR_NAME}-${os.userInfo().username}`, ...parts].join("\\");
+  }
+  return path.join(RUNTIME_HOME, APP_DIR_NAME, ...parts);
+}
+
+export function makeRoomForSocket(socket: string): void {
+  if (process.platform === "win32") return;
+  fs.mkdirSync(path.dirname(socket), { recursive: true });
+  fs.rmSync(socket, { force: true });
+}
+
+export function removeSocket(socket: string): void {
+  if (process.platform === "win32") return;
+  fs.rmSync(socket, { force: true });
+}
+
+export const DAEMON_SOCKET = socketPath("daemon.sock");
 export const DB_FILE = path.join(DATA_DIR, "terminal-browser.db");
 
 export function ensureDataDir(): void {

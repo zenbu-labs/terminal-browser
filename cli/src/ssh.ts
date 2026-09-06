@@ -8,7 +8,8 @@ import path from "node:path";
 export interface SshTunnel {
   destination: string;
   socksPort: number;
-  controlPath: string;
+  /** What to put in front of a command to reach the host again. */
+  dial: string[];
   stop(): void;
 }
 
@@ -131,14 +132,8 @@ export async function openSshTunnel(
 ): Promise<SshTunnel> {
   const { destination, hostArgs, aliasCommand } = resolveSshTarget(target);
   if (aliasCommand) status(`${target} is an alias for ssh ${aliasCommand}`);
-  const controlPath = freshControlPath();
   const socksPort = await freePort();
-  const args = [
-    "-f",
-    "-N",
-    "-M",
-    "-S",
-    controlPath,
+  const forwarding = [
     "-D",
     `127.0.0.1:${socksPort}`,
     "-o",
@@ -151,8 +146,19 @@ export async function openSshTunnel(
     destination,
   ];
   status(`connecting to ${destination}`);
+  if (process.platform === "win32") {
+    const tunnel = await heldTunnel(destination, [...hostArgs, destination], socksPort, [
+      "-N",
+      ...forwarding,
+    ]);
+    status(`connected ${destination}`);
+    return tunnel;
+  }
+  const controlPath = freshControlPath();
   const code = await new Promise<number>((resolve, reject) => {
-    const child = spawn("ssh", args, { stdio: "inherit" });
+    const child = spawn("ssh", ["-f", "-N", "-M", "-S", controlPath, ...forwarding], {
+      stdio: "inherit",
+    });
     child.once("error", reject);
     child.once("exit", (exitCode) => resolve(exitCode ?? 1));
   });
@@ -162,7 +168,7 @@ export async function openSshTunnel(
   return {
     destination,
     socksPort,
-    controlPath,
+    dial: ["-S", controlPath, destination],
     stop: () => {
       try {
         spawnSync("ssh", ["-S", controlPath, "-O", "exit", destination], {
@@ -172,6 +178,74 @@ export async function openSshTunnel(
       } catch {}
     },
   };
+}
+
+/** Windows ssh cannot share one connection between commands, so the tunnel is
+ * a child we keep: killing it is what closes the connection, and everything
+ * afterwards dials the host again. With a key or an agent those extra
+ * connections cost nothing; with a password they each ask for it. */
+async function heldTunnel(
+  destination: string,
+  dial: string[],
+  socksPort: number,
+  args: string[],
+): Promise<SshTunnel> {
+  const child = spawn("ssh", args, { stdio: ["pipe", "inherit", "inherit"] });
+  let ended: number | null = null;
+  child.once("exit", (code) => (ended = code ?? 1));
+  child.once("error", () => (ended = 1));
+  await proxyReady(socksPort, destination, () => ended);
+  return {
+    destination,
+    socksPort,
+    dial,
+    stop: () => {
+      try {
+        child.kill();
+      } catch {}
+    },
+  };
+}
+
+/** The proxy is not there the moment ssh starts: it has to authenticate
+ * first, which can wait on a person typing. Giving up early would report a
+ * refused password as a timeout, so a connection that ends is its own answer.
+ *
+ * Something answering the port is not proof that it is our proxy — anything
+ * else listening would pass a plain connect — so it is asked to speak socks. */
+function proxyReady(
+  port: number,
+  destination: string,
+  ended: () => number | null,
+): Promise<void> {
+  const deadline = Date.now() + CONNECT_TIMEOUT_MS;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
+      const socket = net.connect(port, "127.0.0.1");
+      let settled = false;
+      const again = () => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        if (ended() !== null) return reject(new Error(`ssh to ${destination} failed`));
+        if (Date.now() >= deadline) {
+          return reject(new Error(`the ssh proxy for ${destination} never answered`));
+        }
+        setTimeout(attempt, 100);
+      };
+      socket.setTimeout(PROXY_REPLY_MS, again);
+      socket.once("error", again);
+      socket.once("connect", () => socket.write(SOCKS_GREETING));
+      socket.once("data", (reply) => {
+        if (reply[0] !== SOCKS_VERSION || reply[1] !== SOCKS_NO_PASSWORD) return again();
+        settled = true;
+        socket.destroy();
+        resolve();
+      });
+    };
+    attempt();
+  });
 }
 
 export function validateBundleDir(dir: string): void {
@@ -188,10 +262,20 @@ export function validateBundleDir(dir: string): void {
   } catch {
     throw new Error(`--ssh-bundle ${dir} has no start script`);
   }
-  if (!start.isFile() || !(start.mode & 0o111)) {
+  const runnable = process.platform === "win32" || (start.mode & 0o111) !== 0;
+  if (!start.isFile() || !runnable) {
     throw new Error(`--ssh-bundle ${dir}/start is not executable`);
   }
 }
+
+const CONNECT_TIMEOUT_MS = 120_000;
+
+const PROXY_REPLY_MS = 1_000;
+
+const SOCKS_VERSION = 5;
+const SOCKS_NO_PASSWORD = 0;
+/** Socks 5, offering one way of identifying ourselves: not at all. */
+const SOCKS_GREETING = Buffer.from([SOCKS_VERSION, 1, SOCKS_NO_PASSWORD]);
 
 const READY_TIMEOUT_MS = 120_000;
 
@@ -252,7 +336,7 @@ function run(
   command: string,
   options: { input?: Buffer; stdio?: "inherit" | "ignore"; timeout?: number } = {},
 ): ReturnType<typeof spawnSync> {
-  return spawnSync("ssh", ["-S", tunnel.controlPath, tunnel.destination, command], {
+  return spawnSync("ssh", [...tunnel.dial, command], {
     input: options.input,
     stdio: options.input ? undefined : options.stdio ?? "ignore",
     timeout: options.timeout,
@@ -270,7 +354,15 @@ function upload(tunnel: SshTunnel, dir: string, remoteDir: string): void {
     maxBuffer: 256 * 1024 * 1024,
   });
   if (tar.status !== 0 || !tar.stdout) throw new Error(`could not pack ${dir}`);
-  const result = run(tunnel, `mkdir -p "${remoteDir}" && tar -xz -C "${remoteDir}"`, {
+  const unpack = `mkdir -p "${remoteDir}" && tar -xz -C "${remoteDir}"`;
+  // A bundle packed on windows carries no executable bit, because there is
+  // none to carry, so the scripts a bundle promises are made runnable once
+  // they reach somewhere that has one. A bundle without a stop script is fine.
+  const command =
+    process.platform === "win32"
+      ? `${unpack} && cd "${remoteDir}" && { chmod +x start setup stop 2>/dev/null || true; }`
+      : unpack;
+  const result = run(tunnel, command, {
     input: tar.stdout,
   });
   if (result.status !== 0) {
@@ -300,9 +392,7 @@ function launch(
     "ssh",
     [
       "-tt",
-      "-S",
-      tunnel.controlPath,
-      tunnel.destination,
+      ...tunnel.dial,
       `cd "${remoteDir}" || exit 9; [ -x ./stop ] && ./stop >/dev/null 2>&1; exec ./start`,
     ],
     { stdio: ["ignore", "pipe", "ignore"] },
@@ -381,7 +471,7 @@ function freshControlPath(): string {
   const name = `${process.pid.toString(36)}-${Date.now().toString(36).slice(-5)}`;
   const dir = path.join(os.tmpdir(), "tb-ssh");
   const candidate = path.join(dir, name);
-  if (candidate.length <= 80) {
+  if (process.platform === "win32" || candidate.length <= 80) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     return candidate;
   }

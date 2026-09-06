@@ -5,6 +5,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(node -e 'console.log(require(process.argv[1]+"/package.json").devDependencies.electron)' "$ROOT/browser")"
 DEST="$(node -e 'const p=require("path");console.log(p.join(p.dirname(require.resolve("electron/package.json",{paths:[process.argv[1]]})),"dist"))' "$ROOT/browser")"
 
+# the patched electron only adds the shared texture and shared memory paths,
+# neither of which windows takes, so electron's own build is enough there
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    node "$(node -e 'console.log(require.resolve("electron/install.js",{paths:[process.argv[1]]}))' "$ROOT/browser")"
+    exit 0
+    ;;
+esac
+
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM="darwin-arm64" ;;
   Darwin-x86_64) PLATFORM="darwin-x64" ;;

@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use crate::terminal::Waker;
+use crate::tty::Waker;
 
 pub const PHASE_BEGAN: u32 = 1;
 
