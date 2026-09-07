@@ -22,6 +22,10 @@ impl Engine {
         out: &mut Vec<EngineEvent>,
     ) -> io::Result<()> {
         let point = (mouse.x as f32, mouse.y as f32);
+        if matches!(mouse.button, MouseButton::Back | MouseButton::Forward) {
+            self.forward_pointer(mouse, point, out);
+            return Ok(());
+        }
         self.cursor = Some(point);
         let now = Instant::now();
         self.last_pointer_activity = Some(now);

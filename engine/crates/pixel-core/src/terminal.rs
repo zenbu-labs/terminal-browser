@@ -115,6 +115,8 @@ pub enum MouseButton {
     Left,
     Middle,
     Right,
+    Back,
+    Forward,
     None,
 }
 
@@ -1779,10 +1781,16 @@ fn parse_sgr_mouse(params: &[u8], press: bool) -> Option<(MouseKind, MouseButton
         return None;
     }
 
-    let button = match b & 3 {
+    let button = match b & !60 {
+        128 => MouseButton::Back,
+        129 => MouseButton::Forward,
+        130.. => return None,
         0 => MouseButton::Left,
         1 => MouseButton::Middle,
         2 => MouseButton::Right,
+        64 => MouseButton::Left,
+        65 => MouseButton::Middle,
+        66 => MouseButton::Right,
         _ => MouseButton::None,
     };
     let mods = Mods {
@@ -2004,6 +2012,26 @@ mod tests {
         assert_eq!(parse_cell_size_report(b"ab\x1b[6;28;13tcd"), Some((13, 28)));
         assert_eq!(parse_cell_size_report(b"\x1b[6;14"), None);
         assert_eq!(parse_cell_size_report(b"\x1b[6;0;0t"), None);
+    }
+
+    #[test]
+    fn parses_navigation_buttons_without_aliasing_clicks() {
+        for (code, button) in [(128, MouseButton::Back), (129, MouseButton::Forward)] {
+            for modifiers in 0..8 {
+                let bits = modifiers << 2;
+                let mods = Mods { shift: bits & 4 != 0, alt: bits & 8 != 0, ctrl: bits & 16 != 0, sup: false };
+                for (press, kind) in [(true, MouseKind::Down), (false, MouseKind::Up)] {
+                    let params = format!("<{};12;34", code | bits);
+                    assert_eq!(parse_sgr_mouse(params.as_bytes(), press), Some((kind, button, mods, 12, 34)));
+                }
+                let params = format!("<{};12;34", code | bits | 32);
+                assert_eq!(parse_sgr_mouse(params.as_bytes(), true), Some((MouseKind::Move, button, mods, 12, 34)));
+            }
+        }
+        for code in [130, 131, 162, 163, 192, 193] {
+            let params = format!("<{code};12;34");
+            assert_eq!(parse_sgr_mouse(params.as_bytes(), true), None);
+        }
     }
 
     #[test]

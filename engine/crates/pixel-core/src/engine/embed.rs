@@ -2,7 +2,7 @@ use std::io;
 
 use super::{Engine, EngineEvent};
 use crate::surfaces::Rect;
-use crate::terminal::{Mouse, MouseKind};
+use crate::terminal::{Mouse, MouseButton, MouseKind};
 use crate::tree::PxRect;
 
 fn offset(rect: Rect, abs: PxRect, visible: PxRect) -> Rect {
@@ -95,7 +95,16 @@ impl Engine {
         if self.drag.is_some() {
             return false;
         }
+        let navigation = matches!(mouse.button, MouseButton::Back | MouseButton::Forward);
         let target = match mouse.kind {
+            _ if navigation => {
+                let view = self.comp.view_at(point.0);
+                let local = self.comp.to_local(view, point);
+                let Some(node) = self.comp.views[view].tree.hit_pointer(local.0, local.1) else {
+                    return false;
+                };
+                (view, node)
+            }
             MouseKind::Down => {
                 let view = self.comp.view_at(point.0);
                 let local = self.comp.to_local(view, point);

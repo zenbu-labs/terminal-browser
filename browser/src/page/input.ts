@@ -63,6 +63,7 @@ export class PageInput {
   }
 
   pointer(event: PointerEvent) {
+    if (event.button === "back" || event.button === "forward") return;
     this.syncFocus();
     const scale = this.target.scale();
     const x = Math.max(0, Math.round(event.x / scale));

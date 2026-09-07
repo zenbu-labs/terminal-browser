@@ -230,6 +230,8 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
                 MouseButton::Left => "left",
                 MouseButton::Middle => "middle",
                 MouseButton::Right => "right",
+                MouseButton::Back => "back",
+                MouseButton::Forward => "forward",
                 MouseButton::None => "none",
             },
             "mods": {
