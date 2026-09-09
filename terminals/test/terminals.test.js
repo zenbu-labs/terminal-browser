@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
+const net = require("node:net");
 const path = require("node:path");
 const { test } = require("node:test");
 
@@ -178,7 +179,7 @@ test("herdr prepare leaves an already-enabled config alone and never reloads", a
   assert.deepEqual(commands, []);
 });
 
-test("herdr prepare stays silent when reload-config rejects the edit", async () => {
+test("herdr prepare reports reload-config diagnostics", async () => {
   const configPath = tempHerdrConfig(null);
   const env = { HERDR_PANE_ID: "w1:p1", HERDR_CONFIG_PATH: configPath };
   const { run } = recorder({
@@ -186,31 +187,104 @@ test("herdr prepare stays silent when reload-config rejects the edit", async () 
       result: { status: "failed", diagnostics: ["config parse error"] },
     }),
   });
-  const originalError = console.error;
-  const warnings = [];
-  console.error = (message) => warnings.push(message);
-  try {
-    await assert.doesNotReject(detect(env, run).prepare());
-  } finally {
-    console.error = originalError;
-  }
-  assert.deepEqual(warnings, []);
+  await assert.rejects(detect(env, run).prepare(), /config parse error/);
 });
 
-test("herdr prepare stays silent when herdr itself cannot be run", async () => {
+test("herdr prepare preserves the error when herdr cannot be run", async () => {
   const configPath = tempHerdrConfig(null);
   const env = { HERDR_PANE_ID: "w1:p1", HERDR_CONFIG_PATH: configPath };
-  const run = async () => {
-    throw new Error("spawn herdr ENOENT");
-  };
-  const originalError = console.error;
-  const warnings = [];
-  console.error = (message) => warnings.push(message);
-  try {
-    await assert.doesNotReject(detect(env, run).prepare());
-  } finally {
-    console.error = originalError;
-  }
-  assert.deepEqual(warnings, []);
+  const error = new Error("spawn herdr ENOENT");
+  await assert.rejects(detect(env, async () => { throw error; }).prepare(), (caught) => caught === error);
 });
 
+test("herdr prepare preserves config read failures", async (t) => {
+  const configPath = tempHerdrConfig(null);
+  fs.mkdirSync(configPath);
+  t.after(() => fs.rmSync(path.dirname(configPath), { recursive: true, force: true }));
+  const env = { HERDR_PANE_ID: "w1:p1", HERDR_CONFIG_PATH: configPath };
+  await assert.rejects(detect(env, async () => "").prepare(), { code: "EISDIR" });
+});
+
+async function herdrSocket(t, reply) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-sock-"));
+  const socketPath = path.join(dir, "h.sock");
+  const requests = [];
+  const server = net.createServer((socket) => {
+    socket.on("error", () => {});
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (!buffer.includes("\n")) return;
+      requests.push(JSON.parse(buffer.split("\n")[0]));
+      if (reply === null) socket.end();
+      else socket.end(typeof reply === "string" ? reply : JSON.stringify(reply) + "\n");
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const terminal = detect({ HERDR_PANE_ID: "w1:p7", HERDR_SOCKET_PATH: socketPath }, async () => "");
+  return { terminal, requests };
+}
+
+const READY_GRAPHICS = {
+  file_frame_transport: "direct-kitty",
+  file_frame_directory: "/tmp/herdr-frames",
+  cell_width_px: 16,
+  cell_height_px: 34,
+};
+
+test("herdr graphics check explains reattachment when the live client has no cell size", async (t) => {
+  const { terminal, requests } = await herdrSocket(t, {
+    error: { code: "cell_size_unavailable", message: "host cell size is unavailable" },
+  });
+  await assert.rejects(terminal.checkGraphics(), (error) => {
+    assert.match(error.message, /host cell size is unavailable/);
+    assert.match(error.message, /Ctrl\+B.*Q/);
+    assert.match(error.message, /herdr --session/);
+    return true;
+  });
+  assert.equal(requests[0].method, "pane.graphics.info");
+  assert.deepEqual(requests[0].params, { pane_id: "w1:p7" });
+});
+
+test("herdr graphics check accepts the live direct transport", async (t) => {
+  const { terminal } = await herdrSocket(t, { result: READY_GRAPHICS });
+  await assert.doesNotReject(terminal.checkGraphics());
+});
+
+test("herdr graphics check preserves other server errors", async (t) => {
+  const { terminal } = await herdrSocket(t, {
+    error: { code: "pane_not_found", message: "no such pane w1:p7" },
+  });
+  await assert.rejects(terminal.checkGraphics(), (error) => {
+    assert.match(error.message, /no such pane w1:p7/);
+    assert.doesNotMatch(error.message, /reattach/i);
+    return true;
+  });
+});
+
+for (const [name, result] of [
+  ["missing transport", { ...READY_GRAPHICS, file_frame_transport: undefined }],
+  ["unsupported transport", { ...READY_GRAPHICS, file_frame_transport: "inline" }],
+  ["missing frame directory", { ...READY_GRAPHICS, file_frame_directory: undefined }],
+  ["zero cell width", { ...READY_GRAPHICS, cell_width_px: 0 }],
+  ["missing cell height", { ...READY_GRAPHICS, cell_height_px: undefined }],
+]) {
+  test(`herdr graphics check rejects ${name}`, async (t) => {
+    const { terminal } = await herdrSocket(t, { result });
+    await assert.rejects(terminal.checkGraphics(), /Herdr/);
+  });
+}
+
+for (const [name, reply] of [["malformed reply", "not json\n"], ["closed socket", null]]) {
+  test(`herdr graphics check reports a ${name}`, async (t) => {
+    const { terminal } = await herdrSocket(t, reply);
+    await assert.rejects(terminal.checkGraphics());
+  });
+}

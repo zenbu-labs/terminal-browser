@@ -21,6 +21,7 @@ import {
   cannotOpenPanes,
   checkTerminal,
   detect,
+  GRAPHICS_SKIP_ENV,
   unsupportedGraphicsMessage,
 } from "pixel-terminals";
 import type { Direction, Terminal, TerminalCheck } from "pixel-terminals";
@@ -474,6 +475,7 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
 }
 
 async function requireGraphics(check: TerminalCheck) {
+  if (!process.env[GRAPHICS_SKIP_ENV]) await check.terminal?.checkGraphics?.();
   if (check.graphics !== "unsupported") return;
   process.stderr.write(unsupportedGraphicsMessage(process.stderr.isTTY === true));
   process.exit(1);

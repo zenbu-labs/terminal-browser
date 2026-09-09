@@ -21,6 +21,19 @@ interface HerdrProcessInfo {
   foreground_processes?: { cmdline?: string }[];
 }
 
+interface HerdrGraphicsInfo {
+  file_frame_transport?: string;
+  file_frame_directory?: string;
+  cell_width_px?: number;
+  cell_height_px?: number;
+}
+
+class HerdrError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
+}
+
 function herdrConfigPath(env: NodeJS.ProcessEnv): string {
   if (env.HERDR_CONFIG_PATH) return env.HERDR_CONFIG_PATH;
   if (process.platform === "win32") {
@@ -58,14 +71,41 @@ export const herdr: Detect = (env, run) => {
   }
 
   async function prepare(): Promise<void> {
+    const configPath = herdrConfigPath(env);
+    const current = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+    if (/^[ \t]*kitty_graphics[ \t]*=[ \t]*true[ \t]*$/m.test(current)) return;
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, enableKittyGraphics(current));
+    const reply = JSON.parse(await herdr(["server", "reload-config"])) as {
+      error?: { message?: string };
+      result?: { status?: string; diagnostics?: string[] };
+    };
+    if (reply.error || reply.result?.status !== "applied") {
+      const reason = reply.error?.message || reply.result?.diagnostics?.join("; ") || "configuration was not applied";
+      throw new Error(`Could not enable Herdr graphics: ${reason}`);
+    }
+  }
+
+  async function checkGraphics(): Promise<void> {
+    let info: HerdrGraphicsInfo | undefined;
     try {
-      const configPath = herdrConfigPath(env);
-      const current = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-      if (/^[ \t]*kitty_graphics[ \t]*=[ \t]*true[ \t]*$/m.test(current)) return;
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, enableKittyGraphics(current));
-      await herdr(["server", "reload-config"]);
-    } catch {
+      info = await socketCall("pane.graphics.info", { pane_id: env.HERDR_PANE_ID }) as HerdrGraphicsInfo | undefined;
+    } catch (error) {
+      if (error instanceof HerdrError && error.code === "cell_size_unavailable") {
+        throw new Error(
+          `Herdr: ${error.message}. Detach with Ctrl+B, then Q (the default shortcut), and run herdr again from the outer shell (herdr --session <name> for a named session). Your panes and agents keep running.`,
+        );
+      }
+      throw error;
+    }
+    if (info?.file_frame_transport !== "direct-kitty") {
+      throw new Error("Herdr is not offering direct graphics. Use a local session in Ghostty, Kitty or WezTerm with only one attached client.");
+    }
+    if (typeof info.file_frame_directory !== "string" || !info.file_frame_directory) {
+      throw new Error("Herdr did not provide a graphics frame directory.");
+    }
+    if (![info.cell_width_px, info.cell_height_px].every((size) => typeof size === "number" && Number.isInteger(size) && size > 0)) {
+      throw new Error("Herdr reported invalid terminal cell dimensions.");
     }
   }
 
@@ -113,14 +153,19 @@ export const herdr: Detect = (env, run) => {
       let buffer = "";
       socket.setTimeout(5000, () => socket.destroy(new Error("herdr socket timed out")));
       socket.on("error", reject);
+      socket.on("close", () => reject(new Error("herdr closed the socket without a reply")));
       socket.on("data", (chunk) => {
         buffer += chunk.toString();
         const line = buffer.indexOf("\n");
         if (line < 0) return;
-        socket.end();
-        const reply = JSON.parse(buffer.slice(0, line)) as { error?: { message?: string }; result?: unknown };
-        if (reply.error) reject(new Error(reply.error.message ?? "herdr socket call failed"));
-        else resolve(reply.result);
+        socket.destroy();
+        try {
+          const reply = JSON.parse(buffer.slice(0, line)) as { error?: { message?: string; code?: string }; result?: unknown };
+          if (reply.error) reject(new HerdrError(reply.error.message ?? "herdr socket call failed", reply.error.code));
+          else resolve(reply.result);
+        } catch {
+          reject(new Error("Herdr returned an invalid JSON response"));
+        }
       });
       socket.on("connect", () => {
         socket.write(`${JSON.stringify({ id: "terminal-browser", method, params })}\n`);
@@ -137,6 +182,7 @@ export const herdr: Detect = (env, run) => {
   return {
     name: "herdr",
     prepare,
+    checkGraphics,
     getCurrentPane: async () => ({ id: env.HERDR_PANE_ID!, tab: env.HERDR_TAB_ID! }),
     listPanes,
     async sendText(pane, text) {

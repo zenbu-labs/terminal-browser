@@ -45,6 +45,7 @@ export interface Terminal {
    * Allows code to be ran at startup, useful for preparing the terminal environment for terminal-browser
    */
   prepare?(): void | Promise<void>;
+  checkGraphics?(): void | Promise<void>;
   /**
    * Allows terminal-browser to know which pane its being called from inside the terminal.
    * This gives terminal-browser the ability to know if a terminal-browser instance
