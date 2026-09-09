@@ -16,11 +16,12 @@ import {
   ReviewToolbar,
 } from "./record-bar";
 import { TabStrip } from "./tab-strip";
-import { makeTheme, withAlpha } from "./theme";
+import { makeTheme, mix, withAlpha } from "./theme";
 import type { Theme } from "./theme";
 import { usePulse } from "./pulse";
 import type { RecordView } from "../record/types";
 import type {
+  AdblockView,
   ChromeActions,
   ChromeLayout,
   DownloadView,
@@ -48,6 +49,7 @@ export function Chrome({
   download,
   toast,
   pageMenu,
+  adblock,
   dividerEngaged,
   record,
   recordSurface,
@@ -71,6 +73,7 @@ export function Chrome({
   download: DownloadView | null;
   toast: { text: string; detail?: string; failed: boolean; alert: boolean } | null;
   pageMenu: PageMenuView | null;
+  adblock: AdblockView | null;
   dividerEngaged: boolean;
   record: RecordView | null;
   recordSurface: Surface | null;
@@ -106,6 +109,7 @@ export function Chrome({
             theme={theme}
             tabs={tabs}
             record={record}
+            adblock={adblock}
           />
         ))}
       <BrowserTabContents
@@ -267,6 +271,7 @@ function Toolbar({
   theme,
   tabs,
   record,
+  adblock,
 }: {
   state: BrowserState;
   actions: ChromeActions;
@@ -274,6 +279,7 @@ function Toolbar({
   theme: Theme;
   tabs: TabRow[];
   record: RecordView | null;
+  adblock: AdblockView | null;
 }) {
   const rem = layout.rem;
   const stopIcon = useStopIcon(state.loading);
@@ -327,11 +333,55 @@ function Toolbar({
         url={state.url}
         theme={theme}
       />
+      {adblock && <AdblockPill view={adblock} rem={rem} theme={theme} actions={actions} />}
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
     </Box>
   );
 }
 
+
+function AdblockPill({
+  view,
+  rem,
+  theme,
+  actions,
+}: {
+  view: AdblockView;
+  rem: number;
+  theme: Theme;
+  actions: ChromeActions;
+}) {
+  const height = rem * 1.55;
+  const tint = view.active ? theme.accent : theme.disabled;
+  return (
+    <Box
+      style={{
+        height,
+        alignItems: "center",
+        gap: rem * 0.3,
+        padding: { left: rem * 0.5, right: view.blocked > 0 ? rem * 0.55 : rem * 0.5 },
+        margin: { left: rem * 0.3 },
+        cornerRadius: height / 2,
+        background: view.active ? mix(theme.bg, theme.accent, 0.14) : undefined,
+        hoverBackground: theme.hover,
+        flexShrink: 0,
+      }}
+      onClick={actions.adblockToggle}
+    >
+      <Icon
+        icon="shield"
+        size={rem * 0.95}
+        color={view.active ? tint : withAlpha(tint, 140)}
+        weight={2}
+      />
+      {view.blocked > 0 && (
+        <Text style={{ fontSize: rem * 0.75, color: tint, wrap: false, selectable: false }}>
+          {String(view.blocked)}
+        </Text>
+      )}
+    </Box>
+  );
+}
 
 function seamRadius(radius: number, dock: "bottom" | "right" | null, side: "page" | "devtools") {
   if (!dock) return radius;

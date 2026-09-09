@@ -3,6 +3,7 @@ export {
   DATA_DIR,
   LOGS_DIR,
   FAVICONS_DIR,
+  ADBLOCK_DIR,
   INSTANCES_DIR,
   AGENT_SOCKETS_DIR,
   DAEMON_SOCKET,
@@ -32,3 +33,9 @@ export {
   withdrawInstance,
 } from "./interop";
 export type { InteropInstance, OpenResult, OpenSpec, RegisteredApp } from "./interop";
+export {
+  adblockAllowlist,
+  adblockEnabled,
+  setAdblockAllowlist,
+  setAdblockEnabled,
+} from "./app-state";

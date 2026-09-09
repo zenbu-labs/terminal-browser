@@ -12,11 +12,15 @@
     "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\""
   },
   "dependencies": {
+    "@ghostery/adblocker": "^2.18.2",
+    "@ghostery/adblocker-electron": "^2.18.2",
+    "@ghostery/adblocker-electron-preload": "^2.18.2",
     "pixel-react": "workspace:*",
     "pixel-store": "workspace:*",
     "pixel-terminals": "workspace:*",
     "react": "^18.3.1",
-    "react-grab": "0.2.0"
+    "react-grab": "0.2.0",
+    "tldts-experimental": "^7.4.9"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -488,6 +488,7 @@ const BROWSER_FLAGS = [
   "--no-frame",
   "--open-tabs-in-popup-stack",
   "--allow-clipboard-read",
+  "--no-adblock",
   "--partition=",
   "--ssh=",
   "--ssh-bundle=",

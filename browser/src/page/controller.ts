@@ -7,6 +7,7 @@ import type {
   WheelEvent,
 } from "pixel-react";
 import { normalizeUrl, urlHost } from "../url";
+import { adblockClosePage, adblockOpenPage, adblockPageNavigated } from "./adblock";
 import { allowClipboardRead, persistentPartition } from "./browser-session";
 import { cursorShapeFor } from "./cursor";
 import { DevtoolsWindow } from "./devtools";
@@ -30,6 +31,7 @@ export interface ControllerOptions {
   partition: string | null;
   tabsAsPopups: boolean;
   clipboardRead: boolean;
+  adblock: boolean;
   sessionKey: string;
   appTabId: number | null;
 }
@@ -49,6 +51,8 @@ export class BrowserController {
   private readonly partition: string | null;
   private readonly tabsAsPopups: boolean;
   private readonly clipboardRead: boolean;
+  private readonly adblock: boolean;
+  private readonly contentsId: number;
   private readonly sessionKey: string;
   private readonly appTabId: number | null;
   private readonly cwd: string;
@@ -98,6 +102,7 @@ export class BrowserController {
     this.partition = options.partition ? persistentPartition(options.partition) : null;
     this.tabsAsPopups = options.tabsAsPopups;
     this.clipboardRead = options.clipboardRead;
+    this.adblock = options.adblock;
     this.sessionKey = options.sessionKey;
     this.appTabId = options.appTabId;
     this.cwd = options.cwd;
@@ -137,6 +142,8 @@ export class BrowserController {
       },
     });
     if (this.clipboardRead) allowClipboardRead(this.window.webContents);
+    this.contentsId = this.window.webContents.id;
+    adblockOpenPage(this.contentsId, options.adblock, (blocked) => this.updateState({ blocked }));
     this.input = new PageInput({
       contents: () => this.window.webContents,
       scale: () => this.layout.scale,
@@ -192,6 +199,7 @@ export class BrowserController {
     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
+      adblockPageNavigated(this.contentsId, urlHost(url));
       this.updateNavigation(this.state.loading, url);
     });
     this.window.webContents.on("page-favicon-updated", (_event, favicons) => {
@@ -517,6 +525,7 @@ export class BrowserController {
   }
 
   private teardown() {
+    adblockClosePage(this.contentsId);
     for (const popup of [...this.popups]) popup.close();
     this.devtools?.close();
     screen.off("display-added", this.onDisplayChange);
@@ -637,6 +646,12 @@ export class BrowserController {
 
   private adoptPopup(child: Electron.BrowserWindow) {
     if (this.clipboardRead) allowClipboardRead(child.webContents);
+    const popupContents = child.webContents.id;
+    adblockOpenPage(popupContents, this.adblock);
+    child.webContents.on("did-navigate", (_event, url) =>
+      adblockPageNavigated(popupContents, urlHost(url)),
+    );
+    child.webContents.once("destroyed", () => adblockClosePage(popupContents));
     if (!this.tabsAsPopups) this.popup?.close();
     const size = this.pendingPopupSize ?? { width: 480, height: 360 };
     this.pendingPopupSize = null;

@@ -38,6 +38,17 @@ cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
 "$ROOT/scripts/bundle.sh" "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
 
+"$ROOT/scripts/bundle.sh" "$ROOT/browser/src/adblock-worker.ts" "$STAGE/browser/dist/adblock-worker.js"
+
+# the bundled main.js keeps a runtime require.resolve for the adblocker's preload script
+PRELOAD="$(node -e 'const p=require("path");console.log(p.dirname(require.resolve("@ghostery/adblocker-electron-preload/package.json",{paths:[process.argv[1]]})))' "$ROOT/browser")"
+PRELOAD_STAGE="$STAGE/browser/node_modules/@ghostery/adblocker-electron-preload"
+mkdir -p "$PRELOAD_STAGE/dist"
+cp "$PRELOAD/package.json" "$PRELOAD_STAGE/package.json"
+cp "$PRELOAD/dist/index.cjs" "$PRELOAD_STAGE/dist/index.cjs"
+
+node "$STAGE/browser/dist/adblock-worker.js" "$STAGE/browser/dist/adblock-engine.bin"
+
 cp "$ROOT/scripts/apparmor.sh" "$STAGE/scripts/apparmor.sh"
 
 "$ROOT/scripts/generate-skill.sh"
