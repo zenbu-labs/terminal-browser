@@ -22,6 +22,19 @@ impl Placement {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TransmitOptions {
+    pub placement: Placement,
+    pub wrapper: Wrapper,
+    pub wait_for_response: bool,
+}
+
+impl TransmitOptions {
+    fn quiet(self) -> u8 {
+        if self.wait_for_response { 0 } else { 2 }
+    }
+}
+
 fn emit(out: &mut Vec<u8>, seq: &[u8], wrapper: Wrapper) {
     out.extend_from_slice(&wrapper.wrap(seq));
 }
@@ -65,22 +78,32 @@ pub(crate) fn kitty_transmit_named(
     height: u32,
     name: &str,
     medium: Medium,
-    placement: Placement,
-    wrapper: Wrapper,
+    options: TransmitOptions,
 ) -> Vec<u8> {
     let payload = BASE64.encode(name);
-    let keys = placement.keys();
+    let keys = options.placement.keys();
     let t = medium.key();
+    let quiet = options.quiet();
     let seq = format!(
-        "\x1b_Ga=T,f=32,s={width},v={height},t={t},i={image_id},{keys},q=2;{payload}\x1b\\"
+        "\x1b_Ga=T,f=32,s={width},v={height},t={t},i={image_id},{keys},q={quiet};{payload}\x1b\\"
     );
     let mut out = Vec::new();
-    emit(&mut out, seq.as_bytes(), wrapper);
+    emit(&mut out, seq.as_bytes(), options.wrapper);
     out
 }
 
 pub fn kitty_transmit(image_id: u32, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
-    kitty_transmit_placed(image_id, width, height, rgba, Placement::Cursor, Wrapper::None)
+    kitty_transmit_placed(
+        image_id,
+        width,
+        height,
+        rgba,
+        TransmitOptions {
+            placement: Placement::Cursor,
+            wrapper: Wrapper::None,
+            wait_for_response: false,
+        },
+    )
 }
 
 pub(crate) fn kitty_transmit_placed(
@@ -88,8 +111,7 @@ pub(crate) fn kitty_transmit_placed(
     width: u32,
     height: u32,
     rgba: &[u8],
-    placement: Placement,
-    wrapper: Wrapper,
+    options: TransmitOptions,
 ) -> Vec<u8> {
     assert_eq!(rgba.len(), (width * height * 4) as usize);
     let compressed = crate::profiler::span("kitty.compress", || {
@@ -106,9 +128,10 @@ pub(crate) fn kitty_transmit_placed(
         seq.clear();
         seq.extend_from_slice(b"\x1b_G");
         if i == 0 {
-            let keys = placement.keys();
+            let keys = options.placement.keys();
+            let quiet = options.quiet();
             seq.extend_from_slice(
-                format!("a=T,f=32,o=z,s={width},v={height},t=d,i={image_id},{keys},q=2,m={more}")
+                format!("a=T,f=32,o=z,s={width},v={height},t=d,i={image_id},{keys},q={quiet},m={more}")
                     .as_bytes(),
             );
         } else {
@@ -117,7 +140,7 @@ pub(crate) fn kitty_transmit_placed(
         seq.push(b';');
         seq.extend_from_slice(chunk);
         seq.extend_from_slice(b"\x1b\\");
-        emit(&mut out, &seq, wrapper);
+        emit(&mut out, &seq, options.wrapper);
     }
     out
 }
@@ -234,6 +257,36 @@ mod tests {
     }
 
     #[test]
+    fn acknowledged_transfers_request_a_response() {
+        let named = kitty_transmit_named(
+            9,
+            1,
+            1,
+            "/tmp/frame",
+            Medium::File,
+            TransmitOptions {
+                placement: Placement::Cursor,
+                wrapper: Wrapper::None,
+                wait_for_response: true,
+            },
+        );
+        assert!(String::from_utf8(named).unwrap().contains("i=9,p=1,C=1,q=0;"));
+
+        let inline = kitty_transmit_placed(
+            9,
+            1,
+            1,
+            &[0, 0, 0, 255],
+            TransmitOptions {
+                placement: Placement::Cursor,
+                wrapper: Wrapper::None,
+                wait_for_response: true,
+            },
+        );
+        assert!(String::from_utf8(inline).unwrap().contains("i=9,p=1,C=1,q=0,m=0;"));
+    }
+
+    #[test]
     fn virtual_placement_transmit_wraps_every_chunk_for_tmux() {
         let mut seed = 0x9e3779b9u32;
         let pixels: Vec<u8> = (0..64 * 64 * 4)
@@ -247,8 +300,11 @@ mod tests {
             64,
             64,
             &pixels,
-            Placement::Cells { cols: 8, rows: 4 },
-            Wrapper::Tmux,
+            TransmitOptions {
+                placement: Placement::Cells { cols: 8, rows: 4 },
+                wrapper: Wrapper::Tmux,
+                wait_for_response: false,
+            },
         );
         let text = String::from_utf8_lossy(&out);
         assert!(text.starts_with("\x1bPtmux;\x1b\x1b_Ga=T,"));
