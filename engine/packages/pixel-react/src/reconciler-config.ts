@@ -37,7 +37,7 @@ export interface WheelEvent {
 
 export interface PointerEvent {
   kind: "down" | "up" | "move";
-  button: "left" | "middle" | "right" | "none";
+  button: "left" | "middle" | "right" | "back" | "forward" | "none";
   mods: {
     shift: boolean;
     alt: boolean;

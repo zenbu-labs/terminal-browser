@@ -773,6 +773,10 @@ class Session {
       if (text.trim()) this.tabs.activeController?.navigate(searchOrUrl(text, this.ctx.cwd));
     },
     pointer: (event) => {
+      if (event.button === "back" || event.button === "forward") {
+        if (event.kind === "down") this.tabs.activeController?.[event.button]();
+        return;
+      }
       this.browserFocused = true;
       this.activeRecord()?.pointerSample(event);
       this.tabs.activeController?.pointer(event);
@@ -1791,4 +1795,3 @@ function rememberUrl(url: string) {
     setLastUrl(url);
   } catch { }
 }
-

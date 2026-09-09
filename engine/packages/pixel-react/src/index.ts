@@ -11,7 +11,7 @@ import {
   MarkRef,
   reconciler,
 } from "./reconciler-config";
-import type { PasteSource, PastedImage, SelectionPart } from "./reconciler-config";
+import type { PasteSource, PastedImage, PointerEvent, SelectionPart } from "./reconciler-config";
 import type { EngineInfo, TerminalColors } from "./native";
 import { Surface } from "./surface";
 import { handleDevtoolsKey } from "./devtools/app";
@@ -428,7 +428,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         const props = bridge.propsById[view]?.get(event.node!);
         props?.onPointer?.({
           kind: event.kind as "down" | "up" | "move",
-          button: event.button as "left" | "middle" | "right" | "none",
+          button: event.button as PointerEvent["button"],
           mods: event.mods!,
           x: event.x!,
           y: event.y!,
