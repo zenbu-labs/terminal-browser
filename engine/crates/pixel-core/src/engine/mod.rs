@@ -917,6 +917,12 @@ impl Engine {
         Ok(())
     }
 
+    pub fn set_terminal_title(&mut self, title: &str) {
+        if let Err(error) = self.term.set_terminal_title(title) {
+            logging::warn("engine", format!("terminal title write failed: {error}"));
+        }
+    }
+
     pub fn set_clipboard(&mut self, text: &str) {
         if let Err(error) = self.term.set_clipboard(text) {
             logging::warn("engine", format!("clipboard write failed: {error}"));
@@ -958,6 +964,7 @@ impl Engine {
 
     fn draws_something(&self) -> bool {
         self.comp.dirty
+            || self.comp.compositor_changed()
             || self.comp.active_views().iter().any(|&i| {
                 let view = &self.comp.views[i];
                 view.tree.dirty()
@@ -990,7 +997,8 @@ impl Engine {
                 }
             })
             .collect();
-        if work.is_empty() && !self.comp.dirty {
+        let compositor_dirty = self.comp.dirty || self.comp.compositor_changed();
+        if work.is_empty() && !compositor_dirty {
             return Ok(());
         }
         crate::profiler::span("frame", || -> io::Result<()> {
@@ -1034,7 +1042,7 @@ impl Engine {
                 self.comp.dirty = true;
             }
             crate::profiler::set_view(0);
-            if !self.comp.dirty {
+            if painted.is_empty() && !compositor_dirty {
                 return Ok(());
             }
             self.compose(&painted);

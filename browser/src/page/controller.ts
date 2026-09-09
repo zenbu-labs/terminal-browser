@@ -192,7 +192,7 @@ export class BrowserController {
     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
-      this.updateNavigation(this.state.loading, url);
+      this.updateNavigation(this.state.loading, url, "");
     });
     this.window.webContents.on("page-favicon-updated", (_event, favicons) => {
       void this.loadFavicon(favicons);
@@ -570,9 +570,14 @@ export class BrowserController {
     if (file && seq === this.faviconSeq) this.updateState({ favicon: file });
   }
 
-  private updateNavigation(loading: boolean, url = this.window.webContents.getURL()) {
+  private updateNavigation(
+    loading: boolean,
+    url = this.window.webContents.getURL(),
+    title = this.state.title,
+  ) {
     this.updateState({
       url,
+      title,
       loading,
       canGoBack: this.window.webContents.navigationHistory.canGoBack(),
       canGoForward: this.window.webContents.navigationHistory.canGoForward(),

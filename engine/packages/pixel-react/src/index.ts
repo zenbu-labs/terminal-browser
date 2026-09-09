@@ -184,6 +184,7 @@ export interface PixelRoot {
   // nudge resize is a ridiculous api
   nudgeResize(): void;
   setPointerShape(shape: string): void;
+  setTerminalTitle(title: string): void;
   setKeyCapture(keys: string[]): void;
   requestClipboardImage(): void;
   setClipboard(text: string): void;
@@ -656,6 +657,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     setPointerShape(shape: string) {
       bridge.push(APP_VIEW, { op: "setPointerShape", shape });
       bridge.flush();
+    },
+    setTerminalTitle(title: string) {
+      bridge.engine.setTerminalTitle(title);
     },
     setKeyCapture(keys: string[]) {
       bridge.push(APP_VIEW, { op: "setKeyCapture", keys });

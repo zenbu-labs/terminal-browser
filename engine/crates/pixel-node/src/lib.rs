@@ -12,7 +12,7 @@ mod record;
 mod shm;
 mod surface;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
@@ -279,13 +279,19 @@ pub(crate) fn colors_json(colors: &TerminalColors) -> serde_json::Value {
 }
 
 
+enum EngineCommand {
+    ApplyOps(String),
+    Stop,
+}
+
 #[napi]
 pub struct PixelEngine {
     engine: Option<Engine>,
     info: String,
-    tx: Sender<String>,
-    rx: Option<Receiver<String>>,
+    tx: Sender<EngineCommand>,
+    rx: Option<Receiver<EngineCommand>>,
     waker: Waker,
+    terminal_title: Arc<Mutex<Option<String>>>,
     surfaces: Arc<SurfaceMailbox>,
     captures: capture::Registry,
     stop: Arc<AtomicBool>,
@@ -338,6 +344,7 @@ impl PixelEngine {
             tx,
             rx: Some(rx),
             waker,
+            terminal_title: Arc::new(Mutex::new(None)),
             // who even uses you tho
             surfaces: Arc::new(SurfaceMailbox::default()),
             captures: capture::Registry::default(),
@@ -356,9 +363,23 @@ impl PixelEngine {
      */
     #[napi]
     pub fn apply_ops(&self, ops: String) -> Result<()> {
-        let _ = self.tx.send(ops);
+        let _ = self.tx.send(EngineCommand::ApplyOps(ops));
         self.waker.wake();
         Ok(())
+    }
+
+    #[napi]
+    pub fn set_terminal_title(&self, title: String) {
+        let mut pending = self
+            .terminal_title
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self.stop.load(Ordering::Acquire) {
+            return;
+        }
+        *pending = Some(title);
+        drop(pending);
+        self.waker.wake();
     }
 
     #[napi]
@@ -502,6 +523,7 @@ impl PixelEngine {
             .take()
             .ok_or_else(|| Error::from_reason("engine already started"))?;
         let stop = self.stop.clone();
+        let terminal_title = self.terminal_title.clone();
         let surfaces = self.surfaces.clone();
         let cell = SendEngine(engine);
         self.thread = Some(std::thread::spawn(move || {
@@ -513,16 +535,17 @@ impl PixelEngine {
                 .map(|view| IdMap::new(engine.comp.views[view].tree.root()))
                 .collect();
             let mut autoprofile = Autoprofile::from_env(&mut engine);
-            let exit_error = loop {
+            let exit_error = 'run: loop {
                 let events = match engine.pump(None) {
                     Ok(events) => events,
                     Err(e) => break Some(e.to_string()),
                 };
                 autoprofile.tick(&mut engine);
-                if stop.load(Ordering::Relaxed) {
-                    break None;
-                }
-                while let Ok(cmd) = rx.try_recv() {
+                while let Ok(command) = rx.try_recv() {
+                    let cmd = match command {
+                        EngineCommand::ApplyOps(cmd) => cmd,
+                        EngineCommand::Stop => break 'run None,
+                    };
                     let outcome = apply_ops(&mut engine, &mut ids, &cmd);
                     if let Some(message) = outcome.error {
                         pixel_core::logging::error("bridge", message.clone());
@@ -535,6 +558,15 @@ impl PixelEngine {
                     for reply in outcome.replies {
                         dispatch_to_node.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
                     }
+                }
+                let title = terminal_title
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take();
+                if let Some(title) = title
+                    && !stop.load(Ordering::Acquire)
+                {
+                    engine.set_terminal_title(&title);
                 }
                 for event in &events {
                     if let Some(json) = event_json(event, &engine, &ids) {
@@ -567,7 +599,7 @@ impl PixelEngine {
                 }
             };
             drop(engine);
-            if !stop.load(Ordering::Relaxed) {
+            if !stop.load(Ordering::Acquire) {
                 let exit = json!({ "type": "exit", "error": exit_error });
                 dispatch_to_node.call(
                     Ok(exit.to_string()),
@@ -580,7 +612,13 @@ impl PixelEngine {
 
     #[napi]
     pub fn stop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::Release);
+        let _ = self
+            .terminal_title
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let _ = self.tx.send(EngineCommand::Stop);
         self.waker.wake();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();

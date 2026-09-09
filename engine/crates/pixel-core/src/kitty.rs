@@ -96,12 +96,11 @@ pub(crate) fn kitty_transmit_placed(
         miniz_oxide::deflate::compress_to_vec_zlib(rgba, 1)
     });
     let payload = crate::profiler::span("kitty.base64", || BASE64.encode(&compressed));
-    let chunks: Vec<&[u8]> = payload.as_bytes().chunks(KITTY_CHUNK_SIZE).collect();
-    let last = chunks.len() - 1;
+    let last = payload.len().div_ceil(KITTY_CHUNK_SIZE) - 1;
 
     let mut out = Vec::new();
     let mut seq = Vec::new();
-    for (i, chunk) in chunks.iter().enumerate() {
+    for (i, chunk) in payload.as_bytes().chunks(KITTY_CHUNK_SIZE).enumerate() {
         let more = u8::from(i != last);
         seq.clear();
         seq.extend_from_slice(b"\x1b_G");

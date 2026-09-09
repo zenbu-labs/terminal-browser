@@ -108,8 +108,16 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
   }
   // headless ozone reports a 1x1 screen unless told otherwise:
   // https://source.chromium.org/chromium/chromium/src/+/refs/tags/150.0.7871.212:ui/ozone/platform/headless/headless_screen.cc;l=37-46
-  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
-    argv = [...argv, "--ozone-platform=headless", "--screen-info={8192x8192}"];
+  if (
+    process.platform === "linux" &&
+    (process.env.TERMINAL_BROWSER_HEADLESS === "1" ||
+      (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY))
+  ) {
+    argv = [
+      ...argv,
+      "--ozone-platform=headless",
+      "--screen-info={8192x8192}",
+    ];
   }
   ensureDataDir();
   const logDir = LOGS_DIR;

@@ -38,6 +38,7 @@ export interface NativeEngine {
   captureFrame(captureId: number, index: number): Buffer;
   releaseCapture(captureId: number): void;
   setKeyEventTypes(enabled: boolean): void;
+  setTerminalTitle(title: string): void;
   start(callback: (err: unknown, event: string) => void): void;
   stop(): void;
 }
