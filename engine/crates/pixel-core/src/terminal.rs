@@ -397,6 +397,10 @@ impl Terminal {
             terminal.io.out().flush()?;
         }
         terminal.mouse_pixels = !wrapper.relayed() && terminal.probe_mouse_pixels()?;
+        if !terminal.mouse_pixels {
+            terminal.io.out().write_all(b"\x1b[?1016l\x1b[?1006h")?;
+            terminal.io.out().flush()?;
+        }
         terminal.clipboard_data = !wrapper.relayed() && terminal.probe_clipboard_data()?;
         terminal.connect_herdr();
         if terminal.herdr.is_none() && terminal.herdr_target.is_some() {
@@ -2480,6 +2484,67 @@ mod tests {
 #[cfg(test)]
 mod tty_tests {
     use super::*;
+
+    #[test]
+    fn mouse_coordinates_match_the_negotiated_format() {
+        use std::io::Write as _;
+
+        for (reply, wrapper) in [
+            (Some(b"\x1b[?1016;1$y".as_slice()), Wrapper::None),
+            (Some(b"\x1b[?1016;4$y".as_slice()), Wrapper::None),
+            (None, Wrapper::None),
+            (None, Wrapper::Tmux),
+        ] {
+            let (mut master, _slave, path) = open_pty();
+            let emulator = std::thread::spawn(move || {
+                use std::io::Read as _;
+                let mut seen = Vec::new();
+                let mut pixels = false;
+                let mut byte = [0u8; 1];
+                while master.read_exact(&mut byte).is_ok() {
+                    seen.push(byte[0]);
+                    if seen.ends_with(b"\x1b[?1016h") {
+                        pixels = true;
+                    } else if seen.ends_with(b"\x1b[?1016l")
+                        || seen.ends_with(b"\x1b[?1006h")
+                    {
+                        pixels = false;
+                    } else if seen.ends_with(b"\x1b[?1016$p") {
+                        if let Some(reply) = reply {
+                            master.write_all(reply).unwrap();
+                        }
+                    } else if seen.ends_with(b"\x1b[5n") {
+                        master
+                            .write_all(if pixels {
+                                b"\x1b[<0;485;329M"
+                            } else {
+                                b"\x1b[<0;61;21M"
+                            })
+                            .unwrap();
+                    } else if seen.ends_with(b"\x1b[?1049l") {
+                        break;
+                    }
+                }
+            });
+            let mut term = Terminal::open(&path, wrapper, SessionEnv::of_process()).unwrap();
+            term.cell = Some((8, 16));
+            term.io.out().write_all(b"\x1b[5n").unwrap();
+            term.io.out().flush().unwrap();
+            let event = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+            assert!(
+                matches!(event, Some(Event::Mouse(Mouse {
+                    kind: MouseKind::Down,
+                    button: MouseButton::Left,
+                    x: 484,
+                    y: 328,
+                    ..
+                }))),
+                "the same click must land at (484, 328), reply={reply:?}, wrapper={wrapper:?}: {event:?}"
+            );
+            drop(term);
+            emulator.join().unwrap();
+        }
+    }
 
     /// Returns (master, initial slave fd, slave path). The slave fd stays
     /// open so reads on the master never hit EOF between Terminal lifetimes.
