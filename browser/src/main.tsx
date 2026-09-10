@@ -22,7 +22,6 @@ try {
 app.commandLine.appendSwitch("enable-logging", "file");
 app.commandLine.appendSwitch("log-file", path.join(LOGS_DIR, "chromium.log"));
 app.setName("terminal-browser");
-claimProfile();
 
 
 function freePort(): Promise<number> {
@@ -41,6 +40,7 @@ function freePort(): Promise<number> {
 
 
 void (async () => {
+  await claimProfile();
   const cdpPort = await freePort().catch(() => null);
   if (cdpPort != null) app.commandLine.appendSwitch("remote-debugging-port", String(cdpPort));
   await app.whenReady();

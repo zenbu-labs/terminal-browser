@@ -48,12 +48,14 @@ Options:
   --app-name=<name>     The name of the application
   --app-id=<id>         The identifier of the application
   --no-merge            Do not open the terminal-browser instance as a tab in a neighbor terminal-browser
-
+  --partition=<name>    Isolated storage profile. Cookies and site data for
+                        the partition are kept on disk between runs
 
 Examples:
   terminal-browser open localhost:3000
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
+  terminal-browser open --partition=work github.com
   terminal-browser open --ssh dev@build-box localhost:8080
 `,
   },

@@ -13,6 +13,7 @@ import type { Pane, Terminal } from "pixel-terminals";
 import {
   browserSession,
   configureBrowserSession,
+  persistentPartition,
   routeThroughSocksProxy,
 } from "../page/browser-session";
 import { bundledAsset } from "../assets";
@@ -193,7 +194,6 @@ class Session {
     tabsAsPopups: boolean;
   };
   private readonly appIdentity: TabApp | null;
-  private readonly appPartitions: string[] = [];
   private embedderIpc = false;
   private wasBare = false;
   private paletteApps: RegisteredApp[] = [];
@@ -304,9 +304,10 @@ class Session {
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
-    this.partition =
+    const rawPartition =
       flagValue(this.argv, "--partition") ??
       (sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null);
+    this.partition = rawPartition ? persistentPartition(rawPartition) : null;
     this.preload = flagValue(this.argv, "--preload");
     this.mainScript = flagValue(this.argv, "--main-script");
     this.fallbackState = initialBrowserState(this.initialUrl());
@@ -582,14 +583,6 @@ class Session {
     try {
       this.root?.setPointerShape("text");
     } catch { }
-    try {
-      browserSession(this.partition).flushStorageData();
-    } catch { }
-    for (const partition of this.appPartitions) {
-      try {
-        browserSession(partition).flushStorageData();
-      } catch { }
-    }
     this.registry?.dispose();
     this.registry = null;
     this.tabs.stopAll();
@@ -681,7 +674,6 @@ class Session {
     }
     if (app.mainScript) createRequire(app.mainScript)(app.mainScript);
     this.ensureEmbedderIpc();
-    if (!this.appPartitions.includes(partition)) this.appPartitions.push(partition);
     const tab = this.tabs.create(spec.url ? normalizeUrl(spec.url) : DEFAULT_URL, true, {
       app: { name: app.name ?? null, id },
       partition,

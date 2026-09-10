@@ -5,9 +5,13 @@ import path from "node:path";
 import { app } from "electron";
 import { APP_DIR_NAME } from "pixel-store";
 
-// er i don't think this is necessary anymore given our daemon but i guess it doesn't hurt to be explicit 
-export function claimProfile() {
+// the daemon keeps the base profile dir across restarts so --partition storage
+// never moves; the lock claim prevents two daemons sharing a dir
+const DAEMON_LOCK_WAIT_MS = 5_000;
+
+export async function claimProfile(): Promise<void> {
   const appData = process.env.TERMINAL_BROWSER_APPDATA ?? app.getPath("appData");
+  await waitForFreeLock(path.join(appData, APP_DIR_NAME, "terminal-browser.lock"));
   for (let i = 0; i < 32; i++) {
     const dir = path.join(appData, i === 0 ? APP_DIR_NAME : `${APP_DIR_NAME}-${i + 1}`);
     const lock = path.join(dir, "terminal-browser.lock");
@@ -29,10 +33,26 @@ export function claimProfile() {
       return;
     } catch {}
   }
-  app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-")));
+  app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), APP_DIR_NAME)));
 }
 
-function alive(pid: number) {
+// a previous daemon may still be releasing the dir when we start; if it frees
+// up soon we keep the base dir instead of drifting to a numbered one
+async function waitForFreeLock(lock: string): Promise<void> {
+  const deadline = Date.now() + DAEMON_LOCK_WAIT_MS;
+  while (Date.now() < deadline) {
+    let holder: number;
+    try {
+      holder = Number(fs.readFileSync(lock, "utf8"));
+    } catch {
+      return;
+    }
+    if (!holder || !alive(holder)) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
