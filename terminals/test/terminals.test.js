@@ -58,6 +58,14 @@ test("a terminal we know draws when the tty will not say, a stranger does not", 
   assert.equal(stranger.graphics, "unsupported");
 });
 
+test("rune is known without graphics or panes", async () => {
+  const terminal = detect({ RUNE_SOCKET: "/tmp/rune.sock" }, async () => "");
+  assert.equal(terminal?.name, "rune");
+  assert.equal(terminal?.split, undefined);
+  const checked = await checkTerminal(terminal, {});
+  assert.equal(checked.graphics, "unsupported");
+});
+
 test("a multiplexer wins over the terminal it runs in", () => {
   const terminal = detect({ TMUX: "/tmp/x,1,0", TERM_PROGRAM: "ghostty" }, async () => "");
   assert.equal(terminal?.name, "tmux");

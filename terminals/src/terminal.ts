@@ -42,6 +42,10 @@ export interface Terminal {
    */
   readonly reportsCssPixels?: boolean;
   /**
+   * Set when the terminal is known not to support terminal-browser graphics.
+   */
+  readonly graphics?: "unsupported";
+  /**
    * Allows code to be ran at startup, useful for preparing the terminal environment for terminal-browser
    */
   prepare?(): void | Promise<void>;

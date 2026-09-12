@@ -1,4 +1,5 @@
 import type { Detect } from "../terminal";
+import { rune } from "./rune";
 import { cmux } from "./cmux";
 import { ghostty } from "./ghostty";
 import { herdr } from "./herdr";
@@ -13,6 +14,7 @@ import { wezterm } from "./wezterm";
  * not fantastic, but ordering does matter
  */
 export const TERMINALS: Detect[] = [
+  rune,
   herdr,
   tmux,
   tty7,
