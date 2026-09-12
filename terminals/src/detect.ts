@@ -25,6 +25,7 @@ export async function checkTerminal(
 ): Promise<TerminalCheck> {
   await terminal?.prepare?.();
   if (env[SKIP_ENV]) return { terminal, graphics: "supported" };
+  if (terminal?.graphics === "unsupported") return { terminal, graphics: "unsupported" };
   const probed = await probeGraphics(terminal);
   const graphics = probed === "unknown" ? (terminal ? "supported" : "unsupported") : probed;
   return { terminal, graphics };
