@@ -38,6 +38,11 @@ export interface DownloadView {
   state: "progressing" | "done" | "failed";
 }
 
+export interface PermissionRequestView {
+  origin: string;
+  permission: string;
+}
+
 export type PageMenuIcon =
   | { kind: "path"; d: string; tint?: "red"; weight?: number }
   | { kind: "image"; src: string };
@@ -91,6 +96,8 @@ export interface ChromeActions {
   devtoolsDividerHover(hovering: boolean): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
+  permissionAllow(): void;
+  permissionDeny(): void;
   record: RecordActions;
 }
 

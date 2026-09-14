@@ -65,6 +65,10 @@ if [ -n "$DARWIN_ARCH" ]; then
     -c "Set :CFBundleIdentifier dev.zenbu.terminal-browser" \
     -c "Add :LSUIElement bool true" \
     "$APP/Contents/Info.plist" >/dev/null
+  /usr/libexec/PlistBuddy -c "Delete :NSCameraUsageDescription" "$APP/Contents/Info.plist" >/dev/null 2>&1 || true
+  /usr/libexec/PlistBuddy -c "Delete :NSMicrophoneUsageDescription" "$APP/Contents/Info.plist" >/dev/null 2>&1 || true
+  /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Terminal Browser requires camera access for meetings.'" "$APP/Contents/Info.plist" >/dev/null
+  /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Terminal Browser requires microphone access for meetings.'" "$APP/Contents/Info.plist" >/dev/null
   ELECTRON_EXE="electron/terminal-browser.app/Contents/MacOS/terminal-browser"
   NATIVE_SCROLL='export NATIVE_SCROLL_HELPER="${NATIVE_SCROLL_HELPER:-$ROOT/bin/native-scroll-helper}"'
 else
@@ -102,10 +106,10 @@ tar -czf "$TARBALL" -C "$OUT" terminal-browser
 
 if [ -n "$DARWIN_ARCH" ]; then
   SHA256="$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
-  SIZE="$(stat -f%z "$TARBALL")"
+  SIZE="$(wc -c < "$TARBALL" | tr -d ' ')"
 else
   SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
-  SIZE="$(stat -c%s "$TARBALL")"
+  SIZE="$(wc -c < "$TARBALL" | tr -d ' ')"
 fi
 
 cat > "$OUT/manifest-$TARGET.json" <<EOF

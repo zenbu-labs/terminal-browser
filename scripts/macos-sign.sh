@@ -26,7 +26,10 @@ if [ -z "${MACOS_SIGN_P12:-}" ]; then
   for binary in "${LOOSE_BINARIES[@]}"; do
     codesign --force --sign - --timestamp=none "$binary"
   done
-  codesign --force --sign - --timestamp=none "$APP"
+  find "$APP/Contents/Frameworks" -name "*.app" -o -name "*.dylib" -o -name "*.so" 2>/dev/null | sort -r | while IFS= read -r item; do
+    codesign --force --sign - --timestamp=none "$item"
+  done
+  codesign --force --sign - --entitlements "$ROOT/scripts/entitlements.plist" --timestamp=none "$APP"
   echo "signed ad-hoc (MACOS_SIGN_P12 not set)"
   exit 0
 fi

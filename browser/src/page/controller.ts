@@ -35,6 +35,10 @@ export interface ControllerOptions {
 }
 
 export class BrowserController {
+  get webContents() {
+    return this.window.webContents;
+  }
+
   readonly surface: Surface;
   private readonly popupSurface: Surface;
   private readonly devtoolsSurface: Surface;

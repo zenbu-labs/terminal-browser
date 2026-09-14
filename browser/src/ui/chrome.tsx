@@ -6,7 +6,7 @@ import { Icon } from "./icons";
 import type { IconName } from "./icons";
 import { PageContextMenu } from "./context-menu";
 import { MarkupCanvas } from "./markup-canvas";
-import { NewTabCard, PaletteCard, UrlCard } from "./modals";
+import { NewTabCard, PaletteCard, PermissionCard, UrlCard } from "./modals";
 import { DownloadHud, FindBar, Toast, ZoomHud } from "./overlays";
 import { PopupModal } from "./popup-modal";
 import {
@@ -44,6 +44,7 @@ export function Chrome({
   urlEdit,
   noOverlays,
   popup,
+  permissionRequest,
   zoomHud,
   download,
   toast,
@@ -71,6 +72,7 @@ export function Chrome({
   download: DownloadView | null;
   toast: { text: string; detail?: string; failed: boolean; alert: boolean } | null;
   pageMenu: PageMenuView | null;
+  permissionRequest: import("./types").PermissionRequestView | null;
   dividerEngaged: boolean;
   record: RecordView | null;
   recordSurface: Surface | null;
@@ -188,6 +190,7 @@ export function Chrome({
       {newTab && <NewTabCard view={newTab} actions={actions} layout={layout} theme={theme} />}
       {urlEdit && <UrlCard state={state} actions={actions} layout={layout} theme={theme} />}
       {palette && <PaletteCard view={palette} actions={actions} layout={layout} theme={theme} />}
+      {permissionRequest && <PermissionCard view={permissionRequest} actions={actions} layout={layout} theme={theme} />}
     </Box>
   );
 }

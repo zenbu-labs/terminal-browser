@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { app, net, session } from "electron";
+import { app, net, session, systemPreferences } from "electron";
 import type { Session, WebContents } from "electron";
 
 export interface DownloadProgress {
@@ -12,6 +12,38 @@ export interface DownloadProgress {
   received: number;
   total: number;
   state: "progressing" | "done" | "failed";
+}
+
+const userGrantedMedia = new Set<string>();
+const userDeniedMedia = new Set<string>();
+const userRequestedMediaOrigins = new Set<string>();
+
+export function clearMediaPermissionsForOrigin(origin: string): void {
+  userGrantedMedia.delete(`${origin}:microphone`);
+  userGrantedMedia.delete(`${origin}:camera`);
+  userDeniedMedia.delete(`${origin}:microphone`);
+  userDeniedMedia.delete(`${origin}:camera`);
+}
+
+export function setMediaPermissionForOrigin(origin: string, capability: "microphone" | "camera", granted: boolean): void {
+  const key = `${origin}:${capability}`;
+  if (granted) {
+    userGrantedMedia.add(key);
+    userDeniedMedia.delete(key);
+  } else {
+    userDeniedMedia.add(key);
+    userGrantedMedia.delete(key);
+  }
+}
+
+export function hasMediaPermissionRequested(origin: string): boolean {
+  return (
+    userRequestedMediaOrigins.has(origin) ||
+    userGrantedMedia.has(`${origin}:microphone`) ||
+    userGrantedMedia.has(`${origin}:camera`) ||
+    userDeniedMedia.has(`${origin}:microphone`) ||
+    userDeniedMedia.has(`${origin}:camera`)
+  );
 }
 
 const GRANTED = new Set([
@@ -50,6 +82,18 @@ function granted(contents: WebContents | null, permission: string): boolean {
   );
 }
 
+function promptTerminalPermission(
+  contents: WebContents,
+  permission: "microphone" | "camera",
+  requestingUrl: string | undefined,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    app.emit("terminal-browser:permission-request", contents, permission, requestingUrl, (allow: boolean) => {
+      resolve(allow);
+    });
+  });
+}
+
 export function configureBrowserSession(
   partition: string | null,
   onDownload: (progress: DownloadProgress) => void,
@@ -60,10 +104,152 @@ export function configureBrowserSession(
 
   target.registerPreloadScript({ type: "frame", filePath: selectPreloadPath() });
 
-  target.setPermissionRequestHandler((contents, permission, callback) => {
+  const cleanUserAgent = target.getUserAgent()
+    .replace(/terminal-browser\/[0-9\.]+\s?/g, "")
+    .replace(/Electron\/[0-9\.]+\s?/g, "")
+    .trim();
+  target.setUserAgent(cleanUserAgent);
+
+  target.setDevicePermissionHandler(() => true);
+
+  target.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const requestingUrl = details.requestingUrl;
+    const origin = requestingUrl ? new URL(requestingUrl).origin : null;
+
+    if (!origin) {
+      callback(granted(contents, permission));
+      return;
+    }
+
+    const permStr = permission as string;
+    if (
+      permission === "media" ||
+      permStr === "camera" ||
+      permStr === "microphone" ||
+      permStr === "audio-capture" ||
+      permStr === "video-capture"
+    ) {
+      if (origin) userRequestedMediaOrigins.add(origin);
+      const rawTypes = (details as any)?.mediaTypes;
+      const singleType = (details as any)?.mediaType;
+      const mediaTypes: string[] = Array.isArray(rawTypes)
+        ? rawTypes
+        : typeof singleType === "string"
+        ? [singleType]
+        : [];
+      const needsCamera =
+        permStr === "camera" ||
+        permStr === "video-capture" ||
+        (permission === "media" && (mediaTypes.length === 0 || mediaTypes.includes("video")));
+      const needsMic =
+        permStr === "microphone" ||
+        permStr === "audio-capture" ||
+        (permission === "media" && (mediaTypes.length === 0 || mediaTypes.includes("audio")));
+
+      const isDarwin = process.platform === "darwin";
+
+      const handleMedia = async () => {
+        if (isDarwin) {
+          if (needsCamera) {
+            const status = systemPreferences.getMediaAccessStatus("camera");
+            if (status === "not-determined") {
+              await systemPreferences.askForMediaAccess("camera");
+            }
+          }
+          if (needsMic) {
+            const status = systemPreferences.getMediaAccessStatus("microphone");
+            if (status === "not-determined") {
+              await systemPreferences.askForMediaAccess("microphone");
+            }
+          }
+        }
+
+        if (needsMic) {
+          const micKey = `${origin}:microphone`;
+          if (userDeniedMedia.has(micKey)) {
+            callback(false);
+            return;
+          }
+          if (!userGrantedMedia.has(micKey)) {
+            const allowMic = await promptTerminalPermission(contents, "microphone", requestingUrl);
+            if (allowMic) {
+              userGrantedMedia.add(micKey);
+              userDeniedMedia.delete(micKey);
+            } else {
+              userDeniedMedia.add(micKey);
+              userGrantedMedia.delete(micKey);
+              callback(false);
+              return;
+            }
+          }
+        }
+
+        if (needsCamera) {
+          const camKey = `${origin}:camera`;
+          if (userDeniedMedia.has(camKey)) {
+            callback(false);
+            return;
+          }
+          if (!userGrantedMedia.has(camKey)) {
+            const allowCam = await promptTerminalPermission(contents, "camera", requestingUrl);
+            if (allowCam) {
+              userGrantedMedia.add(camKey);
+              userDeniedMedia.delete(camKey);
+            } else {
+              userDeniedMedia.add(camKey);
+              userGrantedMedia.delete(camKey);
+              callback(false);
+              return;
+            }
+          }
+        }
+
+        callback(true);
+      };
+
+      handleMedia().catch(() => callback(false));
+      return;
+    }
+
     callback(granted(contents, permission));
   });
-  target.setPermissionCheckHandler((contents, permission) => granted(contents, permission));
+
+  target.setPermissionCheckHandler((contents, permission, _origin, details) => {
+    const requestingUrl = (details as any)?.requestingUrl;
+    const origin = requestingUrl ? new URL(requestingUrl).origin : null;
+
+    const permStr = permission as string;
+    if (
+      origin &&
+      (permission === "media" ||
+        permStr === "camera" ||
+        permStr === "microphone" ||
+        permStr === "audio-capture" ||
+        permStr === "video-capture")
+    ) {
+      const rawTypes = (details as any)?.mediaTypes;
+      const singleType = (details as any)?.mediaType;
+      const mediaTypes: string[] = Array.isArray(rawTypes)
+        ? rawTypes
+        : typeof singleType === "string"
+        ? [singleType]
+        : [];
+      const checkCamera =
+        permStr === "camera" ||
+        permStr === "video-capture" ||
+        (permission === "media" && (mediaTypes.length === 0 || mediaTypes.includes("video")));
+      const checkMic =
+        permStr === "microphone" ||
+        permStr === "audio-capture" ||
+        (permission === "media" && (mediaTypes.length === 0 || mediaTypes.includes("audio")));
+
+      if (checkMic && userDeniedMedia.has(`${origin}:microphone`)) return false;
+      if (checkCamera && userDeniedMedia.has(`${origin}:camera`)) return false;
+
+      return true;
+    }
+    return granted(contents, permission);
+  });
 
   target.webRequest.onBeforeRequest({ urls: ["file://*", "file://*/*"] }, (details, callback) => {
     callback({ cancel: details.resourceType === "xhr" });

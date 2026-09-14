@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, Input, Text } from "pixel-react";
-import type { NodeHandle } from "pixel-react";
+import type { NodeHandle, Rgba } from "pixel-react";
 import type { BrowserState } from "../page/types";
 import { Icon } from "./icons";
 import type { Theme } from "./theme";
@@ -73,78 +73,76 @@ export function PaletteCard({
   theme: Theme;
 }) {
   const rem = layout.rem;
-  const cardW = Math.min(rem * 26, layout.width - rem * 4);
-  const rowH = rem * 2;
+  const rowH = rem * 1.8;
   const input = useRef<NodeHandle | null>(null);
   useEffect(() => {
     input.current?.focus();
   }, []);
+  
   return (
-    <ModalCard layout={layout} theme={theme} width={cardW} onClose={actions.paletteClose}>
+    <>
+      <Backdrop layout={layout} onClose={actions.paletteClose} />
       <Box
         style={{
-          height: rem * 2.4,
-          alignItems: "center",
-          padding: { left: rem * 0.85, right: rem * 0.85 },
-          border: { bottom: [1, theme.hairline] },
+          position: "absolute",
+          inset: { bottom: 0, left: 0 },
+          width: layout.width,
+          flexDirection: "column",
+          background: theme.bg,
+          border: { top: [1, theme.hairline] },
         }}
       >
-        <Input
-          ref={input}
-          autoFocus
-          style={{ flexGrow: 1, flexBasis: 0, wrap: false, fontSize: rem }}
-          caretColor={theme.accent}
-          selectionColor={theme.selection}
-          onChange={(text) => actions.paletteQuery(text)}
-        />
-      </Box>
-      <Box style={{ flexDirection: "column" }}>
-        {view.items.length === 0 && (
-          <Text
-            style={{
-              padding: { left: rem * 0.85, top: rem * 0.35, bottom: rem * 0.35 },
-              fontSize: rem * 0.92,
-              color: theme.muted,
-              selectable: false,
-            }}
-          >
-            no matching actions
-          </Text>
-        )}
-        {view.items.map((item, i) => (
-          <Box
-            key={item.id}
-            style={{
-              height: rowH,
-              alignItems: "center",
-              gap: rem * 0.55,
-              padding: { left: rem * 0.85, right: rem * 0.85 },
-              background: i === view.index ? theme.hover : undefined,
-              hoverBackground: theme.hover,
-              cornerRadius: lastRowRadius(i === view.items.length - 1, rem),
-            }}
-            onClick={() => actions.paletteRun(i)}
-          >
-            <Text
-              style={{
-                flexGrow: 1,
-                flexBasis: 0,
-                fontSize: rem * 0.95,
-                wrap: false,
-                selectable: false,
-              }}
-            >
-              {item.label}
-            </Text>
-            <Text
-              style={{ fontSize: rem * 0.82, color: theme.muted, wrap: false, selectable: false }}
-            >
-              {item.shortcut}
+        {view.items.length > 0 ? (
+          <Box style={{ flexDirection: "column", border: { bottom: [1, theme.hairline] } }}>
+            {view.items.map((item, i) => (
+              <Box
+                key={item.id}
+                style={{
+                  height: rowH,
+                  alignItems: "center",
+                  gap: rem * 0.55,
+                  padding: { left: rem * 0.85, right: rem * 0.85 },
+                  background: i === view.index ? theme.hover : undefined,
+                  hoverBackground: theme.hover,
+                }}
+                onClick={() => actions.paletteRun(i)}
+              >
+                <Text style={{ flexGrow: 1, flexBasis: 0, fontSize: rem * 0.95, wrap: false, selectable: false }}>
+                  {item.label}
+                </Text>
+                <Text style={{ fontSize: rem * 0.82, color: theme.muted, wrap: false, selectable: false }}>
+                  {item.shortcut}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        ) : (
+          <Box style={{ border: { bottom: [1, theme.hairline] } }}>
+            <Text style={{ padding: { left: rem * 2, top: rem * 0.35, bottom: rem * 0.35 }, fontSize: rem * 0.92, color: theme.muted, selectable: false }}>
+              no matching actions
             </Text>
           </Box>
-        ))}
+        )}
+        <Box
+          style={{
+            height: rem * 2,
+            alignItems: "center",
+            padding: { left: rem * 0.85, right: rem * 0.85 },
+            gap: rem * 0.5,
+          }}
+        >
+          <Text style={{ fontSize: rem, color: theme.accent, selectable: false }}>:</Text>
+          <Input
+            ref={input}
+            autoFocus
+            style={{ flexGrow: 1, flexBasis: 0, wrap: false, fontSize: rem }}
+            caretColor={theme.accent}
+            selectionColor={theme.selection}
+            onChange={(text) => actions.paletteQuery(text)}
+          />
+        </Box>
       </Box>
-    </ModalCard>
+    </>
   );
 }
 
@@ -280,6 +278,95 @@ export function NewTabCard({
         </Box>
       )}
     </ModalCard>
+  );
+}
+
+export interface DialogOption {
+  key: string;
+  label: string;
+  color?: string | Rgba;
+  action: () => void;
+}
+
+export function DialogCard({
+  layout,
+  theme,
+  title,
+  message,
+  options,
+  onClose,
+}: {
+  layout: ChromeLayout;
+  theme: Theme;
+  title: string;
+  message: string;
+  options: DialogOption[];
+  onClose: () => void;
+}) {
+  const rem = layout.rem;
+  const cardW = Math.min(rem * 32, layout.width - rem * 4);
+  const input = useRef<NodeHandle | null>(null);
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
+  
+  return (
+    <ModalCard layout={layout} theme={theme} width={cardW} onClose={onClose}>
+      <Box style={{ flexDirection: "column", padding: rem, gap: rem * 0.5 }}>
+        <Text style={{ fontSize: rem, color: theme.fg }}>{title}</Text>
+        <Text style={{ fontSize: rem * 0.9, color: theme.muted, wrap: true }}>
+          {message}
+        </Text>
+        <Box style={{ gap: rem, margin: { top: rem * 0.5 } }}>
+          {options.map((opt) => (
+            <Text
+              key={opt.key}
+              style={{ fontSize: rem * 0.9, color: opt.color || theme.accent, selectable: false }}
+            >
+              [{opt.key.toUpperCase()}] {opt.label}
+            </Text>
+          ))}
+        </Box>
+        <Input
+          ref={input}
+          autoFocus
+          style={{ width: 0, height: 0 }}
+          onChange={(text) => {
+            const key = text.toLowerCase();
+            const option = options.find((o) => o.key.toLowerCase() === key);
+            if (option) option.action();
+            else if (key === "escape") onClose();
+          }}
+        />
+      </Box>
+    </ModalCard>
+  );
+}
+
+export function PermissionCard({
+  view,
+  actions,
+  layout,
+  theme,
+}: {
+  view: import("./types").PermissionRequestView;
+  actions: ChromeActions;
+  layout: ChromeLayout;
+  theme: Theme;
+}) {
+  const origin = view.origin ? new URL(view.origin).hostname : "This website";
+  return (
+    <DialogCard
+      layout={layout}
+      theme={theme}
+      title="Permission Request"
+      message={`${origin} wants to use your ${view.permission}.`}
+      options={[
+        { key: "y", label: "Allow", color: theme.accent, action: actions.permissionAllow },
+        { key: "n", label: "Block", color: theme.disabled, action: actions.permissionDeny },
+      ]}
+      onClose={actions.permissionDeny}
+    />
   );
 }
 

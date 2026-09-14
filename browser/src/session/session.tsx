@@ -11,9 +11,13 @@ import { detect } from "pixel-terminals";
 import type { Pane, Terminal } from "pixel-terminals";
 
 import {
+  allowClipboardRead,
   browserSession,
+  clearMediaPermissionsForOrigin,
   configureBrowserSession,
+  hasMediaPermissionRequested,
   routeThroughSocksProxy,
+  setMediaPermissionForOrigin,
 } from "../page/browser-session";
 import { bundledAsset } from "../assets";
 import { Grab, reactGrabPreloadPath } from "../grab/grab";
@@ -212,6 +216,13 @@ class Session {
     if (tab?.app && this.tabs.count > 1) this.tabs.close(tab.id);
     else this.shutdown();
   };
+  private readonly onPermissionRequest = (contents: any, permission: string, origin: string, finish: (allow: boolean) => void) => {
+    const tab = this.tabs.findByContents(contents.id);
+    if (!tab) return;
+    this.permissionRequest?.finish(false);
+    this.permissionRequest = { contentsId: contents.id, permission, origin, finish };
+    this.render();
+  };
   private paletteBinding: KeyBinding[] = [];
   private findBinding: KeyBinding[] = [];
   private devtoolsBinding: KeyBinding[] = [];
@@ -259,6 +270,7 @@ class Session {
 
   private findOpen = false;
   private urlEditOpen = false;
+  private permissionRequest: { contentsId: number; permission: string; origin: string; finish: (allow: boolean) => void } | null = null;
   private palette: { query: string; index: number } | null = null;
   private newTab: NewTabState | null = null;
   private zoomHud: number | null = null;
@@ -376,6 +388,7 @@ class Session {
   }
 
   async start(): Promise<void> {
+    app.on("terminal-browser:permission-request" as any, this.onPermissionRequest as any);
     if (this.socksPort) await routeThroughSocksProxy(this.partition, this.socksPort);
     if (process.platform === "darwin") app.dock?.hide();
     await this.loadDevtoolsSettings();
@@ -574,6 +587,7 @@ class Session {
   shutdown(code = 0) {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    app.off("terminal-browser:permission-request" as any, this.onPermissionRequest as any);
     ipcMain.removeListener("terminal-browser:theme-request", this.onThemeRequest);
     ipcMain.removeListener("terminal-browser:quit", this.onQuitRequest);
     for (const record of this.records.values()) record.dispose();
@@ -749,6 +763,7 @@ class Session {
             : null
         }
         pageMenu={this.pageMenuView()}
+        permissionRequest={this.permissionRequest}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
@@ -861,8 +876,24 @@ class Session {
         this.syncDevtoolsLayout({ keepFrame: true });
       }
     },
-    pageMenuAction: (id) => this.runPageMenu(id),
+    pageMenuAction: (id) => {
+      this.runPageMenu(id);
+    },
     pageMenuClose: () => this.closePageMenu(),
+    permissionAllow: () => {
+      if (this.permissionRequest) {
+        this.permissionRequest.finish(true);
+        this.permissionRequest = null;
+        this.render();
+      }
+    },
+    permissionDeny: () => {
+      if (this.permissionRequest) {
+        this.permissionRequest.finish(false);
+        this.permissionRequest = null;
+        this.render();
+      }
+    },
     record: this.recordActions(),
   };
 
@@ -1369,6 +1400,32 @@ class Session {
         this.openDevtools();
         if (menu.kind === "page" && browser.devtools) browser.inspect(menu.pageX, menu.pageY);
         return;
+      case "permissions": {
+        const activeUrl = this.tabs.activeState?.url;
+        let origin: string | null = null;
+        try {
+          if (activeUrl) origin = new URL(activeUrl).origin;
+        } catch {}
+        if (origin && browser.webContents) {
+          clearMediaPermissionsForOrigin(origin);
+          const targetOrigin = origin;
+          const contentsId = browser.webContents.id;
+          this.permissionRequest = {
+            contentsId,
+            origin: activeUrl!,
+            permission: "microphone & camera",
+            finish: (allow: boolean) => {
+              setMediaPermissionForOrigin(targetOrigin, "microphone", allow);
+              setMediaPermissionForOrigin(targetOrigin, "camera", allow);
+              this.permissionRequest = null;
+              browser.reload();
+              this.render();
+            },
+          };
+          this.render();
+        }
+        return;
+      }
     }
     if (menu.kind !== "page") return;
     switch (id) {
@@ -1436,6 +1493,14 @@ class Session {
   }
 
   private toolMenuItems(): PageMenuItem[] {
+    const activeUrl = this.tabs.activeState?.url;
+    let activeOrigin: string | null = null;
+    try {
+      if (activeUrl) activeOrigin = new URL(activeUrl).origin;
+    } catch {}
+
+    const hasMedia = activeOrigin ? hasMediaPermissionRequested(activeOrigin) : false;
+
     return [
       this.grabMenuItem(),
       {
@@ -1451,6 +1516,16 @@ class Session {
         enabled: true,
         shortcut: bindingLabel(this.devtoolsBinding),
       },
+      ...(hasMedia
+        ? [
+            {
+              id: "permissions",
+              label: "site permissions",
+              enabled: true,
+              shortcut: "",
+            },
+          ]
+        : []),
     ];
   }
 
