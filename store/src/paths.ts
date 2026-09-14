@@ -37,7 +37,9 @@ function physical(dir: string): string {
 export const INSTALL_ROOT = installRoot();
 
 function stableIdentity(root: string): string {
-  return root.replace(/([/\\]Caskroom[/\\]terminal-browser[/\\])[^/\\]+/, "$1");
+  return root
+    .replace(/^\/nix\/store\/[^/]+\/lib\/terminal-browser$/, "nix:terminal-browser")
+    .replace(/([/\\]Caskroom[/\\]terminal-browser[/\\])[^/\\]+/, "$1");
 }
 
 const suffix = crypto.createHash("sha256").update(stableIdentity(INSTALL_ROOT.root)).digest("hex").slice(0, 8);

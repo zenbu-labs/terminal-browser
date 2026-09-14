@@ -21,6 +21,24 @@ curl -fsSL https://terminal-browser.sh/install | bash
 brew install terminal-browser
 ```
 
+### Nix (Linux)
+
+With Nix flakes enabled, run directly or install into your profile:
+
+```bash
+nix run github:zenbu-labs/terminal-browser -- open https://example.com
+nix profile add github:zenbu-labs/terminal-browser
+```
+
+To build a checkout, run `nix build`. The executable is `result/bin/terminal-browser`.
+The flake supports x86_64 and aarch64 Linux. It builds the Rust engine and
+JavaScript bundles from source and uses the project's patched Electron and
+agent-browser release binaries.
+
+Update an installed profile with `nix profile upgrade terminal-browser`. When using
+this flake as an input, update it with `nix flake update` and rebuild your configuration.
+`terminal-browser upgrade` displays Nix update instructions instead of running the installer.
+
 ### Usage
 ```
 terminal-browser # launches the browser
