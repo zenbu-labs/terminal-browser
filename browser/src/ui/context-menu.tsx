@@ -22,7 +22,11 @@ export function PageContextMenu({
     view.items.reduce((widest, item) => {
       let row = rem * 1.4 + item.label.length * charW;
       if (hasIcons) row += rem * 1.2;
-      if (item.shortcut) row += rem * 0.6 + item.shortcut.length * shortcutW;
+      if (item.kind === "zoom") {
+        row += rem * 6.5;
+      } else if (item.shortcut) {
+        row += rem * 0.6 + item.shortcut.length * shortcutW;
+      }
       return Math.max(widest, row);
     }, rem * 9),
   );
@@ -89,6 +93,20 @@ function MenuRow({
   last: boolean;
   alignIcons: boolean;
 }) {
+  if (item.kind === "zoom") {
+    return (
+      <ZoomMenuRow
+        item={item}
+        rowH={rowH}
+        rem={rem}
+        theme={theme}
+        actions={actions}
+        first={first}
+        last={last}
+        alignIcons={alignIcons}
+      />
+    );
+  }
   const radius = Math.max(2, rem * 0.45 - 1);
   return (
     <Box
@@ -139,6 +157,126 @@ function MenuRow({
     </Box>
   );
 }
+
+function ZoomMenuRow({
+  item,
+  rowH,
+  rem,
+  theme,
+  actions,
+  first,
+  last,
+  alignIcons,
+}: {
+  item: PageMenuItem;
+  rowH: number;
+  rem: number;
+  theme: Theme;
+  actions: ChromeActions;
+  first: boolean;
+  last: boolean;
+  alignIcons: boolean;
+}) {
+  const radius = Math.max(2, rem * 0.45 - 1);
+  const btnSize = Math.round(rowH * 0.75);
+  return (
+    <Box
+      style={{
+        height: rowH,
+        alignItems: "center",
+        padding: { left: rem * 0.7, right: rem * 0.5 },
+        cornerRadius: {
+          topLeft: first ? radius : 0,
+          topRight: first ? radius : 0,
+          bottomLeft: last ? radius : 0,
+          bottomRight: last ? radius : 0,
+        },
+        flexShrink: 0,
+      }}
+    >
+      {alignIcons && <Box style={{ width: rem * 1.2, flexShrink: 0 }} />}
+      <Text
+        style={{
+          flexGrow: 1,
+          flexBasis: 0,
+          fontSize: rem * 0.82,
+          color: theme.fg,
+          wrap: false,
+          selectable: false,
+        }}
+      >
+        {item.label}
+      </Text>
+      <Box style={{ alignItems: "center", gap: rem * 0.35 }}>
+        <Box
+          style={{
+            width: btnSize,
+            height: btnSize,
+            alignItems: "center",
+            justifyContent: "center",
+            cornerRadius: rem * 0.25,
+            background: theme.fieldBorder,
+            hoverBackground: theme.hover,
+          }}
+          onClick={() => actions.pageMenuAction("zoom-out")}
+        >
+          <Text
+            style={{
+              fontSize: rem * 0.85,
+              color: theme.fg,
+              selectable: false,
+            }}
+          >
+            -
+          </Text>
+        </Box>
+        <Box
+          style={{
+            padding: { left: rem * 0.3, right: rem * 0.3 },
+            alignItems: "center",
+            justifyContent: "center",
+            hoverBackground: theme.hover,
+            cornerRadius: rem * 0.25,
+          }}
+          onClick={() => actions.pageMenuAction("zoom-reset")}
+        >
+          <Text
+            style={{
+              fontSize: rem * 0.75,
+              color: theme.muted,
+              selectable: false,
+            }}
+          >
+            {item.zoomPercent ?? "100%"}
+          </Text>
+        </Box>
+        <Box
+          style={{
+            width: btnSize,
+            height: btnSize,
+            alignItems: "center",
+            justifyContent: "center",
+            cornerRadius: rem * 0.25,
+            background: theme.fieldBorder,
+            hoverBackground: theme.hover,
+          }}
+          onClick={() => actions.pageMenuAction("zoom-in")}
+        >
+          <Text
+            style={{
+              fontSize: rem * 0.85,
+              color: theme.fg,
+              selectable: false,
+            }}
+          >
+            +
+          </Text>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
 
 function MenuIcon({
   icon,

@@ -974,10 +974,22 @@ class Session {
 
   private runPageMenu(id: string) {
     const menu = this.pageMenu;
-    this.closePageMenu();
     const tab = this.tabs.active;
     const handle = tab?.ref.current;
     if (!menu || !tab || !handle) return;
+    if (id === "zoom-in") {
+      this.applyZoom(1);
+      return;
+    }
+    if (id === "zoom-out") {
+      this.applyZoom(-1);
+      return;
+    }
+    if (id === "zoom-reset") {
+      this.applyZoom(0);
+      return;
+    }
+    this.closePageMenu();
     switch (id) {
       case "grab":
         void this.toggleGrab();
@@ -987,6 +999,7 @@ class Session {
         else void this.startRecording();
         return;
       case "inspect": {
+
         if (menu.kind !== "page") {
           this.openDevtools();
           return;
@@ -1099,8 +1112,17 @@ class Session {
         enabled: true,
         shortcut: bindingLabel(this.devtoolsBinding),
       },
+      {
+        id: "zoom",
+        label: "zoom",
+        enabled: true,
+        shortcut: "",
+        kind: "zoom",
+        zoomPercent: `${Math.round((this.tabs.activeState?.zoom ?? 1) * 100)}%`,
+      },
     ];
   }
+
 
   private pageMenuView(): PageMenuView | null {
     if (!this.pageMenu || !this.layout) return null;

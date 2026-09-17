@@ -47,7 +47,10 @@ export interface PageMenuItem {
   enabled: boolean;
   shortcut: string;
   icon?: PageMenuIcon;
+  kind?: "item" | "zoom";
+  zoomPercent?: string;
 }
+
 
 export interface PageMenuView {
   x: number;
