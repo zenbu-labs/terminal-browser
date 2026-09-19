@@ -41,7 +41,8 @@ import type {
   TabActions,
   TabView,
 } from "../ui/types";
-import { displayUrl, normalizeUrl, searchOrUrl } from "../url";
+import { clearSiteData } from "../page/site-data";
+import { displayUrl, normalizeUrl, searchOrUrl, urlHost } from "../url";
 import { START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
 import { makeTheme } from "../ui/theme";
@@ -200,6 +201,7 @@ class Session {
   private findOpen = false;
   private urlEditOpen = false;
   private palette: { query: string; index: number } | null = null;
+  private clearAllArmed = false;
   private newTab: NewTabState | null = null;
   private zoomHud: number | null = null;
   private zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1272,8 +1274,49 @@ class Session {
     chosen?.run();
   }
 
+  private pageOrigin(): string | null {
+    const url = this.tabs.activeState?.url ?? "";
+    if (!/^https?:\/\//i.test(url)) return null;
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  private clearSite(origin: string) {
+    void clearSiteData(this.partition, origin).then(
+      () => {
+        this.showToast(`cleared ${urlHost(origin)}`, "done");
+        this.tabs.activeHandle?.reload();
+      },
+      (error: unknown) => this.showToast(clearFailure(error), "failed"),
+    );
+  }
+
+  // wiping every site logs the user out of everything, so it takes two runs
+  private clearEverything() {
+    if (!this.clearAllArmed) {
+      this.clearAllArmed = true;
+      setTimeout(() => {
+        this.clearAllArmed = false;
+      }, 5000);
+      this.showToast("run again to clear every site", "alert");
+      return;
+    }
+    this.clearAllArmed = false;
+    void clearSiteData(this.partition).then(
+      () => {
+        this.showToast("cleared all site data", "done");
+        this.tabs.activeHandle?.reload();
+      },
+      (error: unknown) => this.showToast(clearFailure(error), "failed"),
+    );
+  }
+
   private paletteActions(): PaletteAction[] {
     const devtoolsOpen = this.tabs.active?.devtools ?? false;
+    const origin = this.pageOrigin();
     return [
       {
         id: "find",
@@ -1295,6 +1338,24 @@ class Session {
           else if (record.reviewing) record.actions.complete();
           else record.actions.stop();
         },
+      },
+      ...(origin
+        ? [
+          {
+            id: "clear-site",
+            label: `clear cookies and data for ${urlHost(origin)}`,
+            shortcut: "",
+            run: () => this.clearSite(origin),
+          },
+        ]
+        : []),
+      {
+        id: "clear-all",
+        label: this.clearAllArmed
+          ? "clear every site — run again to confirm"
+          : "clear cookies and data for all sites",
+        shortcut: "",
+        run: () => this.clearEverything(),
       },
       {
         id: "grab",
@@ -1435,6 +1496,10 @@ function flagValue(argv: string[], flag: string): string | null {
   return (
     argv.find((argument) => argument.startsWith(`${flag}=`))?.slice(flag.length + 1) ?? null
   );
+}
+
+function clearFailure(error: unknown): string {
+  return `clearing failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
 function rememberUrl(url: string) {
