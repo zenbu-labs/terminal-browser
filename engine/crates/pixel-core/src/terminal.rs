@@ -266,6 +266,18 @@ impl SessionEnv {
     }
 }
 
+// Enabled together and turned off together, so nothing is left on after we go.
+// The last two are the keyboard: `>1u` asks for kitty's key reporting, and
+// `>1s` (XTSHIFTESCAPE) asks the terminal to hand shift+click to us rather than
+// using it for a selection of its own. A terminal that does not know either, or
+// that its user has set to keep shift for itself, ignores it and behaves as it
+// does today.
+const ENABLE_MODES: &[u8] =
+    b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u\x1b[>1s";
+
+const DISABLE_MODES: &[u8] =
+    b"\x1b[>0s\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l";
+
 impl Terminal {
     pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
         Self::with_tty(Tty::stdio()?, wrapper, env)
@@ -276,10 +288,7 @@ impl Terminal {
     }
 
     fn with_tty(mut io: Tty, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
-        // would prefer if they weren't magic and linked to some known doc on the internet
-        io.out().write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
-        )?; // enable many reporting modes so we get info about mouse/keyboard
+        io.out().write_all(ENABLE_MODES)?;
         io.out().flush()?;
 
         let mut terminal = Self {
@@ -1150,9 +1159,7 @@ impl Drop for Terminal {
         if self.color_scheme_updates {
             let _ = self.io.out().write_all(b"\x1b[?2031l");
         }
-        let _ = self.io.out().write_all(
-            b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
-        );
+        let _ = self.io.out().write_all(DISABLE_MODES);
         let _ = self.io.out().flush();
     }
 }
@@ -1995,6 +2002,39 @@ mod tests {
         assert_eq!(parse_kitty_keyboard(b"\x1b[?u"), None);
         // and it is still found behind one of them
         assert_eq!(parse_kitty_keyboard(b"\x1b[?62;22;52c\x1b[?27u"), Some(true));
+    }
+
+    #[test]
+    fn every_mode_we_turn_on_is_turned_off_again() {
+        let enabled: Vec<&[u8]> = ENABLE_MODES.split(|&b| b == 0x1b).skip(1).collect();
+        assert!(!enabled.is_empty());
+        for mode in enabled {
+            let off: Vec<u8> = match mode.last() {
+                Some(b'h') => [&mode[..mode.len() - 1], b"l"].concat(),
+                // the cursor is the one we hide rather than enable
+                Some(b'l') => [&mode[..mode.len() - 1], b"h"].concat(),
+                Some(b'u') => b"[<u".to_vec(),
+                Some(b's') => b"[>0s".to_vec(),
+                other => panic!("no idea how to turn off {other:?}"),
+            };
+            let off = [b"\x1b", off.as_slice()].concat();
+            assert!(
+                DISABLE_MODES
+                    .windows(off.len())
+                    .any(|window| window == off.as_slice()),
+                "{} is turned on and never off",
+                String::from_utf8_lossy(mode)
+            );
+        }
+    }
+
+    #[test]
+    fn shift_escape_is_asked_for_and_given_back() {
+        let contains = |haystack: &[u8], needle: &[u8]| {
+            haystack.windows(needle.len()).any(|window| window == needle)
+        };
+        assert!(contains(ENABLE_MODES, b"\x1b[>1s"), "shift+click is ours");
+        assert!(contains(DISABLE_MODES, b"\x1b[>0s"), "and is handed back");
     }
 
     #[test]
