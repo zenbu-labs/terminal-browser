@@ -53,3 +53,7 @@ dist-release/
 skill/build/
 
 /assets/react-grab/index.global.js
+
+# Nix build outputs
+result
+result-*
