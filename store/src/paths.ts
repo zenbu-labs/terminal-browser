@@ -49,7 +49,14 @@ export const DATA_DIR = path.join(DATA_HOME, APP_DIR_NAME);
 export const LOGS_DIR = path.join(STATE_HOME, APP_DIR_NAME, "logs");
 export const FAVICONS_DIR = path.join(CACHE_HOME, APP_DIR_NAME, "favicons");
 export const INSTANCES_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "instances");
-export const AGENT_SOCKETS_DIR = path.join(RUNTIME_HOME, APP_DIR_NAME, "agent-browser");
+
+function agentSocketsDir(): string {
+  const runtimeDir = process.env.XDG_RUNTIME_DIR;
+  if (runtimeDir) return path.join(runtimeDir, APP_DIR_NAME, "agent-browser");
+  return path.join(os.tmpdir(), "tb-agent");
+}
+
+export const AGENT_SOCKETS_DIR = agentSocketsDir();
 export const DAEMON_SOCKET = path.join(RUNTIME_HOME, APP_DIR_NAME, "daemon.sock");
 export const DB_FILE = path.join(DATA_DIR, "terminal-browser.db");
 
