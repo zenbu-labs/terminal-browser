@@ -11,12 +11,16 @@
     "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\""
   },
   "dependencies": {
+    "@ghostery/adblocker": "^2.18.2",
+    "@ghostery/adblocker-electron": "^2.18.2",
+    "@ghostery/adblocker-electron-preload": "^2.18.2",
     "@zenbu-labs/pixel": "0.0.15",
     "micromark": "^4.0.2",
     "micromark-extension-gfm": "^3.0.0",
     "pixel-store": "workspace:*",
     "react": "^18.3.1",
     "react-grab": "0.2.0",
+    "tldts-experimental": "^7.4.9",
     "zod": "^4.4.3"
   },
   "devDependencies": {

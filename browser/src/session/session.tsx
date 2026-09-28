@@ -44,6 +44,7 @@ import { Registry } from "../registry";
 import { Chrome } from "../ui/chrome";
 import { ICONS } from "../ui/icons";
 import type {
+  AdblockView,
   ChromeActions,
   ChromeLayout,
   DevtoolsView,
@@ -54,7 +55,23 @@ import type {
   TabActions,
   TabView,
 } from "../ui/types";
-import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor } from "../url";
+import {
+  adblockBlocked,
+  adblockClosePage,
+  adblockFiltersAge,
+  adblockPartition,
+  adblockHostAllowed,
+  adblockOn,
+  adblockOpenPage,
+  adblockPageNavigated,
+  adblockUpdating,
+  attachAdblockPreloads,
+  attachAdblockRequests,
+  setAdblockHostAllowed,
+  setAdblockOn,
+  updateAdblockFilters,
+} from "../page/adblock";
+import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor, urlHost } from "../url";
 import type { SearchUrl } from "../url";
 import { START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
@@ -209,6 +226,8 @@ class Session {
   private findOpen = false;
   private urlEditOpen = false;
   private palette: { query: string; index: number } | null = null;
+  private readonly adblock: boolean;
+  private readonly adblockPages = new Map<number, string>();
   private newTab: NewTabState | null = null;
   private zoomHud: number | null = null;
   private zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
@@ -242,6 +261,7 @@ class Session {
       self: () => this.findOwnPane(),
       embedded: embeddedAgent(ctx.env.TERMINAL_BROWSER_AGENT_BRIDGE, ctx.env.TERMINAL_BROWSER_AGENT_TOKEN),
     });
+    this.adblock = !this.argv.includes("--no-adblock");
     this.sessionFlags = {
       clipboardRead: this.argv.includes("--allow-clipboard-read"),
     };
@@ -249,6 +269,8 @@ class Session {
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
     this.partition = sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null;
+    const pageSession = adblockPartition(this.partition);
+    if (this.adblock) attachAdblockPreloads(pageSession);
     this.fallbackState = initialState(this.initialUrl());
     this.copyOnSelect = ctx.env.TERMINAL_BROWSER_COPY_ON_SELECT === "1";
     this.browserPreload = reactGrabPreloadPath(this.copyOnSelect);
@@ -464,6 +486,70 @@ class Session {
     },
   };
 
+  private adblockHost(): string | null {
+    const url = this.tabs.activeState?.url ?? "";
+    if (!this.adblock || !/^https?:\/\//i.test(url)) return null;
+    return urlHost(url) || null;
+  }
+
+  private adblockView(): AdblockView | null {
+    const host = this.adblockHost();
+    if (!host) return null;
+    const contents = this.tabs.active?.ref.current?.webContents;
+    return {
+      active: adblockOn() && !adblockHostAllowed(host),
+      blocked: adblockBlocked(contents && !contents.isDestroyed() ? contents.id : null),
+    };
+  }
+
+  private toggleAdblockForHost() {
+    const host = this.adblockHost();
+    if (!host) return;
+    const allowed = !adblockHostAllowed(host);
+    setAdblockHostAllowed(host, allowed);
+    this.showToast(allowed ? `ads allowed on ${host}` : `ads blocked on ${host}`, "done");
+    this.tabs.activeHandle?.reload();
+    this.render();
+  }
+
+  private toggleAdblock() {
+    const on = !adblockOn();
+    setAdblockOn(on);
+    this.showToast(on ? "ad blocking on" : "ad blocking off", "done");
+    this.tabs.activeHandle?.reload();
+    this.render();
+  }
+
+  private updateFilters() {
+    if (adblockUpdating()) return;
+    this.showToast("updating filters", "done");
+    this.render();
+    void updateAdblockFilters().then((updated) => {
+      this.showToast(updated ? "filters updated" : "filter update failed", updated ? "done" : "failed");
+      this.render();
+    });
+  }
+
+  // the engine owns the webview now, so pages are tracked from their state changes
+  private trackPage(id: number, url: string) {
+    const contents = this.tabs.get(id)?.ref.current?.webContents;
+    if (!contents || contents.isDestroyed()) return;
+    if (!this.adblock) return;
+    attachAdblockRequests(contents.session);
+    const key = contents.id;
+    if (!this.adblockPages.has(key)) {
+      this.adblockPages.set(key, "");
+      adblockOpenPage(key, true, () => this.render());
+      contents.once("destroyed", () => {
+        adblockClosePage(key);
+        this.adblockPages.delete(key);
+      });
+    }
+    if (this.adblockPages.get(key) === url) return;
+    this.adblockPages.set(key, url);
+    adblockPageNavigated(key, urlHost(url));
+  }
+
   private render() {
     if (!this.root || !this.layout) return;
     this.root.render(
@@ -498,6 +584,7 @@ class Session {
         }
         pageMenu={this.pageMenuView()}
         settings={this.settings.view()}
+        adblock={this.adblockView()}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
@@ -578,6 +665,7 @@ class Session {
       if (action === "close") this.closeDevtools();
       else this.setDevtoolsDockSide(action === "dock-bottom" ? "bottom" : "right");
     },
+    adblockToggle: () => this.toggleAdblockForHost(),
     pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
     settings: this.settings.actions,
@@ -827,6 +915,9 @@ class Session {
         return;
       case "page.forward":
         handle?.forward();
+        return;
+      case "adblock.toggle":
+        this.toggleAdblock();
         return;
       case "devtools.toggle":
         this.toggleDevtools();
@@ -1335,6 +1426,7 @@ class Session {
 
   private paletteActions(): PaletteAction[] {
     const devtoolsOpen = this.tabs.active?.devtools ?? false;
+    const adblockHost = this.adblockHost();
     const command = (id: CommandId): PaletteAction => ({
       id,
       label: this.paletteLabel(id),
@@ -1344,6 +1436,25 @@ class Session {
     return [
       command("find"),
       command("record.toggle"),
+      ...(adblockHost
+        ? [
+          {
+            id: "adblock-site",
+            label: adblockHostAllowed(adblockHost)
+              ? `block ads on ${adblockHost}`
+              : `allow ads on ${adblockHost}`,
+            shortcut: "",
+            run: () => this.toggleAdblockForHost(),
+          },
+          command("adblock.toggle"),
+          {
+            id: "adblock-update",
+            label: adblockUpdating() ? "updating filters…" : `update filters${filterAgeLabel()}`,
+            shortcut: "",
+            run: () => this.updateFilters(),
+          },
+        ]
+        : []),
       command("grab.toggle"),
       command("devtools.toggle"),
       ...(devtoolsOpen
@@ -1388,6 +1499,8 @@ class Session {
       }
       case "grab.toggle":
         return this.activeGrab()?.active ? "stop selection" : "send to agent";
+      case "adblock.toggle":
+        return adblockOn() ? "turn off ad blocking" : "turn on ad blocking";
       case "devtools.toggle":
         return this.tabs.active?.devtools ? "close devtools" : "open devtools";
       default:
@@ -1467,6 +1580,15 @@ function flagValue(argv: string[], flag: string): string | null {
   return (
     argv.find((argument) => argument.startsWith(`${flag}=`))?.slice(flag.length + 1) ?? null
   );
+}
+
+function filterAgeLabel(): string {
+  const age = adblockFiltersAge();
+  if (age === null) return "";
+  const hours = Math.floor(age / 3600000);
+  if (hours < 1) return " (updated just now)";
+  if (hours < 24) return ` (${hours}h old)`;
+  return ` (${Math.floor(hours / 24)}d old)`;
 }
 
 function rememberUrl(url: string) {

@@ -20,6 +20,7 @@ export const COMMANDS = {
   "page.reload": { label: "reload page", keys: platform(["cmd+r"], ["ctrl+r"]) },
   "page.back": { label: "back", keys: platform(["cmd+[", "ctrl+["], ["ctrl+["]) },
   "page.forward": { label: "forward", keys: platform(["cmd+]", "ctrl+]"], ["ctrl+]"]) },
+  "adblock.toggle": { label: "turn off ad blocking", keys: shared([]) },
   "devtools.toggle": {
     label: "toggle devtools",
     keys: platform(["cmd+shift+i", "f12"], ["ctrl+shift+i", "f12"]),

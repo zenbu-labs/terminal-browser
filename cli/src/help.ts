@@ -22,6 +22,7 @@ Options:
                         proxy the result back to the local terminal-browser instance
   --allow-clipboard-read
                         Lets websites read from clipboard.
+  --no-adblock          Turn off ad and tracker blocking for this browser
   --no-merge            Do not open the terminal-browser instance as a tab in a neighbor terminal-browser
 
 
