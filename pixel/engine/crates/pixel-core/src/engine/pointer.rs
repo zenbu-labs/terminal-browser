@@ -25,10 +25,6 @@ impl Engine {
         self.cursor = Some(point);
         let now = Instant::now();
         self.last_pointer_activity = Some(now);
-        if matches!(mouse.kind, MouseKind::Down | MouseKind::Up) {
-            self.focus_click = None;
-            self.last_pointer_click = Some(now);
-        }
         let scrolling = matches!(
             mouse.kind,
             MouseKind::ScrollUp

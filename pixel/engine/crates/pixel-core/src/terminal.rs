@@ -2861,9 +2861,153 @@ mod tests {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use std::io::{Read as _, Write as _};
+    use std::os::fd::AsRawFd as _;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    pub(crate) fn open_pty() -> (std::fs::File, std::fs::File, String) {
+        let mut master: libc::c_int = 0;
+        let mut slave: libc::c_int = 0;
+        let mut name = [0u8; 128];
+        #[allow(unsafe_code)]
+        let ok = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                name.as_mut_ptr().cast(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(ok, 0, "openpty failed");
+        let end = name.iter().position(|&b| b == 0).unwrap();
+        let path = String::from_utf8(name[..end].to_vec()).unwrap();
+        #[allow(unsafe_code)]
+        let (master, slave) = unsafe {
+            use std::os::fd::FromRawFd as _;
+            (
+                std::fs::File::from_raw_fd(master),
+                std::fs::File::from_raw_fd(slave),
+            )
+        };
+        (master, slave, path)
+    }
+
+    pub(crate) struct FakeTerminal {
+        stop: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl FakeTerminal {
+        pub(crate) fn new(
+            master: &std::fs::File,
+            mode_1016: Option<&'static [u8]>,
+            click_on_status_request: bool,
+        ) -> Self {
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopped = stop.clone();
+            let mut master = master.try_clone().unwrap();
+            let thread = std::thread::spawn(move || {
+                let mut seen = Vec::with_capacity(256);
+                let mut pixels = false;
+                let mut byte = [0u8; 1];
+                while !stopped.load(Ordering::Relaxed) {
+                    let mut fd = libc::pollfd {
+                        fd: master.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    #[allow(unsafe_code)]
+                    let ready = unsafe { libc::poll(&mut fd, 1, 20) };
+                    if ready == 0 {
+                        continue;
+                    }
+                    if ready < 0 || master.read_exact(&mut byte).is_err() {
+                        break;
+                    }
+                    if seen.len() == 256 {
+                        seen.drain(..128);
+                    }
+                    seen.push(byte[0]);
+                    let reply: Option<Vec<u8>> = if seen.ends_with(b"\x1b[?1016h") {
+                        pixels = true;
+                        None
+                    } else if seen.ends_with(b"\x1b[?1016l") || seen.ends_with(b"\x1b[?1006h") {
+                        pixels = false;
+                        None
+                    } else if seen.ends_with(b"\x1b[?u") {
+                        Some(b"\x1b[?0u".to_vec())
+                    } else if seen.ends_with(b"\x1b[?1016$p") {
+                        mode_1016.map(<[u8]>::to_vec)
+                    } else if seen.ends_with(b"\x1b[?5522$p") {
+                        Some(b"\x1b[?5522;0$y".to_vec())
+                    } else if seen.ends_with(b"\x1b[?2031$p") {
+                        Some(b"\x1b[?2031;0$y".to_vec())
+                    } else if seen.ends_with(b"\x1b[>0q") {
+                        Some(b"\x1bP>|fake 0.0\x1b\\".to_vec())
+                    } else if seen.ends_with(b"\x1b[16t") {
+                        Some(b"\x1b[6;16;8t".to_vec())
+                    } else if seen.ends_with(b"\x1b[5n") && click_on_status_request {
+                        Some(if pixels {
+                            b"\x1b[<0;485;329M".to_vec()
+                        } else {
+                            b"\x1b[<0;61;21M".to_vec()
+                        })
+                    } else if seen.ends_with(b"\x1b\\") {
+                        graphics_error(&seen)
+                    } else {
+                        continue;
+                    };
+                    seen.clear();
+                    if let Some(reply) = reply
+                        && master.write_all(&reply).is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            Self {
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for FakeTerminal {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            self.thread.take().unwrap().join().unwrap();
+        }
+    }
+
+    fn graphics_error(seen: &[u8]) -> Option<Vec<u8>> {
+        let start = seen.windows(3).rposition(|w| w == b"\x1b_G")? + 3;
+        let control = seen[start..].split(|&b| b == b';').next()?;
+        let mut action = None;
+        let mut id = None;
+        for pair in std::str::from_utf8(control).ok()?.split(',') {
+            match pair.split_once('=') {
+                Some(("a", value)) => action = Some(value),
+                Some(("i", value)) => id = value.parse::<u32>().ok(),
+                _ => {}
+            }
+        }
+        let error = match action? {
+            "q" => "ENOENT:no such medium",
+            "f" => "EINVAL:no such action",
+            _ => return None,
+        };
+        Some(format!("\x1b_Gi={};{error}\x1b\\", id?).into_bytes())
+    }
+}
+
+#[cfg(test)]
 mod tty_tests {
     use super::*;
-    use std::io::{Read as _, Write as _};
+    use super::test_support::{FakeTerminal, open_pty};
+    use std::io::Write as _;
 
     fn open(path: &str, wrapper: Wrapper) -> Terminal {
         Terminal::open(path, wrapper, SessionEnv::of_session(Default::default())).unwrap()
@@ -2897,98 +3041,15 @@ mod tty_tests {
         }
     }
 
-    fn open_pty() -> (std::fs::File, std::fs::File, String) {
-        let mut master: libc::c_int = 0;
-        let mut slave: libc::c_int = 0;
-        let mut name = [0u8; 128];
-        #[allow(unsafe_code)]
-        let ok = unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                name.as_mut_ptr().cast(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        assert_eq!(ok, 0, "openpty failed");
-        let end = name.iter().position(|&b| b == 0).unwrap();
-        let path = String::from_utf8(name[..end].to_vec()).unwrap();
-        #[allow(unsafe_code)]
-        let (master, slave) = unsafe {
-            use std::os::unix::io::FromRawFd as _;
-            (
-                std::fs::File::from_raw_fd(master),
-                std::fs::File::from_raw_fd(slave),
-            )
-        };
-        (master, slave, path)
-    }
-
-    fn fake_terminal(master: &std::fs::File) -> std::thread::JoinHandle<()> {
+    fn fake_terminal(master: &std::fs::File) -> FakeTerminal {
         fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"))
     }
 
     fn fake_terminal_answering_1016(
         master: &std::fs::File,
         mode_1016: Option<&'static [u8]>,
-    ) -> std::thread::JoinHandle<()> {
-        let mut master = master.try_clone().unwrap();
-        std::thread::spawn(move || {
-            let mut seen = Vec::new();
-            let mut pixels = false;
-            let mut byte = [0u8; 1];
-            while master.read_exact(&mut byte).is_ok() {
-                seen.push(byte[0]);
-                let reply: Option<Vec<u8>> = if seen.ends_with(b"\x1b[?1016h") {
-                    pixels = true;
-                    None
-                } else if seen.ends_with(b"\x1b[?1016l") || seen.ends_with(b"\x1b[?1006h") {
-                    pixels = false;
-                    None
-                } else if seen.ends_with(b"\x1b[?u") {
-                    Some(b"\x1b[?0u".to_vec())
-                } else if seen.ends_with(b"\x1b[?1016$p") {
-                    mode_1016.map(<[u8]>::to_vec)
-                } else if seen.ends_with(b"\x1b[?5522$p") {
-                    Some(b"\x1b[?5522;0$y".to_vec())
-                } else if seen.ends_with(b"\x1b[?2031$p") {
-                    Some(b"\x1b[?2031;0$y".to_vec())
-                } else if seen.ends_with(b"\x1b[>0q") {
-                    Some(b"\x1bP>|fake 0.0\x1b\\".to_vec())
-                } else if seen.ends_with(b"\x1b[5n") {
-                    Some(if pixels { b"\x1b[<0;485;329M".to_vec() } else { b"\x1b[<0;61;21M".to_vec() })
-                } else if seen.ends_with(b"\x1b\\") {
-                    graphics_error(&seen)
-                } else {
-                    continue;
-                };
-                seen.clear();
-                if let Some(reply) = reply {
-                    master.write_all(&reply).unwrap();
-                }
-            }
-        })
-    }
-
-    fn graphics_error(seen: &[u8]) -> Option<Vec<u8>> {
-        let start = seen.windows(3).rposition(|w| w == b"\x1b_G")? + 3;
-        let control = seen[start..].split(|&b| b == b';').next()?;
-        let mut action = None;
-        let mut id = None;
-        for pair in std::str::from_utf8(control).ok()?.split(',') {
-            match pair.split_once('=') {
-                Some(("a", value)) => action = Some(value),
-                Some(("i", value)) => id = value.parse::<u32>().ok(),
-                _ => {}
-            }
-        }
-        let error = match action? {
-            "q" => "ENOENT:no such medium",
-            "f" => "EINVAL:no such action",
-            _ => return None,
-        };
-        Some(format!("\x1b_Gi={};{error}\x1b\\", id?).into_bytes())
+    ) -> FakeTerminal {
+        FakeTerminal::new(master, mode_1016, true)
     }
 
     #[test]

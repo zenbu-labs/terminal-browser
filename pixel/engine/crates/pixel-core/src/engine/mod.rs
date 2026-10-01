@@ -31,7 +31,7 @@ use crate::scroll::ScrollProfile;
 use crate::scroll::profiles::Smooth;
 use crate::style::Color;
 use crate::terminal::{
-    Event, Handoff, KeyEvent, Mods, Mouse, MouseButton, MouseKind, Retarget, Terminal,
+    Event, Handoff, KeyEvent, Mods, MouseButton, MouseKind, Retarget, Terminal,
     TerminalColors,
 };
 use crate::text_input::InputReply;
@@ -335,9 +335,7 @@ pub struct Engine {
     scroll_burst: u32,
     last_scroll_mark: Option<Instant>,
     clipboard: ClipboardFlows,
-    focus_click: Option<(Instant, (f32, f32))>,
     last_pointer_activity: Option<Instant>,
-    last_pointer_click: Option<Instant>,
     next_pasted_mark: u64,
     pending: Vec<EngineEvent>,
     awaiting_cell: Option<(crate::terminal::WindowSize, Instant)>,
@@ -449,9 +447,7 @@ impl Engine {
             scroll_burst: 0,
             last_scroll_mark: None,
             clipboard: ClipboardFlows::new(),
-            focus_click: None,
             last_pointer_activity: None,
-            last_pointer_click: None,
             next_pasted_mark: 1 << 48,
             pending: Vec::new(),
             awaiting_cell: None,
@@ -645,7 +641,6 @@ impl Engine {
         };
         let deadlines = [
             self.clipboard.osc_deadline(),
-            self.focus_click.as_ref().map(|(deadline, _)| *deadline),
             self.color_request_at,
             self.awaiting_cell.as_ref().map(|(_, at)| *at),
             self.term.idle_flatten_at(),
@@ -686,23 +681,6 @@ impl Engine {
         while let Some(current) = event {
             self.handle_event(current, &mut out)?;
             event = self.term.poll_event(Some(Duration::ZERO))?;
-        }
-        if let Some((deadline, point)) = self.focus_click
-            && Instant::now() >= deadline
-        {
-            self.focus_click = None;
-            for kind in [MouseKind::Down, MouseKind::Up] {
-                self.handle_mouse(
-                    Mouse {
-                        kind,
-                        button: MouseButton::Left,
-                        mods: Mods::default(),
-                        x: point.0 as u32,
-                        y: point.1 as u32,
-                    },
-                    &mut out,
-                )?;
-            }
         }
         self.check_resize(&mut out)?;
         self.apply_overdue_window()?;
@@ -981,18 +959,6 @@ impl Engine {
                 if gained {
                     self.recheck_colors_on_focus();
                 }
-                if !focused {
-                    self.focus_click = None;
-                } else if gained
-                    && let Some(at) = self.last_pointer_activity
-                    && at.elapsed() <= Duration::from_millis(1000)
-                    && self
-                        .last_pointer_click
-                        .is_none_or(|click| click.elapsed() > Duration::from_millis(1000))
-                    && let Some(point) = self.cursor
-                {
-                    self.focus_click = Some((Instant::now() + Duration::from_millis(75), point));
-                }
                 out.push(EngineEvent::Focus { focused });
             }
             Event::WindowSize(ws) => {
@@ -1070,7 +1036,371 @@ pub fn px_for_cell_height(font: &fontdue::Font, cell_height: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::WindowSize;
+    use crate::style::{Dimension, Inset, Position, Style};
+    use crate::terminal::{Mouse, WindowSize};
+    use crate::terminal::test_support::{FakeTerminal, open_pty};
+    use crate::tree::Props;
+    use std::os::fd::AsRawFd as _;
+
+    struct TestEngine {
+        engine: Engine,
+        _terminal: FakeTerminal,
+        _master: std::fs::File,
+        _slave: std::fs::File,
+        popup: NodeId,
+        backdrop: NodeId,
+    }
+
+    impl TestEngine {
+        fn new(pointer_events: bool) -> Self {
+            let (master, slave, path) = open_pty();
+            let size = libc::winsize {
+                ws_col: 40,
+                ws_row: 15,
+                ws_xpixel: 320,
+                ws_ypixel: 240,
+            };
+            #[allow(unsafe_code)]
+            let resized = unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, &size) };
+            assert_eq!(resized, 0);
+            let terminal = FakeTerminal::new(&master, Some(b"\x1b[?1016;1$y"), false);
+            let font = fontdue::Font::from_bytes(
+                include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(),
+                fontdue::FontSettings::default(),
+            )
+            .unwrap();
+            let mut engine = Engine::new(EngineConfig {
+                fonts: vec![font],
+                cell_metrics_font: 0,
+                watch_resize: false,
+                tty: Some(path),
+                host: None,
+                wrapper: Wrapper::None,
+                session_env: crate::terminal::SessionEnv::of_session(Default::default()),
+            })
+            .unwrap();
+            engine.use_native = false;
+            engine.native = None;
+            assert_eq!(engine.comp.window, (320, 240));
+            assert_eq!(engine.cell, (8, 16));
+            let tree = &mut engine.comp.views[0].tree;
+            let backdrop = tree.create(Props {
+                key: Some("backdrop".into()),
+                clickable: true,
+                style: Style {
+                    position: Position::Absolute,
+                    inset: Inset::top_left(0.0, 0.0),
+                    width: Dimension::Px(320.0),
+                    height: Dimension::Px(240.0),
+                    ..Style::default()
+                },
+                ..Props::default()
+            });
+            tree.append(tree.root(), backdrop);
+            let popup = tree.create(Props {
+                key: Some("popup".into()),
+                pointer_events,
+                clickable: true,
+                outside_click_events: true,
+                hover_events: true,
+                wheel_events: true,
+                style: Style {
+                    position: Position::Absolute,
+                    inset: Inset::top_left(40.0, 40.0),
+                    width: Dimension::Px(80.0),
+                    height: Dimension::Px(60.0),
+                    ..Style::default()
+                },
+                ..Props::default()
+            });
+            tree.append(tree.root(), popup);
+            engine.flush_view_layout(0);
+            assert_eq!(
+                engine.comp.views[0].tree.hit_pointer(50.0, 50.0),
+                pointer_events.then_some(popup)
+            );
+            assert_eq!(
+                engine.comp.views[0].tree.hit_click(10.0, 10.0),
+                Some(backdrop)
+            );
+            Self {
+                engine,
+                _terminal: terminal,
+                _master: master,
+                _slave: slave,
+                popup,
+                backdrop,
+            }
+        }
+    }
+
+    fn mouse(kind: MouseKind, point: (u32, u32)) -> Mouse {
+        Mouse {
+            kind,
+            button: MouseButton::Left,
+            mods: Mods::default(),
+            x: point.0,
+            y: point.1,
+        }
+    }
+
+    fn refocus(engine: &mut Engine, out: &mut Vec<EngineEvent>) {
+        engine.handle_event(Event::Focus(false), out).unwrap();
+        assert!(!engine.term_focused);
+        assert_eq!(out.last(), Some(&EngineEvent::Focus { focused: false }));
+        engine.handle_event(Event::Focus(true), out).unwrap();
+        assert!(engine.term_focused);
+        assert_eq!(out.last(), Some(&EngineEvent::Focus { focused: true }));
+    }
+
+    fn pump_past_focus_delay(engine: &mut Engine, out: &mut Vec<EngineEvent>) {
+        let until = Instant::now() + Duration::from_millis(110);
+        while Instant::now() < until {
+            out.extend(engine.pump(Some(Duration::from_millis(10))).unwrap());
+        }
+    }
+
+    fn assert_no_clicks(out: &[EngineEvent]) {
+        assert!(
+            !out.iter().any(|event| matches!(
+                event,
+                EngineEvent::Click { .. }
+                    | EngineEvent::ClickOutside { .. }
+                    | EngineEvent::RightClick { .. }
+                    | EngineEvent::Pointer {
+                        kind: MouseKind::Down | MouseKind::Up,
+                        ..
+                    }
+            )),
+            "focus fabricated a click: {out:?}"
+        );
+    }
+
+    #[test]
+    fn refocus_after_motion_inside_popup_does_not_send_pointer_buttons() {
+        let mut fixture = TestEngine::new(true);
+        let engine = &mut fixture.engine;
+        let mut out = Vec::new();
+        engine
+            .handle_event(Event::Mouse(mouse(MouseKind::Move, (50, 50))), &mut out)
+            .unwrap();
+        assert!(out.iter().any(|event| matches!(event,
+            EngineEvent::Pointer { node, kind: MouseKind::Move, .. } if *node == fixture.popup
+        )));
+        assert!(out.iter().any(|event| matches!(event,
+            EngineEvent::HoverEnter { node, .. } if *node == fixture.popup
+        )));
+        let activity = engine.last_pointer_activity;
+        refocus(engine, &mut out);
+        assert!(engine.color_request_at.is_some());
+        pump_past_focus_delay(engine, &mut out);
+        assert_no_clicks(&out);
+        assert_eq!(engine.cursor, Some((50.0, 50.0)));
+        assert_eq!(engine.last_pointer_activity, activity);
+        assert_eq!(engine.hover_target, Some((0, fixture.popup)));
+        assert_eq!(engine.pointer_capture, None);
+        assert!(engine.last_color_request.is_some());
+    }
+
+    #[test]
+    fn refocus_after_motion_outside_popup_does_not_dismiss_it() {
+        let mut fixture = TestEngine::new(true);
+        let engine = &mut fixture.engine;
+        let mut out = Vec::new();
+        engine
+            .handle_mouse(mouse(MouseKind::Move, (10, 10)), &mut out)
+            .unwrap();
+        refocus(engine, &mut out);
+        pump_past_focus_delay(engine, &mut out);
+        assert_no_clicks(&out);
+        assert_eq!(engine.comp.views[0].tree.find("popup"), Some(fixture.popup));
+        assert_eq!(engine.pending_click, None);
+    }
+
+    #[test]
+    fn repeated_focus_reports_do_not_create_clicks() {
+        let mut fixture = TestEngine::new(false);
+        let engine = &mut fixture.engine;
+        let mut out = Vec::new();
+        engine
+            .handle_mouse(mouse(MouseKind::Move, (50, 50)), &mut out)
+            .unwrap();
+        for _ in 0..2 {
+            refocus(engine, &mut out);
+            engine.handle_event(Event::Focus(true), &mut out).unwrap();
+            pump_past_focus_delay(engine, &mut out);
+            engine.handle_event(Event::Focus(true), &mut out).unwrap();
+        }
+        assert_no_clicks(&out);
+        let focus: Vec<_> = out
+            .iter()
+            .filter_map(|event| match event {
+                EngineEvent::Focus { focused } => Some(*focused),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(focus, [false, true, true, true, false, true, true, true]);
+    }
+
+    #[test]
+    fn genuine_pointer_buttons_and_capture_survive_refocus() {
+        let mut fixture = TestEngine::new(true);
+        let engine = &mut fixture.engine;
+        let mut out = Vec::new();
+        let down = Mouse {
+            mods: Mods {
+                shift: true,
+                ..Mods::default()
+            },
+            ..mouse(MouseKind::Down, (50, 50))
+        };
+        engine.handle_event(Event::Mouse(down), &mut out).unwrap();
+        assert_eq!(
+            out,
+            vec![EngineEvent::Pointer {
+                view: 0,
+                node: fixture.popup,
+                key: Some("popup".into()),
+                kind: MouseKind::Down,
+                button: down.button,
+                mods: down.mods,
+                x: 10.0,
+                y: 10.0,
+            }]
+        );
+        assert_eq!(engine.pointer_capture, Some((0, fixture.popup)));
+        out.clear();
+        refocus(engine, &mut out);
+        pump_past_focus_delay(engine, &mut out);
+        assert_no_clicks(&out);
+        assert_eq!(engine.pointer_capture, Some((0, fixture.popup)));
+        out.clear();
+        engine
+            .handle_mouse(mouse(MouseKind::Move, (10, 10)), &mut out)
+            .unwrap();
+        engine
+            .handle_mouse(mouse(MouseKind::Up, (10, 10)), &mut out)
+            .unwrap();
+        assert_eq!(
+            out,
+            vec![
+                EngineEvent::Pointer {
+                    view: 0,
+                    node: fixture.popup,
+                    key: Some("popup".into()),
+                    kind: MouseKind::Move,
+                    button: MouseButton::Left,
+                    mods: Mods::default(),
+                    x: -30.0,
+                    y: -30.0,
+                },
+                EngineEvent::Pointer {
+                    view: 0,
+                    node: fixture.popup,
+                    key: Some("popup".into()),
+                    kind: MouseKind::Up,
+                    button: MouseButton::Left,
+                    mods: Mods::default(),
+                    x: -30.0,
+                    y: -30.0,
+                },
+            ]
+        );
+        assert_eq!(engine.pointer_capture, None);
+    }
+
+    #[test]
+    fn genuine_clicks_still_activate_popup_and_dismiss_on_backdrop() {
+        let mut fixture = TestEngine::new(false);
+        let engine = &mut fixture.engine;
+        let mut out = Vec::new();
+        engine
+            .handle_mouse(mouse(MouseKind::Move, (50, 50)), &mut out)
+            .unwrap();
+        refocus(engine, &mut out);
+        out.clear();
+        engine
+            .handle_mouse(mouse(MouseKind::Down, (50, 50)), &mut out)
+            .unwrap();
+        assert!(!out.iter().any(|event| matches!(
+            event,
+            EngineEvent::Click { .. } | EngineEvent::ClickOutside { .. }
+        )));
+        engine
+            .handle_mouse(mouse(MouseKind::Up, (50, 50)), &mut out)
+            .unwrap();
+        assert!(
+            matches!(out.as_slice(), [EngineEvent::Click { node, .. }] if *node == fixture.popup)
+        );
+        out.clear();
+        pump_past_focus_delay(engine, &mut out);
+        assert_no_clicks(&out);
+        engine
+            .handle_mouse(mouse(MouseKind::Down, (10, 10)), &mut out)
+            .unwrap();
+        assert!(
+            matches!(out.as_slice(), [EngineEvent::ClickOutside { node, .. }] if *node == fixture.popup)
+        );
+        engine
+            .handle_mouse(mouse(MouseKind::Up, (10, 10)), &mut out)
+            .unwrap();
+        assert!(
+            matches!(out.as_slice(), [EngineEvent::ClickOutside { node, .. }, EngineEvent::Click { node: backdrop, .. }]
+            if *node == fixture.popup && *backdrop == fixture.backdrop)
+        );
+    }
+
+    #[test]
+    fn mouse_activity_still_drives_wheel_and_pinch_hover_fallback() {
+        let mut fixture = TestEngine::new(true);
+        let engine = &mut fixture.engine;
+        let mut out = Vec::new();
+        for kind in [
+            MouseKind::Move,
+            MouseKind::Down,
+            MouseKind::Up,
+            MouseKind::ScrollDown,
+        ] {
+            let before = Instant::now();
+            engine
+                .handle_mouse(mouse(kind, (50, 50)), &mut out)
+                .unwrap();
+            let activity = engine
+                .last_pointer_activity
+                .expect("mouse activity was not recorded");
+            assert!(activity >= before && activity <= Instant::now());
+            assert_eq!(engine.cursor, Some((50.0, 50.0)));
+        }
+        assert!(out.iter().any(|event| matches!(event,
+            EngineEvent::Wheel { node, precise: false, delta_y, .. } if *node == fixture.popup && *delta_y == 16.0
+        )));
+        for recent in [true, false] {
+            if !recent {
+                engine.last_pointer_activity = Some(Instant::now() - Duration::from_secs(2));
+            }
+            engine.pairing.ingest(
+                vec![crate::native::NativeEvent::Zoom {
+                    magnification: 0.1,
+                    point: None,
+                }],
+                1.0,
+                Instant::now(),
+                &mut engine.hover_oracle,
+                (320.0, 240.0),
+                (8.0, 16.0),
+            );
+            out.clear();
+            engine.drain_native(&mut out);
+            assert_eq!(
+                out.iter().any(|event| matches!(event,
+                    EngineEvent::Wheel { node, precise: true, mods, delta_y, .. }
+                        if *node == fixture.popup && mods.ctrl && *delta_y < 0.0
+                )),
+                recent,
+                "pinch hover fallback: {out:?}"
+            );
+        }
+    }
 
     #[test]
     fn window_uses_grid_when_pixels_missing() {
