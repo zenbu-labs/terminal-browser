@@ -343,6 +343,7 @@ class Session {
       name: "terminal-browser",
       tty: this.ctx.tty,
       sessionEnv: { ...this.ctx.env, ...renderEnv((key) => this.settings.get(key)) },
+      focusClick: this.focusClickEnabled(),
       cwd: this.ctx.cwd,
       onKey: (event) => this.handleKey(event),
       onResize: () => {
@@ -1027,6 +1028,11 @@ class Session {
     };
     root.setRender(render);
     root.setLogFile(this.settings.get("debug.logFile") === "on" ? ENGINE_LOG_FILE : null);
+    root.setFocusClick(this.focusClickEnabled());
+  }
+
+  private focusClickEnabled(): boolean {
+    return this.settings.get("mouse.focusClick") === "on";
   }
 
   private blurToOverlay() {

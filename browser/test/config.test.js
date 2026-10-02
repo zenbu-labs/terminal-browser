@@ -214,6 +214,18 @@ function tempManager() {
   return { manager: new SettingsManager(host, store.files), store };
 }
 
+test("click on focus stays on unless the settings file turns it off", () => {
+  const store = tempStore();
+  assert.equal(store.load().settings["mouse.focusClick"], "on");
+  store.setSetting("mouse.focusClick", "off");
+  assert.equal(store.load().settings["mouse.focusClick"], "off");
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "mouse.focusClick": "maybe" }));
+  const loaded = store.load();
+  assert.equal(loaded.settings["mouse.focusClick"], "on");
+  assert.equal(loaded.errors.length, 1);
+  assert.match(loaded.errors[0], /mouse\.focusClick/);
+});
+
 test("recording shows the chord until enter commits it and escape drops it", () => {
   const { manager } = tempManager();
   manager.open();

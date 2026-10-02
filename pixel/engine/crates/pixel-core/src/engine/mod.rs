@@ -336,6 +336,7 @@ pub struct Engine {
     last_scroll_mark: Option<Instant>,
     clipboard: ClipboardFlows,
     focus_click: Option<(Instant, (f32, f32))>,
+    focus_click_enabled: bool,
     last_pointer_activity: Option<Instant>,
     last_pointer_click: Option<Instant>,
     next_pasted_mark: u64,
@@ -353,6 +354,8 @@ pub struct Engine {
     pub stats: FrameStats,
 }
 
+const FOCUS_CLICK_POINTER_WINDOW: Duration = Duration::from_millis(1000);
+const FOCUS_CLICK_DELAY: Duration = Duration::from_millis(75);
 const COLOR_SETTLE_DELAY: Duration = Duration::from_millis(50);
 const COLOR_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const RELAYED_RESIZE_POLL: Duration = Duration::from_millis(500);
@@ -450,6 +453,7 @@ impl Engine {
             last_scroll_mark: None,
             clipboard: ClipboardFlows::new(),
             focus_click: None,
+            focus_click_enabled: true,
             last_pointer_activity: None,
             last_pointer_click: None,
             next_pasted_mark: 1 << 48,
@@ -508,6 +512,13 @@ impl Engine {
         self.default_menu = enabled;
         if !enabled {
             self.close_menu();
+        }
+    }
+
+    pub fn set_focus_click(&mut self, enabled: bool) {
+        self.focus_click_enabled = enabled;
+        if !enabled {
+            self.focus_click = None;
         }
     }
 
@@ -984,14 +995,15 @@ impl Engine {
                 if !focused {
                     self.focus_click = None;
                 } else if gained
-                    && let Some(at) = self.last_pointer_activity
-                    && at.elapsed() <= Duration::from_millis(1000)
-                    && self
-                        .last_pointer_click
-                        .is_none_or(|click| click.elapsed() > Duration::from_millis(1000))
                     && let Some(point) = self.cursor
+                    && focus_click_arms(
+                        self.focus_click_enabled,
+                        self.last_pointer_activity,
+                        self.last_pointer_click,
+                        Instant::now(),
+                    )
                 {
-                    self.focus_click = Some((Instant::now() + Duration::from_millis(75), point));
+                    self.focus_click = Some((Instant::now() + FOCUS_CLICK_DELAY, point));
                 }
                 out.push(EngineEvent::Focus { focused });
             }
@@ -1067,10 +1079,55 @@ pub fn px_for_cell_height(font: &fontdue::Font, cell_height: f32) -> f32 {
     (cell_height * 100.0 / probe.new_line_size).clamp(6.0, 512.0)
 }
 
+fn focus_click_arms(
+    enabled: bool,
+    last_pointer_activity: Option<Instant>,
+    last_pointer_click: Option<Instant>,
+    now: Instant,
+) -> bool {
+    enabled
+        && last_pointer_activity
+            .is_some_and(|at| now.duration_since(at) <= FOCUS_CLICK_POINTER_WINDOW)
+        && last_pointer_click
+            .is_none_or(|click| now.duration_since(click) > FOCUS_CLICK_POINTER_WINDOW)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::terminal::WindowSize;
+
+    #[test]
+    fn focus_click_arms_after_recent_pointer_motion() {
+        let moved = Instant::now();
+        let now = moved + Duration::from_millis(200);
+        assert!(focus_click_arms(true, Some(moved), None, now));
+    }
+
+    #[test]
+    fn focus_click_does_not_arm_when_disabled() {
+        let moved = Instant::now();
+        let now = moved + Duration::from_millis(200);
+        assert!(!focus_click_arms(false, Some(moved), None, now));
+    }
+
+    #[test]
+    fn focus_click_does_not_arm_after_a_recent_real_click() {
+        let moved = Instant::now();
+        let clicked = moved + Duration::from_millis(100);
+        let now = moved + Duration::from_millis(200);
+        assert!(!focus_click_arms(true, Some(moved), Some(clicked), now));
+        let old_click = now - FOCUS_CLICK_POINTER_WINDOW - Duration::from_millis(1);
+        assert!(focus_click_arms(true, Some(moved), Some(old_click), now));
+    }
+
+    #[test]
+    fn focus_click_does_not_arm_without_recent_pointer_motion() {
+        let moved = Instant::now();
+        let now = moved + FOCUS_CLICK_POINTER_WINDOW + Duration::from_millis(1);
+        assert!(!focus_click_arms(true, Some(moved), None, now));
+        assert!(!focus_click_arms(true, None, None, now));
+    }
 
     #[test]
     fn window_uses_grid_when_pixels_missing() {
