@@ -34,6 +34,13 @@ export interface ControlHost {
   closeTab(id: number): boolean;
   agentTouch(id: number): boolean;
   agentRelease(): void;
+  /** Start capture on the active tab. False when one is already running. */
+  recordStart(): Promise<boolean>;
+  /** Stop capture and encode. Returns the manifest path, or null if nothing
+   *  was recording. */
+  recordStop(): string | null;
+  /** Whether a capture is running on the active tab. */
+  recording(): boolean;
   tabs(): unknown;
   targets(): Promise<unknown>;
   viewport(): { width: number; height: number } | null;
@@ -189,6 +196,18 @@ export class Registry {
         this.host.agentRelease();
         return { ...this.record(), tabs: await this.host.targets() };
       }
+      case "record-start": {
+        if (this.host.recording()) throw new Error("already recording");
+        if (!(await this.host.recordStart())) throw new Error("could not start recording");
+        return { ...this.record(), recording: true };
+      }
+      case "record-stop": {
+        const manifest = this.host.recordStop();
+        if (manifest === null) throw new Error("not recording");
+        return { ...this.record(), recording: false, manifest };
+      }
+      case "record-status":
+        return { ...this.record(), recording: this.host.recording() };
       default:
         throw new Error(`unknown command: ${request.cmd}`);
     }

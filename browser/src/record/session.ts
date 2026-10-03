@@ -969,10 +969,13 @@ export class RecordSession {
     } catch {}
   }
 
-  private complete() {
-    if (this.completing) return;
+  /** Finish and encode. Returns the manifest path, or null when there was
+   *  nothing to write. Reaching this without a review is supported: trim,
+   *  markup and shots are simply empty. */
+  complete(): string | null {
+    if (this.completing) return null;
     this.pausePlayback();
-    if (!this.ensureFrames()) return;
+    if (!this.ensureFrames()) return null;
     this.completing = true;
     this.commitEditing();
     const host = this.host;
@@ -996,6 +999,7 @@ export class RecordSession {
       host.toast(`Recording failed: ${message}`, "failed");
     });
     this.finish();
+    return manifestPath;
   }
 
   private discard() {
