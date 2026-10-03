@@ -437,6 +437,33 @@ function currentTerminal(): Promise<TerminalCheck> {
   return asked;
 }
 
+/**
+ * Recording from the agent side.
+ *
+ * The capture itself already exists behind the `record.toggle` keybinding;
+ * this only gives it an entry point that is not a keystroke, so an agent
+ * driving the browser can hand a human a video instead of stitched stills.
+ */
+async function recordCommand(sub: string | undefined, key: string | undefined): Promise<number> {
+  const action = sub ?? "status";
+  if (!["start", "stop", "status"].includes(action)) {
+    fail(`unknown record command: ${action}\n\nusage: terminal-browser record <start|stop|status>`);
+  }
+  const check = await currentTerminal();
+  const found = await browsers(check.terminal);
+  const here = key
+    ? found.filter((browser) => recordKey(browser) === key)
+    : found.filter((browser) => browser.inCurrentTab);
+  const list = (browsers: Browser[]) => browsers.map((browser) => `  ${describe(browser)}`).join("\n");
+  if (here.length === 0) fail(`no browser to record. Running:\n${list(found)}`);
+  if (here.length > 1) {
+    fail(`${here.length} browsers in this tab, so say which with --browser:\n${list(here)}`);
+  }
+  const target = here[0]!;
+  print(await control(target.socket, { cmd: `record-${action}` }));
+  return 0;
+}
+
 async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
   const check = await currentTerminal();
   const found = await browsers(check.terminal);
@@ -723,6 +750,13 @@ async function main(): Promise<number> {
   if (command === "register-app") return registerAppCommand(args);
   if (command === "unregister-app") return unregisterAppCommand(args);
   if (command === "apps") return appsCommand(args);
+  if (command === "record") {
+    const key = takeFlag(args, "--browser");
+    return recordCommand(
+      args.find((arg) => !arg.startsWith("-")),
+      key,
+    );
+  }
   if (command === "new-tab") {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");

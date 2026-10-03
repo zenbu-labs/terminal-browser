@@ -61,6 +61,29 @@ Checks this install's release channel and installs the latest version. Does
 nothing when already up to date.
 `,
   },
+  record: {
+    summary: "Record the page to an mp4",
+    usage: "terminal-browser record <start|stop|status> [--browser <key>]",
+    body: `
+Records the active tab, the same capture the record keybinding runs, from
+the command line instead of a keystroke. This is what lets an agent driving
+the browser hand back a video rather than a sequence of screenshots.
+
+  start    Begin capturing the active tab
+  stop     Finish and encode; prints the manifest path
+  status   Whether a capture is running
+
+The manifest names the output directory and reports encoding progress;
+video.mp4 appears there once its status reads ready.
+
+Options:
+  --browser <key>     A browser key from terminal-browser ls
+
+Examples:
+  terminal-browser record start
+  terminal-browser record stop
+`,
+  },
   "new-tab": {
     summary: "Open a tab here, and a browser too if there is none",
     usage: "terminal-browser new-tab [url] [options]",

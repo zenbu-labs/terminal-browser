@@ -399,6 +399,16 @@ class Session {
       },
       agentTouch: (id) => this.tabs.touchAgentControl(id),
       agentRelease: () => this.tabs.releaseAgentControl(),
+      // The same entry point ctrl+r uses. An agent driving the browser could
+      // screenshot but never record, so a multi-step flow could only be handed
+      // back as stitched stills — losing motion, timing and anything that
+      // autoplays.
+      recordStart: async () => {
+        await this.startRecording();
+        return this.activeRecord() !== null;
+      },
+      recordStop: () => this.activeRecord()?.complete() ?? null,
+      recording: () => this.activeRecord() !== null,
       viewport: () =>
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),
