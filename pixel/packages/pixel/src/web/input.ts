@@ -205,9 +205,15 @@ export class PageInput {
   }
 
   paste(text: string) {
-    clipboard.writeText(text);
+    void this.pasteText(text).catch(() => { });
+  }
+
+  private async pasteText(text: string) {
+    // a terminal paste of what is already on the system clipboard keeps the clipboard's
+    // richer formats (html, images) that the page's own copy put there
+    if ((await clipboard.readText()) !== text) await clipboard.writeText(text);
     if (process.platform === "darwin") {
-      void this.dispatchPaste().catch(() => { });
+      await this.dispatchPaste();
       return;
     }
     this.syncFocus();

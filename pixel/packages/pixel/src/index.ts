@@ -8,6 +8,8 @@ export type {
   DownloadProgress,
   OpenWindowDecision,
   OpenWindowPolicy,
+  PermissionRequest,
+  MediaCapture,
   BrowserWindowOptions,
   WebViewHandle,
   WebViewProps,

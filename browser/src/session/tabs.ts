@@ -85,6 +85,9 @@ export class TabManager {
         findMatches: null,
         zoom: 1,
         favicon: null,
+        audible: false,
+        muted: false,
+        capturing: { video: false, audio: false },
       },
       targetId: null,
       agentControlAt: null,
@@ -268,6 +271,9 @@ export class TabManager {
       favicon: tab.state.favicon,
       active: tab.id === this.activeId,
       agentControlled: tab.agentControlAt != null,
+      audible: tab.state.audible,
+      muted: tab.state.muted,
+      capturing: tab.state.capturing,
     }));
   }
 

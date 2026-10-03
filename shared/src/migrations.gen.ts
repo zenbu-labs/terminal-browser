@@ -19,5 +19,11 @@ export const migrations: { id: string; statements: string[] }[] = [
       "ALTER TABLE `instances` ADD `split_dir` text;",
       "ALTER TABLE `instances` ADD `parent_tty` text;"
     ]
+  },
+  {
+    "id": "0003_secret_stark_industries",
+    "statements": [
+      "CREATE TABLE `site_permissions` (\n\t`origin` text NOT NULL,\n\t`embedder` text NOT NULL,\n\t`kind` text NOT NULL,\n\t`allowed` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tPRIMARY KEY(`origin`, `embedder`, `kind`)\n);"
+    ]
   }
 ];

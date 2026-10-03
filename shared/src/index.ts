@@ -14,8 +14,10 @@ export {
 } from "./paths";
 export { openStore, store } from "./client";
 export type { Store } from "./client";
-export { appState, instances, settings } from "./schema";
-export type { DevtoolsDock, InstanceRow, NewInstanceRow, SettingsRow } from "./schema";
+export { appState, instances, settings, sitePermissions } from "./schema";
+export type { DevtoolsDock, InstanceRow, NewInstanceRow, SettingsRow, SitePermissionRow } from "./schema";
+export { listSitePermissions, setSitePermission } from "./site-permissions";
+export type { SitePermission } from "./site-permissions";
 export { listInstances, removeInstance, upsertInstance } from "./instances";
 export {
   anonymousId,

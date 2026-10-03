@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "cli", "dist", "main.js");
 const SOCKET = path.join(os.tmpdir(), `terminal-browser-dev-${process.pid}.sock`);
+const DEFAULT_URL = "https://terminal-browser.com";
 const browserArgs = process.argv.slice(2);
+if (!browserArgs.some((arg) => !arg.startsWith("-"))) browserArgs.push(DEFAULT_URL);
 
 let browser = null;
 let reloadRequested = false;

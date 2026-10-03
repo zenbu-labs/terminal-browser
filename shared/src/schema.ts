@@ -1,4 +1,4 @@
-import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const instances = sqliteTable("instances", {
   key: text("key").primaryKey(),
@@ -32,6 +32,18 @@ export const appState = sqliteTable("app_state", {
   value: text("value").notNull(),
 });
 
+export const sitePermissions = sqliteTable(
+  "site_permissions",
+  {
+    origin: text("origin").notNull(),
+    embedder: text("embedder").notNull(),
+    kind: text("kind").notNull(),
+    allowed: integer("allowed", { mode: "boolean" }).notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.origin, table.embedder, table.kind] })],
+);
+
 export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey(),
   devtoolsDock: text("devtools_dock", { enum: ["bottom", "right"] })
@@ -43,4 +55,5 @@ export const settings = sqliteTable("settings", {
 export type InstanceRow = typeof instances.$inferSelect;
 export type NewInstanceRow = typeof instances.$inferInsert;
 export type SettingsRow = typeof settings.$inferSelect;
+export type SitePermissionRow = typeof sitePermissions.$inferSelect;
 export type DevtoolsDock = SettingsRow["devtoolsDock"];

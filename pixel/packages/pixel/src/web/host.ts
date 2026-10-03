@@ -1,7 +1,13 @@
 import { BrowserWindow, screen } from "electron";
 import type { EngineKeyEvent, PastedImage, PointerEvent, Surface, WheelEvent } from "../react";
-import { allowClipboardRead, onDownloadFor, routeThroughProxy } from "./browser-session";
-import type { DownloadProgress } from "./browser-session";
+import {
+  allowClipboardRead,
+  onDownloadFor,
+  onMediaCaptureFor,
+  onPermissionFor,
+  routeThroughProxy,
+} from "./browser-session";
+import type { DownloadProgress, PermissionGate, PermissionRequest } from "./browser-session";
 import { cursorShapeFor } from "./cursor";
 import { DevtoolsWindow } from "./devtools";
 import { FaviconCache } from "./favicon";
@@ -113,6 +119,7 @@ export class PageHost {
   onOpenWindow: OpenWindowPolicy | null = null;
   onQuit: (() => void) | null = null;
   onDownload: ((progress: DownloadProgress) => void) | null = null;
+  onPermission: PermissionGate | null = null;
   private readonly popups: PopupWindow[] = [];
   onPopupChange: (() => void) | null = null;
   get popup(): PopupWindow | null {
@@ -150,6 +157,8 @@ export class PageHost {
     if (options.proxy) void routeThroughProxy(this.window.webContents.session, options.proxy);
     if (this.clipboardRead) allowClipboardRead(this.window.webContents);
     onDownloadFor(this.window.webContents, (progress) => this.onDownload?.(progress));
+    this.gatePermissions(this.window.webContents);
+    onMediaCaptureFor(this.window.webContents, (capturing) => this.updateState({ capturing }));
     this.input = new PageInput({
       contents: () => this.window.webContents,
       scale: () => this.layout.scale,
@@ -217,6 +226,9 @@ export class PageHost {
     this.window.webContents.on("page-title-updated", (_event, title) => {
       this.updateState({ title });
     });
+    this.window.webContents.on("audio-state-changed", (event) => {
+      this.updateState({ audible: event.audible });
+    });
     this.window.webContents.on("cursor-changed", (_event, type) => {
       const shape = cursorShapeFor(type);
       if (shape === this.cursorShape) return;
@@ -241,6 +253,12 @@ export class PageHost {
 
   get webContents(): Electron.WebContents {
     return this.window.webContents;
+  }
+
+  setAudioMuted(muted: boolean) {
+    if (this.stopped) return;
+    this.window.webContents.setAudioMuted(muted);
+    this.updateState({ muted });
   }
 
   resize(layout: SurfaceLayout, options?: { keepFrame?: boolean }) {
@@ -580,8 +598,17 @@ export class PageHost {
     };
   }
 
+  private gatePermissions(contents: Electron.WebContents) {
+    onPermissionFor(contents, {
+      request: (request: PermissionRequest) =>
+        this.onPermission ? this.onPermission.request(request) : Promise.resolve(false),
+      check: (request: PermissionRequest) => this.onPermission?.check(request) ?? false,
+    });
+  }
+
   private adoptPopup(child: Electron.BrowserWindow) {
     if (this.clipboardRead) allowClipboardRead(child.webContents);
+    this.gatePermissions(child.webContents);
     const size = this.pendingPopupSize ?? { width: 480, height: 360 };
     this.pendingPopupSize = null;
     child.webContents.on("did-create-window", (grandchild) => this.adoptPopup(grandchild));

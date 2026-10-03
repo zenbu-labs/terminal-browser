@@ -11,6 +11,14 @@ export interface WebViewState {
   findMatches: { active: number; total: number } | null;
   zoom: number;
   favicon: string | null;
+  audible: boolean;
+  muted: boolean;
+  capturing: MediaCapture;
+}
+
+export interface MediaCapture {
+  video: boolean;
+  audio: boolean;
 }
 
 export function initialWebViewState(url: string): WebViewState {
@@ -23,6 +31,9 @@ export function initialWebViewState(url: string): WebViewState {
     findMatches: null,
     zoom: 1,
     favicon: null,
+    audible: false,
+    muted: false,
+    capturing: { video: false, audio: false },
   };
 }
 

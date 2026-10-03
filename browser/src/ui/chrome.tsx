@@ -8,6 +8,7 @@ import { PageContextMenu } from "./context-menu";
 import { MarkupCanvas } from "./markup-canvas";
 import { NewTabCard, PaletteCard, UrlCard } from "./modals";
 import { DownloadHud, FindBar, Toast, ZoomHud } from "./overlays";
+import { PermissionPrompt } from "./permission-prompt";
 import { SettingsCard } from "./settings";
 import {
   RecordBar,
@@ -28,6 +29,7 @@ import type {
   DevtoolsView,
   PageMenuView,
   PaletteView,
+  PermissionPromptView,
   SettingsView,
   ToastView,
   TabActions,
@@ -50,6 +52,7 @@ export function Chrome({
   download,
   toast,
   pageMenu,
+  permissionPrompt,
   settings,
   dividerEngaged,
   record,
@@ -74,6 +77,7 @@ export function Chrome({
   download: DownloadView | null;
   toast: ToastView | null;
   pageMenu: PageMenuView | null;
+  permissionPrompt: PermissionPromptView | null;
   settings: SettingsView | null;
   dividerEngaged: boolean;
   record: RecordView | null;
@@ -155,11 +159,14 @@ export function Chrome({
       {findOpen && (
         <FindBar state={state} actions={actions} layout={layout} theme={theme} />
       )}
+      {permissionPrompt && !record?.canvas && (
+        <PermissionPrompt view={permissionPrompt} actions={actions} layout={layout} theme={theme} />
+      )}
       {zoomHud != null && (
         <ZoomHud factor={zoomHud} layout={layout} theme={theme} findOpen={findOpen} />
       )}
       {download && <DownloadHud download={download} layout={layout} theme={theme} />}
-      {toast && <Toast toast={toast} layout={layout} theme={theme} />}
+      {toast && <Toast toast={toast} actions={actions} layout={layout} theme={theme} />}
       {progress != null && (
         <Box
           style={{
@@ -337,6 +344,7 @@ function Toolbar({
       />
       <ToolbarButton
         icon="select"
+        iconSize={rem * 0.95}
         enabled
         active={grabActive}
         rem={rem}
@@ -543,6 +551,8 @@ function BrowserTabContents({
           onContextMenu={(params) => tabActions.contextMenu(tab.id, params)}
           onDownload={(progress) => tabActions.download(progress)}
           onPointer={(event) => tabActions.pointer(tab.id, event)}
+          onPermissionRequest={(request) => tabActions.permissionRequest(tab.id, request)}
+          onPermissionCheck={(request) => tabActions.permissionCheck(tab.id, request)}
         />
       ))}
     </>
@@ -641,6 +651,7 @@ const GRAB_ACTIVE: Rgba = [0xb3, 0x45, 0xa0, 255];
 
 function ToolbarButton({
   icon,
+  iconSize,
   enabled,
   active = false,
   rem,
@@ -648,6 +659,7 @@ function ToolbarButton({
   onClick,
 }: {
   icon: IconName;
+  iconSize?: number;
   enabled: boolean;
   active?: boolean;
   rem: number;
@@ -669,7 +681,7 @@ function ToolbarButton({
       }}
       onClick={enabled ? onClick : undefined}
     >
-      <Icon icon={icon} size={rem * 1.1} color={color} />
+      <Icon icon={icon} size={iconSize ?? rem * 1.1} color={color} />
     </Box>
   );
 }

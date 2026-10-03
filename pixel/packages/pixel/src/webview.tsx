@@ -35,15 +35,23 @@ import type {
 import { RootContext, handleEntries, useRegistryColors } from "./registry";
 import type { ViewEntry } from "./registry";
 import { makeTheme } from "./theme";
-import type { DownloadProgress } from "./web/browser-session";
+import type { DownloadProgress, PermissionRequest } from "./web/browser-session";
 import { PageHost, decideOpenWindow } from "./web/host";
 import type { BrowserWindowOptions, OpenWindowDecision, OpenWindowPolicy } from "./web/host";
 import { persistentPartition } from "./web/browser-session";
 import { initialWebViewState, snapToCssGrid } from "./web/types";
-import type { DevtoolsDock, SurfaceLayout, WebViewState } from "./web/types";
+import type { DevtoolsDock, MediaCapture, SurfaceLayout, WebViewState } from "./web/types";
 import type { ZoomDirection } from "./web/zoom";
 
-export type { BrowserWindowOptions, DownloadProgress, OpenWindowDecision, OpenWindowPolicy, WebViewState };
+export type {
+  BrowserWindowOptions,
+  DownloadProgress,
+  OpenWindowDecision,
+  OpenWindowPolicy,
+  PermissionRequest,
+  MediaCapture,
+  WebViewState,
+};
 
 export interface WebViewProps {
   src: string;
@@ -62,6 +70,8 @@ export interface WebViewProps {
   onContextMenu?(params: Electron.ContextMenuParams): void;
   onOpenWindow?: OpenWindowPolicy;
   onDownload?(progress: DownloadProgress): void;
+  onPermissionRequest?(request: PermissionRequest): Promise<boolean>;
+  onPermissionCheck?(request: PermissionRequest): boolean;
 }
 
 export interface WebViewHandle {
@@ -75,6 +85,7 @@ export interface WebViewHandle {
   forward(): void;
   reload(): void;
   zoom(direction: ZoomDirection): number;
+  setAudioMuted(muted: boolean): void;
   find(text: string): void;
   findNext(forward: boolean): void;
   stopFind(): void;
@@ -285,6 +296,11 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
     };
     host.onOpenWindow = (details) => decideOpenWindow(propsRef.current.onOpenWindow, details);
     host.onDownload = (progress) => propsRef.current.onDownload?.(progress);
+    host.onPermission = {
+      request: (request) =>
+        propsRef.current.onPermissionRequest?.(request) ?? Promise.resolve(false),
+      check: (request) => propsRef.current.onPermissionCheck?.(request) ?? false,
+    };
     host.onQuit = () => registry.quit(entry);
     host.onFrameSubmitted = () => {
       for (const listener of frameListeners.current) listener();
@@ -482,6 +498,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
         forward: () => host().forward(),
         reload: () => host().reload(),
         zoom: (direction) => host().zoom(direction),
+        setAudioMuted: (muted) => host().setAudioMuted(muted),
         find: (text) => host().find(text),
         findNext: (forward) => host().findNext(forward),
         stopFind: () => host().stopFind(),
