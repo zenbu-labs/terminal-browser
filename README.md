@@ -24,6 +24,21 @@ brew install terminal-browser
 ### Claude code plugin
 [Install instructions here](/claude-code-plugin/README.md)
 
+On NixOS, run it directly from this repository:
+
+```bash
+nix run github:zenbu-labs/terminal-browser
+```
+
+Or install it into your profile:
+
+```bash
+nix profile install github:zenbu-labs/terminal-browser
+```
+
+The flake also exports `packages.<system>.terminal-browser`, so it can be added to
+`environment.systemPackages` or `home.packages` with the package manager of your choice.
+
 ### Usage
 ```
 terminal-browser # launches the browser
