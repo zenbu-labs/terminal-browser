@@ -182,6 +182,7 @@ pub(super) fn collect_surface_occluders(
     }
     let rect = node.abs;
     if let Some(surface) = node.surface
+        && node.style.opaque
         && crate::surfaces::with(surface, |s| s.width > 0 && s.height > 0).unwrap_or(false)
     {
         let inset = node.style.corner_radius.iter().fold(1.0f32, |a, &r| a.max(r));

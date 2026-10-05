@@ -897,6 +897,49 @@ mod tests {
     }
 
     #[test]
+    fn a_translucent_scaled_surface_does_not_keep_its_previous_frame() {
+        let font = fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap();
+        let surface = 907_001;
+        let (sw, sh) = (200u32, 200u32);
+        let frame = |block: (u32, u32)| {
+            let mut pixels = vec![0u8; (sw * sh * 4) as usize];
+            for y in block.1..block.1 + 100 {
+                for x in block.0..block.0 + 100 {
+                    pixels[((y * sw + x) * 4) as usize..][..4].copy_from_slice(&[10, 20, 30, 255]);
+                }
+            }
+            pixels
+        };
+        let mut tree = Tree::new((100.0, 100.0));
+        tree.reconcile(Desc {
+            children: vec![Desc {
+                style: Style {
+                    width: Dimension::Px(100.0),
+                    height: Dimension::Px(100.0),
+                    ..Style::default()
+                },
+                surface: Some(surface),
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        });
+        tree.flush_layout(std::slice::from_ref(&font), 16.0);
+        let mut canvas = Canvas::new(100, 100);
+        let clear = Some((crate::surfaces::Rect::sized(100, 100), [0u8, 0, 0, 0]));
+        let at = |canvas: &Canvas, x: u32, y: u32| canvas.pixels[((y * 100 + x) * 4) as usize..][..4].to_vec();
+
+        crate::surfaces::write(surface, sw, sh, None, &frame((0, 0)), (sw * 4) as usize);
+        paint(&tree, &mut canvas, std::slice::from_ref(&font), None, clear);
+        assert_eq!(at(&canvas, 10, 10), [30, 20, 10, 255], "the first frame's block is drawn");
+        assert_eq!(at(&canvas, 90, 90), [0, 0, 0, 0]);
+
+        crate::surfaces::write(surface, sw, sh, None, &frame((100, 100)), (sw * 4) as usize);
+        paint(&tree, &mut canvas, std::slice::from_ref(&font), None, clear);
+        assert_eq!(at(&canvas, 90, 90), [30, 20, 10, 255], "the second frame's block is drawn");
+        assert_eq!(at(&canvas, 10, 10), [0, 0, 0, 0], "the first frame's block is gone");
+    }
+
+    #[test]
     fn recording_breaks_paint_into_buckets() {
         let font = fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap();
         let mut tree = Tree::new((300.0, 100.0));
