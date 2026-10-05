@@ -87,6 +87,14 @@ export const SETTINGS = {
     choices: onOff,
     inverted: true,
   }),
+  "window.transparent": setting({
+    group: "general",
+    label: "[placeholder copy: Transparent pages]",
+    hint: "[placeholder copy: Let the terminal show through pages that do not paint a background. Applies to new tabs.]",
+    schema: z.enum(["on", "off"]),
+    default: "off",
+    choices: onOff,
+  }),
   "render.fps": setting({
     group: "advanced",
     label: "Frame rate",

@@ -274,6 +274,21 @@ test("render settings accept numbers or their named values and refuse the rest",
   assert.equal(broken.settings["render.transport"], "auto");
 });
 
+test("window.transparent defaults off, persists on, and refuses other values", () => {
+  const store = tempStore();
+  assert.equal(store.load().settings["window.transparent"], "off");
+
+  store.setSetting("window.transparent", "on");
+  const loaded = store.load();
+  assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.settings["window.transparent"], "on");
+
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "window.transparent": true }));
+  const broken = store.load();
+  assert.equal(broken.errors.length, 1);
+  assert.equal(broken.settings["window.transparent"], "off");
+});
+
 test("render settings map to engine values and the startup env", () => {
   assert.equal(maxFps("display", 120), 120);
   assert.equal(maxFps("uncapped", 120), 0);

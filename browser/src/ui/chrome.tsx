@@ -530,6 +530,7 @@ function BrowserTabContents({
           proxy={tab.proxy ?? undefined}
           preload={tab.preload ?? undefined}
           clipboardRead={tab.clipboardRead}
+          browserWindowOptions={tab.transparent ? TRANSPARENT_WINDOW : undefined}
           style={{
             position: "absolute",
             inset: { top: layout.page.y, left: layout.page.x },
@@ -548,6 +549,8 @@ function BrowserTabContents({
     </>
   );
 }
+
+const TRANSPARENT_WINDOW = { transparent: true, backgroundColor: "#00000000" };
 
 const DIVIDER_ACTIVE = [58, 96, 168, 255] as const;
 const DIVIDER_GRIP = [118, 122, 132, 255] as const;

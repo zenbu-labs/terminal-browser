@@ -187,6 +187,7 @@ class Session {
   private readonly argv: string[];
   private readonly sessionFlags: {
     clipboardRead: boolean;
+    transparent: boolean;
   };
   private readonly partition: string | null;
   private readonly socksPort: number | null;
@@ -282,6 +283,7 @@ class Session {
     });
     this.sessionFlags = {
       clipboardRead: this.argv.includes("--allow-clipboard-read"),
+      transparent: this.argv.includes("--transparent"),
     };
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
@@ -490,6 +492,7 @@ class Session {
       proxy: this.socksPort ? `socks5://127.0.0.1:${this.socksPort}` : null,
       preload: this.browserPreload,
       clipboardRead: this.sessionFlags.clipboardRead,
+      transparent: this.sessionFlags.transparent || this.settings.get("window.transparent") === "on",
     }));
   }
 

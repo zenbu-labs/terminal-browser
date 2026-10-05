@@ -186,6 +186,7 @@ export interface TabView {
   proxy: string | null;
   preload: string | null;
   clipboardRead: boolean;
+  transparent: boolean;
 }
 
 export interface TabActions {
