@@ -89,8 +89,8 @@ export const SETTINGS = {
   }),
   "window.transparent": setting({
     group: "general",
-    label: "[placeholder copy: Transparent pages]",
-    hint: "[placeholder copy: Let the terminal show through pages that do not paint a background. Applies to new tabs.]",
+    label: "Transparent website backgrounds",
+    hint: "The terminal background will show through pages without a background color",
     schema: z.enum(["on", "off"]),
     default: "off",
     choices: onOff,
