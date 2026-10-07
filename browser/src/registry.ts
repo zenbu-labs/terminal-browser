@@ -34,6 +34,9 @@ export interface ControlHost {
   closeTab(id: number): boolean;
   agentTouch(id: number): boolean;
   agentRelease(): void;
+  recordStart(timeoutMs: number): Promise<boolean>;
+  recordStop(): string | "empty" | null;
+  recording(): boolean;
   tabs(): unknown;
   targets(): Promise<unknown>;
   viewport(): { width: number; height: number } | null;
@@ -45,6 +48,7 @@ interface ControlRequest {
   url?: string;
   cwd?: string;
   tab?: number;
+  timeoutMs?: number;
 }
 
 export class Registry {
@@ -189,6 +193,25 @@ export class Registry {
         this.host.agentRelease();
         return { ...this.record(), tabs: await this.host.targets() };
       }
+      case "record-start": {
+        if (this.host.recording()) throw new Error("already recording");
+        const timeoutMs = request.timeoutMs;
+        if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+          throw new Error("record-start needs a positive timeoutMs");
+        }
+        if (!(await this.host.recordStart(timeoutMs))) {
+          throw new Error("could not start recording");
+        }
+        return { recording: true, timeoutMs };
+      }
+      case "record-stop": {
+        const manifest = this.host.recordStop();
+        if (manifest === null) throw new Error("not recording");
+        if (manifest === "empty") throw new Error("nothing was captured");
+        return { recording: false, manifest };
+      }
+      case "record-status":
+        return { recording: this.host.recording() };
       default:
         throw new Error(`unknown command: ${request.cmd}`);
     }

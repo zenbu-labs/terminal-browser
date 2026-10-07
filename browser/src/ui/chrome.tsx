@@ -59,6 +59,7 @@ export function Chrome({
   devtools,
   profiling,
   grabActive,
+  agentRecording,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -83,10 +84,12 @@ export function Chrome({
   devtools: DevtoolsView | null;
   profiling: boolean;
   grabActive: boolean;
+  agentRecording: boolean;
 }) {
   const theme = useMemo(() => makeTheme(colors), [colors]);
   const progress = useProgress(state.loading);
-  const agentActive = tabs.some((tab) => tab.active && tab.agentControlled);
+  const agentActive =
+    agentRecording || tabs.some((tab) => tab.active && tab.agentControlled);
   const glowPulse = usePulse(agentActive);
   return (
     <Box
