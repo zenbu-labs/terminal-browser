@@ -53,9 +53,6 @@ fn emit(out: &mut Vec<u8>, seq: &[u8], wrapper: Wrapper) {
 pub(crate) enum Medium {
     Shared,
     File,
-    // what is this?
-    /// A file the terminal deletes once read; its name must contain `tty-graphics-protocol`.
-    Temporary,
 }
 
 impl Medium {
@@ -63,7 +60,6 @@ impl Medium {
         match self {
             Medium::Shared => 's',
             Medium::File => 'f',
-            Medium::Temporary => 't',
         }
     }
 }
