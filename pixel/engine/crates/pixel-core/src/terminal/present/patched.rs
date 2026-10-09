@@ -286,6 +286,9 @@ impl Terminal {
     }
 
     pub(crate) fn idle_flatten_at(&self) -> Option<std::time::Instant> {
+        if let super::Presenter::Cells(_) = self.present {
+            return self.cells_sharpen_at();
+        }
         if self.present != super::Presenter::Patched
             || self.patch_medium().is_none()
             || self.patches.live.len() <= IDLE_COMPACT_KEEP
@@ -310,6 +313,9 @@ impl Terminal {
     }
 
     pub(crate) fn flatten_if_idle(&mut self, frame: Frame<'_>) -> io::Result<()> {
+        if let super::Presenter::Cells(protocol) = self.present {
+            return self.sharpen_still_cells(protocol);
+        }
         if self.idle_flatten_at().is_some_and(|at| std::time::Instant::now() >= at) {
             if self.patches.live.len() >= IDLE_FLATTEN_MIN_PATCHES {
                 let mut out = Vec::new();

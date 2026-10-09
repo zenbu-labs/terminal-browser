@@ -6,6 +6,7 @@ use super::{FrameTransport, SessionEnv, Terminal};
 use crate::canvas::Canvas;
 use crate::surfaces::Rect;
 
+mod cells;
 mod flash;
 mod animation;
 mod full;
@@ -18,6 +19,7 @@ mod tiles;
 
 pub(crate) use flash::Flashes;
 pub(crate) use animation::Animation;
+pub(crate) use cells::Cells;
 pub(crate) use overlay::Overlay;
 pub(crate) use patched::Patched;
 
@@ -33,6 +35,7 @@ pub(crate) enum Presenter {
     Patched,
     // https://sw.kovidgoyal.net/kitty/graphics-protocol/#animation
     Animation,
+    Cells(crate::cell_graphics::CellProtocol),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +213,9 @@ impl Terminal {
     }
 
     pub(super) fn choose_present(&mut self, env: &SessionEnv) -> io::Result<Presenter> {
+        if let Some(protocol) = self.cell_protocol {
+            return Ok(Presenter::Cells(protocol));
+        }
         let forced = env.var("TERMINAL_BROWSER_PRESENT");
         let ssh = over_ssh(env);
         let wants_animation = forced.as_deref().map(str::trim) == Some("animation");
