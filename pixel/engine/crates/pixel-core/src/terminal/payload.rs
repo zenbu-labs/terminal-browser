@@ -107,7 +107,9 @@ impl Terminal {
         match self.transport {
             FrameTransport::Inline | FrameTransport::Host => None,
             FrameTransport::Shared => Some(crate::kitty::Medium::Shared),
-            FrameTransport::File => Some(crate::kitty::Medium::Temporary),
+            // Keep the negotiated t=f medium so every multiplexer client can read the patch.
+            // Payloads already cleans up these files after the handoff grace period.
+            FrameTransport::File => Some(crate::kitty::Medium::File),
         }
     }
 
@@ -119,7 +121,7 @@ impl Terminal {
     ) -> io::Result<String> {
         match medium {
             crate::kitty::Medium::Shared => self.hand_off_shm_with(len, fill),
-            crate::kitty::Medium::File | crate::kitty::Medium::Temporary => {
+            crate::kitty::Medium::File => {
                 let mut data = vec![0u8; len];
                 fill(&mut data);
                 self.hand_off_temp_file(&data)
@@ -135,4 +137,78 @@ impl Terminal {
         })
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::surfaces::Rect;
+    use crate::terminal::TtyHandle;
+    use crate::wrapper::Wrapper;
+    use base64::Engine as _;
+
+    #[test]
+    fn file_transport_patches_can_be_read_by_multiple_terminal_clients() {
+        let (stream, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let mut terminal = Terminal::blank(
+            TtyHandle::Hosted {
+                stream,
+                sink: io::sink(),
+            },
+            None,
+            Wrapper::None,
+            None,
+        );
+        terminal.transport = FrameTransport::File;
+        terminal.cell = Some((14, 32));
+        let mut out = Vec::new();
+        terminal
+            .place_image(
+                &mut out,
+                2,
+                Rect {
+                    x: 17,
+                    y: 83,
+                    w: 2,
+                    h: 1,
+                },
+                2,
+                false,
+                |pixels| pixels.copy_from_slice(&[255, 0, 0, 255, 0, 255, 0, 255]),
+            )
+            .unwrap();
+        let command = String::from_utf8(out).unwrap();
+        assert!(
+            command.contains("t=f,"),
+            "patches must use the negotiated, reusable medium: {command}"
+        );
+        assert!(command.contains("X=3,Y=19"));
+        let name = command
+            .split_once("\x1b_G")
+            .unwrap()
+            .1
+            .split_once(';')
+            .unwrap()
+            .1
+            .strip_suffix("\x1b\\")
+            .unwrap();
+        let path = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(name)
+                .unwrap(),
+        )
+        .unwrap();
+        let expected = [255, 0, 0, 255, 0, 255, 0, 255];
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            expected,
+            "a second client can read the same patch"
+        );
+        drop(terminal);
+        assert!(
+            !std::path::Path::new(&path).exists(),
+            "producer cleans up the handoff file"
+        );
+    }
 }
