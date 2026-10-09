@@ -181,6 +181,7 @@ export interface RootOptions {
   onHostClosed?: () => void;
   onHandoff?: (handoff: { tty?: string; socket?: string }) => void;
   keyEventTypes?: boolean;
+  focusClick?: boolean;
   devtools?: boolean;
   cwd?: string;
   tty?: string;
@@ -211,6 +212,7 @@ export interface PixelRoot {
   stopProfile(): Promise<string | null>;
   setRender(settings: RenderSettings): void;
   setLogFile(path: string | null): void;
+  setFocusClick(enabled: boolean): void;
   highlightTransmits(): boolean;
   // nudge resize is a ridiculous api
   nudgeResize(): void;
@@ -334,6 +336,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   const info = JSON.parse(bridge.engine.info()) as EngineInfo;
   applyColors(info.colors);
   bridge.engine.setKeyEventTypes(!!options.keyEventTypes);
+  if (options.focusClick !== undefined) bridge.engine.setFocusClick(options.focusClick);
   if (options.onLayout) {
     bridge.afterCommit = (view) => {
       if (view !== APP_VIEW) return;
@@ -774,6 +777,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     setLogFile(path: string | null) {
       bridge.push(APP_VIEW, { op: "setLogFile", path });
+      bridge.flush();
+    },
+    setFocusClick(enabled: boolean) {
+      bridge.push(APP_VIEW, { op: "setFocusClick", on: enabled });
       bridge.flush();
     },
     highlightTransmits() {
