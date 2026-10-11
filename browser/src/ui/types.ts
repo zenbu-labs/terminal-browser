@@ -57,6 +57,11 @@ export interface TabRow {
   capturing: MediaCapture;
 }
 
+export interface AdblockView {
+  active: boolean;
+  blocked: number;
+}
+
 export interface DownloadView {
   name: string;
   percent: number | null;
@@ -172,6 +177,7 @@ export interface ChromeActions {
   devtoolsDividerDrag(event: DragEvent): void;
   devtoolsAction(action: "close" | "dock-bottom" | "dock-right"): void;
   devtoolsDividerHover(hovering: boolean): void;
+  adblockToggle(): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
   pageMenuZoom(direction: ZoomDirection): void;
