@@ -44,7 +44,7 @@ interface Modal {
   drafts: Partial<Record<SettingKey, string>>;
 }
 
-function settingRow(key: SettingKey, value: string): SettingRow {
+function settingRow(key: SettingKey, value: string | boolean): SettingRow {
   const def = SETTINGS[key];
   const base = {
     key,
@@ -53,16 +53,20 @@ function settingRow(key: SettingKey, value: string): SettingRow {
     hint: def.hint,
     modified: value !== def.default,
   };
-  if (!def.choices) return { ...base, kind: "string", value };
+  const text = String(value);
+  if (def.schema instanceof z.ZodBoolean) {
+    return { ...base, kind: "toggle", value: value ? "on" : "off", inverted: false };
+  }
+  if (!def.choices) return { ...base, kind: "string", value: text };
   const choices = def.choices.map((choice) => ({
     ...choice,
     logo: choice.logo ? bundledAsset(choice.logo) : null,
   }));
   const values = def.choices.map((choice) => choice.value);
   if (values.length === 2 && values.includes("on") && values.includes("off")) {
-    return { ...base, kind: "toggle", value, inverted: def.inverted ?? false };
+    return { ...base, kind: "toggle", value: text, inverted: def.inverted ?? false };
   }
-  return { ...base, kind: "choice", value, choices, custom: !(def.schema instanceof z.ZodEnum) };
+  return { ...base, kind: "choice", value: text, choices, custom: !(def.schema instanceof z.ZodEnum) };
 }
 
 function agentBrief(files: ConfigFiles): string {
@@ -270,10 +274,12 @@ export class SettingsManager {
 
   private set(key: string, value: string | undefined) {
     if (!isSettingKey(key)) return;
-    if (value !== undefined && !SETTINGS[key].schema.safeParse(value).success) return;
+    const schema = SETTINGS[key].schema;
+    const coerced = schema instanceof z.ZodBoolean && value !== undefined ? value === "on" : value;
+    if (coerced !== undefined && !schema.safeParse(coerced).success) return;
     delete this.modal?.drafts[key];
     this.write(() => {
-      this.config.setSetting(key, value as Settings[SettingKey] | undefined);
+      this.config.setSetting(key, coerced as Settings[SettingKey] | undefined);
     });
   }
 
