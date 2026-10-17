@@ -3,6 +3,7 @@ export {
   DATA_DIR,
   LOGS_DIR,
   FAVICONS_DIR,
+  ADBLOCK_DIR,
   INSTANCES_DIR,
   AGENT_SOCKETS_DIR,
   DAEMON_SOCKET,
@@ -18,11 +19,15 @@ export { appState, instances, settings } from "./schema";
 export type { DevtoolsDock, InstanceRow, NewInstanceRow, SettingsRow } from "./schema";
 export { listInstances, removeInstance, upsertInstance } from "./instances";
 export {
+  adblockAllowlist,
+  adblockEnabled,
   anonymousId,
   lastActiveDay,
   lastLaunchDay,
   lastSeenVersion,
   lastUrl,
+  setAdblockAllowlist,
+  setAdblockEnabled,
   setLastActiveDay,
   setLastLaunchDay,
   setLastSeenVersion,

@@ -21,6 +21,7 @@ import type { Theme } from "./theme";
 import { usePulse } from "./pulse";
 import type { RecordView } from "../record/types";
 import type {
+  AdblockView,
   ChromeActions,
   ChromeLayout,
   DownloadView,
@@ -51,6 +52,7 @@ export function Chrome({
   toast,
   pageMenu,
   settings,
+  adblock,
   dividerEngaged,
   record,
   recordSurface,
@@ -75,6 +77,7 @@ export function Chrome({
   toast: ToastView | null;
   pageMenu: PageMenuView | null;
   settings: SettingsView | null;
+  adblock: AdblockView | null;
   dividerEngaged: boolean;
   record: RecordView | null;
   recordSurface: Surface | null;
@@ -113,6 +116,7 @@ export function Chrome({
             record={record}
             profiling={profiling}
             grabActive={grabActive}
+            adblock={adblock}
           />
         ))}
       <BrowserTabContents
@@ -271,6 +275,7 @@ function Toolbar({
   record,
   profiling,
   grabActive,
+  adblock,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -280,6 +285,7 @@ function Toolbar({
   record: RecordView | null;
   profiling: boolean;
   grabActive: boolean;
+  adblock: AdblockView | null;
 }) {
   const rem = layout.rem;
   const stopIcon = useStopIcon(state.loading);
@@ -335,6 +341,7 @@ function Toolbar({
         url={state.url}
         theme={theme}
       />
+      {adblock && <AdblockPill view={adblock} rem={rem} theme={theme} actions={actions} />}
       <ToolbarButton
         icon="select"
         enabled
@@ -382,6 +389,7 @@ function ProfilingPill({ actions, rem, theme }: { actions: ChromeActions; rem: n
     </Box>
   );
 }
+
 
 
 function seamRadius(radius: number, dock: "bottom" | "right" | null, side: "page" | "devtools") {
@@ -553,6 +561,49 @@ function BrowserTabContents({
 }
 
 const TRANSPARENT_WINDOW = { transparent: true, backgroundColor: "#00000000" };
+
+function AdblockPill({
+  view,
+  rem,
+  theme,
+  actions,
+}: {
+  view: AdblockView;
+  rem: number;
+  theme: Theme;
+  actions: ChromeActions;
+}) {
+  const height = rem * 1.55;
+  const tint = view.active ? theme.accent : theme.disabled;
+  return (
+    <Box
+      style={{
+        height,
+        alignItems: "center",
+        gap: rem * 0.3,
+        padding: { left: rem * 0.5, right: view.blocked > 0 ? rem * 0.55 : rem * 0.5 },
+        margin: { left: rem * 0.3 },
+        cornerRadius: height / 2,
+        background: view.active ? mix(theme.bg, theme.accent, 0.14) : undefined,
+        hoverBackground: theme.hover,
+        flexShrink: 0,
+      }}
+      onClick={actions.adblockToggle}
+    >
+      <Icon
+        icon="shield"
+        size={rem * 0.95}
+        color={view.active ? tint : withAlpha(tint, 140)}
+        weight={2}
+      />
+      {view.blocked > 0 && (
+        <Text style={{ fontSize: rem * 0.75, color: tint, wrap: false, selectable: false }}>
+          {String(view.blocked)}
+        </Text>
+      )}
+    </Box>
+  );
+}
 
 const DIVIDER_ACTIVE = [58, 96, 168, 255] as const;
 const DIVIDER_GRIP = [118, 122, 132, 255] as const;
