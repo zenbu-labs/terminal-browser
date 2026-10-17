@@ -51,7 +51,7 @@ import type { ZoomDirection } from "../zoom";
 
 
 import type { RecordTarget } from "../record/recorder";
-import { RecordSession } from "../record/session";
+import { RecordSession, type RecordOptions } from "../record/session";
 import type { RecordActions } from "../record/types";
 import { Registry } from "../registry";
 import { Chrome } from "../ui/chrome";
@@ -257,6 +257,8 @@ class Session {
   private profiling = false;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private records = new Map<number, RecordSession>();
+  private agentRecordTab: number | null = null;
+  private agentRecordManifest: string | null = null;
   private grabs = new Map<number, Grab>();
   private copyWatchers = new Map<number, CopyOnSelect>();
   private readonly copyOnSelect: boolean;
@@ -401,6 +403,27 @@ class Session {
       },
       agentTouch: (id) => this.tabs.touchAgentControl(id),
       agentRelease: () => this.tabs.releaseAgentControl(),
+      recordStart: async (timeoutMs: number) => {
+        const tab = this.tabs.active?.id ?? null;
+        await this.startRecording({ agent: true, timeoutMs });
+        const started = tab !== null && this.records.has(tab);
+        this.agentRecordTab = started ? tab : null;
+        this.agentRecordManifest = null;
+        return started;
+      },
+      recordStop: () => {
+        const session = this.agentRecord();
+        if (!session) {
+          const done = this.agentRecordManifest;
+          this.agentRecordManifest = null;
+          return done;
+        }
+        const manifest = session.complete();
+        this.agentRecordTab = null;
+        if (typeof manifest === "string") this.agentRecordManifest = null;
+        return manifest;
+      },
+      recording: () => this.agentRecord() !== null,
       viewport: () =>
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),
@@ -553,6 +576,7 @@ class Session {
         devtools={this.devtoolsView()}
         profiling={this.profiling}
         grabActive={this.activeGrab()?.active ?? false}
+        agentRecording={this.agentRecord() !== null}
       />,
     );
   }
@@ -652,6 +676,13 @@ class Session {
   }
 
   /** the record session lives with its tab; the active tab's session gets the UI and input */
+  private agentRecord(): RecordSession | null {
+    if (this.agentRecordTab === null) return null;
+    const session = this.records.get(this.agentRecordTab) ?? null;
+    if (!session) this.agentRecordTab = null;
+    return session;
+  }
+
   private activeRecord(): RecordSession | null {
     const tab = this.tabs.active;
     return tab ? this.records.get(tab.id) ?? null : null;
@@ -704,7 +735,7 @@ class Session {
     };
   }
 
-  private async startRecording() {
+  private async startRecording(options: RecordOptions = {}) {
     if (this.recordStarting) return;
     const tab = this.tabs.active;
     if (!tab || !tab.ref.current || !this.root || this.records.has(tab.id)) return;
@@ -733,6 +764,9 @@ class Session {
           },
           setClipboard: (text) => root.setClipboard(text),
           toast: (name, state, detail) => this.showToast(name, state, detail),
+          completed: (manifestPath) => {
+            if (options.agent) this.agentRecordManifest = manifestPath;
+          },
           finished: () => {
             this.records.delete(tab.id);
             if (this.shownRecord?.target.tabId === tab.id) this.shownRecord = null;
@@ -742,6 +776,7 @@ class Session {
           recordKeyLabel: () => this.keymap.label("record.toggle"),
         },
         this.recordTarget(tab),
+        options,
       );
       this.records.set(tab.id, session);
     } catch (error) {
@@ -1257,7 +1292,11 @@ class Session {
     return [
       {
         id: "record",
-        label: this.activeRecord() ? "Complete recording" : "Record",
+        label: this.activeRecord()
+          ? this.activeRecord()?.agent
+            ? "Stop agent recording"
+            : "Complete recording"
+          : "Record",
         enabled: true,
         shortcut: this.activeRecord() ? "" : this.keymap.label("record.toggle"),
         icon: { kind: "path", d: ICONS.record, tint: "red", weight: 8 },
@@ -1520,6 +1559,7 @@ class Session {
       case "record.toggle": {
         const record = this.activeRecord();
         if (!record) return "Record page";
+        if (record.agent) return "Stop agent recording";
         return record.reviewing ? "Complete recording" : "Stop recording";
       }
       case "grab.toggle":

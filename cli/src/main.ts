@@ -437,6 +437,61 @@ function currentTerminal(): Promise<TerminalCheck> {
   return asked;
 }
 
+const RECORD_USAGE =
+  "usage: terminal-browser record <start|stop|status> [--timeout <seconds>] [--browser <key>]";
+
+async function recordCommand(
+  sub: string | undefined,
+  key: string | undefined,
+  timeout: string | undefined,
+): Promise<number> {
+  if (!sub) fail(`record needs a subcommand\n\n${RECORD_USAGE}`);
+  if (!["start", "stop", "status"].includes(sub)) {
+    fail(`unknown record subcommand: ${sub}\n\n${RECORD_USAGE}`);
+  }
+  let timeoutMs: number | undefined;
+  if (sub === "start") {
+    if (!timeout) {
+      fail(`record start requires --timeout <seconds>\n\n${RECORD_USAGE}`);
+    }
+    const seconds = Number(timeout);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      fail(`--timeout must be a positive number of seconds, got "${timeout}"`);
+    }
+    timeoutMs = Math.round(seconds * 1000);
+  } else if (timeout) {
+    fail(`--timeout only applies to record start\n\n${RECORD_USAGE}`);
+  }
+
+  const check = await currentTerminal();
+  const found = await browsers(check.terminal);
+  const here = key
+    ? found.filter((browser) => recordKey(browser) === key)
+    : found.filter((browser) => browser.inCurrentTab);
+  const list = (browsers: Browser[]) => browsers.map((browser) => `  ${describe(browser)}`).join("\n");
+  if (here.length === 0) {
+    if (found.length === 0) fail("no browser running. Start one with: terminal-browser open <url>");
+    fail(
+      key
+        ? `no browser ${key}. Running:\n${list(found)}`
+        : `no browser to record in this tab. Running:\n${list(found)}`,
+    );
+  }
+  if (here.length > 1) {
+    fail(`${here.length} browsers in this tab, so say which with --browser:\n${list(here)}`);
+  }
+  const target = here[0]!;
+  const reply = (await control(target.socket, {
+    cmd: `record-${sub}`,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  })) as { recording?: boolean; manifest?: string };
+
+  if (sub === "stop") process.stdout.write(`${reply.manifest}\n`);
+  else if (sub === "status") process.stdout.write(reply.recording ? "recording\n" : "idle\n");
+  else process.stdout.write("recording\n");
+  return 0;
+}
+
 async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
   const check = await currentTerminal();
   const found = await browsers(check.terminal);
@@ -724,6 +779,16 @@ async function main(): Promise<number> {
   if (command === "register-app") return registerAppCommand(args);
   if (command === "unregister-app") return unregisterAppCommand(args);
   if (command === "apps") return appsCommand(args);
+  if (command === "record") {
+    requirePaneAccess();
+    const key = takeFlag(args, "--browser");
+    const timeout = takeFlag(args, "--timeout");
+    return recordCommand(
+      args.find((arg) => !arg.startsWith("-")),
+      key,
+      timeout,
+    );
+  }
   if (command === "new-tab") {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");
