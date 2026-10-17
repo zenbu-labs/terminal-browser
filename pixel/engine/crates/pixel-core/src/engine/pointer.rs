@@ -361,7 +361,8 @@ impl Engine {
                 } else {
                     self.cell.1 as f32
                 };
-                if self.emit_wheel(view, local, 0.0, delta, false, mouse.mods, out) {
+                let precise = self.term.scrolls_by_rows();
+                if self.emit_wheel(view, local, 0.0, delta, precise, mouse.mods, out) {
                     return Ok(());
                 }
                 if let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) {

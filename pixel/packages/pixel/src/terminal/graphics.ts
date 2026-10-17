@@ -28,6 +28,15 @@ function graphicsReply(buffer: string): boolean | null {
   return rest.startsWith("OK");
 }
 
+function deviceAttributes(buffer: string): string[] | null {
+  const reply = /\x1b\[\?([\d;]*)c/.exec(buffer);
+  return reply ? reply[1].split(";") : null;
+}
+
+function drawsIterm2(env: NodeJS.ProcessEnv): boolean {
+  return env.LC_TERMINAL === "iTerm2" || env.TERM_PROGRAM === "iTerm.app";
+}
+
 export function probeGraphics(terminal: Terminal | null): Promise<GraphicsSupport> {
   const stdin = process.stdin;
   if (!stdin.isTTY || !process.stdout.isTTY || !stdin.setRawMode) {
@@ -56,7 +65,10 @@ export function probeGraphics(terminal: Terminal | null): Promise<GraphicsSuppor
     const onData = (chunk: Buffer) => {
       buffer += chunk.toString("binary");
       const reply = graphicsReply(buffer);
-      if (reply !== null) return finish(reply ? "supported" : "unsupported");
+      if (reply === true || drawsIterm2(process.env)) return finish("supported");
+      const attributes = deviceAttributes(buffer);
+      if (attributes?.includes("4")) return finish("supported");
+      if (attributes) return finish(reply === false ? "unsupported" : "unknown");
       if (buffer.length > 1024) finish("unknown");
     };
 
@@ -132,7 +144,7 @@ export function unsupportedGraphicsMessage(color = false): string {
     `  ${sgr("2", "We recommend Ghostty:")}`,
     `  ${sgr("4", "https://ghostty.org/download")}`,
     "",
-    `  ${sgr("2", "Note: any terminal that supports the kitty graphics protocol is supported")}`,
+    `  ${sgr("2", "Note: any terminal that supports the kitty graphics protocol, sixel or iTerm2 images is supported")}`,
     "",
   ].join("\n");
 }

@@ -299,6 +299,8 @@ pub struct Terminal {
     present: Presenter,
     patches: present::Patched,
     animation: present::Animation,
+    cell_protocol: Option<crate::cell_graphics::CellProtocol>,
+    cells: present::Cells,
     highlight_transmits: bool,
     overlay: present::Overlay,
     flashes: present::Flashes,
@@ -313,6 +315,8 @@ pub struct Terminal {
     color_scheme_updates: bool,
     color_query: Option<ColorQuery>,
     kitty_keyboard: bool,
+    // Termux:Monet loses images when it rewraps the alternate screen on resize, then crashes drawing them
+    alternate_screen: bool,
 }
 
 #[derive(Default)]
@@ -498,9 +502,14 @@ impl Terminal {
         raw.make_raw();
         retry_intr(|| termios::tcsetattr(io.read_fd(), OptionalActions::Drain, &raw)).map_err(|e| step("tcsetattr", e.into()))?;
 
+        let alternate_screen = !env.var("TERMUX_VERSION").is_some_and(|v| !v.is_empty());
+        if alternate_screen {
+            io.out().write_all(b"\x1b[?1049h")?;
+        }
         // would prefer if they weren't magic and linked to some known doc on the internet
+        // 1002 comes before 1003 for terminals like Termux that only know 1002 and turn touches into it
         io.out().write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
+            b"\x1b[?25l\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
         )?; // enable many reporting modes so we get info about mouse/keyboard
         io.out().flush()?;
 
@@ -510,6 +519,7 @@ impl Terminal {
             wrapper,
             crate::herdr::HerdrTarget::from_env(&env),
         );
+        terminal.alternate_screen = alternate_screen;
         terminal.kitty_keyboard = terminal.probe_kitty_keyboard()?;
         if !terminal.kitty_keyboard {
             terminal.io.out().write_all(b"\x1b[>4;2m")?;
@@ -526,7 +536,11 @@ impl Terminal {
             terminal.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
         }
         // these are a bit messy/sus
-        terminal.transport = terminal.probe_transport(&env)?;
+        terminal.cell_protocol = terminal.probe_cell_protocol(&env)?;
+        terminal.transport = match terminal.cell_protocol {
+            Some(_) => FrameTransport::Inline,
+            None => terminal.probe_transport(&env)?,
+        };
         terminal.identity = terminal.probe_identity(&env)?;
         terminal.present = terminal.choose_present(&env)?;
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
@@ -568,6 +582,8 @@ impl Terminal {
             present: Presenter::Full,
             patches: present::Patched::default(),
             animation: present::Animation::default(),
+            cell_protocol: None,
+            cells: present::Cells::default(),
             highlight_transmits: false,
             overlay: present::Overlay::default(),
             flashes: present::Flashes::default(),
@@ -580,6 +596,7 @@ impl Terminal {
             color_scheme_updates: false,
             color_query: None,
             kitty_keyboard: false,
+            alternate_screen: false,
         }
     }
 
@@ -790,6 +807,7 @@ impl Terminal {
             }
             Presenter::Patched => self.draw_patched(frame, &mut out),
             Presenter::Animation => self.draw_animation(frame, &mut out),
+            Presenter::Cells(protocol) => self.draw_cells(protocol, frame, &mut out),
         };
         self.write_synchronized(&out)?;
         drawn
@@ -1198,6 +1216,12 @@ impl Terminal {
 
     pub fn reports_pixel_mouse(&self) -> bool {
         self.mouse_pixels
+    }
+
+    /// Image cell terminals redraw every scroll step, so a wheel tick moves content by exactly one row
+    /// with no easing, which also follows a finger on Termux, where each row dragged is one tick.
+    pub fn scrolls_by_rows(&self) -> bool {
+        self.cell_protocol.is_some()
     }
 
     pub fn frames_are_inline(&self) -> bool {
@@ -1705,8 +1729,10 @@ impl Drop for Terminal {
             return;
         }
         self.payloads.remove_all();
-        let delete = crate::kitty::kitty_delete(self.image_id, self.wrapper);
-        let _ = self.io.out().write_all(&delete);
+        if self.cell_protocol.is_none() {
+            let delete = crate::kitty::kitty_delete(self.image_id, self.wrapper);
+            let _ = self.io.out().write_all(&delete);
+        }
         if !self.kitty_keyboard {
             let _ = self.io.out().write_all(b"\x1b[>4;0m");
         }
@@ -1714,8 +1740,13 @@ impl Drop for Terminal {
             let _ = self.io.out().write_all(b"\x1b[?2031l");
         }
         let _ = self.io.out().write_all(
-            b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
+            b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?25h",
         );
+        let _ = self.io.out().write_all(if self.alternate_screen {
+            b"\x1b[?1049l".as_slice()
+        } else {
+            b"\x1b[r\x1b[2J\x1b[3J\x1b[H".as_slice()
+        });
         let _ = self.io.out().flush();
         if let Some(saved) = &self.saved {
             let _ = retry_intr(|| {

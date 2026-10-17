@@ -775,6 +775,7 @@ dependencies = [
  "image",
  "libc",
  "miniz_oxide",
+ "png",
  "rayon",
  "rustix",
  "serde_json",

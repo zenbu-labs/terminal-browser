@@ -1,4 +1,5 @@
 mod canvas;
+mod cell_graphics;
 pub mod clipboard_image;
 mod desc;
 mod engine;

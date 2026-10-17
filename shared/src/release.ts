@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const RELEASE_ORIGIN = process.env.TERMINAL_BROWSER_RELEASE_ORIGIN ?? "https://terminal-browser.sh/install";
+const RELEASE_ORIGIN = process.env.TERMINAL_BROWSER_RELEASE_ORIGIN ?? "https://github.com/RchrdAriza/terminal-browser-termux/releases/latest/download";
 
 export interface LatestRelease {
   version: string;

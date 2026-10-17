@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { announceGuest, findOwner, waitForOwners } from "./instances";
 import { apparmorSetup, linuxSandboxError } from "./sandbox";
-import { checkTerminal, detect, unsupportedGraphicsMessage } from "./terminal";
+import { TERMUX_CHROMIUM_FLAGS, checkTerminal, detect, inTermux, termuxEnv, unsupportedGraphicsMessage } from "./terminal";
 
 function fail(message: string): never {
   process.stderr.write(`pixel: ${message}\n`);
@@ -108,22 +108,24 @@ async function main(): Promise<number> {
 
   const electron = electronBinary();
   const chromiumArgs: string[] = [];
-  if (process.platform === "linux") {
+  if (inTermux()) {
+    chromiumArgs.push(...TERMUX_CHROMIUM_FLAGS);
+  } else if (process.platform === "linux") {
     let sandboxError = linuxSandboxError(electron);
     if (sandboxError) {
       apparmorSetup(electron);
       sandboxError = linuxSandboxError(electron);
     }
     if (sandboxError) fail(sandboxError);
-    // headless ozone reports a 1x1 screen unless told otherwise:
-    // https://source.chromium.org/chromium/chromium/src/+/refs/tags/150.0.7871.212:ui/ozone/platform/headless/headless_screen.cc;l=37-46
-    if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
-      chromiumArgs.push("--ozone-platform=headless", "--screen-info={8192x8192}");
-    }
+  }
+  // headless ozone reports a 1x1 screen unless told otherwise:
+  // https://source.chromium.org/chromium/chromium/src/+/refs/tags/150.0.7871.212:ui/ozone/platform/headless/headless_screen.cc;l=37-46
+  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    chromiumArgs.push("--ozone-platform=headless", "--screen-info={8192x8192}");
   }
 
   const bootstrap = path.join(__dirname, "bootstrap.js");
-  const env = { ...process.env };
+  const env = inTermux() ? termuxEnv(process.env) : { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   env.PIXEL_TTY = tty;
   if (announced) env.PIXEL_PANE = announced.pane;

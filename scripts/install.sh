@@ -67,7 +67,9 @@ exec "$APP/bin/terminal-browser" "\$@"
 EOF
 chmod +x "$BIN_HOME/terminal-browser"
 
-if [ "$(uname -s)" = Linux ]; then
+if [ -n "${TERMUX_VERSION:-}" ]; then
+  bash "$APP/scripts/termux.sh" "$APP"
+elif [ "$(uname -s)" = Linux ]; then
   missing="$(ldd "$APP/electron/pixel" 2>/dev/null | awk '/not found/{print $1}' | sort -u)"
   if [ -n "$missing" ]; then
     echo "warning: missing system libraries:" >&2
