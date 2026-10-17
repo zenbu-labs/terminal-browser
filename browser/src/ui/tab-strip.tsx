@@ -248,7 +248,7 @@ export function TabStrip({
             onMouseEnter={() => setHovered(tab.id)}
             onMouseLeave={() => setHovered((id) => (id === tab.id ? null : id))}
           >
-            {hovered === tab.id && !ghost ? (
+            {!ghost && (tabs.length > 1 || hovered === tab.id) ? (
               <Box
                 style={{
                   width: slotW,

@@ -14,7 +14,7 @@ export const COMMANDS = {
   palette: { label: "Command palette", keys: platform(["cmd+p"], ["ctrl+k", "alt+k"]) },
   "settings.open": { label: "Settings", keys: shared(["ctrl+,"]) },
   "tab.new": { label: "New tab", keys: platform(["cmd+t", "ctrl+t"], ["ctrl+t"]) },
-  "tab.close": { label: "Close tab", keys: platform(["cmd+w"], ["ctrl+w"]) },
+  "tab.close": { label: "Close tab", keys: platform(["cmd+w", "ctrl+w"], ["ctrl+w"]) },
   "url.edit": { label: "Edit URL", keys: platform(["cmd+l"], ["ctrl+l"]) },
   find: { label: "Find in page", keys: platform(["cmd+shift+f"], ["ctrl+shift+f"]) },
   "page.reload": { label: "Reload page", keys: platform(["cmd+r"], ["ctrl+r"]) },
