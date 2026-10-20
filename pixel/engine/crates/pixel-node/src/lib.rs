@@ -501,6 +501,16 @@ impl PixelEngine {
     }
 
     #[napi]
+    pub fn set_focus_click(&mut self, enabled: bool) -> Result<()> {
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or_else(|| Error::from_reason("focus click must be configured before start"))?;
+        engine.set_focus_click(enabled);
+        Ok(())
+    }
+
+    #[napi]
     pub fn start(&mut self, callback: JsFunction) -> Result<()> {
         let dispatch_to_node: ThreadsafeFunction<String> = callback
             .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
