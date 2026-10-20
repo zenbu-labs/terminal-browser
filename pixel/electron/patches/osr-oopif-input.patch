@@ -1,0 +1,108 @@
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+index ff39f7c..e9eb658 100644
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -3918,7 +3918,11 @@ void WebContents::SendInputEvent(v8::Isolate* isolate,
+       // For backwards compatibility, convert `kKeyDown` to `kRawKeyDown`.
+       if (keyboard_event.GetType() == blink::WebKeyboardEvent::Type::kKeyDown)
+         keyboard_event.SetType(blink::WebKeyboardEvent::Type::kRawKeyDown);
+-      rwh->ForwardKeyboardEvent(keyboard_event);
++      if (IsOffScreen()) {
++        GetOffScreenRenderWidgetHostView()->SendKeyEvent(keyboard_event);
++      } else {
++        rwh->ForwardKeyboardEvent(keyboard_event);
++      }
+       return;
+     }
+   } else if (type == blink::WebInputEvent::Type::kMouseWheel) {
+diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
+index c9e1f9d..55c5c6c 100644
+--- a/shell/browser/osr/osr_render_widget_host_view.cc
++++ b/shell/browser/osr/osr_render_widget_host_view.cc
+@@ -18,6 +18,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+ #include "components/input/cursor_manager.h"
++#include "components/input/render_widget_host_input_event_router.h"
+ #include "components/viz/common/features.h"
+ #include "components/viz/common/frame_sinks/begin_frame_args.h"
+ #include "components/viz/common/frame_sinks/copy_output_request.h"
+@@ -733,6 +734,18 @@ void OffScreenRenderWidgetHostView::SynchronizeVisualProperties() {
+   ResizeRootLayer(true);
+ }
+ 
++bool OffScreenRenderWidgetHostView::ShouldRouteEvents() const {
++  if (!render_widget_host_ || !render_widget_host_->delegate())
++    return false;
++  // Route only primary main frame events because page popups cannot contain
++  // iframes hosted by another process.
++  if (!render_widget_host_->delegate()->IsWidgetForPrimaryMainFrame(
++          render_widget_host_)) {
++    return false;
++  }
++  return !!render_widget_host_->delegate()->GetInputEventRouter();
++}
++
+ void OffScreenRenderWidgetHostView::SendMouseEvent(
+     const blink::WebMouseEvent& event) {
+   for (auto* proxy_view : proxy_views_) {
+@@ -768,6 +781,13 @@ void OffScreenRenderWidgetHostView::SendMouseEvent(
+ 
+   if (!render_widget_host_)
+     return;
++  // Route mouse input to the frame under the pointer. This will ensure mouse
++  // input reaches iframe's hosted by another process
++  if (ShouldRouteEvents()) {
++    render_widget_host_->delegate()->GetInputEventRouter()->RouteMouseEvent(
++        this, &event, ui::LatencyInfo());
++    return;
++  }
+   render_widget_host_->ForwardMouseEvent(event);
+ }
+ 
+@@ -851,9 +871,30 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
+   }
+   if (!render_widget_host_)
+     return;
++  if (ShouldRouteEvents()) {
++    render_widget_host_->delegate()
++        ->GetInputEventRouter()
++        ->RouteMouseWheelEvent(this, &mouse_wheel_event, ui::LatencyInfo());
++    return;
++  }
+   render_widget_host_->ForwardWheelEvent(event);
+ }
+ 
++void OffScreenRenderWidgetHostView::SendKeyEvent(
++    const input::NativeWebKeyboardEvent& event) {
++  if (!render_widget_host_)
++    return;
++  // Send keys to the focused frame's render widget instead.
++  content::RenderWidgetHostImpl* target_host = render_widget_host_;
++  if (render_widget_host_->delegate()) {
++    target_host = render_widget_host_->delegate()->GetFocusedRenderWidgetHost(
++        render_widget_host_);
++  }
++  if (!target_host)
++    target_host = render_widget_host_;
++  target_host->ForwardKeyboardEvent(event);
++}
++
+ void OffScreenRenderWidgetHostView::SetPainting(bool painting) {
+   painting_ = painting;
+ 
+diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
+index 485eeff..46eaba7 100644
+--- a/shell/browser/osr/osr_render_widget_host_view.h
++++ b/shell/browser/osr/osr_render_widget_host_view.h
+@@ -222,8 +222,10 @@ class OffScreenRenderWidgetHostView
+   void ReleaseResize();
+   void SynchronizeVisualProperties();
+ 
++  bool ShouldRouteEvents() const;
+   void SendMouseEvent(const blink::WebMouseEvent& event);
+   void SendMouseWheelEvent(const blink::WebMouseWheelEvent& event);
++  void SendKeyEvent(const input::NativeWebKeyboardEvent& event);
+ 
+   void SetPainting(bool painting);
+   bool is_painting() const { return painting_; }
