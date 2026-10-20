@@ -60,6 +60,7 @@ terminal-browser upgrade # upgrade to the latest version
 | --- | --- | --- |
 | Quit | ctrl+q or ctrl+c | ctrl+q |
 | New tab | cmd+t | ctrl+t |
+| Close tab | cmd+w or ctrl+w | ctrl+w |
 | Next / previous tab | ctrl+tab / ctrl+shift+tab or cmd+alt+right / cmd+alt+left | ctrl+tab / ctrl+shift+tab or ctrl+pagedown / ctrl+pageup |
 | Edit URL | cmd+l | ctrl+l |
 | Command palette | cmd+p | ctrl+k or alt+k |

@@ -14,7 +14,7 @@ export const COMMANDS = {
   palette: { label: "Command palette", keys: platform(["cmd+p"], ["ctrl+k", "alt+k"]) },
   "settings.open": { label: "Settings", keys: shared(["ctrl+,"]) },
   "tab.new": { label: "New tab", keys: platform(["cmd+t", "ctrl+t"], ["ctrl+t"]) },
-  "tab.close": { label: "Close tab", keys: platform(["cmd+w"], ["ctrl+w"]) },
+  "tab.close": { label: "Close tab", keys: platform(["cmd+w", "ctrl+w"], ["ctrl+w"]) },
   "tab.next": {
     label: "Next tab",
     keys: platform(["ctrl+tab", "cmd+alt+right"], ["ctrl+tab", "ctrl+pagedown"]),

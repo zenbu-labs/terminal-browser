@@ -155,7 +155,8 @@ export function TabStrip({
   const innerGap = rem * 0.35;
   const gap = rem * 0.3;
   const avail = Math.max(0, width - rem * 1.75) - gap * tabs.length;
-  const minInactive = padX * 2 + slotW;
+  const closeW = tabs.length > 1 ? innerGap + slotW : 0;
+  const minInactive = padX * 2 + slotW + closeW;
   const capInactive = rem * 10;
   const minActive = Math.min(rem * 10, avail);
   const inactiveWidths = new Map<number, number>();
@@ -163,7 +164,7 @@ export function TabStrip({
   for (const tab of tabs) {
     if (tab.active) continue;
     const intrinsic =
-      padX * 2 + slotW + innerGap + Math.min(label(tab).length, 24) * charW;
+      padX * 2 + slotW + innerGap + Math.min(label(tab).length, 24) * charW + closeW;
     const w = Math.min(Math.max(intrinsic, minInactive), capInactive);
     inactiveWidths.set(tab.id, w);
     sum += w;
@@ -182,7 +183,7 @@ export function TabStrip({
   // appear from nowhere on hover; it fits its content instead of taking the cap.
   const active = tabs.find((tab) => tab.active);
   const intrinsicActive =
-    padX * 2 + slotW + innerGap + (active ? label(active).length + 1 : 0) * charW;
+    padX * 2 + slotW + innerGap + (active ? label(active).length + 1 : 0) * charW + closeW;
   const activeWidth =
     tabs.length === 1
       ? Math.max(rem * 4, Math.min(intrinsicActive, avail))
@@ -248,7 +249,7 @@ export function TabStrip({
             onMouseEnter={() => setHovered(tab.id)}
             onMouseLeave={() => setHovered((id) => (id === tab.id ? null : id))}
           >
-            {hovered === tab.id && !ghost ? (
+            {!ghost && tabs.length === 1 && hovered === tab.id ? (
               <Box
                 style={{
                   width: slotW,
@@ -310,12 +311,29 @@ export function TabStrip({
                 wrap: false,
                 ellipsis: true,
                 selectable: false,
+                flexGrow: tabs.length > 1 ? 1 : 0,
                 flexShrink: 1,
                 overflow: "hidden",
               }}
             >
               {label(tab)}
             </Text>
+            {!ghost && tabs.length > 1 ? (
+              <Box
+                style={{
+                  width: slotW,
+                  height: slotW,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cornerRadius: rem * 0.2,
+                  hoverBackground: theme.hoverStrong,
+                  flexShrink: 0,
+                }}
+                onClick={() => actions.tabClose(tab.id)}
+              >
+                <Icon icon="close" size={rem * 0.8} color={theme.muted} />
+              </Box>
+            ) : null}
           </Box>
         ))}
       </Box>
