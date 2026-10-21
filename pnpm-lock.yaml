@@ -176,6 +176,25 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  pixel/examples/inline-player:
+    dependencies:
+      '@zenbu-labs/pixel':
+        specifier: workspace:*
+        version: link:../../packages/pixel
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^18.3.0
+        version: 18.3.31
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
   pixel/examples/ssh:
     dependencies:
       '@zenbu-labs/pixel':
