@@ -12,6 +12,7 @@ export {
   SHORTCUTS_FILE,
   ensureDataDir,
 } from "./paths";
+export { daemonEnv } from "./daemon-env";
 export { openStore, store } from "./client";
 export type { Store } from "./client";
 export { appState, instances, settings } from "./schema";

@@ -9,6 +9,7 @@ import {
   LOGS_DIR,
   TERMINAL_SOCKET_ENV,
   appId,
+  daemonEnv,
   ensureDataDir,
   instanceKey,
   listApps,
@@ -171,18 +172,40 @@ function connectDaemon(): Promise<net.Socket> {
 
 function spawnDaemon() {
   const { command, cwd } = browserLaunchCommand(["--daemon"]);
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
-  );
-  env.NODE_ENV ??= "production";
-  const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });
+  const child = spawn(command[0], command.slice(1), {
+    cwd,
+    detached: true,
+    stdio: "ignore",
+    env: daemonEnv(process.env),
+  });
   child.unref();
+}
+
+const DAEMON_STDERR_LOG = path.join(LOGS_DIR, "stderr.log");
+
+function daemonStderrSize(): number {
+  try {
+    return fs.statSync(DAEMON_STDERR_LOG).size;
+  } catch {
+    return 0;
+  }
+}
+
+function daemonStartError(stderrOffset: number): Error {
+  let output = "";
+  try {
+    output = fs.readFileSync(DAEMON_STDERR_LOG).subarray(stderrOffset).toString("utf8").trim();
+  } catch {}
+  if (!output) return new Error("daemon did not start");
+  const firstLines = output.split("\n").filter((line) => line.trim()).slice(0, 10).join("\n");
+  return new Error(`daemon did not start. Its output (${DAEMON_STDERR_LOG}):\n${firstLines}`);
 }
 
 async function daemonSocket(): Promise<net.Socket> {
   try {
     return await connectDaemon();
   } catch {}
+  const stderrOffset = daemonStderrSize();
   spawnDaemon();
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -192,7 +215,7 @@ async function daemonSocket(): Promise<net.Socket> {
       await sleep(200);
     }
   }
-  throw new Error("daemon did not start");
+  throw daemonStartError(stderrOffset);
 }
 
 interface DaemonReply {

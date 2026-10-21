@@ -122,6 +122,7 @@ async function main(): Promise<number> {
   const bootstrap = path.join(__dirname, "bootstrap.js");
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  if (!env.WAYLAND_DISPLAY) delete env.WAYLAND_DISPLAY;
   env.PIXEL_TTY = tty;
   if (unsupported) env[UNSUPPORTED_ENV] = "1";
   else delete env[UNSUPPORTED_ENV];
