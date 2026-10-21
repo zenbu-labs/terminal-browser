@@ -49,6 +49,26 @@ export function normalizeUrl(value: string, cwd: string | undefined, search: Sea
   return search(input);
 }
 
+export function resolveRestoreUrl(
+  restore: boolean,
+  lastUrl: string | null | undefined,
+): string | null {
+  if (!restore) return null;
+  const last = lastUrl?.trim();
+  return last && /^https?:\/\//.test(last) ? last : null;
+}
+
+export function resolveDefaultUrl(
+  env: NodeJS.ProcessEnv,
+  homeDefault: string,
+  startUrl: string,
+  devUrl: string,
+): string {
+  // Tooling sessions set =1 to land empty tabs on the dev dashboard.
+  if (env.TERMINAL_BROWSER_START_PAGE === "1") return devUrl;
+  return homeDefault === "blank" ? "about:blank" : startUrl;
+}
+
 const HAS_AUTHORITY = /^[a-z][a-z0-9+.-]*:\/\//i;
 const SCHEMES_WITHOUT_HOST = /^(?:data|mailto|tel|about|blob|chrome|view-source):/i;
 

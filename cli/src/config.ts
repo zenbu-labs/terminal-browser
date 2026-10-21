@@ -74,7 +74,10 @@ function set(store: ConfigStore, key: string, value: string): number {
   const target = resolve(key);
   if (!target) return unknownKey(key);
   if (target.kind === "setting") {
-    const parsed = SETTINGS[target.key].schema.safeParse(value);
+    const def = SETTINGS[target.key];
+    const coerced =
+      typeof def.default === "boolean" ? value === "on" || value === "true" || value === "1" : value;
+    const parsed = def.schema.safeParse(coerced);
     if (!parsed.success) return complain(`${key}: ${parsed.error.issues[0].message}`);
     store.setSetting(target.key, parsed.data as Settings[SettingKey]);
     return 0;
