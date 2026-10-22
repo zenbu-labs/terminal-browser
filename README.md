@@ -29,6 +29,14 @@ To install on Windows you must be using WSL. Terminals with kitty graphics suppo
 curl -fsSL https://terminal-browser.sh/install | bash
 ```
 
+### Termux (Android)
+Needs a 64-bit ARM phone and a Termux that shows sixel or iTerm2 images. The installer sets up Termux's glibc packages and a few libraries from Ubuntu, so the first install downloads several hundred MB.
+
+```bash
+pkg install curl
+curl -fsSL https://github.com/RchrdAriza/terminal-browser-termux/releases/latest/download/install.sh | bash
+```
+
 ### Claude code plugin
 [Install instructions here](/claude-code-plugin/README.md)
 

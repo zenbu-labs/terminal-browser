@@ -22,6 +22,9 @@ import {
   cannotOpenPanes,
   checkTerminal,
   detect,
+  inTermux,
+  termuxEnv,
+  TERMUX_CHROMIUM_FLAGS,
 } from "@zenbu-labs/pixel/terminal";
 import { findOwner } from "@zenbu-labs/pixel/terminal";
 import type { Direction, Terminal, TerminalCheck } from "@zenbu-labs/pixel/terminal";
@@ -105,7 +108,9 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
       fail(`missing ${required} — build the browser first (pnpm --filter terminal-browser build)`);
     }
   }
-  if (process.platform === "linux") {
+  if (inTermux()) {
+    argv = [...argv, ...TERMUX_CHROMIUM_FLAGS];
+  } else if (process.platform === "linux") {
     let sandboxError = linuxSandboxError(electron);
     if (sandboxError) {
       apparmorSetup(electron);
@@ -171,9 +176,10 @@ function connectDaemon(): Promise<net.Socket> {
 
 function spawnDaemon() {
   const { command, cwd } = browserLaunchCommand(["--daemon"]);
-  const env = Object.fromEntries(
+  let env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
   );
+  if (inTermux()) env = termuxEnv(env);
   env.NODE_ENV ??= "production";
   const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });
   child.unref();
@@ -481,7 +487,7 @@ function unsupportedGraphicsMessage(color: boolean): string {
     `  ${sgr("2", "We recommend Ghostty:")}`,
     `  ${sgr("4", "https://ghostty.org/download")}`,
     "",
-    `  ${sgr("2", "Note: any terminal that supports the kitty graphics protocol is supported")}`,
+    `  ${sgr("2", "Note: any terminal that supports the kitty graphics protocol, sixel or iTerm2 images is supported")}`,
     "",
   ].join("\n");
 }

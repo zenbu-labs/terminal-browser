@@ -42,6 +42,7 @@ cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
 "$ROOT/scripts/bundle.sh" "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
 
 cp "$ROOT/scripts/apparmor.sh" "$STAGE/scripts/apparmor.sh"
+cp "$ROOT/scripts/termux.sh" "$STAGE/scripts/termux.sh"
 
 "$ROOT/scripts/generate-skill.sh"
 cp -R "$ROOT/skill/build" "$STAGE/skills"
@@ -121,6 +122,8 @@ done
 ROOT="\$(CDPATH= cd -- "\$(dirname -- "\$SELF")/.." && pwd -P)"
 export TERMINAL_BROWSER_DIST_ROOT="\$ROOT"
 export ELECTRON_RUN_AS_NODE=1
+# Termux preloads an Android library that would stop electron, a glibc program, from starting
+[ -n "\${TERMUX_VERSION:-}" ] && unset LD_PRELOAD
 $NATIVE_SCROLL
 exec "\$ROOT/$ELECTRON_EXE" "\$ROOT/cli/dist/main.js" "\$@"
 EOF

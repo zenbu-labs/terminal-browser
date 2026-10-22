@@ -30,6 +30,15 @@ function graphicsReply(buffer: string): boolean | null {
   return rest.startsWith("OK");
 }
 
+function deviceAttributes(buffer: string): string[] | null {
+  const reply = /\x1b\[\?([\d;]*)c/.exec(buffer);
+  return reply ? reply[1].split(";") : null;
+}
+
+function drawsIterm2(env: NodeJS.ProcessEnv): boolean {
+  return env.LC_TERMINAL === "iTerm2" || env.TERM_PROGRAM === "iTerm.app";
+}
+
 const SAVE_CURSOR = "\x1b7";
 
 // Terminals without graphics support may print the probe's payload as plain text.
@@ -68,7 +77,10 @@ export function probeGraphics(terminal: Terminal | null): Promise<GraphicsSuppor
     const onData = (chunk: Buffer) => {
       buffer += chunk.toString("binary");
       const reply = graphicsReply(buffer);
-      if (reply !== null) return finish(reply ? "supported" : "unsupported");
+      if (reply === true || drawsIterm2(process.env)) return finish("supported");
+      const attributes = deviceAttributes(buffer);
+      if (attributes?.includes("4")) return finish("supported");
+      if (attributes) return finish(reply === false ? "unsupported" : "unknown");
       if (buffer.length > 1024) finish("unknown");
     };
 

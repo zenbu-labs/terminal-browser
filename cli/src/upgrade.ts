@@ -36,7 +36,7 @@ function runInstaller(url: string): Promise<number> {
 export async function upgradeCommand(): Promise<number> {
   const current = installedVersion();
   if (!current) {
-    throw new Error("Could not perform upgrade: please file an issue https://github.com/zenbu-labs/terminal-browser/issues");
+    throw new Error("Could not perform upgrade: please file an issue https://github.com/RchrdAriza/terminal-browser-termux/issues");
   }
   const latest = await fetchLatestRelease(installedChannel());
   if (latest.version === current) {

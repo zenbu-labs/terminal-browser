@@ -10,3 +10,4 @@ export type { GraphicsSupport } from "./graphics";
 export type { Instance } from "../instances";
 export { findOwner, listInstances, PROTOCOL as EMBED_PROTOCOL } from "../instances";
 export { probeGraphics, SKIP_ENV as GRAPHICS_SKIP_ENV, UNSUPPORTED_ENV } from "./graphics";
+export { TERMUX_CHROMIUM_FLAGS, inTermux, termuxEnv } from "./termux";
