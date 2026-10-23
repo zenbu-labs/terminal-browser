@@ -61,6 +61,7 @@ export interface RecordView {
   currentKey: number | null;
   pageUrl: string;
   recordKey: string;
+  agent: boolean;
   shots: RecordShot[];
   shotThumb: Surface | null;
   keyframeCount: number;

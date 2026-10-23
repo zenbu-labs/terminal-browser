@@ -904,7 +904,7 @@ export function RecordToolbarPill({
           selectable: false,
         }}
       >
-        {stopped ? "ctrl+enter" : view.recordKey}
+        {stopped ? "ctrl+enter" : view.agent ? "agent" : view.recordKey}
       </Text>
     </Box>
   );
