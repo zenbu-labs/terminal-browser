@@ -6,6 +6,7 @@ mod herdr;
 mod hosted;
 mod image_cache;
 mod kitty;
+mod sixel;
 pub mod logging;
 mod menu;
 mod native;
@@ -55,6 +56,9 @@ pub use text_input::{
     Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput, line_height,
     offset_to_point, point_to_offset,
 };
+#[cfg(windows)]
+pub use terminal::ConsoleRelay;
+pub use terminal::RELAY_SIZE_ENV;
 pub use throttle::CpuThrottle;
 pub use tree::{
     BoxMetrics, Gutter, HitTarget, ImageProps, InputProps, NodeId, Props, PxRect, ScrollArea,

@@ -61,7 +61,8 @@
     "@zenbu-labs/pixel-native-darwin-arm64": "0.0.20",
     "@zenbu-labs/pixel-native-darwin-x64": "0.0.20",
     "@zenbu-labs/pixel-native-linux-arm64": "0.0.20",
-    "@zenbu-labs/pixel-native-linux-x64": "0.0.20"
+    "@zenbu-labs/pixel-native-linux-x64": "0.0.20",
+    "@zenbu-labs/pixel-native-win32-x64": "0.0.20"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

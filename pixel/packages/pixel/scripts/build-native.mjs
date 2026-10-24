@@ -8,13 +8,38 @@ const engineDir = path.resolve(packageDir, "..", "..", "engine");
 const platform = `${process.platform}-${process.arch}`;
 const outDir = path.join(packageDir, "..", "native", platform);
 
+const targetDir = process.env.CARGO_TARGET_DIR ?? path.join(engineDir, "target");
+
 execFileSync("cargo", ["build", "-p", "pixel-node", ...(release ? ["--release"] : [])], {
   cwd: engineDir,
   stdio: "inherit",
+  env: process.platform === "win32" ? windowsBuildEnv() : process.env,
 });
 
-const targetDir = process.env.CARGO_TARGET_DIR ?? path.join(engineDir, "target");
-const library = process.platform === "darwin" ? "libpixel_node.dylib" : "libpixel_node.so";
+// Stock node and electron ship no MinGW runtime, so the C++ and gcc runtimes are linked in.
+function windowsBuildEnv() {
+  const stdcpp = execFileSync("gcc", ["-print-file-name=libstdc++.a"], { encoding: "utf8" }).trim();
+  return {
+    ...process.env,
+    LIBNODE_PATH: emptyLibnode(),
+    CXXSTDLIB: "static=stdc++",
+    RUSTFLAGS: `-C link-arg=-static -L native=${path.dirname(stdcpp)}`,
+  };
+}
+
+// The addon looks up every node function in the host process at runtime, but the napi build
+// script still insists on linking a libnode.dll, so it gets an empty archive under that name.
+function emptyLibnode() {
+  const dir = path.join(targetDir, "napi-gnu");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "libnode.dll"), "!<arch>\n");
+  return dir;
+}
+
+const library = {
+  darwin: "libpixel_node.dylib",
+  win32: "pixel_node.dll",
+}[process.platform] ?? "libpixel_node.so";
 const built = path.join(targetDir, release ? "release" : "debug", library);
 
 fs.mkdirSync(outDir, { recursive: true });

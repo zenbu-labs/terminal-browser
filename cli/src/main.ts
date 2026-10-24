@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -23,7 +24,7 @@ import {
   checkTerminal,
   detect,
 } from "@zenbu-labs/pixel/terminal";
-import { findOwner } from "@zenbu-labs/pixel/terminal";
+import { consoleSessionKey, findOwner, ipcPath, RELAY_SIZE_ENV, relayConsole } from "@zenbu-labs/pixel/terminal";
 import type { Direction, Terminal, TerminalCheck } from "@zenbu-labs/pixel/terminal";
 import { actionCommand } from "./action";
 import { control } from "./control";
@@ -33,6 +34,7 @@ import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
 import { findHosts, openInHost } from "./interop";
 import { lsCommand } from "./ls";
+import { takeHandedUrl } from "./handed-url";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
 import { connectSsh, validateSshTarget } from "@zenbu-labs/pixel/ssh";
@@ -42,7 +44,9 @@ import { claudeBridgeCommand } from "./claude-bridge";
 import { configCommand } from "./config";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
-const CAPABILITIES = ["embedding", "image-frames"] as const;
+// Windows Terminal draws sixel images into its text cells, so a host redrawing its own text around
+// an embedded browser wipes it; there the browser opens in a pane of its own beside the host.
+const CAPABILITIES = process.platform === "win32" ? (["split-pane"] as const) : (["embedding", "image-frames"] as const);
 delete process.env.ELECTRON_RUN_AS_NODE;
 
 function fail(message: string): never {
@@ -80,11 +84,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const ELECTRON_DIST_BIN =
   process.platform === "darwin"
     ? ["terminal-browser.app", "Contents", "MacOS", "terminal-browser"]
-    : ["pixel"];
+    : process.platform === "win32"
+      ? ["electron.exe"]
+      : ["pixel"];
 const ELECTRON_DEV_BIN =
   process.platform === "darwin"
     ? ["Electron.app", "Contents", "MacOS", "pixel"]
-    : ["pixel"];
+    : process.platform === "win32"
+      ? ["electron.exe"]
+      : ["pixel"];
 
 function browserDirectory(): string {
   return path.resolve(__dirname, "..", "..", "browser");
@@ -96,7 +104,7 @@ function electronBinary(): string {
   return path.join(path.dirname(library), "electron", "dist", ...ELECTRON_DEV_BIN);
 }
 
-function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
+function browserLaunchCommand(argv: string[]): { electron: string; args: string[]; cwd: string; log: string } {
   const browserDir = browserDirectory();
   const electron = electronBinary();
   const main = path.join(browserDir, "dist", "main.js");
@@ -121,21 +129,18 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
   ensureDataDir();
   const logDir = LOGS_DIR;
   fs.mkdirSync(logDir, { recursive: true });
-  const quoted = [electron, main, ...argv]
-    .map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`)
-    .join(" ");
-  const line = `exec ${quoted} 2>>'${logDir.replaceAll("'", `'\\''`)}/stderr.log'`;
-  return { command: ["/bin/sh", "-c", line], cwd: browserDir };
+  return { electron, args: [main, ...argv], cwd: browserDir, log: path.join(logDir, "stderr.log") };
 }
 
 function clientLaunchCommand(argv: string[]): string[] {
   const runner = DIST_ROOT
-    ? [path.join(DIST_ROOT, "bin", "terminal-browser")]
+    ? [path.join(DIST_ROOT, "bin", process.platform === "win32" ? "terminal-browser.exe" : "terminal-browser")]
     : [process.execPath, path.resolve(__dirname, "main.js")];
   return [...runner, "open", ...argv];
 }
 
 function ownTtyPath(): string | null {
+  if (process.platform === "win32") return consoleSessionKey();
   try {
     const out = execFileSync("tty", {
       stdio: ["inherit", "pipe", "ignore"],
@@ -148,6 +153,7 @@ function ownTtyPath(): string | null {
 }
 
 function interactiveTty(): string | null {
+  if (process.platform === "win32") return process.stdout.isTTY ? ownTtyPath() : null;
   if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
   return ownTtyPath();
 }
@@ -163,19 +169,21 @@ function browserBuildStamp(): string {
 
 function connectDaemon(): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const socket = net.connect(DAEMON_SOCKET);
+    const socket = net.connect(ipcPath(DAEMON_SOCKET));
     socket.once("connect", () => resolve(socket));
     socket.once("error", reject);
   });
 }
 
 function spawnDaemon() {
-  const { command, cwd } = browserLaunchCommand(["--daemon"]);
+  const { electron, args, cwd, log } = browserLaunchCommand(["--daemon"]);
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
   );
   env.NODE_ENV ??= "production";
-  const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });
+  const stderr = fs.openSync(log, "a");
+  const child = spawn(electron, args, { cwd, detached: true, stdio: ["ignore", "ignore", stderr], env, windowsHide: true });
+  fs.closeSync(stderr);
   child.unref();
 }
 
@@ -221,12 +229,16 @@ function nextReply(socket: net.Socket, onLine: (reply: DaemonReply) => void): vo
 }
 
 
-async function openSession(argv: string[], tty: string): Promise<{ socket: net.Socket; reply: DaemonReply }> {
+async function openSession(
+  argv: string[],
+  tty: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ socket: net.Socket; reply: DaemonReply }> {
   const payload = {
     cmd: "open",
     tty,
     argv,
-    env: process.env,
+    env: { ...process.env, ...extraEnv },
     cwd: process.cwd(),
   };
   const ask = (socket: net.Socket, build: string | null) =>
@@ -323,7 +335,33 @@ async function kill(pid: number, why: string): Promise<number> {
   return 0;
 }
 
+async function relayHere(argv: string[]): Promise<never> {
+  // Electron running as node sees only stdout as the console; the native relay reads the keys itself.
+  if (!process.stdout.isTTY) throw new Error("not running in a console");
+  const pipe = `\\\\.\\pipe\\terminal-browser-relay-${process.pid}-${randomBytes(6).toString("hex")}`;
+  const relayed = relayConsole(pipe);
+  const size = `${process.stdout.columns},${process.stdout.rows}`;
+  const { socket, reply } = await openSession(argv, pipe, { [RELAY_SIZE_ENV]: size });
+  if (reply.ok === false || !reply.session) {
+    socket.destroy();
+    throw new Error(reply.error ?? "daemon refused the session");
+  }
+  let code = 0;
+  const exitWhenRestored = () => void relayed.finally(() => process.exit(code));
+  nextReply(socket, (message) => {
+    if (message.event === "closed") code = message.code ?? 0;
+  });
+  socket.on("close", exitWhenRestored);
+  socket.on("error", () => {
+    code = 1;
+    exitWhenRestored();
+  });
+  relayed.catch((error: unknown) => fail(`the console relay stopped: ${String(error)}`));
+  return new Promise<never>(() => {});
+}
+
 async function attachHere(argv: string[]): Promise<never> {
+  if (process.platform === "win32") return relayHere(argv);
   const tty = process.env.PIXEL_TTY ?? ownTtyPath();
   if (!tty) throw new Error("not running on a tty");
   const { socket, reply } = await openSession(argv, tty);
@@ -581,6 +619,7 @@ async function tryAdopt(args: string[], direction: Direction | null): Promise<bo
 }
 
 async function openCommand(args: string[]) {
+  takeHandedUrl(args);
   requirePaneAccess();
   const owned = process.env.PIXEL_TTY ?? ownTtyPath();
   if (process.env.PIXEL_EMBED || (owned && findOwner(owned))) {

@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { announceGuest, findOwner, waitForOwners } from "./instances";
 import { apparmorSetup, linuxSandboxError } from "./sandbox";
-import { UNSUPPORTED_ENV, checkTerminal, detect } from "./terminal";
+import { UNSUPPORTED_ENV, checkTerminal, consoleSessionKey, detect } from "./terminal";
 
 function fail(message: string): never {
   process.stderr.write(`pixel: ${message}\n`);
@@ -54,9 +54,9 @@ function electronBinary(): string {
       "the patched electron build is not installed. Run `node node_modules/@zenbu-labs/pixel/scripts/postinstall.mjs` (npm normally runs it for you on install).",
     );
   }
-  return process.platform === "darwin"
-    ? path.join(dist, "Electron.app", "Contents", "MacOS", "pixel")
-    : path.join(dist, "pixel");
+  if (process.platform === "darwin") return path.join(dist, "Electron.app", "Contents", "MacOS", "pixel");
+  if (process.platform === "win32") return path.join(dist, "electron.exe");
+  return path.join(dist, "pixel");
 }
 
 function logFile(appDir: string): string {
@@ -67,6 +67,7 @@ function logFile(appDir: string): string {
 }
 
 function ownTty(): string {
+  if (process.platform === "win32") return consoleSessionKey();
   try {
     const out = execFileSync("tty", { stdio: ["inherit", "pipe", "ignore"], encoding: "utf8" }).trim();
     if (out.startsWith("/dev/")) return out;

@@ -76,28 +76,61 @@ pub(crate) fn read_for_worker() -> Option<WorkerPaste> {
 }
 
 pub fn image_path_from_paste(text: &str) -> Option<PastedImage> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() || trimmed.contains('\n') {
-        return None;
-    }
-    let unquoted = trimmed.trim_matches(|c| c == '\'' || c == '"');
-    let path = match unquoted.strip_prefix("file://") {
-        Some(rest) => percent_decode(rest),
-        None => unescape(unquoted),
-    };
-    if !path.starts_with('/') && !path.starts_with('~') {
-        return None;
-    }
-    let path = match path.strip_prefix("~/") {
-        Some(rest) => Path::new(&std::env::var("HOME").ok()?).join(rest),
-        None => PathBuf::from(path),
-    };
+    let path = pasted_path(text, std::env::var(HOME_VAR).ok().as_deref())?;
     if !path.is_file() {
         return None;
     }
     from_file(&path, PasteSource::File)
 }
 
+fn pasted_path(text: &str, home: Option<&str>) -> Option<PathBuf> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') {
+        return None;
+    }
+    let unquoted = trimmed.trim_matches(|c| c == '\'' || c == '"');
+    let path = match unquoted.strip_prefix("file://") {
+        Some(rest) => file_url_path(percent_decode(rest)),
+        None => unescape(unquoted),
+    };
+    let path = match path.strip_prefix("~/") {
+        Some(rest) => Path::new(home?).join(rest),
+        None => PathBuf::from(path),
+    };
+    names_a_local_file(&path).then_some(path)
+}
+
+const HOME_VAR: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+
+// Touching a `\\host\share` path makes Windows sign in to that host, so only drive paths count.
+#[cfg(windows)]
+fn names_a_local_file(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+    ) && path.is_absolute()
+}
+
+#[cfg(not(windows))]
+fn names_a_local_file(path: &Path) -> bool {
+    path.is_absolute()
+}
+
+// `file:///C:/x.png` names `C:/x.png` on Windows.
+fn file_url_path(path: String) -> String {
+    let bytes = path.as_bytes();
+    let drive = cfg!(windows) && bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':';
+    if drive { path[1..].to_string() } else { path }
+}
+
+// Backslash is the path separator on Windows, so pasted paths there are taken verbatim.
+#[cfg(windows)]
+fn unescape(s: &str) -> String {
+    s.to_string()
+}
+
+#[cfg(not(windows))]
 fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -165,9 +198,41 @@ mod tests {
         let path = temp_png("with space.png");
         let raw = path.to_string_lossy();
         assert!(image_path_from_paste(&format!("'{raw}'")).is_some());
-        assert!(image_path_from_paste(&raw.replace(' ', "\\ ")).is_some());
-        let url = format!("file://{}", raw.replace(' ', "%20"));
-        assert!(image_path_from_paste(&url).is_some());
+        assert!(image_path_from_paste(&format!("\"{raw}\"")).is_some());
+        if cfg!(not(windows)) {
+            assert!(image_path_from_paste(&raw.replace(' ', "\\ ")).is_some());
+        }
+        let url_path = raw.replace('\\', "/").replace(' ', "%20");
+        let url = if url_path.starts_with('/') { format!("file://{url_path}") } else { format!("file:///{url_path}") };
+        assert!(image_path_from_paste(&url).is_some(), "{url}");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn only_local_drive_paths_count_as_pasted_files() {
+        let local = |text: &str| pasted_path(text, Some(r"C:\Users\me")).is_some();
+        assert!(local(r"C:\Users\me\shot.png"));
+        assert!(local("C:/Users/me/shot.png"));
+        assert!(local(r"\\?\C:\Users\me\shot.png"));
+        assert!(local("~/shot.png"));
+        assert!(!local(r"\\attacker\share\shot.png"), "opening it would sign in to that host");
+        assert!(!local("//attacker/share/shot.png"));
+        assert!(!local(r"\\?\UNC\attacker\share\shot.png"));
+        assert!(!local(r"\\.\pipe\shot.png"));
+        assert!(!local(r"Users\me\shot.png"));
+        assert!(!local("file://attacker/share/shot.png"));
+        assert!(!local(r"~/\\attacker\share\shot.png"), "joining an absolute path drops the home directory");
+        assert!(!local("~shot.png"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn only_absolute_paths_count_as_pasted_files() {
+        let local = |text: &str| pasted_path(text, Some("/home/me")).is_some();
+        assert!(local("/tmp/shot.png"));
+        assert!(local("~/shot.png"));
+        assert!(!local("tmp/shot.png"));
+        assert!(!local("~shot.png"));
     }
 
     #[test]

@@ -275,6 +275,8 @@ importers:
 
   pixel/packages/native/linux-x64: {}
 
+  pixel/packages/native/win32-x64: {}
+
   pixel/packages/pixel:
     dependencies:
       react-reconciler:
@@ -309,6 +311,9 @@ importers:
       '@zenbu-labs/pixel-native-linux-x64':
         specifier: 0.0.20
         version: link:../native/linux-x64
+      '@zenbu-labs/pixel-native-win32-x64':
+        specifier: 0.0.20
+        version: link:../native/win32-x64
 
   shared:
     dependencies:

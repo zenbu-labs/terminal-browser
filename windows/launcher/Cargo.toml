@@ -1,0 +1,13 @@
+[package]
+name = "terminal-browser-launcher"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "terminal-browser"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+strip = true

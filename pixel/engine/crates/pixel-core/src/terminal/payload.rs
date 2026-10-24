@@ -1,7 +1,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use super::{FrameTransport, Terminal, fill_shm, open_shm};
+use super::{FrameTransport, Terminal, fill_shm, open_shm, sys};
 
 const HANDOFF_STALE_AFTER: Duration = Duration::from_secs(3);
 const HANDOFF_MAX_PENDING: usize = 4096;
@@ -15,7 +15,7 @@ impl Payload {
     fn remove(self) {
         match self {
             Payload::Shm(name) => {
-                let _ = rustix::shm::unlink(&name);
+                sys::unlink_shm(&name);
             }
             Payload::File(path) => {
                 let _ = std::fs::remove_file(path);
@@ -79,14 +79,14 @@ impl Terminal {
     fn hand_off_shm_with(&mut self, len: usize, fill: impl FnOnce(&mut [u8])) -> io::Result<String> {
         let seq = self.payloads.next_seq();
         let name = self.shm_name(seq);
-        let fd = match open_shm(&name, len) {
+        let shm = match open_shm(&name, len) {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                let _ = rustix::shm::unlink(&name);
+                sys::unlink_shm(&name);
                 open_shm(&name, len)?
             }
             other => other?,
         };
-        fill_shm(&fd, len, fill)?;
+        fill_shm(&shm, len, fill)?;
         self.payloads.track(Payload::Shm(name.clone()));
         Ok(name)
     }

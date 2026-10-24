@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
+use crate::terminal::HostStream as UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -298,7 +298,7 @@ mod tests {
         transport: &str,
     ) -> (PathBuf, std::sync::mpsc::Receiver<String>) {
         let socket = directory.join("herdr.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let listener = crate::terminal::HostListener::bind(&socket).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let info = format!(
             r#"{{"id":"info","result":{{"cell_width_px":10,"cell_height_px":20,"pane_visible":true,"file_frame_directory":{},"file_frame_transport":"{transport}"}}}}"#,

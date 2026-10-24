@@ -6,6 +6,7 @@ import { app } from "electron";
 
 // why is this defined in pixel store?
 import { DAEMON_SOCKET } from "shared";
+import { ipcPath } from "@zenbu-labs/pixel/terminal";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
@@ -157,12 +158,12 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     process.stderr.write(`terminal-browser daemon socket error: ${error}\n`);
     app.exit(1);
   });
-  server.listen(DAEMON_SOCKET);
+  server.listen(ipcPath(DAEMON_SOCKET));
 }
 
 function socketAlive(): Promise<boolean> {
   return new Promise((resolve) => {
-    const probe = net.connect(DAEMON_SOCKET);
+    const probe = net.connect(ipcPath(DAEMON_SOCKET));
     probe.once("connect", () => {
       probe.end();
       resolve(true);

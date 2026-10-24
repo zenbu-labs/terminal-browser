@@ -1,6 +1,7 @@
 import { createRoot } from "@zenbu-labs/pixel";
 
-const url = process.argv[2] ?? "https://github.com/zenbu-labs";
+const given = process.argv[2] ?? "https://github.com/zenbu-labs";
+const url = /^[a-z][a-z\d+.-]*:/i.test(given) ? given : `https://${given}`;
 const partition = process.argv[3] ?? process.env.HELLO_PARTITION;
 
 const root = createRoot({

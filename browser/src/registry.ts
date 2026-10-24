@@ -2,7 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { callerTty } from "@zenbu-labs/pixel/terminal";
+import { callerTty, ipcPath } from "@zenbu-labs/pixel/terminal";
 import {
   INTEROP_PROTOCOL_VERSIONS,
   advertiseInstance,
@@ -64,7 +64,7 @@ export class Registry {
     fs.rmSync(this.socketPath, { force: true });
     this.server = net.createServer((connection) => this.serve(connection));
     this.server.on("error", () => {});
-    this.server.listen(this.socketPath);
+    this.server.listen(ipcPath(this.socketPath));
     this.write();
     this.advertise();
   }

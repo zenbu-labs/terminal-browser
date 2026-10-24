@@ -4,8 +4,8 @@
   "scripts": {
     "build": "pnpm -r build",
     "browser": "node scripts/dev.mjs",
-    "types": "scripts/plugin-types.sh",
-    "postinstall": "scripts/plugin-types.sh --if-missing",
+    "types": "node scripts/plugin-types.mjs",
+    "postinstall": "node scripts/plugin-types.mjs --if-missing",
     "build:dist": "scripts/release.sh \"local-$(git rev-parse --short HEAD)\"",
     "install:dist": "scripts/install-local.sh",
     "dist": "pnpm build:dist && pnpm install:dist",

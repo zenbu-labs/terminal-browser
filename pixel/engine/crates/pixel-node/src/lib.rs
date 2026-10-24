@@ -8,6 +8,10 @@ mod markdown;
 mod mend;
 mod ops;
 mod record;
+#[cfg(unix)]
+mod shm;
+#[cfg(not(unix))]
+#[path = "shm_unsupported.rs"]
 mod shm;
 mod surface;
 
@@ -708,3 +712,30 @@ impl PixelEngine {
     }
 }
 
+
+#[cfg(windows)]
+pub struct RelayTask(Option<pixel_core::ConsoleRelay>);
+
+#[cfg(windows)]
+impl Task for RelayTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<()> {
+        let relay = self.0.take().ok_or_else(|| err("the console relay already ran"))?;
+        relay.run().map_err(err)
+    }
+
+    fn resolve(&mut self, _env: Env, _output: ()) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Creates the pipe at once, so it exists before the engine is told to open it, and resolves when
+/// the engine closes it.
+#[cfg(windows)]
+#[napi]
+pub fn relay_console(pipe: String) -> Result<AsyncTask<RelayTask>> {
+    let relay = pixel_core::ConsoleRelay::create(&pipe).map_err(err)?;
+    Ok(AsyncTask::new(RelayTask(Some(relay))))
+}

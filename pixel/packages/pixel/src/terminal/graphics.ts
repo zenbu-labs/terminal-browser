@@ -30,6 +30,15 @@ function graphicsReply(buffer: string): boolean | null {
   return rest.startsWith("OK");
 }
 
+// Every terminal answers the device attributes query sent after the kitty one, so once that
+// reply is in, a missing kitty answer means no kitty graphics; attribute 4 means sixel instead.
+export function graphicsSupport(buffer: string): GraphicsSupport | null {
+  if (graphicsReply(buffer) === true) return "supported";
+  const attributes = /\x1b\[\?([\d;]*)c/.exec(buffer);
+  if (!attributes) return null;
+  return attributes[1].split(";").includes("4") ? "supported" : "unsupported";
+}
+
 const SAVE_CURSOR = "\x1b7";
 
 // Terminals without graphics support may print the probe's payload as plain text.
@@ -67,8 +76,8 @@ export function probeGraphics(terminal: Terminal | null): Promise<GraphicsSuppor
 
     const onData = (chunk: Buffer) => {
       buffer += chunk.toString("binary");
-      const reply = graphicsReply(buffer);
-      if (reply !== null) return finish(reply ? "supported" : "unsupported");
+      const support = graphicsSupport(buffer);
+      if (support !== null) return finish(support);
       if (buffer.length > 1024) finish("unknown");
     };
 

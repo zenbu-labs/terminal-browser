@@ -47,7 +47,13 @@ export function adjacentPane(
   return best;
 }
 
+// Windows has no tty devices, so the console session stands in as the key other instances look up.
+export function consoleSessionKey(env: NodeJS.ProcessEnv = process.env): string {
+  return `windows-console-${env.WT_SESSION ?? process.ppid}`;
+}
+
 export function callerTty(): CallerTty {
+  if (process.platform === "win32") return { path: consoleSessionKey(), denied: false };
   let pid = process.pid;
   for (let hops = 0; hops < 30 && pid > 1; hops++) {
     let out: string;

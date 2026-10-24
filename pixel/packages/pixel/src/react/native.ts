@@ -170,6 +170,7 @@ const binding = loadBinding() as {
   highlight(source: string, language: string): HighlightSpan[];
   highlightCaptures(): string[];
   diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];
+  relayConsole?(pipe: string): Promise<void>;
   parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[];
   encodeRecording(
     jobJson: string,
@@ -207,6 +208,11 @@ export function highlight(source: string, language: string): HighlightSpan[] {
 }
 
 export const HIGHLIGHT_CAPTURES: readonly string[] = binding.highlightCaptures();
+
+export function relayConsole(pipe: string): Promise<void> {
+  if (!binding.relayConsole) throw new Error("only Windows relays its console to the engine");
+  return binding.relayConsole(pipe);
+}
 
 export function diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[] {
   return binding.diff(oldSource, newSource, contextLines);

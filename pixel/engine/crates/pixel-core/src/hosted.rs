@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
+use crate::terminal::HostStream as UnixStream;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -400,7 +400,7 @@ mod tests {
         std::sync::mpsc::Receiver<String>,
     ) {
         let socket = dir.join("owner.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let listener = crate::terminal::HostListener::bind(&socket).unwrap();
         let (frames_tx, frames_rx) = std::sync::mpsc::channel();
         let (control_tx, control_rx) = std::sync::mpsc::channel();
         let frame_dir = dir.to_string_lossy().into_owned();
@@ -529,9 +529,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     fn fake_embedder(dir: &std::path::Path) -> (String, std::sync::mpsc::Receiver<String>) {
         let socket = dir.join("embed.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let listener = crate::terminal::HostListener::bind(&socket).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let Ok((connection, _)) = listener.accept() else { return };
@@ -554,6 +555,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn an_embedded_terminal_on_the_host_transport_hands_frames_over_as_shared_memory_and_leaves_the_tty_alone() {
         use crate::terminal::Terminal;
         let dir = std::env::temp_dir().join(format!("pixel-embed-host-{}", std::process::id()));

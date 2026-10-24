@@ -8,6 +8,7 @@ import { tmux } from "./tmux";
 import { tty7 } from "./tty7";
 import { vscode } from "./vscode";
 import { wezterm } from "./wezterm";
+import { windowsTerminal } from "./windows-terminal";
 
 /**
  * not fantastic, but ordering does matter
@@ -22,4 +23,5 @@ export const TERMINALS: Detect[] = [
   supacode,
   ghostty,
   vscode,
+  windowsTerminal,
 ];

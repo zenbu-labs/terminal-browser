@@ -343,3 +343,63 @@ test("ghostty asks the owning instance for a split's neighbor by window and tab"
   assert.equal(commands.at(-1), `osascript -l JavaScript - ${process.ppid} neighbor w1 t1 AAAA right`);
 });
 
+
+test("windows terminal sizes splits and keeps semicolons inside the command", async () => {
+  const wt = "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe";
+  const { run, commands } = recorder({
+    [`${wt} -w 0 split-pane --horizontal --size 0.4 terminal-browser open https://a.test/x\\;y`]: "",
+  });
+  const terminal = detect({ WT_SESSION: "s1", LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" }, run);
+  await terminal.split({
+    from: { id: "s1", tab: "s1" },
+    direction: "down",
+    command: ["terminal-browser", "open", "https://a.test/x;y"],
+    size: 0.4,
+    tty: null,
+  });
+  assert.deepEqual(commands, [`${wt} -w 0 split-pane --horizontal --size 0.4 terminal-browser open https://a.test/x\\;y`]);
+});
+
+test("windows terminal never runs a wt.exe found in the current directory", async () => {
+  const terminal = detect({ WT_SESSION: "s1" }, async () => "");
+  await assert.rejects(
+    terminal.split({ from: { id: "s1", tab: "s1" }, direction: "right", command: ["x"], size: null, tty: null }),
+    /LOCALAPPDATA/,
+  );
+});
+
+test("a windows terminal session inherited by another terminal is not windows terminal", () => {
+  assert.equal(detect({ WT_SESSION: "s1", TERM_PROGRAM: "vscode" }, async () => "")?.name, "vscode");
+  assert.equal(detect({ WT_SESSION: "s1", TERM_PROGRAM: "WezTerm", WEZTERM_PANE: "1" }, async () => "")?.name, "wezterm");
+});
+
+test("the graphics probe settles on kitty graphics, sixel, or neither", () => {
+  const { graphicsSupport } = require("../dist/terminal/graphics.js");
+  assert.equal(graphicsSupport("\x1b_Gi=4207;OK\x1b\\\x1b[?62;4c"), "supported");
+  assert.equal(graphicsSupport("\x1b_Gi=4207;ENOTSUPPORTED\x1b\\\x1b[?62c"), "unsupported");
+  assert.equal(graphicsSupport("\x1b[?61;4;6;7;14;21;22;23;24;28;32;42;52c"), "supported", "windows terminal draws sixel");
+  assert.equal(graphicsSupport("\x1b[?62;22c"), "unsupported", "neither kitty graphics nor sixel");
+  assert.equal(graphicsSupport("\x1b[?14;42c"), "unsupported", "4 only counts as a whole attribute");
+  assert.equal(graphicsSupport("\x1b[?61;4"), null, "reply still arriving");
+});
+
+test("local sockets become named pipes on windows and stay files elsewhere", () => {
+  const { ipcPath } = require("../dist/terminal/index.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-ipc-"));
+  const file = path.join(dir, "daemon.sock");
+  if (process.platform === "win32") {
+    const name = ipcPath(file);
+    assert.match(name, /^\\\\\.\\pipe\\terminal-browser-[0-9a-f]{32}-daemon\.sock$/);
+    assert.equal(ipcPath(file), name, "the same file always names the same pipe");
+    assert.notEqual(ipcPath(path.join(dir, "other.sock")), name);
+    const secret = fs.readFileSync(path.join(dir, ".pipe-secret"), "utf8");
+    assert.match(secret, /^[0-9a-f]{64}$/, "the name rests on a secret only this user can read");
+    fs.writeFileSync(path.join(dir, ".pipe-secret"), "f".repeat(64));
+    assert.notEqual(ipcPath(file), name, "without the secret the name cannot be worked out from the path");
+    fs.writeFileSync(path.join(dir, ".pipe-secret"), "");
+    assert.throws(() => ipcPath(file), /pipe secret/, "an empty secret would make the name guessable again");
+    assert.deepEqual(fs.readdirSync(dir), [".pipe-secret"], "no half written secret is left behind");
+  } else {
+    assert.equal(ipcPath(file), file);
+  }
+});

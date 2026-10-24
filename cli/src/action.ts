@@ -45,7 +45,7 @@ export function agentBrowserPath(): string {
     return override;
   }
   if (DIST_ROOT) {
-    const shipped = path.join(DIST_ROOT, "agent-browser", "bin", "agent-browser");
+    const shipped = path.join(DIST_ROOT, "agent-browser", "bin", process.platform === "win32" ? "agent-browser.exe" : "agent-browser");
     if (fs.existsSync(shipped)) return shipped;
     throw new Error(`missing ${shipped} — the release is incomplete`);
   }

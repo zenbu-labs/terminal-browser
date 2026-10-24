@@ -2,7 +2,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { Browser } from './browser'
 import { MAX_IMAGE_CELLS } from './surface.tsx'
-import { normalizeUrl } from './urls.ts'
+import { normalizeUrl, paneUrl } from './urls.ts'
 import {
   isBridgeState,
   isInputMessage,
@@ -23,6 +23,8 @@ const CLOSE_TOOL = 'mcp__terminal-browser__close'
 const START_URL = 'terminal-browser://start'
 const INSTALL_URL = 'https://terminal-browser.sh'
 const REQUIRED_CAPABILITIES = ['embedding', 'image-frames']
+const SPLIT_CAPABILITY = 'split-pane'
+const OPEN_URL_ENV = 'TERMINAL_BROWSER_OPEN_URL'
 const WATCH_RETRY_MS = 250
 const DENIED_REDRAW_MS = 500
 const DENIALS_BEFORE_LOGGING = 3
@@ -53,12 +55,12 @@ async function terminalBrowserCommand($: EngineInterface): Promise<string[]> {
   return ['terminal-browser']
 }
 
-async function checkCapabilities($: EngineInterface, command: string[]): Promise<{ ok: true } | { ok: false; installed: boolean }> {
+async function capabilitiesOf($: EngineInterface, command: string[]): Promise<string[] | null> {
   let result: { stdout: string; exitCode: number }
   try {
     result = await $.process.run([...command, 'capabilities'], { timeoutMs: 10_000 })
   } catch {
-    return { ok: false, installed: false }
+    return null
   }
   let capabilities: string[] = []
   if (result.exitCode === 0) {
@@ -68,8 +70,39 @@ async function checkCapabilities($: EngineInterface, command: string[]): Promise
       if (parsed && Array.isArray(parsed.capabilities)) capabilities = parsed.capabilities
     } catch {}
   }
+  return capabilities
+}
+
+async function checkCapabilities($: EngineInterface, command: string[]): Promise<{ ok: true } | { ok: false; installed: boolean }> {
+  const capabilities = await capabilitiesOf($, command)
+  if (capabilities === null) return { ok: false, installed: false }
   const ok = REQUIRED_CAPABILITIES.every(need => capabilities.includes(need))
   return ok ? { ok: true } : { ok: false, installed: true }
+}
+
+// Where the terminal cannot keep a picture inside Claude Code's own pane, the browser opens in a
+// terminal pane of its own to the right, and the user quits it there.
+async function openBeside(
+  $: EngineInterface,
+  command: string[],
+  raw: string | null,
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  const url = raw ? paneUrl(raw) : null
+  if (raw && !url) return { ok: false, error: `terminal-browser will not open ${JSON.stringify(raw)} in a pane` }
+  let result: { stdout: string; stderr: string; exitCode: number }
+  try {
+    // The address travels in the environment, never on a command line a shell could parse.
+    result = await $.process.run([...command, 'open', '--split', 'right'], {
+      timeoutMs: 60_000,
+      ...(url ? { env: { [OPEN_URL_ENV]: url } } : {}),
+    })
+  } catch (err) {
+    return { ok: false, error: `terminal-browser could not start: ${err}` }
+  }
+  if (result.exitCode !== 0) {
+    return { ok: false, error: result.stderr.trim() || result.stdout.trim() || `terminal-browser exited with ${result.exitCode}` }
+  }
+  return { ok: true, url: url ?? START_URL }
 }
 
 async function startBridge($: EngineInterface): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -199,6 +232,10 @@ async function watchBridge($: EngineInterface): Promise<void> {
 
 async function openBrowser($: EngineInterface, raw: string | null): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
   if (state.port === null) {
+    const command = await terminalBrowserCommand($)
+    const capabilities = await capabilitiesOf($, command)
+    const embeds = capabilities !== null && REQUIRED_CAPABILITIES.every(need => capabilities.includes(need))
+    if (!embeds && capabilities?.includes(SPLIT_CAPABILITY)) return openBeside($, command, raw)
     const started = await startBridge($)
     if (!started.ok) return started
   }
@@ -294,8 +331,8 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'browser' }, async ($, e) => {
     const arg = e.args.trim()
     if (arg === 'close' || (!arg && state.open)) {
-      await closeBrowser($)
-      return { text: 'Closed terminal-browser' }
+      const closed = await closeBrowser($)
+      return { text: closed ? 'Closed terminal-browser' : 'No browser is open in Claude Code; quit a browser pane with ctrl+q' }
     }
     const opened = await openBrowser($, arg || null)
     return { text: opened.ok ? 'Opened terminal-browser' : opened.error }

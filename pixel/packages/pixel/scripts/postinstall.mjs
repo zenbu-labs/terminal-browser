@@ -18,12 +18,15 @@ const platforms = {
   "darwin-x64": "darwin-x64",
   "linux-x64": "linux-x64",
   "linux-arm64": "linux-arm64",
+  "win32-x64": "win32-x64",
 };
 const platform = platforms[`${process.platform}-${process.arch}`];
 if (!platform) {
   process.stderr.write(`pixel: unsupported platform ${process.platform}-${process.arch}\n`);
   process.exit(1);
 }
+// The patches only touch macOS and Linux frame delivery; Windows reads plain bitmaps from stock electron.
+const stockBinary = platform === "win32-x64";
 
 // Patched electron builds are published as electron-v<version> releases. Newer ones live on
 // the terminal-browser repo, where pixel now lives; older ones stayed on the archived pixel repo.
@@ -116,9 +119,11 @@ if (readMarker(typesMarker) !== wantedSource || !fs.existsSync(typesFile)) {
 
 if (skipBinary) process.exit(0);
 
+const binaryMirror = stockBinary ? `https://github.com/electron/electron/releases/download/v${version}` : mirror;
+if (stockBinary) shasums = (await fetchBytes(`${binaryMirror}/SHASUMS256.txt`)).toString("utf8");
 const expected = listed(zipName);
 if (!expected) {
-  process.stderr.write(`pixel: ${zipName} is missing from ${mirror}/SHASUMS256.txt\n`);
+  process.stderr.write(`pixel: ${zipName} is missing from ${binaryMirror}/SHASUMS256.txt\n`);
   process.exit(1);
 }
 const frameworkBinary = path.join(
@@ -135,8 +140,8 @@ try {
   const cached = path.join(cacheDir, zipName);
   let bytes = fs.existsSync(cached) ? fs.readFileSync(cached) : null;
   if (!bytes || sha256(bytes) !== expected) {
-    process.stderr.write(`pixel: downloading patched electron v${version} (${platform})\n`);
-    bytes = await fetchBytes(`${mirror}/${zipName}`);
+    process.stderr.write(`pixel: downloading ${stockBinary ? "stock" : "patched"} electron v${version} (${platform})\n`);
+    bytes = await fetchBytes(`${binaryMirror}/${zipName}`);
     const actual = sha256(bytes);
     if (actual !== expected) {
       throw new Error(`${zipName} does not match SHASUMS256.txt (expected ${expected}, got ${actual})`);
@@ -148,7 +153,13 @@ try {
   fs.writeFileSync(zip, bytes);
   const unpacked = path.join(tmp, "app");
   fs.mkdirSync(unpacked);
-  execFileSync("unzip", ["-q", zip, "-d", unpacked], { stdio: "inherit" });
+  if (process.platform === "win32") {
+    // Git's GNU tar shadows Windows' own on many PATHs and reads `C:` as a remote host.
+    const windowsTar = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+    execFileSync(windowsTar, ["-xf", zip, "-C", unpacked], { stdio: "inherit" });
+  } else {
+    execFileSync("unzip", ["-q", zip, "-d", unpacked], { stdio: "inherit" });
+  }
   const stamped = fs.readFileSync(path.join(unpacked, "version"), "utf8").trim();
   if (stamped !== version) {
     throw new Error(`fetched electron stamps itself ${stamped}, expected ${version}`);
@@ -156,7 +167,7 @@ try {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.renameSync(unpacked, dest);
   fs.writeFileSync(marker, expected);
-  process.stderr.write(`pixel: installed patched electron v${version} into ${dest}\n`);
+  process.stderr.write(`pixel: installed ${stockBinary ? "stock" : "patched"} electron v${version} into ${dest}\n`);
 } catch (error) {
   process.stderr.write(`pixel: ${error.message}\n`);
   process.exit(1);

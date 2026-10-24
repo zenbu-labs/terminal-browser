@@ -78,6 +78,12 @@ function ownTty(): string | undefined {
   }
 }
 
+// On Windows a tty is only the console session's key, unless it is the pipe of a process relaying
+// its console; otherwise the engine draws in the console it was started in.
+function drawsThroughTty(tty: string | undefined): boolean {
+  return process.platform !== "win32" || Boolean(tty?.startsWith("\\\\.\\pipe\\"));
+}
+
 const liveRoots = new Set<{ stop(code: number): void }>();
 let signalsInstalled = false;
 
@@ -177,7 +183,7 @@ export function createRoot(options: RootOptions = {}): Root {
 
   const engineRoot = createEngineRoot({
     ...options,
-    tty: owner || embed ? undefined : tty,
+    tty: owner || embed || !drawsThroughTty(tty) ? undefined : tty,
     host: owner
       ? {
           socket: owner.socket,

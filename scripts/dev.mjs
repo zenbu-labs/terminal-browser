@@ -7,6 +7,8 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
+import { ipcPath } from "../pixel/packages/pixel/dist/terminal/index.js";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "cli", "dist", "main.js");
 const SOCKET = path.join(os.tmpdir(), `terminal-browser-dev-${process.pid}.sock`);
@@ -93,7 +95,7 @@ function listenForReload() {
     say(`could not listen on ${SOCKET}: ${error.message}`);
     process.exit(1);
   });
-  server.listen(SOCKET);
+  server.listen(ipcPath(SOCKET));
   server.unref();
 }
 

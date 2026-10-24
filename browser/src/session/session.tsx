@@ -12,7 +12,7 @@ import type {
   WebViewHandle,
   WebViewState,
 } from "@zenbu-labs/pixel";
-import { detect } from "@zenbu-labs/pixel/terminal";
+import { detect, ipcPath } from "@zenbu-labs/pixel/terminal";
 import type { Pane, Terminal } from "@zenbu-labs/pixel/terminal";
 
 import {
@@ -771,7 +771,7 @@ class Session {
       this.shutdown();
       return true;
     }
-    if (process.platform === "linux" && event.mods.ctrl && event.key === "c") {
+    if (process.platform !== "darwin" && event.mods.ctrl && event.key === "c") {
       this.showToast("ctrl+q to quit", "alert");
       return true;
     }
@@ -1523,7 +1523,7 @@ class Session {
   }
 
   private requestDevReload(socketPath: string) {
-    const connection = net.connect(socketPath, () => connection.end("reload\n"));
+    const connection = net.connect(ipcPath(socketPath), () => connection.end("reload\n"));
     connection.on("error", () => {});
   }
 
