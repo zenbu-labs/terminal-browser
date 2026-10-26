@@ -425,9 +425,10 @@ fn paint_node(
                             })
                             .flatten();
                         let passes: &[i32] = if font.synthetic_bold { &[0, (px / 24.0).max(1.0) as i32] } else { &[0] };
+                        let shear = if font.synthetic_italic { ITALIC_SHEAR } else { 0.0 };
                         for &dx in passes {
                             match &cut {
-                                Some(shown) => canvas.draw_marked(
+                                Some(shown) => canvas.draw_marked_sheared(
                                     font,
                                     shown,
                                     0..shown.len(),
@@ -436,8 +437,9 @@ fn paint_node(
                                     px,
                                     color,
                                     &[],
+                                    shear,
                                 ),
-                                None => canvas.draw_marked(
+                                None => canvas.draw_marked_sheared(
                                     font,
                                     text,
                                     line.clone(),
@@ -446,6 +448,7 @@ fn paint_node(
                                     px,
                                     color,
                                     marks,
+                                    shear,
                                 ),
                             }
                         }
@@ -458,22 +461,11 @@ fn paint_node(
                         };
                         let face = &fonts[font.variant(span.bold, span.italic).min(fonts.len() - 1)];
                         let shear = if face.synthetic_italic { ITALIC_SHEAR } else { 0.0 };
-                        canvas.draw_text_sheared(
-                            face, segment, x as i32, baseline, px, span.color, shear,
-                        );
-                        if face.synthetic_bold {
-                            let offset = (px / 24.0).max(1.0) as i32;
-                            canvas.draw_text_sheared(
-                                face,
-                                segment,
-                                x as i32 + offset,
-                                baseline,
-                                px,
-                                span.color,
-                                shear,
-                            );
+                        let passes: &[i32] = if face.synthetic_bold { &[0, (px / 24.0).max(1.0) as i32] } else { &[0] };
+                        for &dx in passes {
+                            canvas.draw_fitted(face, font, segment, x as i32 + dx, baseline, px, span.color, shear);
                         }
-                        let width = measure_text(face, segment, px);
+                        let width = measure_text(font, segment, px);
                         let thickness = (px / 14.0).max(1.0);
                         if span.underline {
                             canvas.fill_rounded_rect(

@@ -160,7 +160,6 @@ interface BlockProps {
   block: MarkdownBlock;
   theme: MarkdownTheme;
   rem: number;
-  /** The family code blocks draw in. */
   codeFamily?: FontFamily;
   slug?: string;
   nav?: Nav;

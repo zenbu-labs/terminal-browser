@@ -165,7 +165,6 @@ export interface EngineKeyEvent {
 }
 
 export interface RootOptions {
-  /** Font files to add before the first frame, so text never draws in the wrong font. */
   fonts?: FontFace[];
   onKey?: (event: EngineKeyEvent) => void;
   onRightClick?: (event: { x: number; y: number }) => void;
@@ -263,7 +262,7 @@ interface EngineEventJson {
   cursor?: number;
   caret?: { x: number; y: number; w: number; h: number };
   source?: string;
-  font?: number;
+  request?: number;
   seq?: number;
   token?: number;
   epochMs?: number;
@@ -345,8 +344,14 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   }
   const container: Container = { bridge, view: APP_VIEW, children: [] };
   bridge.containers[APP_VIEW] = container;
-  // Queued ahead of the first render's nodes, so the engine knows every family before it resolves any text.
-  for (const face of options.fonts ?? []) bridge.push(APP_VIEW, { op: "registerFont", ...fontFaceOp(face) });
+  let nextFontRequest = 0;
+  const fontRequests = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
+  const requestFont = (face: FontFace, settle: { resolve: () => void; reject: (error: Error) => void }) => {
+    const request = nextFontRequest++;
+    fontRequests.set(request, settle);
+    bridge.push(APP_VIEW, { op: "registerFont", request, ...fontFaceOp(face) });
+  };
+  for (const face of options.fonts ?? []) requestFont(face, { resolve: () => {}, reject: (error) => console.error(error.message) });
   const root = reconciler.createContainer(
     container,
     ConcurrentRoot,
@@ -361,7 +366,6 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   );
   if (devtoolsEnabled) installConsoleCapture();
 
-  const fontRequests = new Map<string, Array<{ resolve: () => void; reject: (error: Error) => void }>>();
   const retargets: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
 
   const dispatch = (event: EngineEventJson) => {
@@ -617,11 +621,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         break;
       }
       case "fontRegistered": {
-        const pending = fontRequests.get(event.path!) ?? [];
-        fontRequests.delete(event.path!);
-        // fixme: placeholder copy
-        const error = event.error ? new Error(`font ${event.path} failed to load: ${event.error}`) : null;
-        for (const p of pending) error ? p.reject(error) : p.resolve();
+        const settle = fontRequests.get(event.request!);
+        fontRequests.delete(event.request!);
+        if (event.error) settle?.reject(new Error(`font ${event.path} failed to load: ${event.error}`));
+        else settle?.resolve();
         break;
       }
       case "exit":
@@ -703,10 +706,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     registerFont(face: FontFace) {
       return new Promise<void>((resolve, reject) => {
-        const pending = fontRequests.get(face.src) ?? [];
-        pending.push({ resolve, reject });
-        fontRequests.set(face.src, pending);
-        bridge.push(APP_VIEW, { op: "registerFont", ...fontFaceOp(face) });
+        requestFont(face, { resolve, reject });
         bridge.flush();
       });
     },

@@ -218,8 +218,8 @@ pub(crate) struct Resolved {
     pub families: usize,
     pub weight: u16,
     pub italic: bool,
-    /// The font stack the three above resolve to.
     pub font: usize,
+    pub font_id: usize,
     pub selectable: bool,
     pub selection_color: Color,
 }
@@ -306,6 +306,7 @@ pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
     weight: crate::fonts::REGULAR,
     italic: false,
     font: 0,
+    font_id: usize::MAX,
     selectable: true,
     selection_color: DEFAULT_SELECTION_COLOR,
 };
@@ -974,11 +975,12 @@ impl Tree {
         let families = node.style.font_family.unwrap_or(inherited.families);
         let weight = node.style.font_weight.unwrap_or(inherited.weight);
         let italic = node.style.font_italic.unwrap_or(inherited.italic);
-        let font = if (families, weight, italic) == (inherited.families, inherited.weight, inherited.italic) {
+        let font = if (families, weight, italic) == (inherited.families, inherited.weight, inherited.italic) && inherited.font_id != usize::MAX {
             inherited.font
         } else {
             registry.resolve(families, weight, italic)
         };
+        let font_id = registry[font].id();
         let resolved = Resolved {
             color: node.style.color.unwrap_or(inherited.color),
             px: node.style.font_size.unwrap_or(inherited.px),
@@ -986,6 +988,7 @@ impl Tree {
             weight,
             italic,
             font,
+            font_id,
             selectable: node.style.selectable.unwrap_or(inherited.selectable),
             selection_color: node
                 .style
@@ -1039,6 +1042,7 @@ impl Tree {
                 text,
                 px: resolved.px,
                 font: resolved.font,
+                font_id: resolved.font_id,
                 wrap,
                 marks,
             }) };
@@ -1137,6 +1141,7 @@ impl Tree {
             text: node.text.clone().unwrap_or_default(),
             px: node.resolved.px,
             font: node.resolved.font,
+            font_id: node.resolved.font_id,
             wrap: node.style.wrap,
             marks: node.marks().to_vec(),
         };

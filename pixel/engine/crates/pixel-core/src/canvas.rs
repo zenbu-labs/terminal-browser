@@ -24,7 +24,7 @@ fn monospace_advance(font: &crate::fonts::Font, px: f32) -> Option<f32> {
 }
 
 fn draws_itself(font: &crate::fonts::Font, ch: char) -> bool {
-    ch.is_whitespace() || ch.is_control() || font.lookup_glyph_index(ch) != 0
+    ch.is_control() || font.lookup_glyph_index(ch) != 0 || (ch.is_whitespace() && font.fallback_for(ch).is_none())
 }
 
 fn cells(ch: char) -> usize {
@@ -35,7 +35,8 @@ fn natural_fallback_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32
     if let Some(face) = font.fallback_for(ch) {
         return face.metrics(ch, px).advance_width;
     }
-    system_fonts::advance(ch, px).unwrap_or_else(|| font.metrics(ch, px).advance_width)
+    // Matches `rasterize_glyph`, which draws nothing for a zero-width character no font has.
+    system_fonts::advance(ch, px).unwrap_or_else(|| if cells(ch) == 0 { 0.0 } else { font.metrics(ch, px).advance_width })
 }
 
 fn glyph_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32 {
@@ -492,19 +493,28 @@ impl Canvas {
         );
     }
 
+    // Draws `face`'s glyphs on `layout`'s advances, each centered in its cell, so a bold or italic face keeps the
+    // geometry text was laid out, selected and hit-tested with.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw_marked(
+    pub(crate) fn draw_fitted(
         &mut self,
-        font: &crate::fonts::Font,
+        face: &crate::fonts::Font,
+        layout: &crate::fonts::Font,
         text: &str,
-        range: std::ops::Range<usize>,
         x: i32,
         baseline: i32,
         px: f32,
         color: [u8; 4],
-        marks: &[Mark],
+        shear: f32,
     ) {
-        self.draw_marked_sheared(font, text, range, x, baseline, px, color, marks, 0.0);
+        let mut pen_x = x as f32;
+        for ch in text.chars() {
+            let advance = char_advance(layout, ch, 0, px, &[]);
+            let glyph_x = pen_x + ((advance - char_advance(face, ch, 0, px, &[])) / 2.0).round();
+            let mut buf = [0u8; 4];
+            self.draw_marked_sheared(face, ch.encode_utf8(&mut buf), 0..ch.len_utf8(), glyph_x as i32, baseline, px, color, &[], shear);
+            pen_x += advance;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

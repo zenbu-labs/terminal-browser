@@ -140,6 +140,7 @@ enum Op {
         frame_events: Option<bool>,
     },
     RegisterFont {
+        request: u64,
         family: String,
         path: String,
         #[serde(default)]
@@ -194,18 +195,17 @@ struct RichClipMarkDto {
     data: String,
 }
 
-// Adds a face to a family. Text resolved after this sees it; the reply says whether the file loaded.
-fn register_font(engine: &mut Engine, family: &str, path: &str, weight: u16, italic: bool) -> String {
+fn register_font(engine: &mut Engine, request: u64, family: &str, path: &str, weight: u16, italic: bool) -> String {
     let loaded = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
         pixel_core::fontdue::Font::from_bytes(bytes, pixel_core::fontdue::FontSettings::default())
             .map_err(str::to_string)
     });
     match loaded {
         Ok(font) => {
-            engine.fonts.add_face(family, weight, italic, font);
-            serde_json::json!({ "type": "fontRegistered", "path": path })
+            engine.add_font_face(family, weight, italic, font, path);
+            serde_json::json!({ "type": "fontRegistered", "request": request })
         }
-        Err(error) => serde_json::json!({ "type": "fontRegistered", "path": path, "error": error }),
+        Err(error) => serde_json::json!({ "type": "fontRegistered", "request": request, "path": path, "error": error }),
     }
     .to_string()
 }
@@ -235,14 +235,18 @@ enum FamilyDto {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum WeightDto {
-    Number(u16),
+    Number(f64),
     Named(String),
+}
+
+fn split_families(list: &str) -> Vec<String> {
+    list.split(',').map(|name| name.trim().trim_matches(|c| c == '"' || c == '\'').to_string()).filter(|name| !name.is_empty()).collect()
 }
 
 impl WeightDto {
     fn value(self) -> u16 {
         match self {
-            WeightDto::Number(weight) => weight.clamp(1, 1000),
+            WeightDto::Number(weight) => weight.round().clamp(1.0, 1000.0) as u16,
             WeightDto::Named(name) if name == "bold" => pixel_core::fonts::BOLD,
             WeightDto::Named(_) => pixel_core::fonts::REGULAR,
         }
@@ -666,7 +670,7 @@ impl StyleDto {
             color: self.color,
             font_size: self.font_size,
             font_family: self.font_family.map(|family| match family {
-                FamilyDto::One(name) => fonts.families(&[name]),
+                FamilyDto::One(list) => fonts.families(&split_families(&list)),
                 FamilyDto::Stack(names) => fonts.families(&names),
             }),
             font_weight: self.font_weight.map(WeightDto::value),
@@ -806,8 +810,8 @@ fn apply_op(
         replies.push(reply.to_string());
         return;
     }
-    if let Op::RegisterFont { family, path, weight, italic } = op {
-        replies.push(register_font(engine, &family, &path, weight.unwrap_or(pixel_core::fonts::REGULAR), italic));
+    if let Op::RegisterFont { request, family, path, weight, italic } = op {
+        replies.push(register_font(engine, request, &family, &path, weight.unwrap_or(pixel_core::fonts::REGULAR), italic));
         return;
     }
     let base_px = engine.base_px;

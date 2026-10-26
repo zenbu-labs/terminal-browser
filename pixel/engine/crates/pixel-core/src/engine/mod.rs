@@ -471,6 +471,15 @@ impl Engine {
         Ok(engine)
     }
 
+    pub fn add_font_face(&mut self, family: &str, weight: u16, italic: bool, face: fontdue::Font, source: &str) {
+        if !self.fonts.add_face(family, weight, italic, face, source) {
+            return;
+        }
+        for view in &mut self.comp.views {
+            view.tree.mark_layout();
+        }
+    }
+
     pub fn add_view(&mut self) -> usize {
         let view = self.comp.add_view();
         logging::info("engine", format!("view {view} created"));

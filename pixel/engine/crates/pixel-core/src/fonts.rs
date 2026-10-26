@@ -17,12 +17,15 @@ pub struct Font {
     variants: [usize; 4],
 }
 
-static NEXT_STANDALONE_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1 << 32);
+static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn next_id() -> usize {
+    NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 impl Font {
     pub fn single(face: fontdue::Font) -> Font {
-        let id = NEXT_STANDALONE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Font { faces: vec![Arc::new(face)], id, synthetic_bold: false, synthetic_italic: false, variants: [0; 4] }
+        Font { faces: vec![Arc::new(face)], id: next_id(), synthetic_bold: false, synthetic_italic: false, variants: [0; 4] }
     }
 
     pub fn primary(&self) -> &fontdue::Font {
@@ -62,6 +65,7 @@ struct Registered {
     family: String,
     weight: u16,
     italic: bool,
+    source: String,
     face: Face,
 }
 
@@ -89,16 +93,26 @@ const GENERIC_ALIASES: [(&str, &str); 2] = [("system-ui", SANS_SERIF), ("ui-mono
 impl FontRegistry {
     pub fn new(monospace: fontdue::Font, sans_serif: fontdue::Font) -> Self {
         let mut registry = Self { faces: Vec::new(), family_lists: Vec::new(), family_ids: HashMap::new(), stacks: Vec::new(), interned: HashMap::new() };
-        registry.add_face(MONOSPACE, REGULAR, false, monospace);
-        registry.add_face(SANS_SERIF, REGULAR, false, sans_serif);
+        registry.add_face(MONOSPACE, REGULAR, false, monospace, "bundled:monospace");
+        registry.add_face(SANS_SERIF, REGULAR, false, sans_serif, "bundled:sans-serif");
         registry.families(&[MONOSPACE.to_string()]);
         registry.resolve(DEFAULT_FAMILIES, REGULAR, false);
         registry
     }
 
-    pub fn add_face(&mut self, family: &str, weight: u16, italic: bool, face: fontdue::Font) {
-        self.faces.push(Registered { family: normalize(family), weight, italic, face: Arc::new(face) });
-        self.interned.clear();
+    pub fn add_face(&mut self, family: &str, weight: u16, italic: bool, face: fontdue::Font, source: &str) -> bool {
+        let family = normalize(family);
+        if self.faces.iter().any(|r| r.family == family && r.weight == weight && r.italic == italic && r.source == source) {
+            return false;
+        }
+        self.faces.push(Registered { family, weight, italic, source: source.to_string(), face: Arc::new(face) });
+        let built: Vec<(StackKey, usize)> = self.interned.iter().map(|(&key, &base)| (key, base)).collect();
+        for (key, base) in built {
+            for (i, stack) in self.variant_stacks(key, base).into_iter().enumerate() {
+                self.stacks[base + i] = stack;
+            }
+        }
+        true
     }
 
     pub fn families(&mut self, names: &[String]) -> usize {
@@ -121,22 +135,26 @@ impl FontRegistry {
             return index;
         }
         let base = self.stacks.len();
-        let variants = [base, base + 1, base + 2, base + 3];
-        let names = self.family_lists[families].clone();
-        for (i, (variant_weight, variant_italic)) in [(weight, italic), (weight.max(BOLD), italic), (weight, true), (weight.max(BOLD), true)].into_iter().enumerate() {
-            let stack = self.build(&names, variant_weight, variant_italic, base + i, variants);
-            self.stacks.push(stack);
-        }
+        let stacks = self.variant_stacks(key, base);
+        self.stacks.extend(stacks);
         self.interned.insert(key, base);
         base
     }
 
-    fn build(&self, families: &[String], weight: u16, italic: bool, id: usize, variants: [usize; 4]) -> Font {
+    fn variant_stacks(&self, key: StackKey, base: usize) -> [Font; 4] {
+        let names = &self.family_lists[key.families];
+        let variants = [base, base + 1, base + 2, base + 3];
+        let StackKey { weight, italic, .. } = key;
+        [(weight, italic), (weight.max(BOLD), italic), (weight, true), (weight.max(BOLD), true)]
+            .map(|(variant_weight, variant_italic)| self.build(names, variant_weight, variant_italic, variants))
+    }
+
+    fn build(&self, families: &[String], weight: u16, italic: bool, variants: [usize; 4]) -> Font {
         let picked: Vec<&Registered> = families.iter().filter_map(|family| self.best(family, weight, italic)).collect();
         let primary = picked.first().copied();
         Font {
             faces: picked.iter().map(|r| r.face.clone()).collect(),
-            id,
+            id: next_id(),
             synthetic_bold: weight >= BOLD_THRESHOLD && primary.is_some_and(|r| r.weight < BOLD_THRESHOLD),
             synthetic_italic: italic && primary.is_some_and(|r| !r.italic),
             variants,
@@ -146,13 +164,9 @@ impl FontRegistry {
     fn best(&self, family: &str, weight: u16, italic: bool) -> Option<&Registered> {
         self.faces
             .iter()
+            .rev()
             .filter(|r| r.family == family)
-            .min_by_key(|r| {
-                let style_miss = u32::from(r.italic != italic);
-                let distance = u32::from(r.weight.abs_diff(weight));
-                let wrong_side = u32::from(if weight >= BOLD_THRESHOLD { r.weight < weight } else { r.weight > weight });
-                (style_miss, wrong_side, distance)
-            })
+            .min_by_key(|r| (u32::from(r.italic != italic), weight_preference(weight, r.weight)))
     }
 }
 
@@ -172,6 +186,20 @@ impl Deref for FontRegistry {
 
     fn deref(&self) -> &[Font] {
         &self.stacks
+    }
+}
+
+fn weight_preference(wanted: u16, face: u16) -> (u8, u16) {
+    let distance = wanted.abs_diff(face);
+    if face == wanted {
+        return (0, 0);
+    }
+    match wanted {
+        400..=500 if face > wanted && face <= 500 => (1, distance),
+        400..=500 if face < wanted => (2, distance),
+        400..=500 => (3, distance),
+        _ if wanted < 400 => (if face < wanted { 1 } else { 2 }, distance),
+        _ => (if face > wanted { 1 } else { 2 }, distance),
     }
 }
 
@@ -224,7 +252,7 @@ mod tests {
         let mut fonts = registry();
         let plain = { let f = fonts.families(&[MONOSPACE.into()]); fonts.resolve(f, REGULAR, false) };
         assert!(fonts[fonts[plain].variant(true, false)].synthetic_bold);
-        fonts.add_face(MONOSPACE, BOLD, false, face(MONO));
+        fonts.add_face(MONOSPACE, BOLD, false, face(MONO), "test:bold");
         let plain = { let f = fonts.families(&[MONOSPACE.into()]); fonts.resolve(f, REGULAR, false) };
         let bold = fonts[plain].variant(true, false);
         assert!(!fonts[bold].synthetic_bold);
@@ -243,5 +271,34 @@ mod tests {
         let mut fonts = registry();
         let ui = { let f = fonts.families(&["system-ui".into()]); fonts.resolve(f, REGULAR, false) };
         assert!(Arc::ptr_eq(&fonts[ui].faces[0], &fonts.faces[1].face));
+    }
+
+    #[test]
+    fn registering_a_face_rebuilds_stacks_in_place() {
+        let mut fonts = registry();
+        let index = { let f = fonts.families(&[MONOSPACE.into()]); fonts.resolve(f, REGULAR, false) };
+        let before = fonts[fonts[index].variant(true, false)].id();
+        assert!(fonts.add_face(MONOSPACE, BOLD, false, face(MONO), "test:bold"));
+        let bold = fonts[index].variant(true, false);
+        assert!(!fonts[bold].synthetic_bold, "the existing bold variant picked up the new face");
+        assert_ne!(fonts[bold].id(), before);
+        assert!(!fonts.add_face(MONOSPACE, BOLD, false, face(MONO), "test:bold"), "the same file twice is ignored");
+    }
+
+    #[test]
+    fn a_face_registered_later_wins_a_tie() {
+        let mut fonts = registry();
+        fonts.add_face(MONOSPACE, REGULAR, false, face(SANS), "test:custom");
+        let index = { let f = fonts.families(&[MONOSPACE.into()]); fonts.resolve(f, REGULAR, false) };
+        assert!(Arc::ptr_eq(&fonts[index].faces[0], &fonts.faces[2].face));
+    }
+
+    #[test]
+    fn missing_weights_fall_back_in_css_order() {
+        assert!(weight_preference(400, 500) < weight_preference(400, 300));
+        assert!(weight_preference(400, 300) < weight_preference(400, 600));
+        assert!(weight_preference(500, 400) < weight_preference(500, 600));
+        assert!(weight_preference(300, 200) < weight_preference(300, 400));
+        assert!(weight_preference(700, 800) < weight_preference(700, 600));
     }
 }

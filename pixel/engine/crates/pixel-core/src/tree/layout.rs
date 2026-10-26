@@ -10,6 +10,7 @@ pub(crate) enum MeasureCtx {
         text: String,
         px: f32,
         font: usize,
+        font_id: usize,
         wrap: bool,
         marks: Vec<Mark>,
     },
@@ -34,6 +35,7 @@ pub(super) fn measure(
             font,
             wrap,
             marks,
+            ..
         }) => measure_wrapped_text(known, available, text, *px, *font, *wrap, marks, fonts),
     }
 }
