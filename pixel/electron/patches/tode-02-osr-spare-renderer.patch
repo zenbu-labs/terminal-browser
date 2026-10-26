@@ -1,15 +1,18 @@
 diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
-index c56dd0e..fc93093 100644
+index c56dd0e..097a7d5 100644
 --- a/shell/browser/api/electron_api_web_contents.cc
 +++ b/shell/browser/api/electron_api_web_contents.cc
-@@ -1002,6 +1002,10 @@ WebContents::WebContents(v8::Isolate* isolate,
+@@ -1002,6 +1002,13 @@ WebContents::WebContents(v8::Isolate* isolate,
      params.view = view;
      params.delegate_view = view;
  
 +    // As for windowed pages below: the first frame's process is picked here.
++    // Set offscreen explicitly: "type" can make a page offscreen as well.
++    auto renderer_prefs = RendererProcessPreferences::From(options);
++    renderer_prefs.offscreen = true;
 +    base::AutoReset<bool> reset(
 +        ElectronBrowserClient::Get()->spare_renderer_compatible(),
-+        RendererProcessPreferences::From(options).CanUseSpareRenderer());
++        renderer_prefs.CanUseSpareRenderer());
      web_contents = content::WebContents::Create(params);
      view->SetWebContents(web_contents.get());
    } else {
