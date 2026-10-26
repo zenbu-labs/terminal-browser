@@ -13,6 +13,7 @@ pub(crate) enum MeasureCtx {
         font_id: usize,
         wrap: bool,
         marks: Vec<Mark>,
+        cell_caret: bool,
     },
     Image {
         src: String,
@@ -35,8 +36,19 @@ pub(super) fn measure(
             font,
             wrap,
             marks,
+            cell_caret,
             ..
-        }) => measure_wrapped_text(known, available, text, *px, *font, *wrap, marks, fonts),
+        }) => measure_wrapped_text(
+            known,
+            available,
+            text,
+            *px,
+            *font,
+            *wrap,
+            marks,
+            *cell_caret,
+            fonts,
+        ),
     }
 }
 
@@ -84,6 +96,7 @@ fn measure_wrapped_text(
     font: usize,
     wrap: bool,
     marks: &[Mark],
+    cell_caret: bool,
     fonts: &[crate::fonts::Font],
 ) -> taffy::Size<f32> {
     let font = &fonts[font.min(fonts.len() - 1)];
@@ -108,9 +121,14 @@ fn measure_wrapped_text(
             measure_marked(font, text, r.start..r.start + visible_len, px, marks)
         })
         .fold(0.0f32, f32::max);
+    let caret_line = cell_caret
+        && max_width.zip(lines.last()).is_some_and(|(width, last)| {
+            let end = measure_marked(font, text, last.clone(), px, marks);
+            end + crate::canvas::measure_text(font, " ", px) > width + crate::wrap::WRAP_SLACK
+        });
     taffy::Size {
         width: widest.ceil(),
-        height: line * lines.len() as f32,
+        height: line * (lines.len() + usize::from(caret_line)) as f32,
     }
 }
 

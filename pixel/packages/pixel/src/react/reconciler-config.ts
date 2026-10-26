@@ -169,6 +169,8 @@ export interface ChangeInfo extends CaretInfo {
   marks: MarkRef[];
 }
 
+export type CaretShape = "bar" | "block" | "underscore";
+
 export interface InputGutter {
   color: Color;
   activeColor: Color;
@@ -183,6 +185,7 @@ export interface InputProps {
   renderMark?: (id: number) => React.ReactNode;
   serializeMark?: (id: number) => string | undefined;
   caretColor?: Style["color"];
+  caretShape?: CaretShape;
   selectionColor?: Style["color"];
   autoFocus?: boolean;
   spans?: TextSpan[];
@@ -390,6 +393,7 @@ function serializeProps(
       value: valueChanged ? props.value : undefined,
       marks: props.defaultMarks,
       caretColor: parseColor(props.caretColor),
+      caretShape: props.caretShape,
       selectionColor: parseColor(props.selectionColor),
       autoFocus: !!props.autoFocus,
       submit: !!props.onSubmit,

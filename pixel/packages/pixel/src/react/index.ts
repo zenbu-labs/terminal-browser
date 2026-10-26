@@ -78,6 +78,7 @@ export type {
   PasteSource,
   PastedImage,
   CaretInfo,
+  CaretShape,
   ChangeInfo,
   ChangeSource,
   ImageProps,

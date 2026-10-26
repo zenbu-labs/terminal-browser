@@ -356,11 +356,21 @@ struct InputDto {
     value: Option<String>,
     marks: Vec<MarkInitDto>,
     caret_color: Option<Color>,
+    caret_shape: CaretShapeDto,
     selection_color: Option<Color>,
     auto_focus: bool,
     submit: bool,
     gutter: Option<GutterDto>,
     active_line: Option<Color>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+enum CaretShapeDto {
+    #[default]
+    Bar,
+    Block,
+    Underscore,
 }
 
 #[derive(Deserialize)]
@@ -707,6 +717,11 @@ impl PropsDto {
                     value: i.value,
                     marks: i.marks.iter().map(|m| (m.id, m.offset)).collect(),
                     caret_color: i.caret_color.unwrap_or(defaults.caret_color),
+                    caret_shape: match i.caret_shape {
+                        CaretShapeDto::Bar => pixel_core::CaretShape::Bar,
+                        CaretShapeDto::Block => pixel_core::CaretShape::Block,
+                        CaretShapeDto::Underscore => pixel_core::CaretShape::Underscore,
+                    },
                     selection_color: i.selection_color.unwrap_or(defaults.selection_color),
                     auto_focus: i.auto_focus,
                     submit: i.submit,

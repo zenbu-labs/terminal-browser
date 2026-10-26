@@ -39,11 +39,20 @@ pub enum InputReply {
     RequestPaste,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaretShape {
+    #[default]
+    Bar,
+    Block,
+    Underscore,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct InputGeometry {
     pub origin: (f32, f32),
     pub font: usize,
     pub px: f32,
+    pub caret: CaretShape,
     pub max_width: Option<f32>,
 }
 
@@ -75,18 +84,66 @@ impl InputGeometry {
         fonts: &[crate::fonts::Font],
     ) -> PxRect {
         let font = &fonts[self.font.min(fonts.len() - 1)];
-        let (x, y) = offset_to_point(text, cursor, font, self.px, self.max_width, marks);
+        let (x, y) = caret_point(self.caret, text, cursor, font, self.px, self.max_width, marks);
         PxRect {
             x: self.origin.0 + x,
             y: self.origin.1 + y,
-            w: caret_width(self.px),
+            w: caret_width(self.caret, text, cursor, font, self.px, marks),
             h: line_height(font, self.px),
         }
     }
 }
 
-pub(crate) fn caret_width(px: f32) -> f32 {
+pub(crate) fn caret_thickness(px: f32) -> f32 {
     (px / 8.0).max(2.0)
+}
+
+pub(crate) fn caret_width(
+    shape: CaretShape,
+    text: &str,
+    cursor: usize,
+    font: &crate::fonts::Font,
+    px: f32,
+    marks: &[Mark],
+) -> f32 {
+    if shape == CaretShape::Bar {
+        return caret_thickness(px);
+    }
+    match text[cursor..].chars().next().filter(|&ch| ch != '\n') {
+        Some(ch) => char_advance(font, ch, cursor, px, marks),
+        None => char_advance(font, ' ', cursor, px, &[]),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn caret_point(
+    shape: CaretShape,
+    text: &str,
+    cursor: usize,
+    font: &crate::fonts::Font,
+    px: f32,
+    wrap: Option<f32>,
+    marks: &[Mark],
+) -> (f32, f32) {
+    let (x, y) = offset_to_point(text, cursor, font, px, wrap, marks);
+    let width = caret_width(shape, text, cursor, font, px, marks);
+    match wrap {
+        Some(room) if shape != CaretShape::Bar && x + width > room => {
+            if cursor >= text.len() {
+                (0.0, y + line_height(font, px))
+            } else {
+                (x.min(room - width).max(0.0), y)
+            }
+        }
+        _ => (x, y),
+    }
+}
+
+pub(crate) fn caret_char(text: &str, cursor: usize) -> Option<char> {
+    text[cursor..]
+        .chars()
+        .next()
+        .filter(|&ch| ch != '\n' && ch != MARK_CHAR)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1390,6 +1447,7 @@ mod tests {
             origin: (10.0, 5.0),
             font: 0,
             px: 16.0,
+            caret: CaretShape::Bar,
             max_width: None,
         };
         let text = "hello world";

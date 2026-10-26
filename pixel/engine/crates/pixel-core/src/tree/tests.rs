@@ -1,6 +1,7 @@
 use super::*;
-use crate::canvas::Canvas;
+use crate::canvas::{Canvas, measure_text};
 use crate::desc::Desc;
+use crate::text_input::{MARK_CHAR, Mark};
 use crate::paint::paint;
 use crate::style::{Align, Border, BorderSide, Edges, Paint, Position};
 
@@ -388,6 +389,113 @@ fn editor(initial: &str) -> Vec<Desc> {
         }],
         ..Desc::default()
     }]
+}
+
+fn editor_with_caret(initial: &str, shape: CaretShape) -> Vec<Desc> {
+    let mut desc = editor(initial);
+    desc[0].children[0].input.as_mut().unwrap().caret_shape = shape;
+    desc
+}
+
+#[test]
+fn block_caret_covers_the_next_character_and_redraws_it_on_top() {
+    let mut tree = tree_of((200.0, 60.0), editor_with_caret("hWo", CaretShape::Block));
+    let id = tree.find("in").unwrap();
+    tree.input_mut(id).unwrap().set_cursor(1, false);
+    tree.set_focus(Some(id));
+    let fonts = [font()];
+    let geometry = tree.input_geometry(id).unwrap();
+    let block = geometry.caret_rect("hWo", &[], 1, &fonts);
+    assert_eq!(block.w, measure_text(&fonts[0], "W", 16.0), "as wide as the character");
+    let end = geometry.caret_rect("hWo", &[], 3, &fonts);
+    assert_eq!(end.w, measure_text(&fonts[0], " ", 16.0), "one space wide past the end");
+
+    let canvas = painted(&mut tree, (200, 60), None);
+    let mut red = 0;
+    let mut white = 0;
+    for y in block.y as u32..(block.y + block.h) as u32 {
+        for x in block.x.ceil() as u32..(block.x + block.w) as u32 {
+            match pixel(&canvas, x, y) {
+                [255, 0, 0, _] => red += 1,
+                [r, g, b, _] if r > 200 && g > 200 && b > 200 => white += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!(red > 0, "block filled with the caret colour");
+    assert!(white > 0, "the W is drawn in white on the red block");
+}
+
+#[test]
+fn a_transparent_block_caret_draws_nothing() {
+    let mut desc = editor_with_caret("hWo", CaretShape::Block);
+    desc[0].children[0].input.as_mut().unwrap().caret_color = [0, 0, 0, 0];
+    let mut tree = tree_of((200.0, 60.0), desc);
+    let id = tree.find("in").unwrap();
+    tree.input_mut(id).unwrap().set_cursor(1, false);
+    let unfocused = painted(&mut tree, (200, 60), None);
+    tree.set_focus(Some(id));
+    tree.mark_paint();
+    let focused = painted(&mut tree, (200, 60), None);
+    assert!(unfocused.pixels == focused.pixels, "no letter redrawn under an invisible caret");
+}
+
+#[test]
+fn a_block_caret_at_the_end_of_a_full_line_drops_to_a_reserved_line() {
+    let fonts = [font()];
+    let space = measure_text(&fonts[0], " ", 16.0);
+    let fitting = ((192.0 + crate::wrap::WRAP_SLACK) / space).floor() as usize;
+    let text = "x".repeat(fitting);
+    let auto_height = |shape| {
+        let mut desc = editor_with_caret(&text, shape);
+        desc[0].style.flex_direction = FlexDirection::Column;
+        desc
+    };
+    let height = |shape| {
+        let tree = tree_of((200.0, 60.0), auto_height(shape));
+        tree.rect(tree.find("in").unwrap()).unwrap().h
+    };
+    let line = line_height(&fonts[0], 16.0);
+    let reserved = height(CaretShape::Block) - height(CaretShape::Bar);
+    assert!((reserved - line).abs() < 1.0, "one line reserved, got {reserved}");
+
+    let mut tree = tree_of((200.0, 60.0), auto_height(CaretShape::Block));
+    let id = tree.find("in").unwrap();
+    let geometry = tree.input_geometry(id).unwrap();
+    let end = geometry.caret_rect(&text, &[], text.len(), &fonts);
+    assert_eq!((end.x, end.y), (geometry.origin.0, geometry.origin.1 + line));
+    tree.input_mut(id).unwrap().set_cursor(text.len(), false);
+    tree.set_focus(Some(id));
+    let canvas = painted(&mut tree, (200, 60), None);
+    assert_eq!(pixel(&canvas, end.x as u32 + 2, (end.y + end.h / 2.0) as u32)[..3], [255, 0, 0]);
+}
+
+#[test]
+fn a_block_caret_on_a_mark_is_as_wide_as_the_mark() {
+    let fonts = [font()];
+    let marks = [Mark { id: 1, offset: 1, advance: 40.0, data: None }];
+    let text = format!("a{MARK_CHAR}b");
+    let geometry = InputGeometry {
+        origin: (0.0, 0.0),
+        font: 0,
+        px: 16.0,
+        caret: CaretShape::Block,
+        max_width: None,
+    };
+    assert_eq!(geometry.caret_rect(&text, &marks, 1, &fonts).w, 40.0);
+}
+
+#[test]
+fn underscore_caret_sits_on_the_bottom_of_the_line() {
+    let mut tree = tree_of((200.0, 60.0), editor_with_caret("hello", CaretShape::Underscore));
+    let id = tree.find("in").unwrap();
+    tree.input_mut(id).unwrap().set_cursor(5, false);
+    tree.set_focus(Some(id));
+    let rect = tree.input_geometry(id).unwrap().caret_rect("hello", &[], 5, &[font()]);
+    let canvas = painted(&mut tree, (200, 60), None);
+    let middle = (rect.x + rect.w / 2.0) as u32;
+    assert_eq!(pixel(&canvas, middle, (rect.y + rect.h) as u32 - 1)[..3], [255, 0, 0]);
+    assert_ne!(pixel(&canvas, middle, (rect.y + rect.h / 2.0) as u32)[..3], [255, 0, 0]);
 }
 
 #[test]

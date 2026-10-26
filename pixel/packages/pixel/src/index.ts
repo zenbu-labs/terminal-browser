@@ -70,6 +70,7 @@ export type {
   PastedImage,
   PasteSource,
   CaretInfo,
+  CaretShape,
   ChangeInfo,
   ChangeSource,
   ContainerSelection,

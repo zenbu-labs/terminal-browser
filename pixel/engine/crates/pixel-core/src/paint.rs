@@ -4,7 +4,9 @@ use std::time::Instant;
 use crate::canvas::{Canvas, measure_marked, measure_text};
 use crate::image_cache::ImageStatus;
 use crate::style::{Color, Overflow, Paint};
-use crate::text_input::{Mark, caret_width, offset_to_point};
+use crate::text_input::{
+    CaretShape, Mark, caret_char, caret_point, caret_thickness, caret_width,
+};
 use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
 
@@ -546,15 +548,43 @@ fn paint_node(
                 && state.input.selection().is_none()
                 && tree.focus() == Some(id)
             {
-                let (x, y) = offset_to_point(text, state.input.cursor(), font, px, wrap, marks);
-                canvas.fill_rounded_rect(
-                    origin.0 + x,
-                    origin.1 + y,
-                    caret_width(px),
-                    line_h,
-                    [1.5; 4],
-                    state.caret_color,
-                );
+                let cursor = state.input.cursor();
+                let shape = state.caret_shape;
+                let (x, y) = caret_point(shape, text, cursor, font, px, wrap, marks);
+                let (left, top) = (origin.0 + x, origin.1 + y);
+                let width = caret_width(shape, text, cursor, font, px, marks);
+                let color = state.caret_color;
+                match shape {
+                    CaretShape::Bar => {
+                        canvas.fill_rounded_rect(left, top, width, line_h, [1.5; 4], color)
+                    }
+                    CaretShape::Underscore => {
+                        let thickness = caret_thickness(px) / 2.0;
+                        canvas.fill_rounded_rect(
+                            left,
+                            top + line_h - thickness,
+                            width,
+                            thickness,
+                            [0.0; 4],
+                            color,
+                        )
+                    }
+                    CaretShape::Block => {
+                        canvas.fill_rounded_rect(left, top, width, line_h, [0.0; 4], color);
+                        if let Some(under) = caret_char(text, cursor)
+                            && color[3] > 0
+                        {
+                            canvas.draw_text(
+                                font,
+                                under.encode_utf8(&mut [0; 4]),
+                                left.round() as i32,
+                                (top + line_metrics.ascent) as i32,
+                                px,
+                                ink_on(color),
+                            );
+                        }
+                    }
+                }
             }
             if clips_text {
                 canvas.pop_clip();
@@ -595,6 +625,11 @@ fn paint_node(
     }
 }
 
+fn ink_on(color: Color) -> Color {
+    let [r, g, b, a] = color;
+    let luma = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
+    if luma > 150.0 { [0, 0, 0, a] } else { [255, 255, 255, a] }
+}
 
 fn paint_shape(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
     let Some(node) = tree.get(id) else {

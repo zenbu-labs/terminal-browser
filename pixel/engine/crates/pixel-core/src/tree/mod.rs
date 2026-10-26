@@ -17,7 +17,9 @@ use crate::style::{
     Color, DEFAULT_SELECTION_COLOR, Dimension, Edges, FlexDirection, Overflow, ScrollbarStyle,
     SelectionMode, Style,
 };
-use crate::text_input::{Granularity, InputGeometry, TextInput, line_height, offset_to_point};
+use crate::text_input::{
+    CaretShape, Granularity, InputGeometry, TextInput, line_height, offset_to_point,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId {
@@ -123,6 +125,7 @@ pub struct InputProps {
     pub value: Option<String>,
     pub marks: Vec<(u64, usize)>,
     pub caret_color: Color,
+    pub caret_shape: CaretShape,
     pub selection_color: Color,
     pub auto_focus: bool,
     pub submit: bool,
@@ -143,6 +146,7 @@ impl Default for InputProps {
             value: None,
             marks: Vec::new(),
             caret_color: [255, 255, 255, 255],
+            caret_shape: CaretShape::Bar,
             selection_color: [90, 90, 140, 255],
             auto_focus: false,
             submit: false,
@@ -205,6 +209,7 @@ pub struct Props {
 pub(crate) struct InputState {
     pub input: TextInput,
     pub caret_color: Color,
+    pub caret_shape: CaretShape,
     pub selection_color: Color,
     pub submit: bool,
     pub gutter: Option<Gutter>,
@@ -271,6 +276,10 @@ struct Slot {
 }
 
 impl RNode {
+    fn cell_caret(&self) -> bool {
+        self.input.as_ref().is_some_and(|state| state.caret_shape != CaretShape::Bar)
+    }
+
     pub(crate) fn marks(&self) -> &[crate::text_input::Mark] {
         match &self.input {
             Some(state) => state.input.marks(),
@@ -430,6 +439,7 @@ impl Tree {
                 InputState {
                     input,
                     caret_color: p.caret_color,
+                    caret_shape: p.caret_shape,
                     selection_color: p.selection_color,
                     submit: p.submit,
                     gutter: p.gutter,
@@ -652,13 +662,17 @@ impl Tree {
         }
         let node = self.node_mut(id);
         let mut input_removed = false;
+        let mut caret_reshaped = false;
         match (&mut node.input, props.input) {
             (Some(state), Some(p)) => {
+                caret_reshaped = state.caret_shape != p.caret_shape;
                 changed |= state.caret_color != p.caret_color
+                    || state.caret_shape != p.caret_shape
                     || state.selection_color != p.selection_color
                     || state.gutter != p.gutter
                     || state.active_line != p.active_line;
                 state.caret_color = p.caret_color;
+                state.caret_shape = p.caret_shape;
                 state.selection_color = p.selection_color;
                 state.submit = p.submit;
                 state.gutter = p.gutter;
@@ -674,6 +688,7 @@ impl Tree {
                 *state = Some(InputState {
                     input,
                     caret_color: p.caret_color,
+                    caret_shape: p.caret_shape,
                     selection_color: p.selection_color,
                     submit: p.submit,
                     gutter: p.gutter,
@@ -687,6 +702,10 @@ impl Tree {
         }
         if input_removed && self.focus == Some(id) {
             self.focus = None;
+        }
+        if caret_reshaped {
+            self.refresh_input_measure(id);
+            self.needs_layout = true;
         }
         let node = self.node_mut(id);
         let mut text_changed = false;
@@ -1001,6 +1020,7 @@ impl Tree {
         let image = node.image.clone();
         let wrap = node.style.wrap;
         let is_input = node.input.is_some();
+        let cell_caret = node.cell_caret();
         let marks = node.marks().to_vec();
         let node_text = node.text.clone();
         let non_flow_only = children.iter().all(|&c| {
@@ -1045,6 +1065,7 @@ impl Tree {
                 font_id: resolved.font_id,
                 wrap,
                 marks,
+                cell_caret,
             }) };
         if self.taffy.get_node_context(taffy) != want.as_ref() {
             self.taffy
@@ -1144,6 +1165,7 @@ impl Tree {
             font_id: node.resolved.font_id,
             wrap: node.style.wrap,
             marks: node.marks().to_vec(),
+            cell_caret: node.cell_caret(),
         };
         let taffy = node.taffy;
         if self.taffy.get_node_context(taffy) != Some(&ctx) {
@@ -1613,6 +1635,7 @@ impl Tree {
         let state = self.get(id)?.input.as_ref()?;
         let mut geometry = self.text_geometry(id)?;
         geometry.origin.0 -= state.input.scroll_x();
+        geometry.caret = state.caret_shape;
         Some(geometry)
     }
 
@@ -1632,6 +1655,7 @@ impl Tree {
             ),
             font: node.resolved.font,
             px: node.resolved.px,
+            caret: CaretShape::Bar,
             max_width: node.style.wrap.then(|| {
                 (layout.size.width - layout.padding.left - layout.padding.right).max(0.0)
                     + crate::wrap::WRAP_SLACK

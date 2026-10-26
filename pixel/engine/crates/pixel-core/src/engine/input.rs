@@ -302,7 +302,9 @@ impl Engine {
             .into_iter()
             .map(|line| crate::canvas::measure_marked(font, text, line, px, marks))
             .fold(0.0f32, f32::max);
-        let max_scroll = (widest + crate::text_input::caret_width(px) - width).max(0.0);
+        let caret_w =
+            crate::text_input::caret_width(geometry.caret, text, input.cursor(), font, px, marks);
+        let max_scroll = (widest + caret_w - width).max(0.0);
         let full_selection = input
             .selection()
             .is_some_and(|range| range.start == 0 && range.end == text.len());
@@ -317,7 +319,6 @@ impl Engine {
                 None,
                 marks,
             );
-            let caret_w = crate::text_input::caret_width(px);
             let mut next = current;
             if caret_x + caret_w - next > width {
                 next = caret_x + caret_w - width;

@@ -54,8 +54,8 @@ pub use terminal::{
     Waker, WindowSize,
 };
 pub use text_input::{
-    Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput, line_height,
-    offset_to_point, point_to_offset,
+    CaretShape, Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput,
+    line_height, offset_to_point, point_to_offset,
 };
 pub use throttle::CpuThrottle;
 pub use tree::{
