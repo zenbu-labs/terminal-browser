@@ -175,6 +175,7 @@ impl Engine {
                         });
                     }
                 } else {
+                    self.clear_doc_selections(None);
                     self.finish_reply(view, focus, reply, source, out)?;
                 }
             }

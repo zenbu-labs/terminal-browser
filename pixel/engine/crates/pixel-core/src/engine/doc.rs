@@ -178,13 +178,20 @@ impl Engine {
         }
     }
 
+    fn collapse_focused_input(&mut self) {
+        if let Some((focus_view, focus)) = self.focused()
+            && let Some(input) = self.comp.views[focus_view].tree.input_mut(focus)
+            && input.collapse()
+        {
+            self.comp.views[focus_view].tree.mark_paint();
+        }
+    }
+
     pub(super) fn begin_text_selection(&mut self, view: usize, local: (f32, f32)) {
         self.clear_doc_selections(Some(view));
         let fonts = &self.fonts;
         if self.comp.views[view].tree.doc_select_down(local, fonts) {
-            if let Some((focus_view, _)) = self.focused() {
-                self.comp.views[focus_view].tree.set_focus(None);
-            }
+            self.collapse_focused_input();
             self.drag = Some((view, DragTarget::Text));
         } else if self.comp.views[view].tree.doc_select_down_near(local, fonts) {
             self.drag = Some((view, DragTarget::Text));

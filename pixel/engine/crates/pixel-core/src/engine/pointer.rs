@@ -257,14 +257,6 @@ impl Engine {
                             self.comp.views[view]
                                 .tree
                                 .doc_select_drag((local.0, local.1), fonts);
-                            if let Some((focus_view, _)) = self.focused()
-                                && self.comp.views[view]
-                                    .tree
-                                    .doc_selection()
-                                    .is_some_and(|sel| !sel.is_collapsed())
-                            {
-                                self.comp.views[focus_view].tree.set_focus(None);
-                            }
                         }
                         DragTarget::Node(id) => {
                             out.push(EngineEvent::Drag {
