@@ -1,0 +1,63 @@
+diff --git a/lib/browser/init.ts b/lib/browser/init.ts
+index a30aac9..3234e8e 100644
+--- a/lib/browser/init.ts
++++ b/lib/browser/init.ts
+@@ -184,7 +184,57 @@ app.once('will-finish-launching', setDefaultApplicationMenu);
+ const { appCodeLoaded } = process;
+ delete process.appCodeLoaded;
+ 
+-if (packagePath) {
++// fixme: placeholder copy
++// With ELECTRON_DIRECT_ENTRY=1, a CommonJS script given as the first argument
++// (.cjs, or .js in a "type": "commonjs" package) is loaded as default_app would
++// load it, but synchronously and without default_app's ES module graph, which
++// takes a sizable part of startup.
++let directEntry: string | null = null;
++const firstArg = process.argv[1];
++if (
++  process.env.ELECTRON_DIRECT_ENTRY === '1' &&
++  packagePath != null &&
++  path.basename(packagePath) === 'default_app.asar' &&
++  firstArg != null &&
++  !firstArg.startsWith('-') &&
++  /\.c?js$/.test(firstArg) &&
++  !/--(?:import|experimental-loader|loader)\b/.test(process.env.NODE_OPTIONS ?? '')
++) {
++  try {
++    const absolute = path.resolve(firstArg);
++    const resolved = Module._resolveFilename(absolute, null, true);
++    const { getNearestParentPackageJSON } = __non_webpack_require__(
++      'internal/modules/package_json_reader'
++    ) as {
++      getNearestParentPackageJSON(checkPath: string): { data: { type?: string } } | undefined;
++    };
++    const isPackageDir = fs.existsSync(path.join(absolute, 'package.json'));
++    if (!isPackageDir && (resolved.endsWith('.cjs') || getNearestParentPackageJSON(resolved)?.data.type === 'commonjs')) {
++      directEntry = resolved;
++    }
++  } catch {
++    directEntry = null;
++  }
++}
++
++if (directEntry != null) {
++  delete process.env.ELECTRON_DIRECT_ENTRY;
++  Object.defineProperty(process, 'defaultApp', {
++    configurable: false,
++    enumerable: true,
++    value: true
++  });
++  app.setAppPath(path.dirname(directEntry));
++  appCodeLoaded!();
++  try {
++    Module._load(directEntry, undefined, false);
++  } catch (err) {
++    // fixme: placeholder copy
++    console.error('App threw an error during load');
++    console.error((err as Error).stack || err);
++    process.emit('uncaughtException', err as Error);
++  }
++} else if (packagePath) {
+   // Finally load app's main.js and transfer control to C++.
+   if ((packageJson.type === 'module' && !mainStartupScript.endsWith('.cjs')) || mainStartupScript.endsWith('.mjs')) {
+     const { runEntryPointWithESMLoader } = __non_webpack_require__(
