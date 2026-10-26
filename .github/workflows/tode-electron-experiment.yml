@@ -1,0 +1,43 @@
+name: tode electron experiment
+run-name: "tode experimental electron (${{ github.ref_name }})"
+
+# Experimental unsigned darwin-arm64 build of pixel's patched electron plus tode's startup patches.
+# Runs only on tode-perf/electron-* branches and only uploads a run artifact: it never creates or
+# touches releases, tags or issues.
+on:
+  push:
+    branches: ["tode-perf/electron-*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tode-electron-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: depot-macos-26
+    timeout-minutes: 720
+    env:
+      ELECTRON_VERSION: "44.2.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build patched electron (unsigned)
+        env:
+          ELECTRON_UNSIGNED: "1"
+        run: |
+          set -euo pipefail
+          export ELECTRON_BUILD_DIR="$RUNNER_TEMP/electron-build"
+          bash pixel/electron/scripts/build.sh "$ELECTRON_VERSION" "$RUNNER_TEMP/out" darwin-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tode-electron-darwin-arm64
+          path: |
+            ${{ runner.temp }}/out/electron-v${{ env.ELECTRON_VERSION }}-darwin-arm64.zip
+            ${{ runner.temp }}/out/electron.d.ts
+            ${{ runner.temp }}/out/SHASUMS256.txt
+          retention-days: 14
+          if-no-files-found: error
