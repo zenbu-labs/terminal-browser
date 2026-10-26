@@ -117,6 +117,11 @@ fn measure_wrapped_text(
     let widest = lines
         .iter()
         .map(|r| {
+            if cell_caret {
+                let full = measure_marked(font, text, r.clone(), px, marks)
+                    + crate::canvas::measure_text(font, " ", px);
+                return max_width.map_or(full, |w| full.min(w));
+            }
             let visible_len = text[r.clone()].trim_end_matches(' ').len();
             measure_marked(font, text, r.start..r.start + visible_len, px, marks)
         })

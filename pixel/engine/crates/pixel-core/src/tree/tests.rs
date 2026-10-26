@@ -471,6 +471,20 @@ fn a_block_caret_at_the_end_of_a_full_line_drops_to_a_reserved_line() {
 }
 
 #[test]
+fn a_block_caret_stays_on_the_line_when_the_input_is_only_as_wide_as_its_text() {
+    let fonts = [font()];
+    for text in ["", "test"] {
+        let mut desc = editor_with_caret(text, CaretShape::Block);
+        desc[0].style.align_items = Some(Align::Start);
+        let tree = tree_of((200.0, 60.0), desc);
+        let id = tree.find("in").unwrap();
+        let geometry = tree.input_geometry(id).unwrap();
+        let end = geometry.caret_rect(text, &[], text.len(), &fonts);
+        assert_eq!(end.y, geometry.origin.1, "caret after {text:?} stays on its line");
+    }
+}
+
+#[test]
 fn a_block_caret_on_a_mark_is_as_wide_as_the_mark() {
     let fonts = [font()];
     let marks = [Mark { id: 1, offset: 1, advance: 40.0, data: None }];
