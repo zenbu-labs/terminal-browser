@@ -41,14 +41,14 @@ function LogLine(props: { entry: SourcedRow; showTarget: boolean; rem: number })
     >
       {showTarget && (
         <Box style={{ width: rem * 3.2, flexShrink: 0 }}>
-          <Text style={{ color: theme.faint, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+          <Text style={{ color: theme.faint, fontSize: rem * 0.66, fontFamily: MONO, wrap: false }}>
             {row.target}
           </Text>
         </Box>
       )}
       <Box style={{ flexGrow: 1, flexBasis: 0, overflow: "hidden" }}>
         <Text
-          style={{ color: TEXT_COLORS[row.level] ?? theme.text, fontSize: rem * 0.74, font: MONO }}
+          style={{ color: TEXT_COLORS[row.level] ?? theme.text, fontSize: rem * 0.74, fontFamily: MONO }}
         >
           {row.text}
         </Text>
@@ -169,7 +169,7 @@ export function LogPanel(props: { rem: number }) {
               flexBasis: 0,
               fontSize: rem * 0.72,
               color: theme.text,
-              font: MONO,
+              fontFamily: MONO,
               wrap: false,
             }}
             defaultValue=""

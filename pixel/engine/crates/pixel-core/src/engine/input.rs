@@ -254,7 +254,7 @@ impl Engine {
     }
 
     fn caret_state(&mut self, view: usize, id: NodeId) -> Option<(usize, PxRect)> {
-        let fonts = &self.fonts;
+        let fonts = &mut self.fonts;
         let base_px = self.base_px;
         self.comp.views[view].tree.flush_layout(fonts, base_px);
         let tree = &self.comp.views[view].tree;
@@ -271,7 +271,7 @@ impl Engine {
         let Some((view, focus)) = self.focused() else {
             return;
         };
-        let fonts = &self.fonts;
+        let fonts = &mut self.fonts;
         let base_px = self.base_px;
         self.comp.views[view].tree.flush_layout(fonts, base_px);
         self.reveal_caret_x(view, focus);

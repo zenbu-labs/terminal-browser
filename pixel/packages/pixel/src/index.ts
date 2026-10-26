@@ -82,6 +82,8 @@ export type {
   PointerShape,
   ScrollbarStyle,
   Style,
+  FontFace,
+  FontFamily,
   EngineInfo,
   EngineKeyEvent,
   KeyMods,

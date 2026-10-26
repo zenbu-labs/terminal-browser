@@ -93,6 +93,7 @@ function createRoot(options?: RootOptions): Root
 | field | what it does |
 | --- | --- |
 | `name?: string` | name stored in the instance record and shown in tab strips |
+| `fonts?: FontFace[]` | font files added before the first frame, see Fonts |
 | `onKey?(event: EngineKeyEvent): boolean \| void` | called for every key; return `true` to stop it reaching the focused WebView or Input |
 | `onQuit?(view: WebViewHandle \| null)` | called when a page navigates to `pixel://quit` or calls `pixel.quit()`; default stops the root |
 | `onExit?(code: number)` | called after the root stops; default `app.exit(code)` |
@@ -128,7 +129,7 @@ function createRoot(options?: RootOptions): Root
 | `requestClipboardImage()` | requests a clipboard image, delivered to `onPasteImage` |
 | `setClearColor(rgba)` | background color behind all content; alpha 0 shows the terminal |
 | `setKeyCapture(keys: string[])` | listed unmodified keys (`"enter"`, `"escape"`, `"a"`) go to `onKey` even while an `Input` is focused; keys with ctrl/alt/shift/super never match |
-| `registerFont(path): Promise<number>` | loads a font file, returns an id for `style.font` |
+| `registerFont(face: FontFace): Promise<void>` | adds a font file to a family after startup; text laid out afterwards can use it |
 | `createSurface(): Surface` | creates a pixel surface for `<Box surface>` |
 | `setRender({ maxFps?, highlightTransmits?, frameEvents? })` | frame rate cap and render debug options |
 | `openDevtools(tab?)` / `closeDevtools()` | built in devtools for the React UI |
@@ -137,6 +138,14 @@ function createRoot(options?: RootOptions): Root
 | `nudgeResize()` | re-reads the pane size |
 | `queryLayout()` | returns the current layout tree |
 | `surfaceStats()` | surface transmit statistics |
+
+### Fonts
+
+Text names fonts by family, as in CSS. `FontFace` is `{ family, src, weight?, style?: "normal" | "italic" }`; several faces can share a family, e.g. Regular, Bold and Italic files of one typeface. `"monospace"` (the bundled JetBrains Mono, the default for all text) and `"sans-serif"` (the system UI font, else the bundled Inter) always exist; `"ui-monospace"` and `"system-ui"` are aliases.
+
+- `style.fontFamily` is a family or a list in order of preference. `fontWeight` and `fontStyle` pick the closest face in each family, as CSS font matching does. All three inherit separately, so a child that sets only `fontWeight` keeps its parent's family.
+- Bold and italic spans use the family's bold or italic face. A family without one is emboldened with a second offset pass or slanted with a shear.
+- A character the first family lacks comes from the next family in the list, then from the system fonts (CoreText on macOS, fontconfig on Linux), including color emoji. With a monospace first family, borrowed glyphs keep its cell grid: wide characters such as CJK and emoji take two cells and combining marks take none.
 
 `LoadOptions` = `WebViewProps` without `src`, `style`, `hidden`, `autoFocus`.
 
@@ -161,7 +170,9 @@ function createRoot(options?: RootOptions): Root
 | `border` | `{ width, color } \| { top?, right?, bottom?, left?: [width, color] }` |
 | `color`, `hoverBackground`, `hoverColor`, `selectionColor` | `Color` |
 | `fontSize` | `number` |
-| `font` | `number`, id from `registerFont` |
+| `fontFamily` | `string \| string[]`, see Fonts |
+| `fontWeight` | `number \| "normal" \| "bold"` |
+| `fontStyle` | `"normal" \| "italic"` |
 | `opaque`, `wrap`, `ellipsis`, `selectable` | `boolean` |
 | `scrollbar` | `ScrollbarStyle` |
 | `selectionMode` | `"text" \| "unified"` |
@@ -184,7 +195,7 @@ Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/p
 | `Path` | `PathProps` `:104`. SVG path data. `d`, `viewBox`, `stroke: { width, color, cap?, join? }`, `onClick`, `onDrag` |
 | `MarkedText` | `MarkedTextProps` `:197`. `text`, `marks`, `renderMark`, `serializeMark` |
 | `Link` | `packages/pixel/src/react/link.tsx`. `href`, `children`, `style`, `onClick(ClickEvent)`. Opens `href` in the default browser on click (`onClick` replaces that), shows the pointer cursor on hover. String children render as `Text` with `style`; use `style.hoverColor` for a hover state |
-| `Markdown` | `packages/pixel/src/react/markdown.tsx:25`. `text`, `theme: MarkdownTheme`, `rem`, `streaming`, `monoFont`, `onLinkClick(href)`, `highlight`, `highlightBg` |
+| `Markdown` | `packages/pixel/src/react/markdown.tsx:25`. `text`, `theme: MarkdownTheme`, `rem`, `streaming`, `codeFamily` (code blocks, default `"monospace"`), `onLinkClick(href)`, `highlight`, `highlightBg` |
 | `WebView` | see WebView |
 | `DevTools` | `packages/pixel/src/devtools.tsx:100`. `target: RefObject<WebViewHandle> \| WebViewHandle`, `dock: "bottom" \| "right"`, `panel`, `onAction("close" \| "dock-bottom" \| "dock-right")`, `style`, `keepFrame` |
 

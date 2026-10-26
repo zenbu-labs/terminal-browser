@@ -23,7 +23,7 @@ pub(super) fn measure(
     known: taffy::Size<Option<f32>>,
     available: taffy::Size<taffy::AvailableSpace>,
     context: Option<&MeasureCtx>,
-    fonts: &[fontdue::Font],
+    fonts: &[crate::fonts::Font],
 ) -> taffy::Size<f32> {
     match context {
         None => taffy::Size::ZERO,
@@ -82,7 +82,7 @@ fn measure_wrapped_text(
     font: usize,
     wrap: bool,
     marks: &[Mark],
-    fonts: &[fontdue::Font],
+    fonts: &[crate::fonts::Font],
 ) -> taffy::Size<f32> {
     let font = &fonts[font.min(fonts.len() - 1)];
     let line = font

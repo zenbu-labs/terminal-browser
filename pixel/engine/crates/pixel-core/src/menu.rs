@@ -134,7 +134,7 @@ impl MenuController {
         at: (f32, f32),
         size: (f32, f32),
         px: f32,
-        font: &fontdue::Font,
+        font: &crate::fonts::Font,
         include_inspect: bool,
         style: &MenuStyle,
     ) -> Option<NodeId> {
@@ -233,7 +233,7 @@ pub fn context_menu(
     at: (f32, f32),
     window: (f32, f32),
     px: f32,
-    font: &fontdue::Font,
+    font: &crate::fonts::Font,
     style: &MenuStyle,
 ) -> Desc {
     let pad = px * 0.55;
@@ -355,8 +355,8 @@ mod tests {
     static FONT_BYTES: &[u8] =
         include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
 
-    fn font() -> fontdue::Font {
-        fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap()
+    fn font() -> crate::fonts::Font {
+        crate::fonts::Font::single(fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap())
     }
 
     fn style() -> MenuStyle {
@@ -391,7 +391,7 @@ mod tests {
             )],
             ..Desc::default()
         });
-        tree.flush_layout(&[f], 16.0);
+        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
         tree
     }
 

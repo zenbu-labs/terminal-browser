@@ -53,7 +53,7 @@ impl InputGeometry {
         text: &str,
         marks: &[Mark],
         point: (f32, f32),
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> usize {
         let font = &fonts[self.font.min(fonts.len() - 1)];
         point_to_offset(
@@ -72,7 +72,7 @@ impl InputGeometry {
         text: &str,
         marks: &[Mark],
         cursor: usize,
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> PxRect {
         let font = &fonts[self.font.min(fonts.len() - 1)];
         let (x, y) = offset_to_point(text, cursor, font, self.px, self.max_width, marks);
@@ -531,11 +531,11 @@ impl TextInput {
         self.place(target, extend);
     }
 
-    pub fn move_up(&mut self, extend: bool, font: &fontdue::Font, px: f32, wrap: Option<f32>) {
+    pub fn move_up(&mut self, extend: bool, font: &crate::fonts::Font, px: f32, wrap: Option<f32>) {
         self.move_vertical(true, extend, font, px, wrap);
     }
 
-    pub fn move_down(&mut self, extend: bool, font: &fontdue::Font, px: f32, wrap: Option<f32>) {
+    pub fn move_down(&mut self, extend: bool, font: &crate::fonts::Font, px: f32, wrap: Option<f32>) {
         self.move_vertical(false, extend, font, px, wrap);
     }
 
@@ -543,7 +543,7 @@ impl TextInput {
         &mut self,
         up: bool,
         extend: bool,
-        font: &fontdue::Font,
+        font: &crate::fonts::Font,
         px: f32,
         wrap: Option<f32>,
     ) {
@@ -694,7 +694,7 @@ impl TextInput {
     pub fn handle_key(
         &mut self,
         key: KeyEvent,
-        font: &fontdue::Font,
+        font: &crate::fonts::Font,
         px: f32,
         wrap: Option<f32>,
     ) -> InputReply {
@@ -832,7 +832,7 @@ impl TextInput {
         &mut self,
         mouse: &Mouse,
         geometry: InputGeometry,
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> InputReply {
         let point = (mouse.x as f32, mouse.y as f32);
         match (mouse.kind, mouse.button) {
@@ -862,7 +862,7 @@ impl TextInput {
     }
 }
 
-pub fn line_height(font: &fontdue::Font, px: f32) -> f32 {
+pub fn line_height(font: &crate::fonts::Font, px: f32) -> f32 {
     font.horizontal_line_metrics(px)
         .map_or(px, |m| m.new_line_size)
 }
@@ -870,7 +870,7 @@ pub fn line_height(font: &fontdue::Font, px: f32) -> f32 {
 pub fn offset_to_point(
     text: &str,
     offset: usize,
-    font: &fontdue::Font,
+    font: &crate::fonts::Font,
     px: f32,
     wrap: Option<f32>,
     marks: &[Mark],
@@ -889,7 +889,7 @@ pub fn point_to_offset(
     text: &str,
     x: f32,
     y: f32,
-    font: &fontdue::Font,
+    font: &crate::fonts::Font,
     px: f32,
     wrap: Option<f32>,
     marks: &[Mark],
@@ -903,7 +903,7 @@ fn nearest_column(
     text: &str,
     line: Range<usize>,
     x: f32,
-    font: &fontdue::Font,
+    font: &crate::fonts::Font,
     px: f32,
     marks: &[Mark],
 ) -> usize {
@@ -925,8 +925,8 @@ mod tests {
     static FONT_BYTES: &[u8] =
         include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
 
-    fn font() -> fontdue::Font {
-        fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap()
+    fn font() -> crate::fonts::Font {
+        crate::fonts::Font::single(fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap())
     }
 
     fn input(text: &str, cursor: usize) -> TextInput {

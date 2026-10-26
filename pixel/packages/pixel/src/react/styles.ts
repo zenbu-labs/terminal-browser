@@ -1,5 +1,14 @@
 import type { Rgba } from "./native";
 
+export type FontFamily = string | string[];
+
+export interface FontFace {
+  family: string;
+  src: string;
+  weight?: number;
+  style?: "normal" | "italic";
+}
+
 export type Color = Rgba | [number, number, number] | string;
 
 export interface Edges {
@@ -77,7 +86,9 @@ export interface Style {
   border?: Border;
   color?: Color;
   fontSize?: number;
-  font?: number;
+  fontFamily?: FontFamily;
+  fontWeight?: number | "normal" | "bold";
+  fontStyle?: "normal" | "italic";
   hoverBackground?: Color;
   hoverColor?: Color;
   opaque?: boolean;
@@ -158,7 +169,9 @@ export function serializeStyle(style: Style): Record<string, unknown> {
     border: style.border && serializeBorder(style.border),
     color: parseColor(style.color),
     fontSize: style.fontSize,
-    font: style.font,
+    fontFamily: style.fontFamily,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
     hoverBackground: parseColor(style.hoverBackground),
     hoverColor: parseColor(style.hoverColor),
     wrap: style.wrap,

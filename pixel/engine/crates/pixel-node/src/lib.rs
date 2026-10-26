@@ -319,12 +319,7 @@ impl PixelEngine {
         session_env: Option<std::collections::HashMap<String, String>>,
         host: Option<HostOptions>,
     ) -> Result<Self> {
-        // index 0 is what text renders in unless a node picks another font, so it is
-        // the bundled mono face regardless of what the OS ships
-        let fonts = vec![
-            load_font(&[], MONO_FONT_BYTES),
-            load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES),
-        ];
+        let fonts = pixel_core::fonts::FontRegistry::new(load_font(&[], MONO_FONT_BYTES), load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES));
         let session_env = match session_env {
             Some(env) => pixel_core::SessionEnv::of_session(env),
             None => pixel_core::SessionEnv::of_process(),

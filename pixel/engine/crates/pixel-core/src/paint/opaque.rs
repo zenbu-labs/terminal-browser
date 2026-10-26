@@ -231,7 +231,7 @@ mod tests {
     static FONT_BYTES: &[u8] = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
 
     fn page(children: Vec<Desc>) -> Tree {
-        let font = fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap();
+        let font = crate::fonts::Font::single(fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap());
         let mut tree = Tree::new((400.0, 300.0));
         tree.reconcile(Desc {
             style: Style {
@@ -242,7 +242,7 @@ mod tests {
             children,
             ..Desc::default()
         });
-        tree.flush_layout(std::slice::from_ref(&font), 16.0);
+        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
         tree
     }
 

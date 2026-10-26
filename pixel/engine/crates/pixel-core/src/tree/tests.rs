@@ -7,8 +7,8 @@ use crate::style::{Align, Border, BorderSide, Edges, Paint, Position};
 static FONT_BYTES: &[u8] =
     include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
 
-fn font() -> fontdue::Font {
-    fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap()
+fn font() -> crate::fonts::Font {
+    crate::fonts::Font::single(fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap())
 }
 
 fn tree_of(window: (f32, f32), children: Vec<Desc>) -> Tree {
@@ -17,13 +17,13 @@ fn tree_of(window: (f32, f32), children: Vec<Desc>) -> Tree {
         children,
         ..Desc::default()
     });
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     tree
 }
 
 fn painted(tree: &mut Tree, window: (u32, u32), cursor: Option<(f32, f32)>) -> Canvas {
     let mut canvas = Canvas::new(window.0, window.1);
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     paint(tree, &mut canvas, &[font()], cursor, None);
     canvas
 }
@@ -180,7 +180,7 @@ fn pointer_hit_prefers_the_topmost_pointer_surface() {
     });
     tree.append(tree.root(), bottom);
     tree.append(tree.root(), top);
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(tree.hit_pointer(10.0, 10.0), Some(top));
     assert_eq!(tree.hit_pointer(100.0, 50.0), Some(bottom));
 }
@@ -209,7 +209,7 @@ fn pointer_hit_stops_at_a_drag_surface_drawn_over_it() {
     });
     tree.append(tree.root(), page);
     tree.append(tree.root(), canvas);
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(tree.hit_pointer(10.0, 10.0), None);
     assert_eq!(tree.hit_drag(10.0, 10.0), Some(canvas));
     assert_eq!(tree.hit_pointer(100.0, 50.0), Some(page));
@@ -308,7 +308,7 @@ fn scrolled_out_children_do_not_take_clicks() {
     let id = tree.find("scroller").unwrap();
     tree.scroll_state_mut(id).unwrap().position = 40.0;
     tree.mark_place();
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     let hit = tree.hit_click(5.0, 35.0).unwrap();
     assert_eq!(
         tree.key_of(hit),
@@ -500,7 +500,7 @@ fn text_leaves_size_the_layout_and_relayout_when_text_changes() {
         }],
         ..Desc::default()
     });
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     let after = tree.rect(id).unwrap();
     assert!(after.w > before.w, "{} > {}", after.w, before.w);
 }
@@ -643,7 +643,7 @@ fn outside_click_targets_report_flagged_nodes_not_containing_the_point() {
         ..Props::default()
     });
     tree.append(tree.root(), id);
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert!(tree.outside_click_targets(35.0, 45.0).is_empty());
     assert_eq!(tree.outside_click_targets(5.0, 5.0), vec![id]);
 }
@@ -761,7 +761,7 @@ fn shrinking_content_clamps_the_scroll_position() {
     state.position = 40.0;
     state.set_target(40.0);
     tree.mark_place();
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(tree.scroll_state(id).unwrap().position, 40.0);
 
     // Drop the second block: content now fits, so scroll snaps to 0.
@@ -771,7 +771,7 @@ fn shrinking_content_clamps_the_scroll_position() {
         children: desc,
         ..Desc::default()
     });
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     let state = tree.scroll_state(id).unwrap();
     assert_eq!(state.position, 0.0);
     assert_eq!(state.target, 0.0);
@@ -801,7 +801,7 @@ fn hidden_nodes_zero_their_rects() {
     props.style.width = Dimension::Px(50.0);
     props.style.height = Dimension::Px(50.0);
     tree.update(id, props);
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(tree.rect(id), Some(PxRect::ZERO));
 }
 
@@ -836,7 +836,7 @@ fn scroll_range_follows_content_height_and_no_overflow_hides_the_bar() {
         children: virtual_list(Some(800.0)),
         ..Desc::default()
     });
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(
         tree.scroll_max(id),
         600.0,
@@ -998,7 +998,7 @@ fn labels(a: &str, b: &str) -> Vec<Desc> {
     }]
 }
 
-fn point_at(tree: &Tree, id: NodeId, offset: usize, fonts: &[fontdue::Font]) -> (f32, f32) {
+fn point_at(tree: &Tree, id: NodeId, offset: usize, fonts: &[crate::fonts::Font]) -> (f32, f32) {
     let geometry = tree.text_geometry(id).unwrap();
     let text = tree.text_of(id).unwrap();
     let rect = geometry.caret_rect(text, &[], offset, fonts);
@@ -1266,7 +1266,7 @@ fn an_outside_click_dismisses_the_selection_and_repaints() {
     tree.doc_select_drag(point_at(&tree, a, 5, &fonts), &fonts);
     tree.doc_select_up();
     assert_eq!(tree.doc_selected_text().as_deref(), Some("first"));
-    tree.flush_layout(&[font()], 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     tree.clear_paint_flag();
 
     let rect = tree.rect(a).unwrap();
@@ -1674,7 +1674,7 @@ fn mark_widgets_reserve_width_and_place_inline() {
         ..Props::default()
     });
     tree.append(input, widget);
-    tree.flush_layout(&fonts, 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
 
     let geometry = tree.input_geometry(input).unwrap();
     let text = tree.input_text(input).unwrap().to_string();
@@ -1704,7 +1704,7 @@ fn mark_widgets_reserve_width_and_place_inline() {
         i.set_cursor(after, false);
         i.delete_backward(Granularity::Char);
     });
-    tree.flush_layout(&fonts, 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(
         tree.rect(widget),
         Some(PxRect::ZERO),
@@ -1714,7 +1714,7 @@ fn mark_widgets_reserve_width_and_place_inline() {
     tree.edit_input(input, |i| {
         assert!(i.undo());
     });
-    tree.flush_layout(&fonts, 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(
         tree.rect(widget).map(|r| r.w),
         Some(40.0),
@@ -1748,7 +1748,7 @@ fn static_text_marks_place_widgets_like_inputs() {
         ..Props::default()
     });
     tree.append(text, widget);
-    tree.flush_layout(&fonts, 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
 
     assert_eq!(
         tree.text_of(text).unwrap(),
@@ -1810,11 +1810,11 @@ fn failed_image_with_unknown_dims_occupies_a_square() {
         ..Props::default()
     });
     tree.append(row, image);
-    tree.flush_layout(&fonts, 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
 
     wait_for_decode(&decoded);
     tree.mark_layout();
-    tree.flush_layout(&fonts, 16.0);
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     let rect = tree.rect(image).unwrap();
     assert_eq!(
         (rect.w, rect.h),
@@ -1947,4 +1947,30 @@ fn single_line_inputs_center_their_text_vertically() {
     let multi = tree_of((200.0, 60.0), field(true));
     let id = multi.find("in").unwrap();
     assert_eq!(multi.input_geometry(id).unwrap().origin.1, 4.0, "wrapping inputs stay top aligned");
+}
+
+#[test]
+fn font_family_weight_and_style_inherit_separately() {
+    let mut fonts = crate::fonts::FontRegistry::bundled();
+    let sans = fonts.families(&["sans-serif".to_string()]);
+    let mut tree = Tree::new((200.0, 100.0));
+    tree.reconcile(Desc {
+        children: vec![Desc {
+            style: Style { font_family: Some(sans), ..Style::default() },
+            children: vec![Desc {
+                text: Some("bold".into()),
+                style: Style { font_weight: Some(crate::fonts::BOLD), ..Style::default() },
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        }],
+        ..Desc::default()
+    });
+    tree.flush_layout(&mut fonts, 16.0);
+    let parent = tree.children(tree.root())[0];
+    let text = tree.children(parent)[0];
+    let resolved = tree.node(text).resolved;
+    assert_eq!((resolved.families, resolved.weight), (sans, crate::fonts::BOLD), "the child keeps the parent's family");
+    assert_eq!(resolved.font, fonts.resolve(sans, crate::fonts::BOLD, false));
+    assert_ne!(resolved.font, tree.node(parent).resolved.font);
 }

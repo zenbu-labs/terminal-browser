@@ -7,7 +7,7 @@ pub(crate) const WRAP_SLACK: f32 = 1.0;
 
 pub fn wrap_lines(
     text: &str,
-    font: &fontdue::Font,
+    font: &crate::fonts::Font,
     px: f32,
     max_width: Option<f32>,
     marks: &[Mark],
@@ -32,7 +32,7 @@ pub fn wrap_lines(
 fn wrap_logical_line(
     text: &str,
     line: Range<usize>,
-    font: &fontdue::Font,
+    font: &crate::fonts::Font,
     px: f32,
     max_width: f32,
     marks: &[Mark],
@@ -98,7 +98,7 @@ fn next_break(text: &str, from: usize, limit: usize) -> usize {
 fn break_long_word(
     text: &str,
     word: Range<usize>,
-    font: &fontdue::Font,
+    font: &crate::fonts::Font,
     px: f32,
     max_width: f32,
     marks: &[Mark],
@@ -134,8 +134,8 @@ mod tests {
     static FONT_BYTES: &[u8] =
         include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
 
-    fn font() -> fontdue::Font {
-        fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap()
+    fn font() -> crate::fonts::Font {
+        crate::fonts::Font::single(fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap())
     }
 
     fn parts<'a>(text: &'a str, lines: &[Range<usize>]) -> Vec<&'a str> {
@@ -246,7 +246,7 @@ mod tests {
 // Cuts a single line to fit `max_width` and ends it with an ellipsis, so a
 // label that is too wide reads as cut rather than as a different word. Returns
 // None when the whole line fits.
-pub fn ellipsize(text: &str, font: &fontdue::Font, px: f32, max_width: f32) -> Option<String> {
+pub fn ellipsize(text: &str, font: &crate::fonts::Font, px: f32, max_width: f32) -> Option<String> {
     let measure = |s: &str| crate::canvas::measure_text(font, s, px);
     if measure(text) <= max_width {
         return None;

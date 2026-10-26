@@ -140,7 +140,12 @@ enum Op {
         frame_events: Option<bool>,
     },
     RegisterFont {
+        family: String,
         path: String,
+        #[serde(default)]
+        weight: Option<u16>,
+        #[serde(default)]
+        italic: bool,
     },
     SetKeyCapture {
         keys: Vec<String>,
@@ -189,19 +194,18 @@ struct RichClipMarkDto {
     data: String,
 }
 
-fn register_font(engine: &mut Engine, path: &str) -> String {
+// Adds a face to a family. Text resolved after this sees it; the reply says whether the file loaded.
+fn register_font(engine: &mut Engine, family: &str, path: &str, weight: u16, italic: bool) -> String {
     let loaded = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
         pixel_core::fontdue::Font::from_bytes(bytes, pixel_core::fontdue::FontSettings::default())
             .map_err(str::to_string)
     });
     match loaded {
         Ok(font) => {
-            let index = engine.add_font(font);
-            serde_json::json!({ "type": "fontRegistered", "path": path, "font": index })
+            engine.fonts.add_face(family, weight, italic, font);
+            serde_json::json!({ "type": "fontRegistered", "path": path })
         }
-        Err(error) => {
-            serde_json::json!({ "type": "fontRegistered", "path": path, "error": error })
-        }
+        Err(error) => serde_json::json!({ "type": "fontRegistered", "path": path, "error": error }),
     }
     .to_string()
 }
@@ -219,6 +223,30 @@ struct Envelope<'a> {
     // we want to use slices instead of Value trees since batches can hold tens of thousands of ops 
     #[serde(borrow)]
     ops: Vec<&'a serde_json::value::RawValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FamilyDto {
+    One(String),
+    Stack(Vec<String>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WeightDto {
+    Number(u16),
+    Named(String),
+}
+
+impl WeightDto {
+    fn value(self) -> u16 {
+        match self {
+            WeightDto::Number(weight) => weight.clamp(1, 1000),
+            WeightDto::Named(name) if name == "bold" => pixel_core::fonts::BOLD,
+            WeightDto::Named(_) => pixel_core::fonts::REGULAR,
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -529,7 +557,9 @@ struct StyleDto {
     border: Option<BorderDto>,
     color: Option<Color>,
     font_size: Option<f32>,
-    font: Option<usize>,
+    font_family: Option<FamilyDto>,
+    font_weight: Option<WeightDto>,
+    font_style: Option<String>,
     hover_background: Option<Color>,
     hover_color: Option<Color>,
     scrollbar: Option<ScrollbarDto>,
@@ -584,7 +614,7 @@ fn edges(dto: Option<EdgesDto>) -> Edges {
 }
 
 impl StyleDto {
-    fn into_style(self, rem: f32) -> Style {
+    fn into_style(self, rem: f32, fonts: &mut pixel_core::fonts::FontRegistry) -> Style {
         Style {
             flex_direction: match self.flex_direction.as_deref() {
                 Some("column") => FlexDirection::Column,
@@ -635,7 +665,12 @@ impl StyleDto {
             border: self.border.map(BorderDto::into_border),
             color: self.color,
             font_size: self.font_size,
-            font: self.font,
+            font_family: self.font_family.map(|family| match family {
+                FamilyDto::One(name) => fonts.families(&[name]),
+                FamilyDto::Stack(names) => fonts.families(&names),
+            }),
+            font_weight: self.font_weight.map(WeightDto::value),
+            font_italic: self.font_style.map(|style| style == "italic"),
             hover_background: self.hover_background,
             hover_color: self.hover_color,
             scrollbar: self.scrollbar.map(|s| s.into_style(rem)),
@@ -654,9 +689,9 @@ impl StyleDto {
 }
 
 impl PropsDto {
-    fn into_props(self, rem: f32) -> Props {
+    fn into_props(self, rem: f32, fonts: &mut pixel_core::fonts::FontRegistry) -> Props {
         Props {
-            style: self.style.into_style(rem),
+            style: self.style.into_style(rem, fonts),
             text: self.text,
             key: self.key,
             clickable: self.clickable,
@@ -771,8 +806,8 @@ fn apply_op(
         replies.push(reply.to_string());
         return;
     }
-    if let Op::RegisterFont { path } = op {
-        replies.push(register_font(engine, &path));
+    if let Op::RegisterFont { family, path, weight, italic } = op {
+        replies.push(register_font(engine, &family, &path, weight.unwrap_or(pixel_core::fonts::REGULAR), italic));
         return;
     }
     let base_px = engine.base_px;
@@ -782,7 +817,7 @@ fn apply_op(
     };
     match op {
         Op::Create { id, props } => {
-            let node = tree.create(props.into_props(base_px));
+            let node = tree.create(props.into_props(base_px, &mut engine.fonts));
             map.insert(id, node);
         }
         Op::InsertBefore {
@@ -805,7 +840,7 @@ fn apply_op(
         Op::Forget { id } => map.forget(id),
         Op::Update { id, props } => {
             if let Some(node) = map.node(id) {
-                let props = props.into_props(base_px);
+                let props = props.into_props(base_px, &mut engine.fonts);
                 tree.update(node, props);
             }
         }

@@ -76,24 +76,24 @@ function ElementRow(props: { row: Row; selected: boolean; expanded: boolean; rem
         style={{
           color: row.expandable ? theme.dim : theme.faint,
           fontSize: rem * 0.7,
-          font: MONO,
+          fontFamily: MONO,
           wrap: false,
           flexShrink: 0,
         }}
       >
         {row.expandable ? (expanded ? "-" : "+") : " "}
       </Text>
-      <Text style={{ color: theme.tag, fontSize: rem * 0.74, font: MONO, wrap: false }}>
+      <Text style={{ color: theme.tag, fontSize: rem * 0.74, fontFamily: MONO, wrap: false }}>
         {`<${tag}>`}
       </Text>
       {instance.props.id && (
-        <Text style={{ color: theme.attrName, fontSize: rem * 0.7, font: MONO, wrap: false }}>
+        <Text style={{ color: theme.attrName, fontSize: rem * 0.7, fontFamily: MONO, wrap: false }}>
           {`#${instance.props.id}`}
         </Text>
       )}
       {text && (
         <Box style={{ flexShrink: 1, overflow: "hidden" }}>
-          <Text style={{ color: theme.dim, fontSize: rem * 0.7, font: MONO, wrap: false }}>
+          <Text style={{ color: theme.dim, fontSize: rem * 0.7, fontFamily: MONO, wrap: false }}>
             {`"${text}"`}
           </Text>
         </Box>
@@ -119,7 +119,7 @@ function formatPx(value: number): string {
 
 function BoxValue(props: { value: string; rem: number }) {
   return (
-    <Text style={{ color: BOX_TEXT, fontSize: props.rem * 0.62, font: MONO, wrap: false }}>
+    <Text style={{ color: BOX_TEXT, fontSize: props.rem * 0.62, fontFamily: MONO, wrap: false }}>
       {props.value}
     </Text>
   );
@@ -148,7 +148,7 @@ function BoxRing(props: {
       onMouseLeave={() => setHighlight(null)}
     >
       <Box style={{ position: "absolute", inset: { left: rem * 0.25, top: rem * 0.12 } }}>
-        <Text style={{ color: BOX_TEXT, fontSize: rem * 0.56, font: MONO, wrap: false }}>
+        <Text style={{ color: BOX_TEXT, fontSize: rem * 0.56, fontFamily: MONO, wrap: false }}>
           {area}
         </Text>
       </Box>
@@ -206,12 +206,12 @@ function DetailRow(props: { name: string; value: string; rem: number; color?: st
   return (
     <Box style={{ flexDirection: "row", gap: rem * 0.5, padding: { left: rem * 0.5, top: 1, bottom: 1 } }}>
       <Box style={{ width: rem * 6.5, flexShrink: 0 }}>
-        <Text style={{ color: theme.attrName, fontSize: rem * 0.7, font: MONO, wrap: false }}>
+        <Text style={{ color: theme.attrName, fontSize: rem * 0.7, fontFamily: MONO, wrap: false }}>
           {name}
         </Text>
       </Box>
       <Box style={{ flexGrow: 1, flexBasis: 0, overflow: "hidden" }}>
-        <Text style={{ color: props.color ?? theme.attrValue, fontSize: rem * 0.7, font: MONO }}>
+        <Text style={{ color: props.color ?? theme.attrValue, fontSize: rem * 0.7, fontFamily: MONO }}>
           {value}
         </Text>
       </Box>
@@ -238,15 +238,15 @@ function Details(props: { instance: Instance | null; rect: LayoutRect | null; re
           alignItems: "center",
         }}
       >
-        <Text style={{ color: theme.tag, fontSize: rem * 0.8, font: MONO, wrap: false }}>
+        <Text style={{ color: theme.tag, fontSize: rem * 0.8, fontFamily: MONO, wrap: false }}>
           {`<${instance.type}>`}
         </Text>
         {instance.props.id && (
-          <Text style={{ color: theme.attrName, fontSize: rem * 0.74, font: MONO, wrap: false }}>
+          <Text style={{ color: theme.attrName, fontSize: rem * 0.74, fontFamily: MONO, wrap: false }}>
             {`#${instance.props.id}`}
           </Text>
         )}
-        <Text style={{ color: theme.faint, fontSize: rem * 0.68, font: MONO, wrap: false }}>
+        <Text style={{ color: theme.faint, fontSize: rem * 0.68, fontFamily: MONO, wrap: false }}>
           {`node ${instance.id}`}
         </Text>
       </Box>

@@ -132,7 +132,7 @@ impl DocSelectionState {
         &mut self,
         doc: &impl DocLayout,
         point: (f32, f32),
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> bool {
         let scope = doc.scope_at(point);
         let Some(pos) = pos_hit(doc, point, fonts, scope) else {
@@ -170,7 +170,7 @@ impl DocSelectionState {
         &mut self,
         doc: &impl DocLayout,
         point: (f32, f32),
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> bool {
         let scope = doc.scope_at(point);
         let Some(pos) = pos_near(doc, point, fonts, true, scope) else {
@@ -188,7 +188,7 @@ impl DocSelectionState {
         &mut self,
         doc: &impl DocLayout,
         point: (f32, f32),
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> bool {
         if !self.selecting {
             return false;
@@ -339,7 +339,7 @@ impl DocSelectionState {
         &mut self,
         doc: &impl DocLayout,
         up: bool,
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> bool {
         let Some(sel) = self.selection(doc) else {
             return false;
@@ -417,7 +417,7 @@ impl DocSelectionState {
     pub(crate) fn blocks(
         &self,
         doc: &impl DocLayout,
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> Vec<(NodeId, Vec<PxRect>, Color)> {
         let Some((start, end)) = self.range(doc) else {
             return Vec::new();
@@ -491,7 +491,7 @@ impl DocSelectionState {
     }
 }
 
-fn offset_at(doc: &impl DocLayout, id: NodeId, point: (f32, f32), fonts: &[fontdue::Font]) -> usize {
+fn offset_at(doc: &impl DocLayout, id: NodeId, point: (f32, f32), fonts: &[crate::fonts::Font]) -> usize {
     match (doc.text_geometry(id), doc.text_of(id)) {
         (Some(geometry), Some(text)) => geometry.offset_at(text, doc.marks_of(id), point, fonts),
         _ => 0,
@@ -501,7 +501,7 @@ fn offset_at(doc: &impl DocLayout, id: NodeId, point: (f32, f32), fonts: &[fontd
 fn pos_hit(
     doc: &impl DocLayout,
     point: (f32, f32),
-    fonts: &[fontdue::Font],
+    fonts: &[crate::fonts::Font],
     scope: Option<NodeId>,
 ) -> Option<DocPos> {
     let id = doc.paint_order().iter().rev().copied().find(|&id| {
@@ -520,7 +520,7 @@ fn pos_hit(
 fn pos_near(
     doc: &impl DocLayout,
     point: (f32, f32),
-    fonts: &[fontdue::Font],
+    fonts: &[crate::fonts::Font],
     clamp_to_ends: bool,
     scope: Option<NodeId>,
 ) -> Option<DocPos> {
@@ -577,7 +577,7 @@ fn adjacent_leaf(doc: &impl DocLayout, id: NodeId, forward: bool) -> Option<Node
     }
 }
 
-fn caret_point(doc: &impl DocLayout, pos: DocPos, fonts: &[fontdue::Font]) -> Option<(f32, f32, f32)> {
+fn caret_point(doc: &impl DocLayout, pos: DocPos, fonts: &[crate::fonts::Font]) -> Option<(f32, f32, f32)> {
     let geometry = doc.text_geometry(pos.node)?;
     let text = doc.text_of(pos.node)?;
     let font = &fonts[geometry.font.min(fonts.len() - 1)];

@@ -114,7 +114,7 @@ impl Engine {
         if view >= self.comp.views.len() {
             return;
         }
-        let fonts = &self.fonts;
+        let fonts = &mut self.fonts;
         let base_px = self.base_px;
         self.comp.views[view].tree.flush_layout(fonts, base_px);
         let tree = &self.comp.views[view].tree;
@@ -141,7 +141,7 @@ impl Engine {
         if view >= self.comp.views.len() {
             return;
         }
-        let fonts = &self.fonts;
+        let fonts = &mut self.fonts;
         let base_px = self.base_px;
         let tree = &mut self.comp.views[view].tree;
         tree.flush_layout(fonts, base_px);

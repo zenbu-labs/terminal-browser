@@ -248,7 +248,7 @@ function InteractionsLane(props: {
                     style={{
                       color: fromDevtools ? theme.faint : theme.warn,
                       fontSize: rem * 0.64,
-                      font: MONO,
+                      fontFamily: MONO,
                       wrap: false,
                     }}
                   >
@@ -331,7 +331,7 @@ function Lane(props: {
                   style={{
                     color: "#101318",
                     fontSize: rem * 0.62,
-                    font: MONO,
+                    fontFamily: MONO,
                     wrap: false,
                   }}
                 >
@@ -357,7 +357,7 @@ function Ruler(props: { session: ProfileSession; viewport: Viewport; width: numb
         const x = ((t - viewport.t0) / (viewport.t1 - viewport.t0)) * width;
         return (
           <Box key={i} style={{ position: "absolute", inset: { left: x, top: 0 } }}>
-            <Text style={{ color: theme.faint, fontSize: rem * 0.58, font: MONO, wrap: false }}>
+            <Text style={{ color: theme.faint, fontSize: rem * 0.58, fontFamily: MONO, wrap: false }}>
               {`${(t - session.start).toFixed(1)}ms`}
             </Text>
           </Box>
@@ -382,27 +382,27 @@ function SpanDetail(props: { span: TimeSpan | null; session: ProfileSession; rem
     >
       {span ? (
         <>
-          <Text style={{ color: theme.text, fontSize: rem * 0.72, font: MONO, wrap: false }}>
+          <Text style={{ color: theme.text, fontSize: rem * 0.72, fontFamily: MONO, wrap: false }}>
             {span.name}
           </Text>
           {span.label != null && (
-            <Text style={{ color: theme.dim, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+            <Text style={{ color: theme.dim, fontSize: rem * 0.66, fontFamily: MONO, wrap: false }}>
               {span.label}
             </Text>
           )}
-          <Text style={{ color: theme.dim, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+          <Text style={{ color: theme.dim, fontSize: rem * 0.66, fontFamily: MONO, wrap: false }}>
             {`at ${(span.start - session.start).toFixed(2)}ms`}
           </Text>
-          <Text style={{ color: theme.accent, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+          <Text style={{ color: theme.accent, fontSize: rem * 0.66, fontFamily: MONO, wrap: false }}>
             {`total ${span.dur.toFixed(2)}ms`}
           </Text>
           {span.self != null && (
-            <Text style={{ color: theme.warn, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+            <Text style={{ color: theme.warn, fontSize: rem * 0.66, fontFamily: MONO, wrap: false }}>
               {`self ${span.self.toFixed(2)}ms`}
             </Text>
           )}
           {span.arg != null && (
-            <Text style={{ color: theme.faint, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+            <Text style={{ color: theme.faint, fontSize: rem * 0.66, fontFamily: MONO, wrap: false }}>
               {span.name.startsWith("paint.")
                 ? `n = ${span.arg}`
                 : span.name.startsWith("image.")
@@ -532,7 +532,7 @@ export function ProfilerPanel(props: { rem: number }) {
             height: rem * 1.3,
             fontSize: rem * 0.7,
             color: theme.text,
-            font: MONO,
+            fontFamily: MONO,
             wrap: false,
             padding: { left: rem * 0.3, right: rem * 0.3 },
             border: { width: 1, color: theme.border },
@@ -547,7 +547,7 @@ export function ProfilerPanel(props: { rem: number }) {
         />
         {session && !exportedTo && <Summary session={session} rem={rem} />}
         {exportedTo && (
-          <Text style={{ color: theme.ok, fontSize: rem * 0.66, font: MONO, wrap: false }}>
+          <Text style={{ color: theme.ok, fontSize: rem * 0.66, fontFamily: MONO, wrap: false }}>
             {exportedTo}
           </Text>
         )}

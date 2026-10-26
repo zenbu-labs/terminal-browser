@@ -9,7 +9,7 @@ import {
   type MarkdownRow,
   type MarkdownSpan,
 } from "./native";
-import type { Color } from "./styles";
+import type { Color, FontFamily } from "./styles";
 import type { ClickEvent, TextSpan } from "./reconciler-config";
 
 export interface MarkdownTheme {
@@ -27,7 +27,8 @@ export interface MarkdownProps {
   theme: MarkdownTheme;
   rem: number;
   streaming?: boolean;
-  monoFont?: number;
+  /** The family code blocks draw in. */
+  codeFamily?: FontFamily;
   onLinkClick?: (href: string) => void;
   highlight?: { start: number; end: number } | null;
   highlightBg?: Color;
@@ -47,7 +48,7 @@ export function Markdown({
   theme,
   rem,
   streaming,
-  monoFont,
+  codeFamily,
   onLinkClick,
   highlight,
   highlightBg,
@@ -86,7 +87,7 @@ export function Markdown({
       nav: nav.current,
       theme,
       rem,
-      monoFont,
+      codeFamily,
       highlightBg: hit ? highlightBg ?? theme.codeBg : undefined,
       highlightRef: first ? firstHighlighted : undefined,
     };
@@ -159,7 +160,8 @@ interface BlockProps {
   block: MarkdownBlock;
   theme: MarkdownTheme;
   rem: number;
-  monoFont?: number;
+  /** The family code blocks draw in. */
+  codeFamily?: FontFamily;
   slug?: string;
   nav?: Nav;
   index?: number;
@@ -172,7 +174,7 @@ const Block = memo(
     block,
     theme,
     rem,
-    monoFont,
+    codeFamily,
     slug,
     nav,
     index,
@@ -184,7 +186,7 @@ const Block = memo(
         block={block}
         theme={theme}
         rem={rem}
-        monoFont={monoFont}
+        codeFamily={codeFamily}
         slug={slug}
         nav={nav}
         index={index}
@@ -225,7 +227,7 @@ const Block = memo(
   (a, b) =>
     a.theme === b.theme &&
     a.rem === b.rem &&
-    a.monoFont === b.monoFont &&
+    a.codeFamily === b.codeFamily &&
     a.slug === b.slug &&
     a.index === b.index &&
     a.highlightBg === b.highlightBg &&
@@ -292,7 +294,7 @@ function blockId(index: number | undefined): string | undefined {
   return index != null ? `md:${index}` : undefined;
 }
 
-function BlockBody({ block, theme, rem, monoFont, slug, nav, index }: BlockProps) {
+function BlockBody({ block, theme, rem, codeFamily, slug, nav, index }: BlockProps) {
   switch (block.kind) {
     case "heading": {
       const scale = HEADING_SCALE[block.level - 1] ?? 1;
@@ -314,7 +316,7 @@ function BlockBody({ block, theme, rem, monoFont, slug, nav, index }: BlockProps
     }
     case "code":
       return (
-        <CodeBlock block={block} theme={theme} rem={rem} monoFont={monoFont} index={index} />
+        <CodeBlock block={block} theme={theme} rem={rem} codeFamily={codeFamily} index={index} />
       );
     case "rule":
       return <Box style={{ height: 1, background: theme.separator }} />;
@@ -452,7 +454,7 @@ function Table({ block, theme, rem, nav, index }: BlockProps) {
   );
 }
 
-function CodeBlock({ block, theme, rem, monoFont, index }: BlockProps) {
+function CodeBlock({ block, theme, rem, codeFamily, index }: BlockProps) {
   const spans = useMemo(
     () =>
       highlight(block.text, block.language).map((s) => ({
@@ -480,7 +482,7 @@ function CodeBlock({ block, theme, rem, monoFont, index }: BlockProps) {
       )}
       <Text
         id={blockId(index)}
-        style={{ wrap: false, color: theme.fg, font: monoFont }}
+        style={{ wrap: false, color: theme.fg, fontFamily: codeFamily ?? "monospace" }}
         spans={spans}
       >
         {block.text}

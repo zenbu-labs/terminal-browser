@@ -215,6 +215,10 @@ pub(crate) struct InputState {
 pub(crate) struct Resolved {
     pub color: Color,
     pub px: f32,
+    pub families: usize,
+    pub weight: u16,
+    pub italic: bool,
+    /// The font stack the three above resolve to.
     pub font: usize,
     pub selectable: bool,
     pub selection_color: Color,
@@ -298,6 +302,9 @@ pub struct Tree {
 pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
     color: [255, 255, 255, 255],
     px: 16.0,
+    families: crate::fonts::DEFAULT_FAMILIES,
+    weight: crate::fonts::REGULAR,
+    italic: false,
     font: 0,
     selectable: true,
     selection_color: DEFAULT_SELECTION_COLOR,
@@ -917,9 +924,9 @@ impl Tree {
         self.needs_layout = true;
     }
 
-    pub fn flush_layout(&mut self, fonts: &[fontdue::Font], base_px: f32) {
-        assert!(!fonts.is_empty());
+    pub fn flush_layout(&mut self, registry: &mut crate::fonts::FontRegistry, base_px: f32) {
         self.base_px = base_px;
+        let fonts_needed = self.needs_layout;
         if self.needs_layout {
             crate::profiler::span("tree.sync", || self.sync_dirty_children());
             self.image_slot_parents.clear();
@@ -931,8 +938,12 @@ impl Tree {
                         px: base_px,
                         ..DEFAULT_RESOLVED
                     },
+                    registry,
                 )
             });
+        }
+        let fonts: &[crate::fonts::Font] = registry;
+        if fonts_needed {
             crate::profiler::span("tree.widgets", || self.layout_mark_widgets(fonts));
 
             let root_taffy = self.node(self.root).taffy;
@@ -958,12 +969,23 @@ impl Tree {
         }
     }
 
-    fn resolve(&mut self, id: NodeId, inherited: Resolved) {
+    fn resolve(&mut self, id: NodeId, inherited: Resolved, registry: &mut crate::fonts::FontRegistry) {
         let node = self.node_mut(id);
+        let families = node.style.font_family.unwrap_or(inherited.families);
+        let weight = node.style.font_weight.unwrap_or(inherited.weight);
+        let italic = node.style.font_italic.unwrap_or(inherited.italic);
+        let font = if (families, weight, italic) == (inherited.families, inherited.weight, inherited.italic) {
+            inherited.font
+        } else {
+            registry.resolve(families, weight, italic)
+        };
         let resolved = Resolved {
             color: node.style.color.unwrap_or(inherited.color),
             px: node.style.font_size.unwrap_or(inherited.px),
-            font: node.style.font.unwrap_or(inherited.font),
+            families,
+            weight,
+            italic,
+            font,
             selectable: node.style.selectable.unwrap_or(inherited.selectable),
             selection_color: node
                 .style
@@ -1027,11 +1049,11 @@ impl Tree {
             let _ = self.taffy.mark_dirty(taffy);
         }
         for child in children {
-            self.resolve(child, resolved);
+            self.resolve(child, resolved, registry);
         }
     }
 
-    fn layout_slots(&mut self, fonts: &[fontdue::Font]) {
+    fn layout_slots(&mut self, fonts: &[crate::fonts::Font]) {
         use taffy::prelude::length;
         let parents = self.image_slot_parents.clone();
         for id in parents {
@@ -1067,7 +1089,7 @@ impl Tree {
         }
     }
 
-    fn layout_mark_widgets(&mut self, fonts: &[fontdue::Font]) {
+    fn layout_mark_widgets(&mut self, fonts: &[crate::fonts::Font]) {
         let parents = self.mark_parents.clone();
         for id in parents {
             let Some(node) = self.get(id) else { continue };
@@ -1127,7 +1149,7 @@ impl Tree {
         }
     }
 
-    fn place(&mut self, fonts: &[fontdue::Font]) {
+    fn place(&mut self, fonts: &[crate::fonts::Font]) {
         self.paint_order.clear();
         self.scrollables.clear();
         let layout = self
@@ -1143,7 +1165,7 @@ impl Tree {
         self.place_node(self.root, (0.0, 0.0), Some(window), fonts);
     }
 
-    fn single_line_offset(&self, id: NodeId, layout: &taffy::Layout, fonts: &[fontdue::Font]) -> f32 {
+    fn single_line_offset(&self, id: NodeId, layout: &taffy::Layout, fonts: &[crate::fonts::Font]) -> f32 {
         let node = self.node(id);
         if node.input.is_none() || node.style.wrap {
             return 0.0;
@@ -1158,7 +1180,7 @@ impl Tree {
         id: NodeId,
         origin: (f32, f32),
         clip: Option<PxRect>,
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) {
         if self.node(id).hidden {
             self.zero_rects(id);
@@ -1255,7 +1277,7 @@ impl Tree {
         parent: NodeId,
         child: NodeId,
         mark_id: u64,
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> Option<(f32, f32)> {
         let node = self.get(parent)?;
         let text = node.text.as_deref()?;
@@ -1616,7 +1638,7 @@ impl Tree {
         &self,
         id: NodeId,
         point: (f32, f32),
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> Option<usize> {
         let text = Tree::text_of(self, id)?;
         let geometry = self.text_geometry(id)?;
@@ -1645,7 +1667,7 @@ impl Tree {
         self.doc.scope()
     }
 
-    pub fn doc_selection_snapshot(&self, fonts: &[fontdue::Font]) -> Option<SelectionSnapshot> {
+    pub fn doc_selection_snapshot(&self, fonts: &[crate::fonts::Font]) -> Option<SelectionSnapshot> {
         let sel = self.doc_selection()?;
         if sel.is_collapsed() {
             return None;
@@ -1710,7 +1732,7 @@ impl Tree {
 
     pub fn doc_selection_blocks(
         &self,
-        fonts: &[fontdue::Font],
+        fonts: &[crate::fonts::Font],
     ) -> Vec<(NodeId, Vec<PxRect>, Color)> {
         self.doc.blocks(self, fonts)
     }
@@ -1722,7 +1744,7 @@ impl Tree {
         out
     }
 
-    pub fn doc_select_down(&mut self, point: (f32, f32), fonts: &[fontdue::Font]) -> bool {
+    pub fn doc_select_down(&mut self, point: (f32, f32), fonts: &[crate::fonts::Font]) -> bool {
         let selected = self.with_doc(|doc, tree| doc.select_down(tree, point, fonts));
         if selected {
             self.needs_paint = true;
@@ -1730,7 +1752,7 @@ impl Tree {
         selected
     }
 
-    pub fn doc_select_down_near(&mut self, point: (f32, f32), fonts: &[fontdue::Font]) -> bool {
+    pub fn doc_select_down_near(&mut self, point: (f32, f32), fonts: &[crate::fonts::Font]) -> bool {
         let selected = self.with_doc(|doc, tree| doc.select_down_near(tree, point, fonts));
         if selected {
             self.needs_paint = true;
@@ -1738,7 +1760,7 @@ impl Tree {
         selected
     }
 
-    pub fn doc_select_drag(&mut self, point: (f32, f32), fonts: &[fontdue::Font]) {
+    pub fn doc_select_drag(&mut self, point: (f32, f32), fonts: &[crate::fonts::Font]) {
         if self.with_doc(|doc, tree| doc.select_drag(tree, point, fonts)) {
             self.needs_paint = true;
         }
@@ -1780,7 +1802,7 @@ impl Tree {
         moved
     }
 
-    pub fn doc_extend_vertical(&mut self, up: bool, fonts: &[fontdue::Font]) -> bool {
+    pub fn doc_extend_vertical(&mut self, up: bool, fonts: &[crate::fonts::Font]) -> bool {
         let moved = self.with_doc(|doc, tree| doc.extend_vertical(tree, up, fonts));
         if moved {
             self.needs_paint = true;

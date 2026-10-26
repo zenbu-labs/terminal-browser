@@ -13,6 +13,7 @@ import {
   reconciler,
 } from "./reconciler-config";
 import type { PasteSource, PastedImage, SelectionPart } from "./reconciler-config";
+import type { FontFace } from "./styles";
 import type { EngineInfo, HostOptions, TerminalColors } from "./native";
 import { Surface } from "./surface";
 import { requestFrameRate } from "../web/frame-rate";
@@ -94,7 +95,7 @@ export type {
   ShapeStroke,
   PathProps,
 } from "./reconciler-config";
-export type { Color, Edges, InsetEdges, InsetValue, PointerShape, ScrollbarStyle, Style } from "./styles";
+export type { Color, Edges, FontFace, FontFamily, InsetEdges, InsetValue, PointerShape, ScrollbarStyle, Style } from "./styles";
 export type {
   DiffEmphasis,
   DiffRow,
@@ -164,6 +165,8 @@ export interface EngineKeyEvent {
 }
 
 export interface RootOptions {
+  /** Font files to add before the first frame, so text never draws in the wrong font. */
+  fonts?: FontFace[];
   onKey?: (event: EngineKeyEvent) => void;
   onRightClick?: (event: { x: number; y: number }) => void;
   onPaste?: (text: string) => void;
@@ -197,7 +200,7 @@ export interface PixelRoot {
   sharedTextures: boolean;
   render(element: ReactNode): void;
   flushSync<T>(fn: () => T): T;
-  registerFont(path: string): Promise<number>;
+  registerFont(face: FontFace): Promise<void>;
   createSurface(): Surface;
   surfaceStats(): SurfaceStats;
   stop(): void;
@@ -297,6 +300,10 @@ function applyColors(colors: TerminalColors): void {
   devtoolsStore.update((s) => ({ ...s, background: colors.background }));
 }
 
+function fontFaceOp(face: FontFace) {
+  return { family: face.family, path: face.src, weight: face.weight, italic: face.style === "italic" };
+}
+
 export function createRoot(options: RootOptions = {}): PixelRoot {
   const bridge =
     options.tty || options.host
@@ -338,6 +345,8 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   }
   const container: Container = { bridge, view: APP_VIEW, children: [] };
   bridge.containers[APP_VIEW] = container;
+  // Queued ahead of the first render's nodes, so the engine knows every family before it resolves any text.
+  for (const face of options.fonts ?? []) bridge.push(APP_VIEW, { op: "registerFont", ...fontFaceOp(face) });
   const root = reconciler.createContainer(
     container,
     ConcurrentRoot,
@@ -352,11 +361,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   );
   if (devtoolsEnabled) installConsoleCapture();
 
-  const fontIds = new Map<string, number>();
-  const fontRequests = new Map<
-    string,
-    Array<{ resolve: (font: number) => void; reject: (error: Error) => void }>
-  >();
+  const fontRequests = new Map<string, Array<{ resolve: () => void; reject: (error: Error) => void }>>();
   const retargets: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
 
   const dispatch = (event: EngineEventJson) => {
@@ -614,13 +619,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
       case "fontRegistered": {
         const pending = fontRequests.get(event.path!) ?? [];
         fontRequests.delete(event.path!);
-        if (event.font != null) {
-          fontIds.set(event.path!, event.font);
-          for (const p of pending) p.resolve(event.font);
-        } else {
-          const error = new Error(event.error ?? "font failed to load");
-          for (const p of pending) p.reject(error);
-        }
+        // fixme: placeholder copy
+        const error = event.error ? new Error(`font ${event.path} failed to load: ${event.error}`) : null;
+        for (const p of pending) error ? p.reject(error) : p.resolve();
         break;
       }
       case "exit":
@@ -700,17 +701,12 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     flushSync(fn) {
       return reconciler.flushSync(fn);
     },
-    registerFont(path: string) {
-      const known = fontIds.get(path);
-      if (known != null) return Promise.resolve(known);
-      return new Promise<number>((resolve, reject) => {
-        const pending = fontRequests.get(path);
-        if (pending) {
-          pending.push({ resolve, reject });
-          return;
-        }
-        fontRequests.set(path, [{ resolve, reject }]);
-        bridge.push(APP_VIEW, { op: "registerFont", path });
+    registerFont(face: FontFace) {
+      return new Promise<void>((resolve, reject) => {
+        const pending = fontRequests.get(face.src) ?? [];
+        pending.push({ resolve, reject });
+        fontRequests.set(face.src, pending);
+        bridge.push(APP_VIEW, { op: "registerFont", ...fontFaceOp(face) });
         bridge.flush();
       });
     },

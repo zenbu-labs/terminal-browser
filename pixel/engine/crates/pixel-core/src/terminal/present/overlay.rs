@@ -30,7 +30,7 @@ struct Note {
 
 #[derive(Default)]
 pub(crate) struct Overlay {
-    font: Option<fontdue::Font>,
+    font: Option<crate::fonts::Font>,
     frame: (u32, u32),
     notes: Vec<Note>,
     next: u32,
@@ -45,7 +45,7 @@ impl Overlay {
     }
 }
 
-fn render(font: &fontdue::Font, text: &str, px: f32, fg: [u8; 4], bg: [u8; 4]) -> (u32, u32, Vec<u8>) {
+fn render(font: &crate::fonts::Font, text: &str, px: f32, fg: [u8; 4], bg: [u8; 4]) -> (u32, u32, Vec<u8>) {
     let metrics = font.horizontal_line_metrics(px);
     let ascent = metrics.map_or(px * 0.8, |m| m.ascent);
     let line = metrics.map_or(px * 1.4, |m| m.ascent - m.descent + m.line_gap);
@@ -58,7 +58,7 @@ fn render(font: &fontdue::Font, text: &str, px: f32, fg: [u8; 4], bg: [u8; 4]) -
 }
 
 impl Terminal {
-    pub fn set_overlay_font(&mut self, font: fontdue::Font) {
+    pub fn set_overlay_font(&mut self, font: crate::fonts::Font) {
         self.overlay.font = Some(font);
     }
 

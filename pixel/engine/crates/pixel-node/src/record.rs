@@ -220,8 +220,9 @@ pub fn run(job_json: &str, progress: &(dyn Fn(f64) + Sync)) -> Result<(), String
     }
     let font_bytes = fs::read(&job.font_file).map_err(|e| format!("font: {e}"))?;
 
-    let font = fontdue::Font::from_bytes(font_bytes, fontdue::FontSettings::default())
-        .map_err(|e| format!("font: {e}"))?;
+    let font = pixel_core::fonts::Font::single(
+        fontdue::Font::from_bytes(font_bytes, fontdue::FontSettings::default()).map_err(|e| format!("font: {e}"))?,
+    );
     if job.stage.as_deref() != Some("video") {
         write_crops(&job, &mut source, &font)?;
         write_keyframes(&job, &mut source, &font)?;
@@ -347,7 +348,7 @@ enum Step {
 fn encode_video(
     job: &Job,
     source: &mut FrameSource,
-    font: &fontdue::Font,
+    font: &pixel_core::fonts::Font,
     progress: &(dyn Fn(f64) + Sync),
 ) -> Result<(), String> {
     let (base_w, base_h) = {
@@ -523,7 +524,7 @@ fn encode_video(
     })
 }
 
-fn write_crops(job: &Job, source: &mut FrameSource, font: &fontdue::Font) -> Result<(), String> {
+fn write_crops(job: &Job, source: &mut FrameSource, font: &pixel_core::fonts::Font) -> Result<(), String> {
     if job.crops.is_empty() {
         return Ok(());
     }
@@ -589,7 +590,7 @@ fn cursor_at(pointer: &[TimedPoint], t_ms: u64) -> Option<(f32, f32)> {
     Some((prev.x, prev.y))
 }
 
-fn draw_overlay(canvas: &mut Canvas, overlay: &Overlay, job: &Job, font: &fontdue::Font) {
+fn draw_overlay(canvas: &mut Canvas, overlay: &Overlay, job: &Job, font: &pixel_core::fonts::Font) {
     let size = (canvas.height as f32 * 0.024).max(14.0);
     for &(x, y, progress) in &overlay.pulses {
         let radius = size * (0.55 + 1.35 * progress);
@@ -630,7 +631,7 @@ fn draw_overlay(canvas: &mut Canvas, overlay: &Overlay, job: &Job, font: &fontdu
     }
 }
 
-fn fit_px(font: &fontdue::Font, text: &str, base_px: f32, max_w: f32) -> f32 {
+fn fit_px(font: &pixel_core::fonts::Font, text: &str, base_px: f32, max_w: f32) -> f32 {
     let width = measure_text(font, text, base_px);
     if width > max_w {
         (base_px * max_w / width).max(8.0)
@@ -639,7 +640,7 @@ fn fit_px(font: &fontdue::Font, text: &str, base_px: f32, max_w: f32) -> f32 {
     }
 }
 
-fn draw_link_toast(canvas: &mut Canvas, url: &str, fade: f32, font: &fontdue::Font) {
+fn draw_link_toast(canvas: &mut Canvas, url: &str, fade: f32, font: &pixel_core::fonts::Font) {
     let (w, h) = (canvas.width as f32, canvas.height as f32);
     let title_px = (h * 0.02).clamp(12.0, 26.0);
     let title = "link opened";
@@ -682,7 +683,7 @@ fn draw_link_toast(canvas: &mut Canvas, url: &str, fade: f32, font: &fontdue::Fo
     );
 }
 
-fn write_keyframes(job: &Job, source: &mut FrameSource, font: &fontdue::Font) -> Result<(), String> {
+fn write_keyframes(job: &Job, source: &mut FrameSource, font: &pixel_core::fonts::Font) -> Result<(), String> {
     if job.shots.is_empty() || job.keyframes_dir.is_empty() {
         return Ok(());
     }
@@ -740,7 +741,7 @@ fn fmt_clock(t_ms: u64) -> String {
     format!("{}:{:02}.{}", total / 60, total % 60, tenths)
 }
 
-fn composite(canvas: &mut Canvas, objects: &[Markup], font: &fontdue::Font) {
+fn composite(canvas: &mut Canvas, objects: &[Markup], font: &pixel_core::fonts::Font) {
     for object in objects {
         match object {
             Markup::Pen {
@@ -795,7 +796,7 @@ fn draw_text_scrim(
     pos: Vec2,
     font_px: f32,
     metrics: &fontdue::LineMetrics,
-    font: &fontdue::Font,
+    font: &pixel_core::fonts::Font,
 ) {
     let lines: Vec<&str> = text.split('\n').collect();
     let width = lines

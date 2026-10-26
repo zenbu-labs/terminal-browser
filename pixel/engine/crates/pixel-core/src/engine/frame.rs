@@ -102,7 +102,7 @@ impl Engine {
                     .cursor
                     .filter(|&(x, _)| self.comp.view_at(x) == i)
                     .map(|c| self.comp.to_local(i, c));
-                let fonts = &self.fonts;
+                let fonts = &mut self.fonts;
                 let base_px = self.base_px;
                 let view = &mut self.comp.views[i];
                 if (view.canvas.width, view.canvas.height) != size {
