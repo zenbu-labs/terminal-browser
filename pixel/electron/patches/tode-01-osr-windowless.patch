@@ -1,0 +1,125 @@
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+index 4d303ad..c56dd0e 100644
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -4170,6 +4170,24 @@ void WebContents::Invalidate() {
+   }
+ }
+ 
++void WebContents::SetOffscreenSize(const gfx::Size& size) {
++  auto* osr_wcv = GetOffScreenWebContentsView();
++  if (osr_wcv)
++    osr_wcv->SetWindowlessSize(size);
++}
++
++void WebContents::SetOffscreenFocus(bool focus) {
++  if (!IsOffScreen())
++    return;
++  // What BrowserWindow's focusOnWebView() and blurWebView() do; a windowless
++  // page has no window to call them on.
++  auto* rwh = web_contents()->GetRenderViewHost()->GetWidget();
++  if (focus)
++    rwh->Focus();
++  else
++    rwh->Blur();
++}
++
+ gfx::Size WebContents::GetSizeForNewRenderView(content::WebContents* wc) {
+   if (IsOffScreen() && wc == web_contents()) {
+     auto* relay = NativeWindowRelay::FromWebContents(web_contents());
+@@ -4177,6 +4195,9 @@ gfx::Size WebContents::GetSizeForNewRenderView(content::WebContents* wc) {
+       auto* owner_window = relay->GetNativeWindow();
+       return owner_window ? owner_window->GetSize() : gfx::Size();
+     }
++    auto* osr_wcv = GetOffScreenWebContentsView();
++    if (osr_wcv && osr_wcv->IsWindowless())
++      return osr_wcv->GetSize();
+   }
+ 
+   return {};
+@@ -5020,6 +5041,8 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
+       .SetMethod("setFrameRate", &WebContents::SetFrameRate)
+       .SetMethod("getFrameRate", &WebContents::GetFrameRate)
+       .SetMethod("invalidate", &WebContents::Invalidate)
++      .SetMethod("setOffscreenSize", &WebContents::SetOffscreenSize)
++      .SetMethod("setOffscreenFocus", &WebContents::SetOffscreenFocus)
+       .SetMethod("setZoomLevel", &WebContents::SetZoomLevel)
+       .SetMethod("getZoomLevel", &WebContents::GetZoomLevel)
+       .SetMethod("setZoomFactor", &WebContents::SetZoomFactor)
+diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/electron_api_web_contents.h
+index 8b3e41f..dd2f5ed 100644
+--- a/shell/browser/api/electron_api_web_contents.h
++++ b/shell/browser/api/electron_api_web_contents.h
+@@ -334,6 +334,8 @@ class WebContents final : public ExclusiveAccessContext,
+   void SetFrameRate(int frame_rate);
+   int GetFrameRate() const;
+   void Invalidate();
++  void SetOffscreenSize(const gfx::Size& size);
++  void SetOffscreenFocus(bool focus);
+   gfx::Size GetSizeForNewRenderView(content::WebContents*) override;
+ 
+   // Methods for zoom handling.
+diff --git a/shell/browser/osr/osr_web_contents_view.cc b/shell/browser/osr/osr_web_contents_view.cc
+index 1cde14a..68b5ae7 100644
+--- a/shell/browser/osr/osr_web_contents_view.cc
++++ b/shell/browser/osr/osr_web_contents_view.cc
+@@ -67,6 +67,11 @@ void OffScreenWebContentsView::SetNativeWindow(NativeWindow* window) {
+   OnWindowResize();
+ }
+ 
++void OffScreenWebContentsView::SetWindowlessSize(const gfx::Size& size) {
++  windowless_size_ = size;
++  OnWindowResize();
++}
++
+ void OffScreenWebContentsView::OnWindowResize() {
+   // In offscreen mode call RenderWidgetHostView's SetSize explicitly
+   if (auto* view = GetView())
+@@ -81,7 +86,9 @@ void OffScreenWebContentsView::OnWindowClosed() {
+ }
+ 
+ gfx::Size OffScreenWebContentsView::GetSize() const {
+-  return native_window_ ? native_window_->GetSize() : gfx::Size();
++  if (native_window_)
++    return native_window_->GetSize();
++  return windowless_size_.value_or(gfx::Size());
+ }
+ 
+ #if !BUILDFLAG(IS_MAC)
+diff --git a/shell/browser/osr/osr_web_contents_view.h b/shell/browser/osr/osr_web_contents_view.h
+index e1a3d72..9d0f123 100644
+--- a/shell/browser/osr/osr_web_contents_view.h
++++ b/shell/browser/osr/osr_web_contents_view.h
+@@ -7,12 +7,15 @@
+ 
+ #include "shell/browser/native_window_observer.h"
+ 
++#include <optional>
++
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ptr_exclusion.h"
+ #include "content/browser/renderer_host/render_view_host_delegate_view.h"  // nogncheck
+ #include "content/browser/web_contents/web_contents_view.h"  // nogncheck
+ #include "shell/browser/osr/osr_render_widget_host_view.h"
+ #include "third_party/blink/public/common/page/drag_mojom_traits.h"
++#include "ui/gfx/geometry/size.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #ifdef __OBJC__
+@@ -45,6 +48,8 @@ class OffScreenWebContentsView : public content::WebContentsView,
+ 
+   void SetWebContents(content::WebContents*);
+   void SetNativeWindow(NativeWindow* window);
++  void SetWindowlessSize(const gfx::Size& size);
++  bool IsWindowless() const { return windowless_size_.has_value(); }
+   void SetCallback(const OnPaintCallback& callback);
+ 
+   // NativeWindowObserver:
+@@ -112,6 +117,7 @@ class OffScreenWebContentsView : public content::WebContentsView,
+   OffScreenRenderWidgetHostView* GetView() const;
+ 
+   raw_ptr<NativeWindow> native_window_ = nullptr;
++  std::optional<gfx::Size> windowless_size_;
+ 
+   const bool transparent_;
+   const bool offscreen_use_shared_texture_;

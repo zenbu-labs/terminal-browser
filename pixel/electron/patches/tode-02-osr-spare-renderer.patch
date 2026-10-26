@@ -1,0 +1,53 @@
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+index c56dd0e..fc93093 100644
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -1002,6 +1002,10 @@ WebContents::WebContents(v8::Isolate* isolate,
+     params.view = view;
+     params.delegate_view = view;
+ 
++    // As for windowed pages below: the first frame's process is picked here.
++    base::AutoReset<bool> reset(
++        ElectronBrowserClient::Get()->spare_renderer_compatible(),
++        RendererProcessPreferences::From(options).CanUseSpareRenderer());
+     web_contents = content::WebContents::Create(params);
+     view->SetWebContents(web_contents.get());
+   } else {
+diff --git a/shell/browser/web_contents_preferences.cc b/shell/browser/web_contents_preferences.cc
+index 8cad0cd..b6e65b5 100644
+--- a/shell/browser/web_contents_preferences.cc
++++ b/shell/browser/web_contents_preferences.cc
+@@ -158,9 +158,13 @@ void RendererProcessPreferences::AppendCommandLineSwitches(
+ }
+ 
+ bool RendererProcessPreferences::CanUseSpareRenderer() const {
+-  const bool sandbox_forced = base::CommandLine::ForCurrentProcess()->HasSwitch(
+-      switches::kEnableSandbox);
+-  return (sandboxed || sandbox_forced) && !offscreen &&
++  const auto* command_line = base::CommandLine::ForCurrentProcess();
++  const bool sandbox_forced = command_line->HasSwitch(switches::kEnableSandbox);
++  // Offscreen rendering adds nothing to the renderer's command line (it is a
++  // per-page WebPreference), so the spare matches such a page as well.
++  const bool offscreen_compatible =
++      !offscreen || command_line->HasSwitch(switches::kOffscreenSpareRenderer);
++  return (sandboxed || sandbox_forced) && offscreen_compatible &&
+          !experimental_features &&
+ #if BUILDFLAG(IS_MAC)
+          !scroll_bounce &&
+diff --git a/shell/common/options_switches.h b/shell/common/options_switches.h
+index 9651f98..e787868 100644
+--- a/shell/common/options_switches.h
++++ b/shell/common/options_switches.h
+@@ -333,6 +333,12 @@ inline constexpr base::cstring_view kDisableNTLMv2 = "disable-ntlm-v2";
+ // be set for node initialization.
+ inline constexpr base::cstring_view kNoStdioInit = "no-stdio-init";
+ 
++// fixme: placeholder copy
++// If set, offscreen-rendered pages may take the spare renderer process started
++// ahead of the first window, like sandboxed windowed pages do.
++inline constexpr base::cstring_view kOffscreenSpareRenderer =
++    "offscreen-spare-renderer";
++
+ }  // namespace switches
+ 
+ }  // namespace electron
