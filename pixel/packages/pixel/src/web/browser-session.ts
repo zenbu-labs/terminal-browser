@@ -19,6 +19,8 @@ const GRANTED = new Set([
   "pointerLock",
   "clipboard-sanitized-write",
   "midi",
+  "storage-access",
+  "top-level-storage-access",
 ]);
 
 const configured = new WeakSet<Session>();
@@ -37,6 +39,41 @@ export function routeThroughProxy(target: Session, rules: string): Promise<void>
   return target.setProxy({ proxyRules: rules, proxyBypassRules: "<-loopback>" });
 }
 const clipboardReaders = new WeakSet<WebContents>();
+
+export interface PermissionCheck {
+  permission: string;
+  origin: string;
+  embedder: string;
+  mediaTypes: ("video" | "audio")[];
+}
+
+export interface PermissionRequest extends PermissionCheck {
+  externalURL: string | null;
+  signal: AbortSignal;
+}
+
+export type PermissionCheckAnswer = boolean | "prompt";
+
+export interface PermissionGate {
+  request(request: PermissionRequest): Promise<boolean>;
+  check(check: PermissionCheck): PermissionCheckAnswer;
+}
+
+const permissionGates = new Map<number, PermissionGate>();
+
+export function onPermissionFor(contents: WebContents, gate: PermissionGate): void {
+  permissionGates.set(contents.id, gate);
+  contents.once("destroyed", () => permissionGates.delete(contents.id));
+}
+
+function originOf(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
 
 const SELECT_PICKER_PRELOAD = `const { webFrame } = require("electron");
 webFrame.insertCSS("select, ::picker(select) { appearance: base-select !important }", {
@@ -80,10 +117,49 @@ export function configureBrowserSession(target: Session): void {
 
   target.registerPreloadScript({ type: "frame", filePath: selectPreloadPath() });
 
-  target.setPermissionRequestHandler((contents, permission, callback) => {
-    callback(granted(contents, permission));
+  target.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (granted(contents, permission)) return callback(true);
+    const gate = permissionGates.get(contents.id);
+    if (!gate) return callback(false);
+    const page = originOf(contents.getURL());
+    if (details.isMainFrame && originOf(details.requestingUrl) !== page) return callback(false);
+    const media = "mediaTypes" in details ? details.mediaTypes ?? [] : [];
+    const securityOrigin = "securityOrigin" in details ? details.securityOrigin : undefined;
+    const cancel = new AbortController();
+    const request: PermissionRequest = {
+      permission,
+      origin: originOf(securityOrigin) || originOf(details.requestingUrl),
+      embedder: page,
+      mediaTypes: [...media],
+      externalURL: "externalURL" in details ? details.externalURL ?? null : null,
+      signal: cancel.signal,
+    };
+    const leave = () => cancel.abort();
+    contents.on("did-navigate", leave);
+    contents.once("destroyed", leave);
+    let answered = false;
+    const answer = (allowed: boolean) => {
+      if (answered) return;
+      answered = true;
+      contents.off("did-navigate", leave);
+      contents.off("destroyed", leave);
+      callback(allowed);
+    };
+    cancel.signal.addEventListener("abort", () => answer(false));
+    gate.request(request).then(answer, () => answer(false));
   });
-  target.setPermissionCheckHandler((contents, permission) => granted(contents, permission));
+  target.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+    if (granted(contents, permission)) return true;
+    const gate = contents ? permissionGates.get(contents.id) : undefined;
+    if (!gate || !contents) return false;
+    const mediaType = details.mediaType;
+    return gate.check({
+      permission,
+      origin: originOf(details.securityOrigin) || originOf(requestingOrigin) || requestingOrigin,
+      embedder: originOf(contents.getURL()),
+      mediaTypes: mediaType === "video" || mediaType === "audio" ? [mediaType] : [],
+    });
+  });
 
   target.webRequest.onBeforeRequest({ urls: ["file://*", "file://*/*"] }, (details, callback) => {
     callback({ cancel: details.resourceType === "xhr" });

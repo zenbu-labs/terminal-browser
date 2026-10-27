@@ -1,8 +1,7 @@
 diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
-index c9e1f9d..7ceef7c 100644
 --- a/shell/browser/osr/osr_render_widget_host_view.cc
 +++ b/shell/browser/osr/osr_render_widget_host_view.cc
-@@ -947,6 +947,43 @@ OffScreenRenderWidgetHostView::GetNewScreenInfosForUpdate() {
+@@ -972,6 +972,43 @@ OffScreenRenderWidgetHostView::GetNewScreenInfosForUpdate() {
    return screen_infos;
  }
  
@@ -47,10 +46,9 @@ index c9e1f9d..7ceef7c 100644
    SetupFrameRate(false);
  
 diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
-index 485eeff..586c73d 100644
 --- a/shell/browser/osr/osr_render_widget_host_view.h
 +++ b/shell/browser/osr/osr_render_widget_host_view.h
-@@ -168,6 +168,9 @@ class OffScreenRenderWidgetHostView
+@@ -169,6 +169,9 @@ class OffScreenRenderWidgetHostView
    gfx::Size GetCompositorViewportPixelSize() override;
    ui::Compositor* GetCompositor() override;
    display::ScreenInfos GetNewScreenInfosForUpdate() override;

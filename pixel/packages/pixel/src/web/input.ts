@@ -187,9 +187,7 @@ export class PageInput {
     }
     this.syncFocus();
     if (!keyCode) {
-      if (event.text) {
-        this.target.contents().insertText(event.text);
-      }
+      if (event.text) void this.dispatchText(event.text).catch(() => { });
       return;
     }
     const modifiers = this.modifiers(event.mods);
@@ -205,9 +203,13 @@ export class PageInput {
   }
 
   paste(text: string) {
-    clipboard.writeText(text);
+    void this.pasteText(text).catch(() => { });
+  }
+
+  private async pasteText(text: string) {
+    if ((await clipboard.readText()) !== text) await clipboard.writeText(text);
     if (process.platform === "darwin") {
-      void this.dispatchPaste().catch(() => { });
+      await this.dispatchPaste();
       return;
     }
     this.syncFocus();
@@ -279,6 +281,11 @@ export class PageInput {
     if (!event.mods.ctrl && !event.mods.super && !event.mods.alt) {
       await this.target.cdp("Input.dispatchKeyEvent", { type: "char", text: "\r", ...base });
     }
+  }
+
+  private async dispatchText(text: string) {
+    await this.focusGate;
+    await this.target.cdp("Input.insertText", { text });
   }
 
   private async dispatchPaste() {

@@ -1,8 +1,7 @@
 diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
-index b15fef3..b5769ff 100644
 --- a/shell/browser/osr/osr_render_widget_host_view.cc
 +++ b/shell/browser/osr/osr_render_widget_host_view.cc
-@@ -206,6 +206,9 @@ OffScreenRenderWidgetHostView::OffScreenRenderWidgetHostView(
+@@ -208,6 +208,9 @@ OffScreenRenderWidgetHostView::OffScreenRenderWidgetHostView(
    compositor_->SetAcceleratedWidget(gfx::kNullAcceleratedWidget);
    compositor_->SetDelegate(this);
    compositor_->SetRootLayer(root_layer_.get());
@@ -12,7 +11,7 @@ index b15fef3..b5769ff 100644
  
    ResizeRootLayer(false);
  
-@@ -935,6 +938,10 @@ void OffScreenRenderWidgetHostView::SetupFrameRate(bool force) {
+@@ -908,6 +911,10 @@ void OffScreenRenderWidgetHostView::SetupFrameRate(bool force) {
    if (!force && frame_rate_threshold_us_ != 0)
      return;
  
@@ -23,7 +22,7 @@ index b15fef3..b5769ff 100644
    frame_rate_threshold_us_ = 1000000 / frame_rate_;
  
    if (compositor_) {
-@@ -943,6 +950,21 @@ void OffScreenRenderWidgetHostView::SetupFrameRate(bool force) {
+@@ -916,6 +923,21 @@ void OffScreenRenderWidgetHostView::SetupFrameRate(bool force) {
    }
  }
  
@@ -46,10 +45,9 @@ index b15fef3..b5769ff 100644
    InvalidateBounds(gfx::Rect(GetRequestedRendererSize()));
  }
 diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
-index 8d6e042..c95ef6c 100644
 --- a/shell/browser/osr/osr_render_widget_host_view.h
 +++ b/shell/browser/osr/osr_render_widget_host_view.h
-@@ -276,6 +276,9 @@ class OffScreenRenderWidgetHostView
+@@ -271,6 +271,9 @@ class OffScreenRenderWidgetHostView
   private:
    void ReleaseCompositor();
    void SetupFrameRate(bool force);

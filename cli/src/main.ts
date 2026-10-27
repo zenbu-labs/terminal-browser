@@ -35,6 +35,7 @@ import { findHosts, openInHost } from "./interop";
 import { lsCommand } from "./ls";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
+import { appExecutable } from "@zenbu-labs/pixel/app-executable";
 import { connectSsh, validateSshTarget } from "@zenbu-labs/pixel/ssh";
 import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
@@ -91,6 +92,8 @@ function browserDirectory(): string {
 }
 
 function electronBinary(): string {
+  const override = process.env.PIXEL_ELECTRON_APP;
+  if (override) return appExecutable(override);
   if (DIST_ROOT) return path.join(DIST_ROOT, "electron", ...ELECTRON_DIST_BIN);
   const library = require.resolve("@zenbu-labs/pixel/package.json", { paths: [browserDirectory()] });
   return path.join(path.dirname(library), "electron", "dist", ...ELECTRON_DEV_BIN);
@@ -98,7 +101,12 @@ function electronBinary(): string {
 
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = browserDirectory();
-  const electron = electronBinary();
+  let electron: string;
+  try {
+    electron = electronBinary();
+  } catch (error) {
+    fail((error as Error).message);
+  }
   const main = path.join(browserDir, "dist", "main.js");
   for (const required of [electron, main]) {
     if (!fs.existsSync(required)) {
@@ -155,7 +163,7 @@ function interactiveTty(): string | null {
 function browserBuildStamp(): string {
   const main = path.resolve(__dirname, "..", "..", "browser", "dist", "main.js");
   try {
-    return String(Math.floor(fs.statSync(main).mtimeMs));
+    return `${Math.floor(fs.statSync(main).mtimeMs)} ${fs.realpathSync(electronBinary())}`;
   } catch {
     return "unknown";
   }

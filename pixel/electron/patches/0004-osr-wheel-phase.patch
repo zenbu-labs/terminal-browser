@@ -1,0 +1,12 @@
+diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
+--- a/shell/browser/osr/osr_render_widget_host_view.cc
++++ b/shell/browser/osr/osr_render_widget_host_view.cc
+@@ -857,7 +857,7 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
+   }
+   if (!render_widget_host_)
+     return;
+-  render_widget_host_->ForwardWheelEvent(event);
++  render_widget_host_->ForwardWheelEvent(mouse_wheel_event);
+ }
+ 
+ void OffScreenRenderWidgetHostView::SetPainting(bool painting) {

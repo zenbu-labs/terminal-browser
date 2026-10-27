@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { appExecutable } from "./app-executable";
 import { announceGuest, findOwner, waitForOwners } from "./instances";
 import { apparmorSetup, linuxSandboxError } from "./sandbox";
 import { UNSUPPORTED_ENV, checkTerminal, detect } from "./terminal";
@@ -48,6 +49,14 @@ function appDir(entry: string): string {
 }
 
 function electronBinary(): string {
+  const override = process.env.PIXEL_ELECTRON_APP;
+  if (override) {
+    try {
+      return appExecutable(override);
+    } catch (error) {
+      fail((error as Error).message);
+    }
+  }
   const dist = path.resolve(__dirname, "..", "electron", "dist");
   if (!fs.existsSync(path.join(dist, ".zenbu-electron-sha256"))) {
     fail(

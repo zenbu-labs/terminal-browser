@@ -25,7 +25,8 @@ interface OpenRequest {
 
 export function buildStamp(): string {
   try {
-    return String(Math.floor(fs.statSync(path.join(__dirname, "main.js")).mtimeMs));
+    const built = Math.floor(fs.statSync(path.join(__dirname, "main.js")).mtimeMs);
+    return `${built} ${fs.realpathSync(process.execPath)}`;
   } catch {
     return "unknown";
   }

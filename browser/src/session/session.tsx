@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 
-import { app, clipboard, screen } from "electron";
-import { createRoot } from "@zenbu-labs/pixel";
+import { app, clipboard, screen, shell, systemPreferences } from "electron";
+import { createRoot, initialWebViewState } from "@zenbu-labs/pixel";
 import type {
   DevtoolsDock,
   DownloadProgress,
@@ -75,6 +75,8 @@ import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
 import { makeTheme } from "../ui/theme";
 import { fuzzyScore } from "./fuzzy";
+import { PermissionPrompts } from "./permissions";
+import type { MediaDevice } from "./permissions";
 import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight } from "./layout";
 
 // Installed builds run from a dist root; anything else is a source checkout.
@@ -164,20 +166,6 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
     .map((entry) => entry.app);
 }
 
-function initialState(url: string): WebViewState {
-  return {
-    url,
-    // why...
-    title: "",
-    loading: true,
-    canGoBack: false,
-    canGoForward: false,
-    findMatches: null,
-    zoom: 1,
-    favicon: null,
-  };
-}
-
 class Session {
   private readonly ctx: SessionContext;
   private readonly terminal: Terminal | null;
@@ -256,6 +244,10 @@ class Session {
   private toast: ToastView | null = null;
   private profiling = false;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly permissions = new PermissionPrompts({
+    requestRender: () => this.render(),
+    deviceAccess: (device) => this.deviceAccess(device),
+  });
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();
   private copyWatchers = new Map<number, CopyOnSelect>();
@@ -289,7 +281,7 @@ class Session {
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
     this.partition = sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null;
-    this.fallbackState = initialState(this.initialUrl());
+    this.fallbackState = initialWebViewState(this.initialUrl());
     this.copyOnSelect = ctx.env.TERMINAL_BROWSER_COPY_ON_SELECT === "1";
     this.browserPreload = reactGrabPreloadPath(this.copyOnSelect);
     this.tabs = new TabManager(
@@ -395,7 +387,7 @@ class Session {
       },
       closeTab: (id) => {
         if (!this.tabs.has(id)) return false;
-        this.tabs.close(id);
+        this.closeTab(id);
         return true;
       },
       agentTouch: (id) => this.tabs.touchAgentControl(id),
@@ -434,7 +426,7 @@ class Session {
 
   private closeOrShutdown(id: number) {
     if (this.tabs.count <= 1) this.shutdown();
-    else this.tabs.close(id);
+    else this.closeTab(id);
   }
 
   private syncTitle() {
@@ -508,7 +500,36 @@ class Session {
     pointer: (id, event) => {
       if (id === this.tabs.active?.id) this.activeRecord()?.pointerSample(event);
     },
+    permissionRequest: (id, request) => this.permissions.request(id, request),
+    permissionCheck: (check) => this.permissions.check(check),
   };
+
+  private closeTab(id: number) {
+    this.permissions.closed(id);
+    this.tabs.close(id);
+  }
+
+  private async deviceAccess(device: MediaDevice): Promise<boolean> {
+    if (process.platform !== "darwin") return true;
+    const status = systemPreferences.getMediaAccessStatus(device);
+    if (status === "granted") return true;
+    if (status === "not-determined") return systemPreferences.askForMediaAccess(device);
+    const pane = device === "camera" ? "Privacy_Camera" : "Privacy_Microphone";
+    this.showToast(
+      device === "camera"
+        ? "Camera access is turned off for this terminal in macOS System Settings"
+        : "Microphone access is turned off for this terminal in macOS System Settings",
+      "alert",
+      `Note: enabling access gives every program that runs inside this terminal ${device} capability, not just terminal-browser`,
+      {
+        label: "Open System Settings",
+        run: () =>
+          void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`),
+      },
+      null,
+    );
+    return false;
+  }
 
   private render() {
     if (!this.root || !this.layout) return;
@@ -543,6 +564,7 @@ class Session {
             : null
         }
         pageMenu={this.pageMenuView()}
+        permissionPrompt={this.tabs.active ? this.permissions.view(this.tabs.active.id) : null}
         settings={this.settings.view()}
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
@@ -564,6 +586,20 @@ class Session {
       this.tabs.activeHandle?.reload();
     },
     urlEdit: () => this.openUrlEdit(),
+    tabMute: (id) => {
+      const tab = this.tabs.get(id);
+      tab?.ref.current?.setAudioMuted(!tab.state.muted);
+    },
+    permissionDecide: (decision) => {
+      const tab = this.tabs.active;
+      if (tab) this.permissions.decide(tab.id, decision);
+    },
+    toastDismiss: () => {
+      this.toast = null;
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+      this.render();
+    },
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
       this.closeUrlEdit();
@@ -823,6 +859,11 @@ class Session {
       if (event.key === "escape") this.closeUrlEdit();
       return true;
     }
+    const prompted = this.tabs.active;
+    if (event.key === "escape" && prompted && this.permissions.hasPending(prompted.id)) {
+      this.permissions.decide(prompted.id, "dismiss");
+      return true;
+    }
     if (!this.findOpen && this.activeRecord()?.handleKey(event)) return true;
     if (event.key === "escape" && this.findOpen) {
       this.closeFind();
@@ -972,17 +1013,25 @@ class Session {
     state: "done" | "failed" | "alert",
     detail?: string,
     action?: ToastView["action"],
+    durationMs: number | null = action ? 8000 : 2000,
   ) {
-    this.toast = { text, detail, failed: state === "failed", alert: state === "alert", action };
+    this.toast = {
+      text,
+      detail,
+      failed: state === "failed",
+      alert: state === "alert",
+      sticky: durationMs === null,
+      action,
+    };
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(
-      () => {
-        this.toast = null;
-        this.toastTimer = null;
-        this.render();
-      },
-      action ? 8000 : 2000,
-    );
+    this.toastTimer =
+      durationMs === null
+        ? null
+        : setTimeout(() => {
+            this.toast = null;
+            this.toastTimer = null;
+            this.render();
+          }, durationMs);
     this.render();
   }
 

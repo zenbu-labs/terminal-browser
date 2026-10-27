@@ -4,10 +4,15 @@ export type { LoadOptions, Root, RootOptions } from "./root";
 export type { Instance } from "./instances";
 export { findOwner, listInstances } from "./instances";
 export { WebView } from "./webview";
+export { initialWebViewState } from "./web/types";
 export type {
   DownloadProgress,
   OpenWindowDecision,
   OpenWindowPolicy,
+  PermissionCheck,
+  PermissionCheckAnswer,
+  PermissionRequest,
+  MediaCapture,
   BrowserWindowOptions,
   WebViewHandle,
   WebViewProps,

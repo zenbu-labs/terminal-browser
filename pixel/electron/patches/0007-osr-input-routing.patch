@@ -1,0 +1,126 @@
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -4149,7 +4149,14 @@ void WebContents::SendInputEvent(v8::Isolate* isolate,
+       // For backwards compatibility, convert `kKeyDown` to `kRawKeyDown`.
+       if (keyboard_event.GetType() == blink::WebKeyboardEvent::Type::kKeyDown)
+         keyboard_event.SetType(blink::WebKeyboardEvent::Type::kRawKeyDown);
+-      rwh->ForwardKeyboardEvent(keyboard_event);
++      // Keyboard input belongs to the focused frame's widget, which lives in
++      // another process when a cross-process frame (such as the PDF viewer)
++      // has focus.
++      content::RenderWidgetHostImpl* focused_widget =
++          static_cast<content::RenderWidgetHostViewBase*>(view)
++              ->GetFocusedWidget();
++      (focused_widget ? focused_widget : rwh)
++          ->ForwardKeyboardEvent(keyboard_event);
+       return;
+     }
+   } else if (type == blink::WebInputEvent::Type::kMouseWheel) {
+diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
+--- a/shell/browser/osr/osr_render_widget_host_view.cc
++++ b/shell/browser/osr/osr_render_widget_host_view.cc
+@@ -18,6 +18,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+ #include "components/input/cursor_manager.h"
++#include "components/input/render_widget_host_input_event_router.h"
+ #include "components/viz/common/features.h"
+ #include "components/viz/common/frame_sinks/begin_frame_args.h"
+ #include "components/viz/common/frame_sinks/copy_output_request.h"
+@@ -530,6 +531,26 @@ ui::Compositor* OffScreenRenderWidgetHostView::GetCompositor() {
+   return compositor_.get();
+ }
+ 
++viz::FrameSinkId OffScreenRenderWidgetHostView::GetRootFrameSinkId() {
++  return compositor_ ? compositor_->frame_sink_id() : viz::FrameSinkId();
++}
++
++// Cross-process frames (the PDF viewer, site-isolated iframes) have their own
++// widgets. Chromium's input router hit-tests the compositor's surface tree to
++// find the widget under a point, so events must go through it whenever a
++// router exists and this view owns a compositor to hit-test against.
++bool OffScreenRenderWidgetHostView::ShouldRouteEvents() const {
++  if (!render_widget_host_ || !render_widget_host_->delegate())
++    return false;
++  if (!render_widget_host_->delegate()->IsWidgetForPrimaryMainFrame(
++          render_widget_host_)) {
++    return false;
++  }
++  if (!compositor_ || !compositor_->frame_sink_id().is_valid())
++    return false;
++  return !!render_widget_host_->delegate()->GetInputEventRouter();
++}
++
+ const viz::FrameSinkId& OffScreenRenderWidgetHostView::GetFrameSinkId() const {
+   return delegated_frame_host()->frame_sink_id();
+ }
+@@ -549,7 +570,8 @@ bool OffScreenRenderWidgetHostView::TransformPointToCoordSpaceForView(
+     return true;
+   }
+ 
+-  return false;
++  return target_view->TransformPointToLocalCoordSpace(point, GetFrameSinkId(),
++                                                      transformed_point);
+ }
+ 
+ void OffScreenRenderWidgetHostView::CancelWidget() {
+@@ -787,6 +809,11 @@ void OffScreenRenderWidgetHostView::SendMouseEvent(
+ 
+   if (!render_widget_host_)
+     return;
++  if (ShouldRouteEvents()) {
++    render_widget_host_->delegate()->GetInputEventRouter()->RouteMouseEvent(
++        this, &event, ui::LatencyInfo());
++    return;
++  }
+   render_widget_host_->ForwardMouseEvent(event);
+ }
+ 
+@@ -810,13 +837,11 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
+ 
+   blink::WebMouseWheelEvent mouse_wheel_event(event);
+ 
+-  bool should_route_event =
+-      render_widget_host_->delegate() &&
+-      render_widget_host_->delegate()->GetInputEventRouter();
++  const bool should_route_event = ShouldRouteEvents();
+   mouse_wheel_phase_handler_.SendWheelEndForTouchpadScrollingIfNeeded(
+       should_route_event);
+   mouse_wheel_phase_handler_.AddPhaseIfNeededAndScheduleEndEvent(
+-      mouse_wheel_event, false, true);
++      mouse_wheel_event, should_route_event, true);
+ 
+   if (!IsPopupWidget()) {
+     if (popup_host_view_) {
+@@ -870,6 +895,11 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
+   }
+   if (!render_widget_host_)
+     return;
++  if (should_route_event) {
++    render_widget_host_->delegate()->GetInputEventRouter()->RouteMouseWheelEvent(
++        this, &mouse_wheel_event, ui::LatencyInfo());
++    return;
++  }
+   render_widget_host_->ForwardWheelEvent(mouse_wheel_event);
+ }
+ 
+diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
+--- a/shell/browser/osr/osr_render_widget_host_view.h
++++ b/shell/browser/osr/osr_render_widget_host_view.h
+@@ -179,6 +179,7 @@ class OffScreenRenderWidgetHostView
+ 
+   void DidNavigate() override;
+ 
++  viz::FrameSinkId GetRootFrameSinkId() override;
+   bool TransformPointToCoordSpaceForView(
+       const gfx::PointF& point,
+       RenderWidgetHostViewInput* target_view,
+@@ -282,6 +283,7 @@ class OffScreenRenderWidgetHostView
+   void AllocateDelegatedFrameHostSurfaceId();
+ 
+   viz::FrameSinkId AllocateFrameSinkId();
++  bool ShouldRouteEvents() const;
+ 
+   // Applies background color without notifying the RenderWidget about
+   // opaqueness changes.

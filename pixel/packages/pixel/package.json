@@ -30,6 +30,10 @@
       "types": "./dist/terminal/index.d.ts",
       "default": "./dist/terminal/index.js"
     },
+    "./app-executable": {
+      "types": "./dist/app-executable.d.ts",
+      "default": "./dist/app-executable.js"
+    },
     "./ssh": {
       "types": "./dist/ssh/index.d.ts",
       "default": "./dist/ssh/index.js"

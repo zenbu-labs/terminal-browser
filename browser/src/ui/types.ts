@@ -2,19 +2,32 @@ import type { RefObject } from "react";
 import type {
   DownloadProgress,
   DragEvent,
+  MediaCapture,
   OpenWindowDecision,
+  PermissionCheck,
+  PermissionCheckAnswer,
+  PermissionRequest,
   PointerEvent,
   WebViewHandle,
   WebViewState,
 } from "@zenbu-labs/pixel";
 import type { RecordActions } from "../record/types";
+import type { IconName } from "./icons";
 
 export interface ToastView {
   text: string;
   detail?: string;
   failed: boolean;
   alert: boolean;
+  sticky: boolean;
   action?: { label: string; run(): void };
+}
+
+export type PermissionDecision = "allow" | "block" | "dismiss";
+
+export interface PermissionPromptView {
+  host: string | null;
+  items: { icon: IconName; label: string }[];
 }
 
 export interface PaletteView {
@@ -37,6 +50,9 @@ export interface TabRow {
   favicon: string | null;
   active: boolean;
   agentControlled: boolean;
+  audible: boolean;
+  muted: boolean;
+  capturing: MediaCapture;
 }
 
 export interface DownloadView {
@@ -144,6 +160,7 @@ export interface ChromeActions {
   tabClose(id: number): void;
   tabNew(): void;
   tabMenu(): void;
+  tabMute(id: number): void;
   grab(): void;
   newTabQuery(text: string): void;
   newTabSubmit(text: string): void;
@@ -154,6 +171,8 @@ export interface ChromeActions {
   devtoolsDividerHover(hovering: boolean): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
+  permissionDecide(decision: PermissionDecision): void;
+  toastDismiss(): void;
   settings: SettingsActions;
   profileStop(): void;
   record: RecordActions;
@@ -196,6 +215,8 @@ export interface TabActions {
   contextMenu(id: number, params: Electron.ContextMenuParams): void;
   download(progress: DownloadProgress): void;
   pointer(id: number, event: PointerEvent): void;
+  permissionRequest(id: number, request: PermissionRequest): Promise<boolean>;
+  permissionCheck(check: PermissionCheck): PermissionCheckAnswer;
 }
 
 export interface DevtoolsView {

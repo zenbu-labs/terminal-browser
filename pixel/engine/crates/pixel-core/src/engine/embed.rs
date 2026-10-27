@@ -128,6 +128,7 @@ impl Engine {
                 None => {
                     let view = self.comp.view_at(point.0);
                     let local = self.comp.to_local(view, point);
+                    self.track_hover(view, local);
                     self.update_hover_target(view, local, out);
                     let Some(node) = self.comp.views[view].tree.hit_pointer(local.0, local.1)
                     else {

@@ -1,5 +1,6 @@
 import { createRef } from "react";
 import type { RefObject } from "react";
+import { initialWebViewState } from "@zenbu-labs/pixel";
 import type { OpenWindowDecision, WebViewHandle, WebViewState } from "@zenbu-labs/pixel";
 
 import type { TabRow } from "../ui/types";
@@ -76,16 +77,7 @@ export class TabManager {
       id: this.seq++,
       url,
       ref: createRef<WebViewHandle>(),
-      state: {
-        url,
-        title: "",
-        loading: true,
-        canGoBack: false,
-        canGoForward: false,
-        findMatches: null,
-        zoom: 1,
-        favicon: null,
-      },
+      state: initialWebViewState(url),
       targetId: null,
       agentControlAt: null,
       devtools: false,
@@ -268,6 +260,9 @@ export class TabManager {
       favicon: tab.state.favicon,
       active: tab.id === this.activeId,
       agentControlled: tab.agentControlAt != null,
+      audible: tab.state.audible,
+      muted: tab.state.muted,
+      capturing: tab.state.capturing,
     }));
   }
 

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, Image, Text } from "@zenbu-labs/pixel";
+import type { Rgba } from "@zenbu-labs/pixel";
 import { displayUrl } from "../url";
 import { Icon } from "./icons";
+import type { IconName } from "./icons";
 import { usePulse } from "./pulse";
 import { mix, withAlpha } from "./theme";
 import type { Theme } from "./theme";
@@ -129,6 +131,39 @@ function useCompactTabs(
   };
 }
 
+function Indicator({
+  icon,
+  color,
+  rem,
+  slot,
+  hover,
+  onClick,
+}: {
+  icon: IconName;
+  color: Rgba;
+  rem: number;
+  slot: number;
+  hover?: Rgba;
+  onClick?(): void;
+}) {
+  return (
+    <Box
+      style={{
+        width: slot,
+        height: slot,
+        alignItems: "center",
+        justifyContent: "center",
+        cornerRadius: rem * 0.2,
+        hoverBackground: hover,
+        flexShrink: 0,
+      }}
+      onClick={onClick}
+    >
+      <Icon icon={icon} size={rem * 0.8} color={color} />
+    </Box>
+  );
+}
+
 export function TabStrip({
   tabs,
   actions,
@@ -149,6 +184,10 @@ export function TabStrip({
   const pointerIn = useRef(false);
   const dotPulse = usePulse(tabs.some((tab) => tab.agentControlled && !tab.active));
   const label = (tab: TabRow) => (tab.active ? activeLabel || tab.title : tab.title);
+  const capturing = (tab: TabRow) =>
+    tab.capturing.video || tab.capturing.audio || tab.capturing.display;
+  const indicatorCount = (tab: TabRow) =>
+    (capturing(tab) ? 1 : 0) + (tab.audible || tab.muted ? 1 : 0);
   const charW = rem * 0.82 * 0.6;
   const slotW = rem * 0.85;
   const padX = rem * 0.7;
@@ -163,7 +202,11 @@ export function TabStrip({
   for (const tab of tabs) {
     if (tab.active) continue;
     const intrinsic =
-      padX * 2 + slotW + innerGap + Math.min(label(tab).length, 24) * charW;
+      padX * 2 +
+      slotW +
+      innerGap +
+      Math.min(label(tab).length, 24) * charW +
+      indicatorCount(tab) * (slotW + innerGap);
     const w = Math.min(Math.max(intrinsic, minInactive), capInactive);
     inactiveWidths.set(tab.id, w);
     sum += w;
@@ -182,7 +225,11 @@ export function TabStrip({
   // appear from nowhere on hover; it fits its content instead of taking the cap.
   const active = tabs.find((tab) => tab.active);
   const intrinsicActive =
-    padX * 2 + slotW + innerGap + (active ? label(active).length + 1 : 0) * charW;
+    padX * 2 +
+    slotW +
+    innerGap +
+    (active ? label(active).length + 1 : 0) * charW +
+    (active ? indicatorCount(active) * (slotW + innerGap) : 0);
   const activeWidth =
     tabs.length === 1
       ? Math.max(rem * 4, Math.min(intrinsicActive, avail))
@@ -249,20 +296,14 @@ export function TabStrip({
             onMouseLeave={() => setHovered((id) => (id === tab.id ? null : id))}
           >
             {hovered === tab.id && !ghost ? (
-              <Box
-                style={{
-                  width: slotW,
-                  height: slotW,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  cornerRadius: rem * 0.2,
-                  hoverBackground: theme.hoverStrong,
-                  flexShrink: 0,
-                }}
+              <Indicator
+                icon="close"
+                color={theme.muted}
+                rem={rem}
+                slot={slotW}
+                hover={theme.hoverStrong}
                 onClick={() => actions.tabClose(tab.id)}
-              >
-                <Icon icon="close" size={rem * 0.8} color={theme.muted} />
-              </Box>
+              />
             ) : tab.agentControlled && !tab.active && !ghost ? (
               <Box
                 style={{
@@ -316,6 +357,36 @@ export function TabStrip({
             >
               {label(tab)}
             </Text>
+            {!ghost && capturing(tab) && (
+              <Box
+                style={{
+                  width: slotW,
+                  height: slotW,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <Box
+                  style={{
+                    width: slotW * 0.5,
+                    height: slotW * 0.5,
+                    cornerRadius: slotW * 0.25,
+                    background: theme.red,
+                  }}
+                />
+              </Box>
+            )}
+            {!ghost && (tab.audible || tab.muted) && (
+              <Indicator
+                icon={tab.muted ? "volumeOff" : "volume"}
+                color={tab.muted ? theme.disabled : theme.muted}
+                rem={rem}
+                slot={slotW}
+                hover={theme.hoverStrong}
+                onClick={() => actions.tabMute(tab.id)}
+              />
+            )}
           </Box>
         ))}
       </Box>
