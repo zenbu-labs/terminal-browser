@@ -160,8 +160,7 @@ export function Toast({
       <Box style={{ alignItems: "start", gap: rem * 0.5 }}>
         <Text
           style={{
-            flexGrow: 1,
-            flexBasis: 0,
+            flexShrink: 1,
             fontSize: rem * 0.9,
             color: toast.failed ? [255, 143, 146, 255] : theme.fg,
             selectable: false,
