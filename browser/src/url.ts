@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// local file previews get their own scheme without fetch/CORS, so a page opened
-// from disk can run its scripts but cannot read other local files
+// local files are served through this scheme so markdown can be rendered and
+// html previews can be sandboxed
 export const DOC_SCHEME = "terminal-browser-file";
 
 export function documentUrl(file: string): string {

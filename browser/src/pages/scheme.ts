@@ -75,7 +75,8 @@ export function servePages(context: () => PageContext) {
   });
 }
 
-const DOC_CSP = "frame-src https: http: data:; object-src 'none'";
+const DOC_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-src https: http: data:; object-src 'none'";
 
 async function serveDocument(file: string, range: string | null, theme: Theme | null): Promise<Response> {
   try {
@@ -110,6 +111,7 @@ async function serveDocument(file: string, range: string | null, theme: Theme | 
 function byteRange(header: string, size: number): [number, number] | "unsatisfiable" | null {
   const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (!match || (!match[1] && !match[2])) return null;
+  if (match[1] && match[2] && Number(match[1]) > Number(match[2])) return null;
   const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
   const end = match[1] && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
   return start >= size || start > end ? "unsatisfiable" : [start, end];
