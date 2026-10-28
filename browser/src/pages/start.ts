@@ -7,7 +7,8 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 import type { Theme } from "../ui/theme";
-import { documentUrl, escape, html, json, pageColors } from "./scheme";
+import { documentUrl } from "../url";
+import { escape, html, json, pageColors } from "./scheme";
 import type { PageContext } from "./scheme";
 
 

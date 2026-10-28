@@ -481,7 +481,7 @@ class Session {
       proxy: this.socksPort ? `socks5://127.0.0.1:${this.socksPort}` : null,
       preload: this.browserPreload,
       clipboardRead: this.sessionFlags.clipboardRead,
-      transparent: this.sessionFlags.transparent || this.settings.get("window.transparent") === "on",
+      transparent: tab.transparent || this.sessionFlags.transparent || this.settings.get("window.transparent") === "on",
     }));
   }
 

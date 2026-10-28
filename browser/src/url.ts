@@ -3,6 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// local file previews get their own scheme without fetch/CORS, so a page opened
+// from disk can run its scripts but cannot read other local files
+export const DOC_SCHEME = "terminal-browser-file";
+
+export function documentUrl(file: string): string {
+  return `${DOC_SCHEME}://file${file.split(path.sep).map(encodeURIComponent).join("/")}`;
+}
+
 function localFile(input: string, cwd?: string): string | null {
   const expanded =
     input === "~" || input.startsWith("~/") ? path.join(os.homedir(), input.slice(1)) : input;
@@ -36,10 +44,13 @@ export function normalizeUrl(value: string, cwd: string | undefined, search: Sea
   if (!input) return "about:blank";
   if (HAS_AUTHORITY.test(input) || SCHEMES_WITHOUT_HOST.test(input)) {
     try {
-      return new URL(input).toString();
+      const url = new URL(input);
+      if (url.protocol === "file:" && MARKDOWN.test(url.pathname)) return documentUrl(fileURLToPath(url));
+      return url.toString();
     } catch {}
   }
   const file = localFile(input, cwd);
+  if (file && MARKDOWN.test(file)) return documentUrl(file);
   if (file) return pathToFileURL(file).toString();
   if (/^[\w.-]+(?::\d+)?(?:\/.*)?$/.test(input)) {
     const host = input.split(/[:/]/)[0].toLowerCase();
@@ -49,12 +60,14 @@ export function normalizeUrl(value: string, cwd: string | undefined, search: Sea
   return search(input);
 }
 
+const MARKDOWN = /\.(?:md|markdown)$/i;
 const HAS_AUTHORITY = /^[a-z][a-z0-9+.-]*:\/\//i;
 const SCHEMES_WITHOUT_HOST = /^(?:data|mailto|tel|about|blob|chrome|view-source):/i;
 
 export function displayUrl(url: string): string {
   if (!url) return "about:blank";
   if (url.startsWith("file://")) return homeRelative(url);
+  if (url.startsWith(`${DOC_SCHEME}://`)) return homeRelative(`file://${url.slice(`${DOC_SCHEME}://file`.length)}`);
   return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
@@ -67,6 +80,10 @@ function homeRelative(url: string): string {
   } catch {
     return url;
   }
+}
+
+export function isMarkdownDocument(url: string): boolean {
+  return url.startsWith(`${DOC_SCHEME}://`) && MARKDOWN.test(url.split(/[?#]/)[0]);
 }
 
 export function urlHost(url: string): string {

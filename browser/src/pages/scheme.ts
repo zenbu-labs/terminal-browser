@@ -1,18 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 import { protocol } from "electron";
 
-import { renderMarkdown } from "./markdown";
+import { MARKDOWN_CSP, renderMarkdown } from "./markdown";
 import { renderStartPage } from "./start";
 import type { Theme } from "../ui/theme";
+import { DOC_SCHEME } from "../url";
 
 
 
 export const SCHEME = "terminal-browser";
-// local file previews get their own scheme without fetch/CORS, so a page opened
-// from disk can run its scripts but cannot read other local files
-export const DOC_SCHEME = "terminal-browser-file";
 export const START_URL = `${SCHEME}://start`;
 export const HOME_URL = "https://terminal-browser.com";
 
@@ -36,6 +35,21 @@ const CONTENT_TYPES: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".ogv": "video/ogg",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".flac": "audio/flac",
+  ".vtt": "text/vtt; charset=utf-8",
   ".woff2": "font/woff2",
   ".woff": "font/woff",
   ".txt": "text/plain; charset=utf-8",
@@ -45,7 +59,7 @@ const CONTENT_TYPES: Record<string, string> = {
 export function registerScheme() {
   protocol.registerSchemesAsPrivileged([
     { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
-    { scheme: DOC_SCHEME, privileges: { standard: true, secure: true } },
+    { scheme: DOC_SCHEME, privileges: { standard: true, secure: true, stream: true } },
   ]);
 }
 
@@ -57,34 +71,48 @@ export function servePages(context: () => PageContext) {
   });
   protocol.handle(DOC_SCHEME, async (request) => {
     const url = new URL(request.url);
-    return serveDocument(decodeURIComponent(url.pathname), context().theme);
+    return serveDocument(decodeURIComponent(url.pathname), request.headers.get("range"), context().theme);
   });
 }
 
-export function documentUrl(file: string): string {
-  return `${DOC_SCHEME}://file${file.split(path.sep).map(encodeURIComponent).join("/")}`;
-}
-
-// a previewed file may embed remote frames but not other local files, so it
-// cannot reach a same-origin local document to read its DOM
 const DOC_CSP = "frame-src https: http: data:; object-src 'none'";
 
-async function serveDocument(file: string, theme: Theme | null): Promise<Response> {
+async function serveDocument(file: string, range: string | null, theme: Theme | null): Promise<Response> {
   try {
     const stat = await fs.promises.stat(file);
     if (!stat.isFile()) return new Response("", { status: 404 });
-    const body = await fs.promises.readFile(file);
     const extension = path.extname(file).toLowerCase();
-    const headers: Record<string, string> = { "content-security-policy": DOC_CSP };
     if (extension === ".md" || extension === ".markdown") {
-      headers["content-type"] = "text/html; charset=utf-8";
-      return new Response(await renderMarkdown(body.toString("utf8"), path.basename(file), theme), { headers });
+      const source = await fs.promises.readFile(file, "utf8");
+      return new Response(await renderMarkdown(source, path.basename(file), theme), {
+        headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": MARKDOWN_CSP },
+      });
     }
-    headers["content-type"] = CONTENT_TYPES[extension] ?? "application/octet-stream";
-    return new Response(body, { headers });
+    const headers: Record<string, string> = {
+      "content-security-policy": DOC_CSP,
+      "content-type": CONTENT_TYPES[extension] ?? "application/octet-stream",
+      "accept-ranges": "bytes",
+    };
+    const bytes = range ? byteRange(range, stat.size) : null;
+    if (bytes === "unsatisfiable") {
+      return new Response(null, { status: 416, headers: { ...headers, "content-range": `bytes */${stat.size}` } });
+    }
+    const [start, end] = bytes ?? [0, stat.size - 1];
+    if (bytes) headers["content-range"] = `bytes ${start}-${end}/${stat.size}`;
+    headers["content-length"] = String(Math.max(0, end - start + 1));
+    const body = stat.size === 0 ? null : (Readable.toWeb(fs.createReadStream(file, { start, end })) as ReadableStream);
+    return new Response(body, { status: bytes ? 206 : 200, headers });
   } catch {
     return new Response("", { status: 404 });
   }
+}
+
+function byteRange(header: string, size: number): [number, number] | "unsatisfiable" | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match || (!match[1] && !match[2])) return null;
+  const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
+  const end = match[1] && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  return start >= size || start > end ? "unsatisfiable" : [start, end];
 }
 
 export function html(markup: string): Response {
@@ -107,10 +135,16 @@ export function escape(text: string): string {
 
 export function pageColors(theme: Theme | null) {
   return {
+    bg: css(theme?.bg, "#1e1e1e"),
     fg: css(theme?.fg, "#e6e6e6"),
     muted: css(theme?.muted, "#8a8f98"),
     accent: css(theme?.accent, "#6ea8ff"),
     hairline: css(theme?.hairline, "rgba(255,255,255,0.12)"),
     field: css(theme?.field, "rgba(255,255,255,0.06)"),
+    red: css(theme?.red, "#f2777a"),
+    green: css(theme?.green, "#99cc99"),
+    yellow: css(theme?.yellow, "#ffcc66"),
+    magenta: css(theme?.magenta, "#cc99cc"),
+    cyan: css(theme?.cyan, "#66cccc"),
   };
 }
