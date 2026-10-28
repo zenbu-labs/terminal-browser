@@ -5,7 +5,7 @@ import path from "node:path";
 import { app } from "electron";
 
 // why is this defined in pixel store?
-import { DAEMON_SOCKET } from "shared";
+import { DAEMON_SOCKET, defaultSettings } from "shared";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
@@ -41,13 +41,21 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   fs.mkdirSync(path.dirname(DAEMON_SOCKET), { recursive: true });
   fs.rmSync(DAEMON_SOCKET, { force: true });
 
+  const defaults = defaultSettings();
   const build = buildStamp();
   const sessions = new Map<string, SessionHandle>();
   servePages(() => {
     const all = [...sessions.values()];
     const shown = all.filter((open) => open.showsStartPage());
     const chosen = shown[shown.length - 1] ?? all[all.length - 1];
-    return chosen?.pageContext() ?? { cwd: process.cwd(), theme: null };
+    return (
+      chosen?.pageContext() ?? {
+        cwd: process.cwd(),
+        theme: null,
+        searchEngine: defaults["search.engine"],
+        suggestions: defaults["search.suggestions"],
+      }
+    );
   });
   let seq = 0;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;

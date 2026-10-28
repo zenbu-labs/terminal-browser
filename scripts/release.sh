@@ -58,6 +58,9 @@ cp "$ROOT/assets/search/"* "$STAGE/assets/search/"
 mkdir -p "$STAGE/assets/chromium"
 cp "$ROOT/assets/chromium/"* "$STAGE/assets/chromium/"
 
+mkdir -p "$STAGE/assets/start"
+cp "$ROOT/assets/start/"* "$STAGE/assets/start/"
+
 ELECTRON_DIST="$(node -e '
   const p = require("path");
   const lib = require.resolve("@zenbu-labs/pixel/package.json", { paths: [process.argv[1]] });

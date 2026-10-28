@@ -6,9 +6,13 @@ import { promisify } from "node:util";
 
 import { z } from "zod";
 
+import { engineBySearch } from "shared";
+
+import { bundledAsset } from "../assets";
 import type { Theme } from "../ui/theme";
 import { documentUrl, escape, html, json, pageColors } from "./scheme";
 import type { PageContext } from "./scheme";
+import { resolveSearchEngine, startVariant } from "./start-api";
 
 
 
@@ -32,14 +36,35 @@ const MAX_PORTS = 10;
 const MAX_DOCUMENTS = 8;
 const PORT_NOISE = ["ControlCe", "rapportd", "sharingd", "agent-bro", "identitys", "Electron", "terminal-"];
 
+const SHELL = `<!doctype html>
+<html><head><meta charset="utf-8"><title>terminal-browser</title><link rel="icon" href="./icon.png">
+<link rel="stylesheet" href="./page.css">
+{{THEME_STYLE}}</head>
+<body>
+{{HERO}}
+{{DEV}}
+{{FOOT}}
+<script>{{PAGE_JS}}</script>
+</body></html>`;
+
 export async function renderStartPage(url: URL, context: PageContext): Promise<Response> {
-  const data = await collect(context.cwd);
-  return url.searchParams.has("data") ? json(data) : html(render(data, context.theme));
+  // Home skips the slow port, document and pull request lookups so it appears immediately.
+  if (startVariant(url) === "home" && !url.searchParams.has("data")) {
+    const data = { searchEngine: resolveSearchEngine(context.searchEngine), ports: [], documents: [], pr: null };
+    return html(render(data, context.theme, "home"));
+  }
+  const data = await collectStartData(context);
+  if (url.searchParams.has("data")) return json(data);
+  return html(render(data, context.theme, startVariant(url)));
 }
 
-async function collect(cwd: string) {
-  const [ports, documents, pr] = await Promise.all([listeningPorts(), recentDocuments(cwd), openPullRequest(cwd)]);
-  return { ports, documents, pr };
+export async function collectStartData(context: PageContext) {
+  const [ports, documents, pr] = await Promise.all([
+    listeningPorts(),
+    recentDocuments(context.cwd),
+    openPullRequest(context.cwd),
+  ]);
+  return { ports, documents, pr, searchEngine: resolveSearchEngine(context.searchEngine) };
 }
 
 async function listeningPorts(): Promise<Port[]> {
@@ -118,11 +143,33 @@ function ago(ms: number): string {
   return `${Math.round(hours / 24)}d`;
 }
 
-function render(data: Awaited<ReturnType<typeof collect>>, theme: Theme | null): string {
-  const { fg, muted, accent, hairline } = pageColors(theme);
+export function loadStartAsset(name: string): string {
+  const file = bundledAsset(`start/${name}`);
+  if (!file) throw new Error(`missing start asset: start/${name}`);
+  return fs.readFileSync(file, "utf8");
+}
+
+export function loadStartAssetBytes(name: string): Uint8Array<ArrayBuffer> {
+  const file = bundledAsset(`start/${name}`);
+  if (!file) throw new Error(`missing start asset: start/${name}`);
+  return fs.readFileSync(file);
+}
+
+export function render(
+  data: Awaited<ReturnType<typeof collectStartData>>,
+  theme: Theme | null,
+  variant: "home" | "dev" = "home",
+): string {
+  const { fg, muted, accent, hairline, field, overlay } = pageColors(theme);
   const link = (href: string, text: string) => `<a href="${escape(href)}" target="_blank">${escape(text)}</a>`;
   const section = (title: string, rows: string[]) =>
     rows.length === 0 ? "" : `<section><h2>${escape(title)}</h2><ul>${rows.join("")}</ul></section>`;
+  const suggest = engineBySearch(data.searchEngine)?.suggest ?? null;
+  const hero = `<header class="hero">
+<h1><img src="./icon.png" alt="" width="30" height="30"> terminal-browser</h1>
+<form id="search-form" role="search"><input id="search-input" name="q" type="search" autofocus autocomplete="off" spellcheck="false" placeholder="Search or enter URL..." aria-label="Search or enter URL" data-search-template="${escape(data.searchEngine)}"${suggest ? ` data-suggest-template="${escape(suggest)}"` : ""}><ul id="search-suggest" role="listbox" aria-label="Search suggestions" hidden></ul></form>
+<p class="hint">Enter opens here · Alt+Enter opens a new tab · / focuses search</p>
+</header>`;
   const body =
     section("Pull request", data.pr ? [`<li>${link(data.pr.url, `#${data.pr.number} ${data.pr.title}`)}</li>`] : []) +
     section(
@@ -133,31 +180,21 @@ function render(data: Awaited<ReturnType<typeof collect>>, theme: Theme | null):
       "Recent documents",
       data.documents.map((d) => `<li>${link(d.url, d.label)}<span>${escape(d.age)}</span></li>`),
     );
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><title>terminal-browser</title>
-<style>
-  :root { color-scheme: dark light; }
-  html, body { margin: 0; background: transparent; color: ${fg}; }
-  body { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 28px 32px; max-width: 720px; }
-  h2 { font-size: 11px; font-weight: 500; letter-spacing: 0.08em; color: ${muted}; margin: 0 0 6px; }
-  section + section { margin-top: 22px; padding-top: 18px; border-top: 1px solid ${hairline}; }
-  ul { list-style: none; margin: 0; padding: 0; }
-  li { display: flex; justify-content: space-between; gap: 16px; padding: 3px 0; }
-  li span { color: ${muted}; white-space: nowrap; }
-  a { color: ${accent}; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  a:hover { text-decoration: underline; }
-  .empty { color: ${muted}; }
-</style></head>
-<body>
-${body || `<p class="empty">no running servers, no recent documents, no open pull request</p>`}
-<script>
-  // dev servers come and go: reload only when the lists changed
-  const data = () => fetch(location.origin + location.pathname + "?data").then(r => r.ok ? r.text() : null).catch(() => null);
-  data().then(t => { window.__start = t; });
-  setInterval(async () => {
-    const fresh = await data();
-    if (fresh && fresh !== window.__start) { window.__start = fresh; location.reload(); }
-  }, 8000);
-</script>
-</body></html>`;
+  const themeStyle = `<style>:root{--fg:${fg};--muted:${muted};--accent:${accent};--hairline:${hairline};--field:${field};--overlay:${overlay};}</style>`;
+  const pageJs = loadStartAsset("page.js");
+  const dev = body || `<p class="empty">no running servers, no recent documents, no open pull request</p>`;
+  const foot = `<p class="hint" id="home-foot">prefer a blank page? set home.default to blank and turn off home.restore in settings (ctrl+,)</p>
+<p class="hint">running servers and recent files live at <a href="terminal-browser://dev">terminal-browser://dev</a></p>`;
+  // A replacer function keeps `$&` in inserted text literal.
+  const parts: Record<string, string> = {
+    HERO: variant === "home" ? hero : "",
+    DEV: variant === "dev" ? dev : "",
+    FOOT: variant === "home" ? foot : "",
+    THEME_STYLE: themeStyle,
+    PAGE_JS: pageJs,
+  };
+  return SHELL.replace(
+    /{{(HERO|DEV|FOOT|THEME_STYLE|PAGE_JS)}}/g,
+    (_match, key: keyof typeof parts) => parts[key],
+  );
 }

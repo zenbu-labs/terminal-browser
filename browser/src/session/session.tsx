@@ -69,9 +69,9 @@ import type {
   ToastView,
   ReleaseView,
 } from "../ui/types";
-import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor } from "../url";
+import { displayUrl, normalizeUrl, resolveDefaultUrl, resolveRestoreUrl, searchOrUrl, searchUrlFor } from "../url";
 import type { SearchUrl } from "../url";
-import { HOME_URL, START_URL } from "../pages/scheme";
+import { DEV_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
 import { makeTheme } from "../ui/theme";
 import { fuzzyScore } from "./fuzzy";
@@ -260,7 +260,7 @@ class Session {
 
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
-    this.defaultUrl = ctx.env.TERMINAL_BROWSER_START_PAGE === "1" ? START_URL : HOME_URL;
+    this.defaultUrl = resolveDefaultUrl(ctx.env, this.settings.get("home.default"), START_URL, DEV_URL);
     const socket = ctx.env[TERMINAL_SOCKET_ENV];
     this.terminal = socket ? socketTerminal(socket) : detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
@@ -1628,7 +1628,12 @@ class Session {
 
   pageContext(): PageContext {
     const colors = this.root?.info.colors;
-    return { cwd: this.ctx.cwd, theme: colors ? makeTheme(colors) : null };
+    return {
+      cwd: this.ctx.cwd,
+      theme: colors ? makeTheme(colors) : null,
+      searchEngine: this.settings.get("search.engine"),
+      suggestions: this.settings.get("search.suggestions"),
+    };
   }
 
   showsStartPage(): boolean {
@@ -1638,10 +1643,12 @@ class Session {
   private initialUrl(): string {
     const arg = this.argv.find((argument) => !argument.startsWith("-"));
     if (arg) return normalizeUrl(arg, this.ctx.cwd, this.searchUrl());
-    try {
-      const last = lastUrl()?.trim();
-      if (last && /^https?:\/\//.test(last)) return last;
-    } catch { }
+    if (this.ctx.env.TERMINAL_BROWSER_START_PAGE !== "1") {
+      try {
+        const restored = resolveRestoreUrl(this.settings.get("home.restore") === "on", lastUrl());
+        if (restored) return restored;
+      } catch { }
+    }
     return this.defaultUrl;
   }
 }

@@ -3,8 +3,11 @@ import path from "node:path";
 
 import { protocol } from "electron";
 
+import { SUGGESTIONS_OFF } from "shared";
+
 import { renderMarkdown } from "./markdown";
-import { renderStartPage } from "./start";
+import { collectStartData, loadStartAsset, loadStartAssetBytes, renderStartPage } from "./start";
+import { routeStartApi, suggestUrl } from "./start-api";
 import type { Theme } from "../ui/theme";
 
 
@@ -15,10 +18,13 @@ export const SCHEME = "terminal-browser";
 export const DOC_SCHEME = "terminal-browser-file";
 export const START_URL = `${SCHEME}://start`;
 export const HOME_URL = "https://terminal-browser.com";
+export const DEV_URL = `${SCHEME}://dev`;
 
 export interface PageContext {
   cwd: string;
   theme: Theme | null;
+  searchEngine: string;
+  suggestions: string;
 }
 
 type Rgba = [number, number, number, number];
@@ -52,8 +58,39 @@ export function registerScheme() {
 export function servePages(context: () => PageContext) {
   protocol.handle(SCHEME, async (request) => {
     const url = new URL(request.url);
-    if (url.host === "start") return renderStartPage(url, context());
-    return new Response("", { status: 404 });
+    if (url.host !== "start" && url.host !== "dev") return new Response("", { status: 404 });
+    const route = routeStartApi(request.method, url);
+    switch (route.kind) {
+      case "page":
+        return renderStartPage(url, context());
+      case "data":
+        return json(await collectStartData(context()));
+      case "suggest": {
+        if (!route.query.trim()) return json({ error: "missing query" }, 400);
+        const { suggestions } = context();
+        const upstream = suggestUrl(suggestions === SUGGESTIONS_OFF ? null : suggestions, route.query);
+        if (!upstream) return json({ error: "suggestions off" }, 404);
+        try {
+          const response = await fetch(upstream, { signal: AbortSignal.timeout(3000) });
+          if (!response.ok) return json({ error: "suggestion fetch failed" }, 502);
+          return new Response(await response.text(), {
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          });
+        } catch {
+          return json({ error: "suggestion fetch failed" }, 502);
+        }
+      }
+      case "page-css":
+        return new Response(loadStartAsset("page.css"), {
+          headers: { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=31536000, immutable" },
+        });
+      case "page-icon":
+        return new Response(loadStartAssetBytes("icon.png"), {
+          headers: { "content-type": "image/png", "cache-control": "public, max-age=31536000, immutable" },
+        });
+      case "not-found":
+        return json({ error: "not found" }, 404);
+    }
   });
   protocol.handle(DOC_SCHEME, async (request) => {
     const url = new URL(request.url);
@@ -91,8 +128,8 @@ export function html(markup: string): Response {
   return new Response(markup, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
-export function json(value: unknown): Response {
-  return new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+export function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 }
 
 function css(color: Rgba | undefined, fallback: string): string {
@@ -109,8 +146,9 @@ export function pageColors(theme: Theme | null) {
   return {
     fg: css(theme?.fg, "#e6e6e6"),
     muted: css(theme?.muted, "#8a8f98"),
-    accent: css(theme?.accent, "#6ea8ff"),
+    accent: css(theme?.accent, "#4d9fff"),
     hairline: css(theme?.hairline, "rgba(255,255,255,0.12)"),
     field: css(theme?.field, "rgba(255,255,255,0.06)"),
+    overlay: css(theme?.overlay, "rgb(30, 30, 46)"),
   };
 }
