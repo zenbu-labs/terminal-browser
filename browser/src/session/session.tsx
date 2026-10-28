@@ -1609,6 +1609,7 @@ class Session {
       this.root.displayScale,
       reviewing ? null : placement,
       reviewing ? recordBarHeight(info) : 0,
+      this.ctx.env.TERMINAL_BROWSER_NO_CHROME === "1",
     );
     this.layout = result.chrome;
     this.surfaceLayout = result.surface;

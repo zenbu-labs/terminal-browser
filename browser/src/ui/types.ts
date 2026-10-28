@@ -194,6 +194,7 @@ export interface ChromeLayout {
   } | null;
   rem: number;
   frame: number;
+  radius: number;
 }
 
 export interface TabView {

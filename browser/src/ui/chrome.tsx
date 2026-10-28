@@ -179,7 +179,7 @@ export function Chrome({
               width: layout.page.width + layout.frame * 2,
               height: Math.round(layout.rem * 2),
               flexShrink: 0,
-              cornerRadius: Math.max(2, layout.rem * 0.55 - 1) + layout.frame,
+              cornerRadius: layout.radius + layout.frame,
               border: {
                 width: Math.max(2, Math.round(layout.rem * 0.12)),
                 color: theme.accent,
@@ -418,7 +418,7 @@ function AgentGlow({
     Math.max(12, Math.round(layout.rem * 1.6)),
     Math.floor(Math.min(page.width, page.height) / 2),
   );
-  const base = seamRadius(Math.max(2, layout.rem * 0.55 - 1), dock, "page");
+  const base = seamRadius(layout.radius, dock, "page");
   const r =
     typeof base === "number"
       ? { topLeft: base, topRight: base, bottomRight: base, bottomLeft: base }
@@ -510,10 +510,10 @@ function BrowserTabContents({
 }) {
   const dock = layout.devtools?.dock ?? null;
   const frame = layout.frame;
-  const pageRadius = Math.max(2, layout.rem * 0.55 - 1);
+  const pageRadius = layout.radius;
   return (
     <>
-      {!coveredByReview && (
+      {!coveredByReview && frame > 0 && (
         <Box
           style={{
             position: "absolute",
@@ -581,7 +581,7 @@ function DevtoolsPane({
 }) {
   const rect = layout.devtools!;
   const frame = layout.frame;
-  const pageRadius = Math.max(2, layout.rem * 0.55 - 1);
+  const pageRadius = layout.radius;
   const horizontal = rect.dock === "bottom";
   const grab = Math.max(8, Math.round(layout.rem * 0.5));
   const divider = horizontal

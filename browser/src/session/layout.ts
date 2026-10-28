@@ -91,11 +91,14 @@ export function computeLayout(
   scale: number,
   devtools: DevtoolsPlacement | null,
   recordBar = 0,
+  bare = false,
 ): SessionLayout {
-  const toolbarHeight = Math.min(info.height - info.cellHeight, Math.round(info.basePx * 2.1));
-  const pad = Math.round(info.basePx * 0.45);
-  const padLeft = Math.round(info.basePx * 0.2);
-  const padBottom = Math.round(info.basePx * 0.2);
+  const toolbarHeight = bare
+    ? 0
+    : Math.min(info.height - info.cellHeight, Math.round(info.basePx * 2.1));
+  const pad = bare ? 0 : Math.round(info.basePx * 0.45);
+  const padLeft = bare ? 0 : Math.round(info.basePx * 0.2);
+  const padBottom = bare ? 0 : Math.round(info.basePx * 0.2);
   const chrome: ChromeLayout = {
     width: info.width,
     height: info.height,
@@ -110,7 +113,8 @@ export function computeLayout(
     },
     devtools: null,
     rem: info.basePx,
-    frame: Math.max(1, Math.round(scale)),
+    frame: bare ? 0 : Math.max(1, Math.round(scale)),
+    radius: bare ? 0 : Math.max(2, info.basePx * 0.55 - 1),
   };
   const gap = Math.max(2, Math.round(info.basePx * 0.25));
   const split = splitForDevtools(chrome.page, devtools, gap);
