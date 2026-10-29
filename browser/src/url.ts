@@ -45,7 +45,9 @@ export function normalizeUrl(value: string, cwd: string | undefined, search: Sea
   if (HAS_AUTHORITY.test(input) || SCHEMES_WITHOUT_HOST.test(input)) {
     try {
       const url = new URL(input);
-      if (url.protocol === "file:" && MARKDOWN.test(url.pathname)) return documentUrl(fileURLToPath(url));
+      if (url.protocol === "file:" && MARKDOWN.test(url.pathname)) {
+        return `${documentUrl(fileURLToPath(url))}${url.search}${url.hash}`;
+      }
       return url.toString();
     } catch {}
   }
