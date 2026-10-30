@@ -55,7 +55,6 @@ import { RecordSession } from "../record/session";
 import type { RecordActions } from "../record/types";
 import { Registry } from "../registry";
 import { Chrome } from "../ui/chrome";
-import { ICONS } from "../ui/icons";
 import type {
   ChromeActions,
   ChromeLayout,
@@ -261,7 +260,6 @@ class Session {
   private grabs = new Map<number, Grab>();
   private copyWatchers = new Map<number, CopyOnSelect>();
   private readonly copyOnSelect: boolean;
-  private readonly inspectIcon = bundledAsset(path.join("chromium", "logo.png"));
   private readonly agentPanes: AgentPaneFinder;
   private shownRecord: RecordSession | null = null;
   private recordStarting = false;
@@ -325,7 +323,8 @@ class Session {
         onActiveState: (state, urlChanged) => {
           if (urlChanged) rememberUrl(state.url);
           this.ensureCopyWatcher();
-          if (Math.abs(state.zoom - this.lastZoom) > 0.001) this.showZoomHud(state.zoom);
+          const zoomed = Math.abs(state.zoom - this.lastZoom) > 0.001;
+          if (zoomed && this.pageMenu?.kind !== "toolbar") this.showZoomHud(state.zoom);
           this.lastZoom = state.zoom;
           this.registry?.update();
           this.syncTitle();
@@ -688,6 +687,7 @@ class Session {
     },
     pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
+    pageMenuZoom: (direction) => this.applyZoom(direction),
     settings: this.settings.actions,
     record: this.recordActions(),
   };
@@ -1378,7 +1378,6 @@ class Session {
       label: this.activeGrab()?.active ? "Stop selection" : "Send to agent",
       enabled: true,
       shortcut: this.keymap.label("grab.toggle"),
-      icon: { kind: "path", d: ICONS.select },
     };
   }
 
@@ -1389,14 +1388,12 @@ class Session {
         label: this.activeRecord() ? "Complete recording" : "Record",
         enabled: true,
         shortcut: this.activeRecord() ? "" : this.keymap.label("record.toggle"),
-        icon: { kind: "path", d: ICONS.record, tint: "red", weight: 8 },
       },
       {
         id: "inspect",
         label: "Inspect",
         enabled: true,
         shortcut: this.keymap.label("devtools.toggle"),
-        icon: this.inspectIcon ? { kind: "image", src: this.inspectIcon } : undefined,
       },
     ];
   }
@@ -1409,14 +1406,12 @@ class Session {
         label: CLEAR_DATA_LABEL,
         enabled: true,
         shortcut: "",
-        icon: { kind: "path", d: ICONS.trash },
       },
       {
         id: "settings",
         label: commandLabel("settings.open"),
         enabled: true,
         shortcut: this.keymap.label("settings.open"),
-        icon: { kind: "path", d: ICONS.settings },
       },
     ];
   }
@@ -1424,7 +1419,12 @@ class Session {
   private pageMenuView(): PageMenuView | null {
     if (!this.pageMenu || !this.layout) return null;
     if (this.pageMenu.kind === "toolbar") {
-      return { x: this.layout.width, y: this.layout.toolbarHeight, items: this.toolbarMenuItems() };
+      return {
+        x: this.layout.width,
+        y: this.layout.toolbarHeight,
+        zoomPercent: Math.round((this.tabs.activeState?.zoom ?? 1) * 100),
+        items: this.toolbarMenuItems(),
+      };
     }
     const items: PageMenuItem[] = [
       ...(this.pageMenu.selectionText

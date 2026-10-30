@@ -55,9 +55,6 @@ cp "$ROOT/assets/react-grab/"* "$STAGE/assets/react-grab/"
 mkdir -p "$STAGE/assets/search"
 cp "$ROOT/assets/search/"* "$STAGE/assets/search/"
 
-mkdir -p "$STAGE/assets/chromium"
-cp "$ROOT/assets/chromium/"* "$STAGE/assets/chromium/"
-
 ELECTRON_DIST="$(node -e '
   const p = require("path");
   const lib = require.resolve("@zenbu-labs/pixel/package.json", { paths: [process.argv[1]] });

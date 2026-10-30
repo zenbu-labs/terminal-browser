@@ -10,6 +10,7 @@ import type {
   PointerEvent,
   WebViewHandle,
   WebViewState,
+  ZoomDirection,
 } from "@zenbu-labs/pixel";
 import type { RecordActions } from "../record/types";
 import type { BrowsingDataKind } from "../session/browsing-data";
@@ -62,16 +63,11 @@ export interface DownloadView {
   state: "progressing" | "done" | "failed";
 }
 
-export type PageMenuIcon =
-  | { kind: "path"; d: string; tint?: "red"; weight?: number }
-  | { kind: "image"; src: string };
-
 export interface PageMenuItem {
   id: string;
   label: string;
   enabled: boolean;
   shortcut: string;
-  icon?: PageMenuIcon;
 }
 
 export interface ClearDataView {
@@ -82,6 +78,7 @@ export interface ClearDataView {
 export interface PageMenuView {
   x: number;
   y: number;
+  zoomPercent?: number;
   items: PageMenuItem[];
 }
 
@@ -177,6 +174,7 @@ export interface ChromeActions {
   devtoolsDividerHover(hovering: boolean): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
+  pageMenuZoom(direction: ZoomDirection): void;
   permissionDecide(decision: PermissionDecision): void;
   toastDismiss(): void;
   clearDataToggle(kind: BrowsingDataKind): void;
