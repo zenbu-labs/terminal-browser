@@ -11,12 +11,19 @@ function isIco(data: Buffer): boolean {
   return data.length > 4 && data[0] === 0 && data[1] === 0 && data[2] === 1 && data[3] === 0;
 }
 
+let clears = 0;
+
+export async function clearFavicons(): Promise<void> {
+  clears++;
+  await fs.promises.rm(path.join(app.getPath("userData"), "favicons"), { recursive: true, force: true });
+}
 
 export class FaviconCache {
   constructor(private readonly dir: string = path.join(app.getPath("userData"), "favicons")) {}
 
   async resolve(urls: string[], ses: Session): Promise<string | null> {
     if (urls.length === 0) return null;
+    const clearsBefore = clears;
     const candidates = [...urls].sort((a, b) => Number(RASTER_URL.test(b)) - Number(RASTER_URL.test(a)));
     try {
       const fallback = new URL("/favicon.ico", urls[0]).toString();
@@ -26,7 +33,7 @@ export class FaviconCache {
       this.dir,
       crypto
         .createHash("sha1")
-        .update(`${ses.storagePath ?? ""}\0${candidates.join("\n")}`)
+        .update(`${ses.storagePath ?? ""}\0${clearsBefore}\0${candidates.join("\n")}`)
         .digest("hex")
         .slice(0, 16),
     );
@@ -34,6 +41,10 @@ export class FaviconCache {
     if (cached) return cached;
     for (const url of candidates) {
       const file = await this.fetchDecodable(url, ses, stem);
+      if (file && clears !== clearsBefore) {
+        await fs.promises.rm(file, { force: true });
+        return null;
+      }
       if (file) return file;
     }
     return null;

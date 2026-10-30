@@ -27,6 +27,7 @@ export type { DevtoolsDock } from "./web/types";
 export type { ZoomDirection } from "./web/zoom";
 export type { TerminalTheme } from "./web/session";
 export { QUIT_URL, defaultOpenWindow } from "./web/host";
+export { clearFavicons } from "./web/favicon";
 
 export {
   Box,

@@ -1,3 +1,4 @@
+import { clearFavicons } from "@zenbu-labs/pixel";
 import { session as electronSession } from "electron";
 import type { Session } from "electron";
 
@@ -22,6 +23,7 @@ export async function clearBrowsingData(session: Session, kinds: readonly Browsi
   }
   if (kinds.includes("cache")) {
     await session.clearCache();
+    await clearFavicons();
     await session.clearCodeCaches({});
   }
 }
