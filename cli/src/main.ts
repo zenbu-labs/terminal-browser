@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import readline from "node:readline";
 
 import {
   DAEMON_SOCKET,
@@ -449,18 +450,24 @@ function currentTerminal(): Promise<TerminalCheck> {
   return asked;
 }
 
-async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
-  const check = await currentTerminal();
-  const found = await browsers(check.terminal);
+function listBrowsers(found: Browser[]): string {
+  return found.map((browser) => `  ${describe(browser)}`).join("\n");
+}
+
+function chooseBrowser(found: Browser[], key: string | undefined): Browser | undefined {
   const here = key
     ? found.filter((browser) => recordKey(browser) === key)
     : found.filter((browser) => browser.inCurrentTab);
-  const list = (browsers: Browser[]) => browsers.map((browser) => `  ${describe(browser)}`).join("\n");
-  if (key && here.length === 0) fail(`no browser ${key}. Running:\n${list(found)}`);
+  if (key && here.length === 0) fail(`no browser ${key}. Running:\n${listBrowsers(found)}`);
   if (here.length > 1) {
-    fail(`${here.length} browsers in this tab, so say which with --browser:\n${list(here)}`);
+    fail(`${here.length} browsers in this tab, so say which with --browser:\n${listBrowsers(here)}`);
   }
-  const target = here[0];
+  return here[0];
+}
+
+async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
+  const check = await currentTerminal();
+  const target = chooseBrowser(await browsers(check.terminal), key);
   if (target) {
     const where = url ? { cmd: "open-tab", url, cwd: process.cwd() } : { cmd: "open-tab" };
     const opened = (await control(target.socket, where)) as { openedTab?: number };
@@ -477,6 +484,57 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
   const tty = ownTtyPath() ?? callerTty().path;
   if (tty) split.push(`--parent-tty=${tty}`);
   reportOpened(recordKey(await launchInSplit(check.terminal!, "right", split, null)));
+  return 0;
+}
+
+const BROWSING_DATA_NAMES: Record<string, string> = {
+  siteData: "cookies and site data",
+  cache: "cached images and files",
+};
+
+function clearSummary(kinds: string[]): string {
+  const shown = kinds.length > 0 ? kinds : Object.keys(BROWSING_DATA_NAMES);
+  const what = shown.map((kind) => BROWSING_DATA_NAMES[kind]).join(", and ");
+  return `This clears ${what}${shown.length > 1 ? "," : ""} for every site in every terminal-browser window${shown.includes("siteData") ? ", signing you out" : ""}.`;
+}
+
+async function confirmClear(summary: string): Promise<boolean> {
+  const ask = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise<string>((resolve) => {
+    ask.question(`${summary} Continue? [y/N] `, resolve);
+    ask.on("close", () => resolve("n"));
+  });
+  ask.close();
+  return /^(y|yes)$/i.test(answer.trim());
+}
+
+async function clearBrowsingDataCommand(args: string[]): Promise<number> {
+  const key = takeFlag(args, "--browser");
+  const confirmed = takeBoolFlag(args, "--yes") || takeBoolFlag(args, "-y");
+  const kinds = [
+    ...(takeBoolFlag(args, "--cookies") ? ["siteData"] : []),
+    ...(takeBoolFlag(args, "--cache") ? ["cache"] : []),
+  ];
+  if (args.length > 0) fail(`unexpected ${args[0]} (see terminal-browser clear-browsing-data --help)`);
+  const found = await browsers((await currentTerminal()).terminal);
+  const target = chooseBrowser(found, key) ?? (found.length === 1 ? found[0] : undefined);
+  if (!target) {
+    if (found.length === 0) fail("no browser is open, so there is nothing to clear");
+    fail(`no browser in this terminal tab, so say which with --browser:\n${listBrowsers(found)}`);
+  }
+  if (!confirmed) {
+    const summary = clearSummary(kinds);
+    if (!process.stdin.isTTY) fail(`${summary}\nPass --yes to confirm when not running interactively.`);
+    if (!(await confirmClear(summary))) {
+      process.stdout.write("cancelled\n");
+      return 0;
+    }
+  }
+  const reply = (await control(target.socket, {
+    cmd: "clear-browsing-data",
+    ...(kinds.length > 0 ? { kinds } : {}),
+  })) as { cleared: string[] };
+  process.stdout.write(`cleared ${reply.cleared.map((kind) => BROWSING_DATA_NAMES[kind] ?? kind).join(", and ")}\n`);
   return 0;
 }
 
@@ -755,6 +813,10 @@ async function main(): Promise<number> {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");
     return newTabCommand(args.find((arg) => !arg.startsWith("-")), key);
+  }
+  if (command === "clear-browsing-data") {
+    requirePaneAccess();
+    return clearBrowsingDataCommand(args);
   }
   if (command === "action") {
     requirePaneAccess();

@@ -12,6 +12,7 @@ import type {
   WebViewState,
 } from "@zenbu-labs/pixel";
 import type { RecordActions } from "../record/types";
+import type { BrowsingDataKind } from "../session/browsing-data";
 import type { IconName } from "./icons";
 
 export interface ToastView {
@@ -71,6 +72,11 @@ export interface PageMenuItem {
   enabled: boolean;
   shortcut: string;
   icon?: PageMenuIcon;
+}
+
+export interface ClearDataView {
+  checked: BrowsingDataKind[];
+  clearing: boolean;
 }
 
 export interface PageMenuView {
@@ -173,6 +179,9 @@ export interface ChromeActions {
   pageMenuClose(): void;
   permissionDecide(decision: PermissionDecision): void;
   toastDismiss(): void;
+  clearDataToggle(kind: BrowsingDataKind): void;
+  clearDataConfirm(): void;
+  clearDataCancel(): void;
   settings: SettingsActions;
   profileStop(): void;
   record: RecordActions;

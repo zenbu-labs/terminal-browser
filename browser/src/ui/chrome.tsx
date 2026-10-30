@@ -4,6 +4,7 @@ import type { EngineInfo, Rgba, Surface } from "@zenbu-labs/pixel";
 import type { WebViewState } from "@zenbu-labs/pixel";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
+import { ClearDataDialog } from "./clear-data-dialog";
 import { PageContextMenu } from "./context-menu";
 import { MarkupCanvas } from "./markup-canvas";
 import { NewTabCard, PaletteCard, UrlCard } from "./modals";
@@ -24,6 +25,7 @@ import type { RecordView } from "../record/types";
 import type {
   ChromeActions,
   ChromeLayout,
+  ClearDataView,
   DownloadView,
   NewTabView,
   DevtoolsView,
@@ -53,6 +55,7 @@ export function Chrome({
   pageMenu,
   permissionPrompt,
   settings,
+  clearData,
   dividerEngaged,
   record,
   recordSurface,
@@ -77,6 +80,7 @@ export function Chrome({
   pageMenu: PageMenuView | null;
   permissionPrompt: PermissionPromptView | null;
   settings: SettingsView | null;
+  clearData: ClearDataView | null;
   dividerEngaged: boolean;
   record: RecordView | null;
   recordSurface: Surface | null;
@@ -194,6 +198,7 @@ export function Chrome({
       {settings && (
         <SettingsCard view={settings} actions={actions.settings} layout={layout} theme={theme} />
       )}
+      {clearData && <ClearDataDialog view={clearData} actions={actions} layout={layout} theme={theme} />}
     </Box>
   );
 }

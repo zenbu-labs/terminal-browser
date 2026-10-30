@@ -74,6 +74,8 @@ import type { SearchUrl } from "../url";
 import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
 import { makeTheme } from "../ui/theme";
+import { BROWSING_DATA_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
+import type { BrowsingDataKind } from "./browsing-data";
 import { fuzzyScore } from "./fuzzy";
 import { PermissionPrompts } from "./permissions";
 import type { MediaDevice } from "./permissions";
@@ -166,6 +168,13 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
     .map((entry) => entry.app);
 }
 
+const CLEAR_DATA_LABEL = "Clear browsing data";
+
+interface ClearDataState {
+  checked: Set<BrowsingDataKind>;
+  clearing: boolean;
+}
+
 class Session {
   private readonly ctx: SessionContext;
   private readonly terminal: Terminal | null;
@@ -232,6 +241,7 @@ class Session {
     | { kind: "toolbar" }
     | null = null;
 
+  private clearData: ClearDataState | null = null;
   private findOpen = false;
   private urlEditOpen = false;
   private palette: { query: string; index: number } | null = null;
@@ -394,6 +404,7 @@ class Session {
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),
       targets: () => this.tabs.targets(),
+      clearBrowsingData: (kinds) => this.clearBrowsingData(kinds),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
@@ -563,6 +574,14 @@ class Session {
         pageMenu={this.pageMenuView()}
         permissionPrompt={this.tabs.active ? this.permissions.view(this.tabs.active.id) : null}
         settings={this.settings.view()}
+        clearData={
+          this.clearData
+            ? {
+              checked: BROWSING_DATA_KINDS.filter((kind) => this.clearData!.checked.has(kind)),
+              clearing: this.clearData.clearing,
+            }
+            : null
+        }
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
@@ -597,6 +616,15 @@ class Session {
       this.toastTimer = null;
       this.render();
     },
+    clearDataToggle: (kind) => {
+      const dialog = this.clearData;
+      if (!dialog || dialog.clearing) return;
+      if (dialog.checked.has(kind)) dialog.checked.delete(kind);
+      else dialog.checked.add(kind);
+      this.render();
+    },
+    clearDataConfirm: () => void this.confirmClearData(),
+    clearDataCancel: () => this.closeClearData(),
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
       this.closeUrlEdit();
@@ -665,7 +693,7 @@ class Session {
   };
 
   private openSettings() {
-    if (this.palette || this.newTab || this.urlEditOpen) return;
+    if (this.palette || this.newTab || this.urlEditOpen || this.clearData) return;
     this.closePageMenu();
     this.settings.open();
   }
@@ -814,6 +842,11 @@ class Session {
     }
     if (this.settings.isOpen) {
       if (event.key === "escape" || command === "settings.open") this.settings.close();
+      return true;
+    }
+    if (this.clearData) {
+      if (event.key === "escape") this.closeClearData();
+      else if (event.key === "enter") void this.confirmClearData();
       return true;
     }
     if (this.palette) {
@@ -1154,7 +1187,7 @@ class Session {
 
   private openPageMenu(params: Electron.ContextMenuParams) {
     if (!this.surfaceLayout) return;
-    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
+    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen || this.clearData) return;
     const scale = this.surfaceLayout.scale;
     this.pageMenu = {
       kind: "page",
@@ -1168,6 +1201,51 @@ class Session {
     this.render();
   }
 
+  private openClearData() {
+    if (this.clearData || this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
+    this.closePageMenu();
+    this.clearData = { checked: new Set(BROWSING_DATA_KINDS), clearing: false };
+    this.enterOverlay(["enter"]);
+    this.render();
+  }
+
+  private closeClearData() {
+    if (!this.clearData || this.clearData.clearing) return;
+    this.clearData = null;
+    this.leaveOverlay();
+    this.render();
+  }
+
+  private async confirmClearData() {
+    const dialog = this.clearData;
+    if (!dialog || dialog.clearing || dialog.checked.size === 0) return;
+    dialog.clearing = true;
+    this.render();
+    let failure: unknown = null;
+    try {
+      await this.clearBrowsingData([...dialog.checked]);
+    } catch (error) {
+      failure = error;
+    }
+    dialog.clearing = false;
+    this.closeClearData();
+    if (failure) {
+      this.showToast("Could not clear browsing data", "failed", failure instanceof Error ? failure.message : String(failure));
+      return;
+    }
+    this.showToast("Browsing data cleared", "done", undefined, {
+      label: "Reload page",
+      run: () => {
+        this.actions.toastDismiss();
+        this.actions.reload();
+      },
+    });
+  }
+
+  private clearBrowsingData(kinds: BrowsingDataKind[]): Promise<void> {
+    return clearBrowsingData(browsingSession(this.partition), kinds);
+  }
+
   private closePageMenu() {
     if (!this.pageMenu) return;
     this.pageMenu = null;
@@ -1179,7 +1257,7 @@ class Session {
       this.closePageMenu();
       return;
     }
-    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
+    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen || this.clearData) return;
     this.pageMenu = { kind: "toolbar" };
     this.render();
   }
@@ -1193,6 +1271,9 @@ class Session {
     switch (id) {
       case "settings":
         this.openSettings();
+        return;
+      case "clear-data":
+        this.openClearData();
         return;
       case "grab":
         void this.toggleGrab();
@@ -1323,6 +1404,13 @@ class Session {
   private toolbarMenuItems(): PageMenuItem[] {
     return [
       ...this.toolMenuItems(),
+      {
+        id: "clear-data",
+        label: CLEAR_DATA_LABEL,
+        enabled: true,
+        shortcut: "",
+        icon: { kind: "path", d: ICONS.trash },
+      },
       {
         id: "settings",
         label: commandLabel("settings.open"),
@@ -1510,6 +1598,7 @@ class Session {
       command("record.toggle"),
       command("grab.toggle"),
       command("devtools.toggle"),
+      { id: "clear-data", label: CLEAR_DATA_LABEL, shortcut: "", run: () => this.openClearData() },
       ...(DEV_BUILD
         ? [
           {

@@ -15,6 +15,8 @@ import type { InstanceRow } from "shared";
 
 import type { WebViewState } from "@zenbu-labs/pixel";
 import { INSTANCES_DIR } from "shared";
+import { BROWSING_DATA_KINDS, isBrowsingDataKind } from "./session/browsing-data";
+import type { BrowsingDataKind } from "./session/browsing-data";
 
 export interface Where {
   terminal: string | null;
@@ -37,6 +39,7 @@ export interface ControlHost {
   tabs(): unknown;
   targets(): Promise<unknown>;
   viewport(): { width: number; height: number } | null;
+  clearBrowsingData(kinds: BrowsingDataKind[]): Promise<void>;
 }
 
 interface ControlRequest {
@@ -45,6 +48,7 @@ interface ControlRequest {
   url?: string;
   cwd?: string;
   tab?: number;
+  kinds?: unknown;
 }
 
 export class Registry {
@@ -188,6 +192,14 @@ export class Registry {
       case "agent-release": {
         this.host.agentRelease();
         return { ...this.record(), tabs: await this.host.targets() };
+      }
+      case "clear-browsing-data": {
+        const kinds = request.kinds ?? BROWSING_DATA_KINDS;
+        if (!Array.isArray(kinds) || kinds.length === 0 || !kinds.every(isBrowsingDataKind)) {
+          throw new Error(`clear-browsing-data kinds must be some of: ${BROWSING_DATA_KINDS.join(", ")}`);
+        }
+        await this.host.clearBrowsingData(kinds);
+        return { cleared: kinds };
       }
       default:
         throw new Error(`unknown command: ${request.cmd}`);
