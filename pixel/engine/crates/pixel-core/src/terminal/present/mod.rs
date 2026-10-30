@@ -39,6 +39,7 @@ pub(crate) enum Presenter {
 pub(crate) enum Identity {
     Ghostty { version: (u32, u32, u32) },
     Kitty { version: (u32, u32, u32) },
+    Graphide,
     Unknown,
 }
 
@@ -53,6 +54,7 @@ impl Identity {
         match self {
             Identity::Ghostty { version } => version >= (1, 2, 0),
             Identity::Kitty { .. } => true,
+            Identity::Graphide => true,
             Identity::Unknown => false,
         }
     }
@@ -163,6 +165,7 @@ pub(super) fn parse_xtversion(buf: &[u8]) -> Option<Identity> {
     Some(match name.as_str() {
         "ghostty" => Identity::Ghostty { version },
         "kitty" => Identity::Kitty { version },
+        "gred" => Identity::Graphide,
         _ => Identity::Unknown,
     })
 }
@@ -294,7 +297,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn xtversion_replies_identify_ghostty_and_kitty() {
+    fn xtversion_replies_identify_ghostty_kitty_and_graphide() {
         assert_eq!(
             parse_xtversion(b"noise\x1bP>|ghostty 1.3.1\x1b\\"),
             Some(Identity::Ghostty { version: (1, 3, 1) })
@@ -303,6 +306,7 @@ mod tests {
             parse_xtversion(b"\x1bP>|kitty(0.48.1)\x1b\\"),
             Some(Identity::Kitty { version: (0, 48, 1) })
         );
+        assert_eq!(parse_xtversion(b"\x1bP>|gred 0.2.13\x1b\\"), Some(Identity::Graphide));
         assert_eq!(
             parse_xtversion(b"\x1bP>|WezTerm 20240203\x1b\\"),
             Some(Identity::Unknown)
@@ -318,6 +322,7 @@ mod tests {
         let local = |forced, transport, identity| select(forced, false, transport, identity, true, false);
         assert_eq!(local(None, FrameTransport::File, ghostty), Presenter::Patched);
         assert_eq!(local(None, FrameTransport::Shared, kitty), Presenter::Patched);
+        assert_eq!(local(None, FrameTransport::File, Identity::Graphide), Presenter::Patched);
         assert_eq!(local(None, FrameTransport::File, old_ghostty), Presenter::Full);
         assert_eq!(local(None, FrameTransport::File, Identity::Unknown), Presenter::Full);
         assert_eq!(local(None, FrameTransport::Inline, ghostty), Presenter::Full);
@@ -344,6 +349,7 @@ mod tests {
         assert_eq!(ssh(ghostty), Presenter::Patched);
         assert_eq!(ssh(old_ghostty), Presenter::Full);
         assert_eq!(ssh(kitty), Presenter::Patched);
+        assert_eq!(ssh(Identity::Graphide), Presenter::Patched);
         assert_eq!(ssh(Identity::Unknown), Presenter::Full);
     }
 
