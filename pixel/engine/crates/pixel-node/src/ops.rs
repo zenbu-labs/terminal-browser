@@ -6,7 +6,7 @@ use pixel_core::{
     HighlightArea, ImageProps, InputProps, Inset, InsetValue, Justify, LineCap, LineJoin,
     LinearGradient, NodeId, Paint,
     Overflow, Position, Props, ScrollbarStyle, SelectionMode, ShapeProps, ShapeStroke,
-    SlotKind, Style, TextSpan, parse_path_data,
+    SlotKind, Style, TextSpan, Tree, parse_path_data,
 };
 use serde::Deserialize;
 
@@ -38,6 +38,24 @@ impl IdMap {
 
     pub fn node(&self, ext: u32) -> Option<NodeId> {
         self.to_node.get(&ext).copied()
+    }
+
+    fn live(&self, tree: &Tree, ext: u32) -> Option<NodeId> {
+        let node = self.node(ext).filter(|&node| tree.contains(node));
+        if node.is_none() {
+            pixel_core::logging::debug("ops", format!("ignored an op on node {ext}, which is not in the tree"));
+        }
+        node
+    }
+
+    fn forget_subtree(&mut self, tree: &Tree, node: NodeId) {
+        let mut stack = vec![node];
+        while let Some(node) = stack.pop() {
+            if let Some(ext) = self.to_ext.remove(&node) {
+                self.to_node.remove(&ext);
+            }
+            stack.extend_from_slice(tree.children(node));
+        }
     }
 
     pub fn ext(&self, node: NodeId) -> Option<u32> {
@@ -835,50 +853,23 @@ fn apply_op(
         return;
     };
     match op {
-        Op::Create { id, props } => {
-            let node = tree.create(props.into_props(base_px, &mut engine.fonts));
-            map.insert(id, node);
-        }
-        Op::InsertBefore {
-            parent,
-            child,
-            before,
-        } => {
-            let (Some(parent), Some(child)) = (map.node(parent), map.node(child)) else {
-                return;
-            };
-            let before = before.and_then(|b| map.node(b));
-            tree.insert_before(parent, child, before);
-        }
-        Op::Remove { id } => {
-            if let Some(node) = map.node(id) {
-                tree.remove(node);
-            }
-            map.forget(id);
-        }
-        Op::Forget { id } => map.forget(id),
-        Op::Update { id, props } => {
-            if let Some(node) = map.node(id) {
-                let props = props.into_props(base_px, &mut engine.fonts);
-                tree.update(node, props);
-            }
-        }
-        Op::Clear { id } => {
-            if let Some(node) = map.node(id) {
-                tree.remove_children(node);
-            }
-        }
+        Op::Create { .. }
+        | Op::InsertBefore { .. }
+        | Op::Remove { .. }
+        | Op::Forget { .. }
+        | Op::Update { .. }
+        | Op::Clear { .. } => apply_tree_op(tree, map, op, base_px, &mut engine.fonts),
         Op::Focus { id } => {
-            let node = id.and_then(|id| map.node(id));
+            let node = id.and_then(|id| map.live(tree, id));
             engine.set_focus(view, node);
         }
         Op::ScrollTo { id, offset, smooth } => {
-            if let Some(node) = map.node(id) {
+            if let Some(node) = map.live(tree, id) {
                 engine.scroll_to(view, node, offset, smooth);
             }
         }
         Op::ScrollIntoView { id, smooth } => {
-            if let Some(node) = map.node(id) {
+            if let Some(node) = map.live(tree, id) {
                 engine.scroll_into_view(view, node, smooth);
             }
         }
@@ -970,22 +961,22 @@ fn apply_op(
             end,
             text,
         } => {
-            if let Some(node) = map.node(id) {
+            if let Some(node) = map.live(tree, id) {
                 engine.splice_input(view, node, start, end, &text);
             }
         }
         Op::InputSelectAll { id } => {
-            if let Some(node) = map.node(id) {
+            if let Some(node) = map.live(tree, id) {
                 engine.select_all_input(view, node);
             }
         }
         Op::InsertMark { id, mark, offset } => {
-            if let Some(node) = map.node(id) {
+            if let Some(node) = map.live(tree, id) {
                 engine.insert_input_mark(view, node, mark, offset);
             }
         }
         Op::RemoveMark { id, mark } => {
-            if let Some(node) = map.node(id) {
+            if let Some(node) = map.live(tree, id) {
                 engine.remove_input_mark(view, node, mark);
             }
         }
@@ -997,6 +988,55 @@ fn apply_op(
         }
         Op::RequestClipboardImage {} => engine.request_clipboard_image(view),
         Op::SetClipboard { text } => engine.set_clipboard(&text),
+    }
+}
+
+fn apply_tree_op(
+    tree: &mut Tree,
+    map: &mut IdMap,
+    op: Op,
+    base_px: f32,
+    fonts: &mut pixel_core::fonts::FontRegistry,
+) {
+    match op {
+        Op::Create { id, props } => {
+            let node = tree.create(props.into_props(base_px, fonts));
+            map.insert(id, node);
+        }
+        Op::InsertBefore {
+            parent,
+            child,
+            before,
+        } => {
+            let (Some(parent), Some(child)) = (map.live(tree, parent), map.live(tree, child)) else {
+                return;
+            };
+            let before = before.and_then(|b| map.live(tree, b));
+            tree.insert_before(parent, child, before);
+        }
+        Op::Remove { id } => {
+            if let Some(node) = map.live(tree, id) {
+                map.forget_subtree(tree, node);
+                tree.remove(node);
+            }
+            map.forget(id);
+        }
+        Op::Forget { id } => map.forget(id),
+        Op::Update { id, props } => {
+            if let Some(node) = map.live(tree, id) {
+                let props = props.into_props(base_px, fonts);
+                tree.update(node, props);
+            }
+        }
+        Op::Clear { id } => {
+            if let Some(node) = map.live(tree, id) {
+                for &child in tree.children(node) {
+                    map.forget_subtree(tree, child);
+                }
+                tree.remove_children(node);
+            }
+        }
+        _ => unreachable!("only tree ops reach apply_tree_op"),
     }
 }
 
@@ -1083,5 +1123,44 @@ mod set_render_tests {
             let op: Op = serde_json::from_str(raw.get()).unwrap();
             assert!(matches!(op, Op::SetRender { max_fps: Some(120.0), .. }));
         }
+    }
+}
+
+#[cfg(test)]
+mod removed_subtree_tests {
+    use super::{IdMap, Op, apply_tree_op};
+    use pixel_core::fonts::FontRegistry;
+    use pixel_core::{Tree, fontdue};
+
+    #[test]
+    fn ops_on_nodes_inside_a_removed_subtree_are_ignored() {
+        let mut tree = Tree::new((200.0, 200.0));
+        let mut map = IdMap::new(tree.root());
+        let face = || {
+            let bytes = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+            fontdue::Font::from_bytes(&bytes[..], fontdue::FontSettings::default()).unwrap()
+        };
+        let mut fonts = FontRegistry::new(face(), face());
+        let ops = [
+            r#"{"op":"create","id":10,"props":{"style":{"width":100,"height":100}}}"#,
+            r#"{"op":"create","id":11,"props":{"style":{"width":50,"height":50}}}"#,
+            r#"{"op":"create","id":12,"props":{"style":{"width":20,"height":20}}}"#,
+            r#"{"op":"insertBefore","parent":11,"child":12}"#,
+            r#"{"op":"insertBefore","parent":10,"child":11}"#,
+            r#"{"op":"insertBefore","parent":0,"child":10}"#,
+            r#"{"op":"remove","id":10}"#,
+            r#"{"op":"update","id":11,"props":{"style":{"width":60,"height":60}}}"#,
+            r#"{"op":"update","id":12,"props":{"style":{"width":30,"height":30}}}"#,
+            r#"{"op":"clear","id":11}"#,
+            r#"{"op":"insertBefore","parent":0,"child":12}"#,
+            r#"{"op":"remove","id":11}"#,
+        ];
+        for raw in ops {
+            let op: Op = serde_json::from_str(raw).unwrap();
+            apply_tree_op(&mut tree, &mut map, op, 16.0, &mut fonts);
+        }
+        assert_eq!(map.node(11), None);
+        assert_eq!(map.node(12), None);
+        assert!(tree.children(tree.root()).is_empty());
     }
 }
