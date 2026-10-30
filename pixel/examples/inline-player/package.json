@@ -1,0 +1,22 @@
+{
+  "name": "inline-player",
+  "private": true,
+  "main": "dist/inline.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "start": "tsc -p tsconfig.json && node dist/inline.js"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "@zenbu-labs/pixel": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.5.0"
+  },
+  "bin": {
+    "inline-player": "dist/inline.js"
+  }
+}
