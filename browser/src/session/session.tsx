@@ -86,6 +86,8 @@ import { SettingsManager } from "./settings";
 import { Telemetry } from "../telemetry";
 import { fetchSuggestions } from "./suggest";
 import { TabManager } from "./tabs";
+import { isPageSelectionCurrent, readPageSelection } from "./copy";
+import type { PageSelection } from "./copy";
 
 function displayHz(): number {
   try {
@@ -136,6 +138,12 @@ function bundledFontPath(): string {
   const found = bundledAsset(FONT_FILE);
   if (!found) throw new Error(`bundled font missing: ${FONT_FILE} (searched up from ${__dirname})`);
   return found;
+}
+
+interface PageCopyTarget {
+  tab: Tab;
+  handle: WebViewHandle;
+  selection: Promise<PageSelection | null>;
 }
 
 interface NewTabState {
@@ -234,7 +242,8 @@ class Session {
 
   private findOpen = false;
   private urlEditOpen = false;
-  private palette: { query: string; index: number } | null = null;
+  private palette: { query: string; index: number; copy: PageCopyTarget | null } | null = null;
+  private copySequence = 0;
   private newTab: NewTabState | null = null;
   private zoomHud: number | null = null;
   private zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
@@ -286,6 +295,8 @@ class Session {
     this.tabs = new TabManager(
       {
         onActivated: () => {
+          this.copySequence += 1;
+          if (this.palette) this.palette.copy = null;
           this.pageMenu = null;
           this.reconcileRecord();
           this.recalculateLayout();
@@ -313,6 +324,10 @@ class Session {
           }
         },
         onActiveState: (state, urlChanged) => {
+          if (urlChanged || state.loading) {
+            this.copySequence += 1;
+            if (this.palette) this.palette.copy = null;
+          }
           if (urlChanged) rememberUrl(state.url);
           this.ensureCopyWatcher();
           if (Math.abs(state.zoom - this.lastZoom) > 0.001) this.showZoomHud(state.zoom);
@@ -435,6 +450,7 @@ class Session {
   shutdown(code = 0) {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    this.copySequence += 1;
     for (const record of this.records.values()) record.dispose();
     this.records.clear();
     this.shownRecord = null;
@@ -804,10 +820,6 @@ class Session {
       this.shutdown();
       return true;
     }
-    if (process.platform === "linux" && event.mods.ctrl && event.key === "c") {
-      this.showToast("ctrl+q to quit", "alert");
-      return true;
-    }
     if (this.pageMenu) {
       this.closePageMenu();
       if (event.key === "escape") return true;
@@ -877,7 +889,7 @@ class Session {
     return false;
   }
 
-  private runCommand(id: CommandId) {
+  private runCommand(id: CommandId, copy?: PageCopyTarget | null) {
     this.telemetry.used();
     const handle = this.tabs.activeHandle;
     switch (id) {
@@ -909,6 +921,9 @@ class Session {
         return;
       case "find":
         this.openFind();
+        return;
+      case "page.copy":
+        void this.copyPage(copy === undefined ? this.capturePageCopy() : copy);
         return;
       case "page.reload":
         this.activeRecord()?.reloaded();
@@ -1083,6 +1098,7 @@ class Session {
   }
 
   private blurToOverlay() {
+    this.copySequence += 1;
     this.tabs.activeHandle?.blur();
   }
 
@@ -1474,9 +1490,35 @@ class Session {
     this.render();
   }
 
+  private canCopyPage(): boolean {
+    return (
+      !this.shuttingDown && !this.palette && !this.urlEditOpen && !this.newTab &&
+      !this.findOpen && !this.settings.isOpen && !this.settings.recording &&
+      !this.tabs.active?.devtools && !this.activeRecord()?.reviewing && !this.activeGrab()?.active
+    );
+  }
+
+  private capturePageCopy(): PageCopyTarget | null {
+    const tab = this.tabs.active;
+    const handle = this.tabs.activeHandle;
+    if (!tab || !handle || !this.canCopyPage()) return null;
+    return { tab, handle, selection: readPageSelection(handle.webContents) };
+  }
+
+  private async copyPage(target: PageCopyTarget | null): Promise<void> {
+    const request = ++this.copySequence;
+    if (!target) return;
+    const selection = await target.selection;
+    if (!selection || !(await isPageSelectionCurrent(selection))) return;
+    if (request === this.copySequence && this.canCopyPage() && this.tabs.active === target.tab && this.tabs.activeHandle === target.handle) {
+      this.root?.setClipboard(selection.text);
+    }
+  }
+
   private openPalette() {
     if (this.palette) return;
-    this.palette = { query: "", index: 0 };
+    const copy = this.capturePageCopy();
+    this.palette = { query: "", index: 0, copy };
     this.enterOverlay(["enter", "up", "down"]);
     this.render();
   }
@@ -1491,8 +1533,10 @@ class Session {
   private runPalette(index?: number) {
     const items = this.filteredPalette();
     const chosen = items[index ?? this.palette?.index ?? 0];
+    const copy = this.palette?.copy ?? null;
     this.closePalette();
-    chosen?.run();
+    if (chosen?.id === "page.copy") this.runCommand("page.copy", copy);
+    else chosen?.run();
   }
 
   private paletteActions(): PaletteAction[] {
@@ -1504,6 +1548,7 @@ class Session {
       run: () => this.runCommand(id),
     });
     return [
+      command("page.copy"),
       command("find"),
       command("tab.next"),
       command("tab.previous"),
