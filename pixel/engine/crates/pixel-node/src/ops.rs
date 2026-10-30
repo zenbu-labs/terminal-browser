@@ -204,6 +204,9 @@ enum Op {
     SetClipboard {
         text: String,
     },
+    WriteTerminal {
+        data: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -988,6 +991,7 @@ fn apply_op(
         }
         Op::RequestClipboardImage {} => engine.request_clipboard_image(view),
         Op::SetClipboard { text } => engine.set_clipboard(&text),
+        Op::WriteTerminal { data } => engine.write_terminal(&data),
     }
 }
 

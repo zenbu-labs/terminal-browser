@@ -165,10 +165,17 @@ export interface EngineKeyEvent {
   mods: KeyMods;
 }
 
+export interface TapEvent {
+  x: number;
+  y: number;
+  target: "input" | "control" | "content";
+}
+
 export interface RootOptions {
   fonts?: FontFace[];
   onKey?: (event: EngineKeyEvent) => void;
   onRightClick?: (event: { x: number; y: number }) => void;
+  onTap?: (event: TapEvent) => void;
   onPaste?: (text: string) => void;
   onFocus?: (focused: boolean) => void;
   onVisible?: (visible: boolean) => void;
@@ -219,6 +226,7 @@ export interface PixelRoot {
   requestClipboardImage(): void;
   setClipboard(text: string): void;
   setTitle(text: string): void;
+  writeTerminal(data: string): void;
   retarget(target: RetargetTarget): Promise<void>;
 }
 
@@ -543,6 +551,11 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           options.onRightClick?.({ x: event.x!, y: event.y! });
         }
         break;
+      case "tap":
+        if (view === APP_VIEW) {
+          options.onTap?.({ x: event.x!, y: event.y!, target: event.target as TapEvent["target"] });
+        }
+        break;
       case "paste":
         if (view === APP_VIEW) options.onPaste?.(event.text!);
         break;
@@ -800,6 +813,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     setTitle(text: string) {
       bridge.push(APP_VIEW, { op: "setTitle", text });
+      bridge.flush();
+    },
+    writeTerminal(data: string) {
+      bridge.push(APP_VIEW, { op: "writeTerminal", data });
       bridge.flush();
     },
     retarget(target: RetargetTarget) {

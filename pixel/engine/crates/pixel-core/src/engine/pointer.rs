@@ -1,7 +1,7 @@
 use std::io;
 use std::time::Instant;
 
-use super::{DragPhase, Engine, EngineEvent};
+use super::{DragPhase, Engine, EngineEvent, TapTarget};
 use crate::menu::MenuClick;
 use crate::terminal::{Mods, Mouse, MouseButton, MouseKind};
 use crate::tree::{HitTarget, NodeId};
@@ -83,6 +83,7 @@ impl Engine {
         match mouse.kind {
             MouseKind::Down if mouse.button == MouseButton::Left => {
                 self.pending_click = None;
+                self.pending_tap = None;
                 self.mark_pointer("click", point);
                 if self.handle_menu_click(point, out)? {
                     return Ok(());
@@ -135,6 +136,7 @@ impl Engine {
                         !covered
                     });
                 if let Some(id) = drag_node {
+                    self.pending_tap = Some((view, point, TapTarget::Control));
                     self.drag = Some((view, DragTarget::Node(id)));
                     out.push(EngineEvent::Drag {
                         view,
@@ -147,7 +149,14 @@ impl Engine {
                     });
                     return Ok(());
                 }
-                let node = match self.comp.views[view].tree.hit_target(local.0, local.1) {
+                let hit = self.comp.views[view].tree.hit_target(local.0, local.1);
+                let target = match hit {
+                    Some(HitTarget::Input(_)) => TapTarget::Input,
+                    Some(HitTarget::Click(_)) => TapTarget::Control,
+                    _ => TapTarget::Content,
+                };
+                self.pending_tap = Some((view, point, target));
+                let node = match hit {
                     Some(HitTarget::Input(id)) => {
                         self.clear_doc_selections(None);
                         self.set_focus(view, Some(id));
@@ -172,6 +181,7 @@ impl Engine {
             }
             MouseKind::Down if mouse.button == MouseButton::Right => {
                 self.pending_click = None;
+                self.pending_tap = None;
                 self.mark_pointer("right-click", point);
                 self.close_menu();
                 if self.comp.on_divider(point.0) {
@@ -290,6 +300,19 @@ impl Engine {
                             ),
                         });
                     }
+                }
+                if mouse.button == MouseButton::Left
+                    && let Some((view, start, target)) = self.pending_tap.take()
+                    && (point.0 - start.0).abs() <= self.cell.0 as f32
+                    && (point.1 - start.1).abs() <= self.cell.1 as f32 / 2.0
+                {
+                    let local = self.comp.to_local(view, point);
+                    out.push(EngineEvent::Tap {
+                        view,
+                        x: local.0,
+                        y: local.1,
+                        target,
+                    });
                 }
                 if let Some((view, target)) = self.drag.take() {
                     match target {

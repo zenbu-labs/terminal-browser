@@ -105,6 +105,23 @@ impl ChangeSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TapTarget {
+    Input,
+    Control,
+    Content,
+}
+
+impl TapTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TapTarget::Input => "input",
+            TapTarget::Control => "control",
+            TapTarget::Content => "content",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
     HostClosed,
@@ -134,6 +151,12 @@ pub enum EngineEvent {
         view: usize,
         x: f32,
         y: f32,
+    },
+    Tap {
+        view: usize,
+        x: f32,
+        y: f32,
+        target: TapTarget,
     },
     Change {
         view: usize,
@@ -318,6 +341,7 @@ pub struct Engine {
     log_cursor: u64,
     drag: Option<(usize, DragTarget)>,
     pending_click: Option<(usize, NodeId)>,
+    pending_tap: Option<(usize, (f32, f32), TapTarget)>,
     pointer_capture: Option<(usize, NodeId)>,
     key_passthrough: bool,
     last_selection: Option<(
@@ -439,6 +463,7 @@ impl Engine {
             log_cursor: 0,
             drag: None,
             pending_click: None,
+            pending_tap: None,
             pointer_capture: None,
             key_passthrough: false,
             last_selection: None,
@@ -1035,6 +1060,12 @@ impl Engine {
     pub fn set_clipboard(&mut self, text: &str) {
         if let Err(error) = self.term.set_clipboard(text) {
             logging::warn("engine", format!("clipboard write failed: {error}"));
+        }
+    }
+
+    pub fn write_terminal(&mut self, data: &str) {
+        if let Err(error) = self.term.write_raw(data) {
+            logging::warn("engine", format!("terminal write failed: {error}"));
         }
     }
 

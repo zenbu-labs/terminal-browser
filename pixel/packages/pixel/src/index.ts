@@ -93,6 +93,7 @@ export type {
   FontFamily,
   EngineInfo,
   EngineKeyEvent,
+  TapEvent,
   KeyMods,
   Rgba,
   TerminalColors,

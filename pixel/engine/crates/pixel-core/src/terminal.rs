@@ -1415,6 +1415,14 @@ impl Terminal {
         self.io.out().flush()
     }
 
+    pub fn write_raw(&mut self, data: &str) -> io::Result<()> {
+        if self.hosted.is_some() {
+            return Ok(());
+        }
+        self.io.out().write_all(data.as_bytes())?;
+        self.io.out().flush()
+    }
+
     pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
         if self.hosted.is_some() {
             return self.host_send(crate::hosted::clipboard(text));

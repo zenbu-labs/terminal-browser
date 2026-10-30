@@ -99,6 +99,7 @@ function createRoot(options?: RootOptions): Root
 | `onExit?(code: number)` | called after the root stops; default `app.exit(code)` |
 | `onUnsupportedTerminal?(terminal: Terminal \| null): string` | text written to the terminal when `pixel` found no graphics support; the process then exits 1 |
 | `onRightClick?({ x, y })` | right click outside a WebView |
+| `onTap?(TapEvent)` | left click that didn't drag (down and up within about a cell), outside a WebView. `TapEvent { x, y, target: "input" \| "control" \| "content" }`: `input` is an `Input`, `control` anything with `onClick` or `onDrag`, `content` text or empty space. Fires after the node's `onClick` |
 | `onPaste?(text)` | text paste |
 | `onPasteImage?(image: PastedImage)` | image paste |
 | `onFocus?(focused: boolean)` | terminal focus change |
@@ -125,6 +126,7 @@ function createRoot(options?: RootOptions): Root
 | `displayScale: number` | device pixel ratio |
 | `hosted: boolean` | true when running as a guest tab or embedded |
 | `setTitle(text)` | sets the terminal title |
+| `writeTerminal(data)` | writes raw bytes to the terminal, e.g. an OSC the terminal understands. Dropped in hosted panes |
 | `setClipboard(text)` | copies via OSC 52 |
 | `requestClipboardImage()` | requests a clipboard image, delivered to `onPasteImage` |
 | `setClearColor(rgba)` | background color behind all content; alpha 0 shows the terminal |
