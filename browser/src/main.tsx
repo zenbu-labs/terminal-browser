@@ -15,6 +15,7 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("enable-features", "WebMCP");
+app.commandLine.appendSwitch("disable-features", "FedCm");
 
 if (process.env.TERMINAL_BROWSER_DISABLE_GPU === "1") {
   app.commandLine.appendSwitch("disable-gpu");
