@@ -200,6 +200,9 @@ pub enum EngineEvent {
         colors: TerminalColors,
     },
     Devtools,
+    Osc {
+        data: String,
+    },
     Inspect {
         view: usize,
         node: NodeId,
@@ -1052,6 +1055,7 @@ impl Engine {
             Event::Colors(colors) => self.apply_colors(colors, out),
             Event::Devtools => out.push(EngineEvent::Devtools),
             Event::Visible(visible) => out.push(EngineEvent::Visible { visible }),
+            Event::Osc(data) => out.push(EngineEvent::Osc { data }),
         }
         self.emit_selection_change(out);
         Ok(())

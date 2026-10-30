@@ -39,6 +39,7 @@ pub enum Event {
     ColorSchemeChanged,
     Colors(TerminalColors),
     Devtools,
+    Osc(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -989,6 +990,7 @@ impl Terminal {
                         Some(colors) => Event::Colors(colors),
                         None => continue,
                     },
+                    RawEvent::Osc(body) => Event::Osc(body),
                 }));
             }
             let escape_deadline = self.lone_escape_deadline();
@@ -1754,6 +1756,7 @@ enum RawEvent {
     Clip(ClipPacket),
     Color(ColorSlot, [u8; 4]),
     ColorSchemeChanged,
+    Osc(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1843,7 +1846,10 @@ fn parse_event_kitty(buf: &[u8], kitty_active: bool) -> Option<(RawEvent, usize)
                 Some(text) => (RawEvent::Paste(text), end),
                 None => match parse_osc_color_reply(&buf[..end]) {
                     Some((slot, rgba)) => (RawEvent::Color(slot, rgba), end),
-                    None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
+                    None => match osc_body(&buf[..end]) {
+                        Some(body) => (RawEvent::Osc(body), end),
+                        None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
+                    },
                 },
             })
         }
@@ -2251,6 +2257,17 @@ fn associated_text(params: &[u8]) -> Option<String> {
         text.push(character);
     }
     (!text.is_empty()).then_some(text)
+}
+
+fn osc_body(seq: &[u8]) -> Option<String> {
+    let body = seq.strip_prefix(b"\x1b]")?;
+    let body = body
+        .strip_suffix(b"\x07")
+        .or_else(|| body.strip_suffix(b"\x1b\\"))?;
+    if body.starts_with(b"52;") {
+        return None;
+    }
+    String::from_utf8(body.to_vec()).ok()
 }
 
 fn consume_string_sequence(buf: &[u8]) -> Option<usize> {
@@ -2662,6 +2679,19 @@ mod tests {
             parse_event(b"\x1bP1$r0m\x1b\\"),
             Some((key(Key::Unknown), 9))
         );
+    }
+
+    #[test]
+    fn unhandled_osc_replies_reach_the_app() {
+        assert_eq!(
+            parse_event(b"\x1b]7717;keyboard=1;accessory=1\x07x"),
+            Some((RawEvent::Osc("7717;keyboard=1;accessory=1".into()), 30))
+        );
+        assert_eq!(
+            parse_event(b"\x1b]7717;keyboard=1\x1b\\"),
+            Some((RawEvent::Osc("7717;keyboard=1".into()), 19))
+        );
+        assert_eq!(parse_event(b"\x1b]7717;keyb"), None, "reply mid-arrival");
     }
 
     #[test]

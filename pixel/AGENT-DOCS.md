@@ -104,6 +104,7 @@ function createRoot(options?: RootOptions): Root
 | `onPasteImage?(image: PastedImage)` | image paste |
 | `onFocus?(focused: boolean)` | terminal focus change |
 | `onVisible?(visible: boolean)` | pane visibility change |
+| `onOsc?(data: string)` | <!-- fixme: placeholder copy --> an OSC the terminal sent that pixel doesn't handle itself (not colors, clipboard or 5522), e.g. the reply to a private query sent with `writeTerminal`. `data` is the body without `ESC ]` and the BEL/ST terminator, e.g. `"7717;keyboard=1"`. Replies that arrive while pixel is probing the terminal at startup can be lost, so query after the first render |
 | `onResize?({ width, height, basePx })` | pane resize, pixel size and base font size |
 | `onColors?(colors: TerminalColors)` | terminal color change |
 | `devtools?: boolean` | enables built in devtools; default `NODE_ENV !== "production"` |

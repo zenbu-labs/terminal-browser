@@ -179,6 +179,7 @@ export interface RootOptions {
   onPaste?: (text: string) => void;
   onFocus?: (focused: boolean) => void;
   onVisible?: (visible: boolean) => void;
+  onOsc?: (data: string) => void;
   onPasteImage?: (image: PastedImage) => void;
   onEngineExit?: (error: string | null) => void;
   onResize?: (size: { width: number; height: number; basePx: number }) => void;
@@ -288,6 +289,7 @@ interface EngineEventJson {
   parts?: unknown[];
   level?: string;
   target?: string;
+  data?: string;
   stats?: { frameMs: number; fps: number };
   nodes?: LayoutRect[];
   spans?: Array<{
@@ -564,6 +566,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         break;
       case "visible":
         options.onVisible?.(!!event.visible);
+        break;
+      case "osc":
+        options.onOsc?.(event.data!);
         break;
       case "devtools":
         enableDevtools();
