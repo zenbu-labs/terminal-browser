@@ -370,6 +370,33 @@ impl Waker {
     pub fn wake(&self) {
         let _ = rustix::io::write(&*self.fd, &[1]);
     }
+
+    pub(crate) fn pipe() -> io::Result<(rustix::fd::OwnedFd, Waker)> {
+        let (rx, tx) = rustix::pipe::pipe()?;
+        rustix::fs::fcntl_setfl(&rx, rustix::fs::OFlags::NONBLOCK)?;
+        rustix::fs::fcntl_setfl(&tx, rustix::fs::OFlags::NONBLOCK)?;
+        Ok((rx, Waker { fd: std::sync::Arc::new(tx) }))
+    }
+}
+
+pub(crate) fn wait_for_wake(wake: &rustix::fd::OwnedFd, wait: Option<Duration>) -> io::Result<()> {
+    let timeout = match wait {
+        Some(w) => Some(
+            rustix::event::Timespec::try_from(w)
+                .map_err(|_| io::Error::other("timeout out of range"))?,
+        ),
+        None => None,
+    };
+    let mut fds = [rustix::event::PollFd::new(wake, rustix::event::PollFlags::IN)];
+    match rustix::event::poll(&mut fds, timeout.as_ref()) {
+        Ok(_) | Err(rustix::io::Errno::INTR) => {}
+        Err(e) => return Err(e.into()),
+    }
+    if fds[0].revents().contains(rustix::event::PollFlags::IN) {
+        let mut sink = [0u8; 64];
+        while matches!(rustix::io::read(wake, &mut sink), Ok(n) if n > 0) {}
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1075,27 +1102,13 @@ impl Terminal {
     }
 
     fn wait_for_wake(&self, wait: Option<Duration>) -> io::Result<()> {
-        let Some(wake) = &self.wake_rx else {
-            std::thread::sleep(wait.unwrap_or(Duration::from_millis(50)));
-            return Ok(());
-        };
-        let timeout = match wait {
-            Some(w) => Some(
-                rustix::event::Timespec::try_from(w)
-                    .map_err(|_| io::Error::other("timeout out of range"))?,
-            ),
-            None => None,
-        };
-        let mut fds = [rustix::event::PollFd::new(wake, rustix::event::PollFlags::IN)];
-        match rustix::event::poll(&mut fds, timeout.as_ref()) {
-            Ok(_) | Err(rustix::io::Errno::INTR) => {}
-            Err(e) => return Err(e.into()),
+        match &self.wake_rx {
+            Some(wake) => wait_for_wake(wake, wait),
+            None => {
+                std::thread::sleep(wait.unwrap_or(Duration::from_millis(50)));
+                Ok(())
+            }
         }
-        if fds[0].revents().contains(rustix::event::PollFlags::IN) {
-            let mut sink = [0u8; 64];
-            while matches!(rustix::io::read(wake, &mut sink), Ok(n) if n > 0) {}
-        }
-        Ok(())
     }
 
     fn lone_escape_deadline(&mut self) -> Option<Instant> {
@@ -1110,13 +1123,8 @@ impl Terminal {
         if let Some(waker) = &self.waker {
             return Ok(waker.clone());
         }
-        let (rx, tx) = rustix::pipe::pipe()?;
-        rustix::fs::fcntl_setfl(&rx, rustix::fs::OFlags::NONBLOCK)?;
-        rustix::fs::fcntl_setfl(&tx, rustix::fs::OFlags::NONBLOCK)?;
+        let (rx, waker) = Waker::pipe()?;
         self.wake_rx = Some(rx);
-        let waker = Waker {
-            fd: std::sync::Arc::new(tx),
-        };
         self.waker = Some(waker.clone());
         Ok(waker)
     }

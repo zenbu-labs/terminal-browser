@@ -1,0 +1,90 @@
+use std::ffi::{CString, c_char, c_void};
+use std::io;
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use pixel_core::device::DeviceHost;
+
+#[repr(C)]
+pub struct PixelFrame {
+    pub rgba: *const u8,
+    pub width: u32,
+    pub height: u32,
+    pub premultiplied: bool,
+    pub rects: *const u32,
+    pub rect_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PixelCallbacks {
+    pub context: *mut c_void,
+    pub event: extern "C" fn(*mut c_void, *const c_char),
+    pub present: extern "C" fn(*mut c_void, *const PixelFrame),
+    pub write: extern "C" fn(*mut c_void, *const c_char),
+}
+
+// SAFETY: the app promises its context and callbacks stay valid and thread safe until pixel_engine_stop returns.
+unsafe impl Send for PixelCallbacks {}
+
+impl PixelCallbacks {
+    pub(crate) fn event(&self, json: &str) {
+        if let Ok(json) = CString::new(json) {
+            (self.event)(self.context, json.as_ptr());
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct SharedCallbacks(Arc<Mutex<Option<PixelCallbacks>>>);
+
+impl SharedCallbacks {
+    pub(crate) fn set(&self, callbacks: Option<PixelCallbacks>) {
+        *self.lock() = callbacks;
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<PixelCallbacks>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+pub(crate) struct Host {
+    callbacks: SharedCallbacks,
+    rects: Vec<u32>,
+}
+
+impl Host {
+    pub(crate) fn new(callbacks: SharedCallbacks) -> Self {
+        Self { callbacks, rects: Vec::new() }
+    }
+}
+
+impl DeviceHost for Host {
+    fn present(&mut self, frame: &pixel_core::Frame<'_>) -> io::Result<usize> {
+        let Some(callbacks) = *self.callbacks.lock() else {
+            return Ok(0);
+        };
+        self.rects.clear();
+        for rect in frame.repainted.iter().chain(frame.changed) {
+            self.rects.extend([rect.x, rect.y, rect.w, rect.h]);
+        }
+        let canvas = frame.canvas;
+        let presented = PixelFrame {
+            rgba: canvas.pixels.as_ptr(),
+            width: canvas.width,
+            height: canvas.height,
+            premultiplied: frame.premultiplied,
+            rects: self.rects.as_ptr(),
+            rect_count: (self.rects.len() / 4) as u32,
+        };
+        (callbacks.present)(callbacks.context, &presented);
+        Ok(canvas.pixels.len())
+    }
+
+    fn write(&mut self, data: &str) {
+        if let Some(callbacks) = *self.callbacks.lock()
+            && let Ok(data) = CString::new(data)
+        {
+            (callbacks.write)(callbacks.context, data.as_ptr());
+        }
+    }
+}

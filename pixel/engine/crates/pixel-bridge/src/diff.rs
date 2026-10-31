@@ -1,15 +1,18 @@
 use std::time::Duration;
 
-use napi_derive::napi;
 use similar::{Algorithm, ChangeTag, DiffTag, InlineChangeOptions, TextDiff};
 
-#[napi(object)]
+#[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffEmphasis {
     pub start: u32,
     pub end: u32,
 }
 
-#[napi(object)]
+#[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffRow {
     pub kind: String,
     pub old_line: Option<u32>,
@@ -61,7 +64,6 @@ fn gap_row(count: u32) -> DiffRow {
     }
 }
 
-#[napi]
 pub fn diff(old_source: String, new_source: String, context_lines: Option<u32>) -> Vec<DiffRow> {
     let context = context_lines.unwrap_or(3) as usize;
     let text_diff = TextDiff::configure()

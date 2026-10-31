@@ -399,7 +399,7 @@ impl Engine {
             return;
         }
         let shape = shape.to_string();
-        if self.term.set_pointer_shape(&shape).is_ok() {
+        if self.io.set_pointer_shape(&shape).is_ok() {
             self.pointer_shape = Some(shape);
         }
     }

@@ -1,0 +1,45 @@
+{
+  "name": "@zenbu-labs/pixel-ios",
+  "version": "0.0.20",
+  "description": "Run pixel apps as native iOS apps: the pixel engine drawn with Metal inside an Expo app",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zenbu-labs/terminal-browser.git",
+    "directory": "pixel/packages/pixel-ios"
+  },
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./metro": "./metro.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "ios/*.swift",
+    "ios/PixelIOS.podspec",
+    "ios/Vendor/PixelEngine.xcframework",
+    "expo-module.config.json",
+    "metro.js"
+  ],
+  "scripts": {
+    "build:engine": "./scripts/build-xcframework.sh"
+  },
+  "dependencies": {
+    "react-18": "npm:react@18.3.1"
+  },
+  "peerDependencies": {
+    "@zenbu-labs/pixel": "0.0.20",
+    "expo": "*",
+    "react-native": "*"
+  },
+  "peerDependenciesMeta": {
+    "expo": {
+      "optional": true
+    },
+    "react-native": {
+      "optional": true
+    }
+  }
+}

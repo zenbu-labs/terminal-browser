@@ -1,6 +1,8 @@
 mod canvas;
 pub mod clipboard_image;
 mod desc;
+#[cfg(feature = "device")]
+pub mod device;
 mod engine;
 pub mod fonts;
 mod herdr;
@@ -27,11 +29,11 @@ pub mod wrapper;
 mod tree;
 mod wrap;
 
-pub use canvas::{Canvas, measure_text};
+pub use canvas::{Canvas, Frame, measure_text};
 pub use desc::Desc;
 pub use engine::{
     ChangeSource, DragPhase, Engine, EngineConfig, EngineEvent, FrameStats, HighlightArea,
-    HostConfig, MarkRef, px_for_cell_height,
+    HostConfig, Io, MarkRef, px_for_cell_height,
 };
 pub use kitty::kitty_transmit;
 pub use logging::{LogEntry, LogLevel};

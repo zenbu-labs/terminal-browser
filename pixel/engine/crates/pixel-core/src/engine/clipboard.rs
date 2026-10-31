@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::EngineEvent;
 use crate::clipboard_image::PastedImage;
 use crate::logging;
-use crate::terminal::Terminal;
+use super::Io;
 use crate::text_input::MARK_CHAR;
 use crate::tree::NodeId;
 
@@ -93,8 +93,8 @@ pub(super) fn parse_rich_paste(text: &str) -> Option<(String, Vec<(usize, String
     (!marks.is_empty()).then_some((out, marks))
 }
 
-fn request_text_clipboard(term: &mut Terminal) {
-    if let Err(error) = term.request_clipboard() {
+fn request_text_clipboard(io: &mut Io) {
+    if let Err(error) = io.request_clipboard() {
         logging::warn("engine", format!("clipboard request failed: {error}"));
     }
 }
@@ -118,13 +118,13 @@ impl ClipboardFlows {
 
     pub fn begin_rich_capture(
         &mut self,
-        term: &mut Terminal,
+        io: &mut Io,
         view: usize,
         text: String,
         marks: Vec<(NodeId, crate::text_input::Mark)>,
     ) -> io::Result<Option<EngineEvent>> {
         let projection: String = text.chars().filter(|&c| c != MARK_CHAR).collect();
-        term.set_clipboard(&projection)?;
+        io.set_clipboard(&projection)?;
         if marks.is_empty() {
             self.rich = None;
             return Ok(None);
@@ -154,7 +154,7 @@ impl ClipboardFlows {
         }))
     }
 
-    pub fn attach_rich(&mut self, term: &mut Terminal, token: u64, marks: Vec<(usize, String)>) {
+    pub fn attach_rich(&mut self, io: &mut Io, token: u64, marks: Vec<(usize, String)>) {
         let Some(rich) = self.rich.as_mut().filter(|r| r.token == token) else {
             return;
         };
@@ -165,7 +165,7 @@ impl ClipboardFlows {
         }
         let rich = self.rich.take().expect("checked above");
         if let Some(enriched) = enrich_clipboard_text(&rich.text, &rich.slots)
-            && let Err(error) = term.set_clipboard(&enriched)
+            && let Err(error) = io.set_clipboard(&enriched)
         {
             logging::warn("engine", format!("clipboard write failed: {error}"));
         }
@@ -178,7 +178,7 @@ impl ClipboardFlows {
 
     pub fn resolve_pastes(
         &mut self,
-        term: &mut Terminal,
+        io: &mut Io,
         pastes: Vec<(u64, Option<PastedImage>)>,
     ) -> Vec<(usize, NodeId, PastedImage)> {
         let mut delivered = Vec::new();
@@ -191,8 +191,8 @@ impl ClipboardFlows {
                 Some(image) => delivered.push((view, node, image)),
                 None => {
                     if self.osc.is_none()
-                        && term.clipboard_data_supported()
-                        && term.request_clipboard_types().is_ok()
+                        && io.clipboard_data_supported()
+                        && io.request_clipboard_types().is_ok()
                     {
                         self.osc = Some(OscPaste {
                             view,
@@ -201,7 +201,7 @@ impl ClipboardFlows {
                             deadline: Instant::now() + Duration::from_secs(3),
                         });
                     } else {
-                        request_text_clipboard(term);
+                        request_text_clipboard(io);
                     }
                 }
             }
@@ -210,14 +210,14 @@ impl ClipboardFlows {
             && Instant::now() > paste.deadline
         {
             self.osc = None;
-            request_text_clipboard(term);
+            request_text_clipboard(io);
         }
         delivered
     }
 
     pub fn handle_clipboard_data(
         &mut self,
-        term: &mut Terminal,
+        io: &mut Io,
         items: Vec<(String, Vec<u8>)>,
         ok: bool,
     ) {
@@ -225,7 +225,7 @@ impl ClipboardFlows {
             return;
         };
         if !ok {
-            request_text_clipboard(term);
+            request_text_clipboard(io);
             return;
         }
         match paste.stage {
@@ -239,14 +239,14 @@ impl ClipboardFlows {
                     .iter()
                     .find(|(mime, _)| offered.split_whitespace().any(|o| o == *mime));
                 match pick {
-                    Some(&(mime, ext)) if term.request_clipboard_data(mime).is_ok() => {
+                    Some(&(mime, ext)) if io.request_clipboard_data(mime).is_ok() => {
                         self.osc = Some(OscPaste {
                             stage: OscPasteStage::Data { ext },
                             deadline: Instant::now() + Duration::from_secs(20),
                             ..paste
                         });
                     }
-                    _ => request_text_clipboard(term),
+                    _ => request_text_clipboard(io),
                 }
             }
             OscPasteStage::Data { ext } => {
@@ -263,7 +263,7 @@ impl ClipboardFlows {
                         );
                         self.pending_pastes.push((seq, paste.view, paste.node));
                     }
-                    None => request_text_clipboard(term),
+                    None => request_text_clipboard(io),
                 }
             }
         }

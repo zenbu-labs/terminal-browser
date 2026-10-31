@@ -19,15 +19,15 @@ impl Engine {
 
     pub fn set_frame_events(&mut self, on: bool) {
         if on {
-            self.term.set_overlay_font(self.fonts[0].clone());
-        } else if let Err(error) = self.term.overlay_off() {
+            self.io.set_overlay_font(self.fonts[0].clone());
+        } else if let Err(error) = self.io.overlay_off() {
             logging::warn("engine", format!("could not clear the presenter overlay: {error}"));
         }
         logging::info("engine", if on { "showing presenter events on screen" } else { "presenter events hidden" });
     }
 
     pub fn note(&mut self, text: String) {
-        self.term.note(text);
+        self.io.note(text);
     }
 
     pub(super) fn frame_debt(&self) -> Duration {
@@ -36,7 +36,7 @@ impl Engine {
         } else {
             Duration::ZERO
         };
-        if !self.term.frames_are_inline() {
+        if !self.io.frames_are_inline() {
             return interval;
         }
         let budget = INLINE_FRAME_BUDGET_MB_PER_SEC * 1_000_000.0;
@@ -66,10 +66,10 @@ impl Engine {
             self.frame_deferred = false;
         }
         self.frame_due = None;
-        self.term.tick_highlights()?;
-        self.term.draw_overlay()?;
+        self.io.tick_highlights()?;
+        self.io.draw_overlay()?;
         if !self.draws_something() {
-            self.term.flatten_if_idle(self.comp.frame())?;
+            self.io.flatten_if_idle(self.comp.frame())?;
         }
         let active = self.comp.active_views();
         let work: Vec<(usize, bool)> = active
@@ -154,9 +154,9 @@ impl Engine {
             if !self.comp.dirty {
                 return Ok(());
             }
-            let direct = self.term.draws_locally();
+            let direct = self.io.draws_locally();
             self.compose(&painted, direct);
-            let bytes = crate::profiler::span("draw", || self.term.draw(self.comp.frame()))?;
+            let bytes = crate::profiler::span("draw", || self.io.draw(self.comp.frame()))?;
             crate::profiler::count("bytes", || bytes as u64);
             if let Some((thread_before, process_before)) = cpu
                 && let Some((thread_after, process_after)) = crate::profiler::cpu_us()

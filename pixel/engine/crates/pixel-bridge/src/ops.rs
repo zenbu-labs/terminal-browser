@@ -917,8 +917,10 @@ fn apply_op(
             if let Some(fps) = max_fps {
                 engine.set_max_fps(fps);
             }
-            if let Some(on) = highlight_transmits {
-                engine.term.set_highlight_transmits(on);
+            if let Some(on) = highlight_transmits
+                && let Some(term) = engine.io.tty_mut()
+            {
+                term.set_highlight_transmits(on);
             }
             if let Some(on) = frame_events {
                 engine.set_frame_events(on);

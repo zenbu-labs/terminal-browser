@@ -17,7 +17,7 @@ impl Engine {
                 .iter()
                 .any(|&id| tree.scroll_state(id).is_some_and(|s| !s.settled()))
         });
-        scrolling || self.bars_animating() || self.term.highlight_active()
+        scrolling || self.bars_animating() || self.io.highlight_active()
     }
 
     pub(super) fn bar_at(&self, view: usize, point: (f32, f32)) -> Option<NodeId> {

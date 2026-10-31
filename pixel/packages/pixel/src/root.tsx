@@ -22,7 +22,7 @@ import {
   markHandoff,
 } from "./instances";
 import type { Instance } from "./instances";
-import { createRoot as createEngineRoot } from "./react";
+import { createRoot as createEngineRoot } from "./react/node";
 import type { EngineKeyEvent, PixelRoot, RootOptions as EngineRootOptions } from "./react";
 import { RootContext, ViewRegistry } from "./registry";
 import type { ViewEntry } from "./registry";
