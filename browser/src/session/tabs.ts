@@ -4,6 +4,7 @@ import { initialWebViewState } from "@zenbu-labs/pixel";
 import type { OpenWindowDecision, WebViewHandle, WebViewState } from "@zenbu-labs/pixel";
 
 import type { TabRow } from "../ui/types";
+import { isInternalUrl } from "../pages/internal";
 import { DOC_SCHEME, displayUrl, isMarkdownDocument } from "../url";
 
 export interface Tab {
@@ -15,6 +16,7 @@ export interface Tab {
   targetId: string | null;
   agentControlAt: number | null;
   devtools: boolean;
+  lastAccessed: number;
 }
 
 export interface TabTarget {
@@ -72,7 +74,7 @@ export class TabManager {
     return this.tabs;
   }
 
-  create(url: string, activate = true): Tab {
+  create(url: string, activate = true, options: { index?: number } = {}): Tab {
     const first = this.seq === 1;
     const tab: Tab = {
       id: this.seq++,
@@ -87,8 +89,10 @@ export class TabManager {
       targetId: null,
       agentControlAt: null,
       devtools: false,
+      lastAccessed: Date.now(),
     };
-    this.tabs.push(tab);
+    const index = options.index ?? this.tabs.length;
+    this.tabs.splice(Math.max(0, Math.min(index, this.tabs.length)), 0, tab);
     if (activate) this.activate(tab.id);
     this.host.onTabsChanged();
     this.host.requestRender();
@@ -112,6 +116,7 @@ export class TabManager {
   openWindow(id: number, details: Electron.HandlerDetails): OpenWindowDecision {
     const tab = this.get(id);
     if (!tab) return "deny";
+    if (isInternalUrl(details.url) && !isInternalUrl(tab.state.url)) return "deny";
     const wantsTab = details.disposition === "foreground-tab" || details.disposition === "background-tab";
     if (!wantsTab) {
       // a page-opened window (window.open with features) is a readable
@@ -161,6 +166,7 @@ export class TabManager {
     const tab = this.get(id);
     if (!tab || (id !== this.activeId && !this.host.tabSwitchAllowed())) return;
     this.activeId = id;
+    tab.lastAccessed = Date.now();
     tab.ref.current?.focus();
     this.host.onActivated();
     this.host.requestRender();

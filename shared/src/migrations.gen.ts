@@ -25,5 +25,18 @@ export const migrations: { id: string; statements: string[] }[] = [
     "statements": [
       "CREATE TABLE `site_permissions` (\n\t`origin` text NOT NULL,\n\t`embedder` text NOT NULL,\n\t`kind` text NOT NULL,\n\t`allowed` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tPRIMARY KEY(`origin`, `embedder`, `kind`)\n);"
     ]
+  },
+  {
+    "id": "0004_glamorous_captain_marvel",
+    "statements": [
+      "CREATE TABLE `bookmarks` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`parent_id` integer,\n\t`position` integer DEFAULT 0 NOT NULL,\n\t`title` text DEFAULT '' NOT NULL,\n\t`url` text,\n\t`date_added` integer NOT NULL,\n\t`date_group_modified` integer\n);",
+      "CREATE INDEX `bookmarks_parent` ON `bookmarks` (`parent_id`);",
+      "CREATE TABLE `downloads` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`url` text NOT NULL,\n\t`final_url` text NOT NULL,\n\t`filename` text NOT NULL,\n\t`mime` text DEFAULT '' NOT NULL,\n\t`start_time` integer NOT NULL,\n\t`end_time` integer,\n\t`state` text NOT NULL,\n\t`error` text,\n\t`paused` integer DEFAULT false NOT NULL,\n\t`total_bytes` integer DEFAULT 0 NOT NULL,\n\t`received_bytes` integer DEFAULT 0 NOT NULL\n);",
+      "CREATE TABLE `history_urls` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`url` text NOT NULL,\n\t`title` text DEFAULT '' NOT NULL,\n\t`visit_count` integer DEFAULT 0 NOT NULL,\n\t`typed_count` integer DEFAULT 0 NOT NULL,\n\t`last_visit_time` integer NOT NULL\n);",
+      "CREATE UNIQUE INDEX `history_urls_url_unique` ON `history_urls` (`url`);",
+      "CREATE TABLE `history_visits` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`url_id` integer NOT NULL,\n\t`visit_time` integer NOT NULL,\n\t`transition` text NOT NULL,\n\t`referring_visit_id` integer\n);",
+      "CREATE INDEX `history_visits_url` ON `history_visits` (`url_id`);",
+      "CREATE INDEX `history_visits_time` ON `history_visits` (`visit_time`);"
+    ]
   }
 ];

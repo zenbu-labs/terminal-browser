@@ -58,3 +58,35 @@ export * from "./config/render";
 export * from "./config/search";
 export * from "./config/settings";
 export * from "./config/telemetry";
+export { bookmarks, downloads, historyUrls, historyVisits } from "./schema";
+export type { BookmarkRow, DownloadRow, HistoryUrlRow } from "./schema";
+export {
+  addHistoryVisit,
+  deleteAllHistory,
+  deleteHistoryRange,
+  deleteHistoryUrlInRange,
+  recentVisits,
+  setHistoryTitle,
+} from "./history";
+export type { HistoryEntry, HistoryVisit } from "./history";
+export {
+  createDownload,
+  deleteDownload,
+  getDownload,
+  interruptStaleDownloads,
+  listDownloads,
+  updateDownload,
+} from "./downloads";
+export type { DownloadRecord, DownloadState } from "./downloads";
+export {
+  BOOKMARK_ROOT_ID,
+  BOOKMARKS_BAR_ID,
+  OTHER_BOOKMARKS_ID,
+  allBookmarks,
+  createBookmark,
+  ensureBookmarkRoots,
+  getBookmark,
+  hasBookmarkChildren,
+  removeBookmark,
+} from "./bookmarks";
+export type { BookmarkRecord } from "./bookmarks";

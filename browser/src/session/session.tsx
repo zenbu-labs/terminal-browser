@@ -72,6 +72,9 @@ import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor } from "../url";
 import type { SearchUrl } from "../url";
 import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
+import { isInternalUrl } from "../pages/internal";
+import { trackTabs } from "../pages/tabs";
+import { browsing } from "../browsing";
 import { makeTheme } from "../ui/theme";
 import { BROWSING_DATA_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
 import type { BrowsingDataKind } from "./browsing-data";
@@ -212,6 +215,7 @@ class Session {
     terminal: () => this.terminal?.name ?? null,
   });
   private readonly tabs: TabManager;
+  private untrackTabs: (() => void) | null = null;
   private readonly fallbackState: WebViewState;
 
   private root: Root | null = null;
@@ -370,6 +374,7 @@ class Session {
     this.applyRenderSettings();
     this.settings.watch();
     this.recalculateLayout();
+    this.untrackTabs = trackTabs(this.tabs);
     this.tabs.create(this.fallbackState.url);
     this.registry = new Registry({
       key: this.ctx.key,
@@ -451,6 +456,8 @@ class Session {
     this.registry?.dispose();
     this.registry = null;
     this.settings.dispose();
+    this.untrackTabs?.();
+    this.untrackTabs = null;
     this.tabs.stopAll();
     if (this.root) this.root.stop(code);
     else this.ctx.onClose(code);
@@ -1712,7 +1719,9 @@ class Session {
 
   private resolveInput(text: string): string {
     const search = this.searchUrl();
-    return normalizeUrl(searchOrUrl(text, this.ctx.cwd, search), this.ctx.cwd, search);
+    const url = normalizeUrl(searchOrUrl(text, this.ctx.cwd, search), this.ctx.cwd, search);
+    browsing().history.typedUrl(url);
+    return url;
   }
 
   pageContext(): PageContext {
@@ -1721,7 +1730,7 @@ class Session {
   }
 
   showsStartPage(): boolean {
-    return (this.tabs.activeState?.url ?? "").startsWith(START_URL);
+    return isInternalUrl(this.tabs.activeState?.url ?? "");
   }
 
   private initialUrl(): string {

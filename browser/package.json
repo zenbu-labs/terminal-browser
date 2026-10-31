@@ -5,7 +5,7 @@
   "main": "dist/main.js",
   "scripts": {
     "postinstall": "bash ../scripts/copy-react-grab.sh",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/bundle-preloads.mjs",
     "start": "pnpm build && pnpm --filter terminal-browser-cli build && exec node ../cli/dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\""
@@ -34,6 +34,7 @@
     "@types/hast": "3.0.5",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "esbuild": "^0.25.0"
   }
 }

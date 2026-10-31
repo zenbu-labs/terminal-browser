@@ -9,6 +9,8 @@ import { DAEMON_SOCKET } from "shared";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
+import { installPages } from "./pages/install";
+import { startBrowsing } from "./browsing";
 
 // what
 const IDLE_EXIT_MS = 15_000;
@@ -42,13 +44,16 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   fs.rmSync(DAEMON_SOCKET, { force: true });
 
   const build = buildStamp();
+  startBrowsing();
   const sessions = new Map<string, SessionHandle>();
-  servePages(() => {
+  const pageContext = () => {
     const all = [...sessions.values()];
     const shown = all.filter((open) => open.showsStartPage());
     const chosen = shown[shown.length - 1] ?? all[all.length - 1];
     return chosen?.pageContext() ?? { cwd: process.cwd(), theme: null };
-  });
+  };
+  servePages(pageContext);
+  installPages(pageContext);
   let seq = 0;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 

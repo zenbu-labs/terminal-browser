@@ -174,10 +174,10 @@ export function configureBrowserSession(target: Session): void {
   });
 
   target.on("will-download", (_event, item, contents) => {
-    const onDownload = downloadHandlers.get(contents.id);
+    const onDownload = contents ? downloadHandlers.get(contents.id) : undefined;
     if (!onDownload) return;
-    const savePath = downloadPath(item.getFilename());
-    item.setSavePath(savePath);
+    if (!item.getSavePath()) item.setSavePath(downloadPath(item.getFilename()));
+    const savePath = item.getSavePath();
     const report = (state: DownloadProgress["state"]) =>
       onDownload({
         name: path.basename(savePath),
