@@ -5,7 +5,8 @@
   "apple": {
     "modules": [
       "PixelModule",
-      "NativeViewsModule"
+      "NativeViewsModule",
+      "ToolbarModule"
     ]
   }
 }

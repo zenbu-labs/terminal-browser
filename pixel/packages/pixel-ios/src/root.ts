@@ -3,12 +3,13 @@ import type { DeviceRoot, DeviceRootOptions } from "@zenbu-labs/pixel/device";
 
 import { makeInput } from "./components/input";
 import { makeMenu } from "./components/menu";
+import { makeToolbar } from "./components/toolbar";
 import { makeVideo } from "./components/video";
 import { makeWebView } from "./components/web-view";
 import { Pixel } from "./native-module";
 
 export function createRoot(options: DeviceRootOptions = {}): DeviceRoot {
   const root = createDeviceRoot({ displayScale: Pixel.displayScale(), ...options });
-  registerHostComponents({ Input: makeInput(root), NativeMenu: makeMenu(root), WebView: makeWebView(root), Video: makeVideo(root) });
+  registerHostComponents({ Input: makeInput(root), NativeMenu: makeMenu(root), Toolbar: makeToolbar(root), WebView: makeWebView(root), Video: makeVideo(root) });
   return root;
 }

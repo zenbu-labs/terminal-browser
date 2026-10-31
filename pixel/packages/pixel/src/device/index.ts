@@ -68,6 +68,6 @@ export type {
 export { useRect } from "../layout";
 export { makeTheme } from "../theme";
 export type { Theme } from "../theme";
-export { registerHostComponents, hostHas, Input, NativeMenu, WebView, Video } from "./host-components";
+export { registerHostComponents, hostHas, Input, NativeMenu, Toolbar, WebView, Video } from "./host-components";
 export { surfaceId } from "../react/surface";
-export type { AccessoryMenuItem, ComposerInputProps, HostComponents, NativeInputProps, MenuItem, NativeMenuProps, WebViewHandle, WebViewProps, VideoProps } from "./host-components";
+export type { AccessoryMenuItem, ComposerInputProps, HostComponents, NativeInputProps, MenuItem, NativeMenuProps, ToolbarItem, ToolbarProps, WebViewHandle, WebViewProps, VideoProps } from "./host-components";
