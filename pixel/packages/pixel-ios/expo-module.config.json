@@ -6,7 +6,8 @@
     "modules": [
       "PixelModule",
       "NativeViewsModule",
-      "ToolbarModule"
+      "ToolbarModule",
+      "CrashModule"
     ]
   }
 }

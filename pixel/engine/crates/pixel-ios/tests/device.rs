@@ -135,3 +135,4 @@ fn surface_boxes_are_placed_for_native_views() {
     );
     assert!(running.wait_for(|s| s.placed == vec![(7, [20.0, 40.0, 200.0, 120.0])]), "{:?}", running.seen.lock().unwrap().placed);
 }
+

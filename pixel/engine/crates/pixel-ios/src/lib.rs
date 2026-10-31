@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 mod calls;
+mod crash;
 mod guard;
 mod host;
 mod input;
@@ -17,6 +18,7 @@ use pixel_core::{Engine, EngineConfig, TerminalColors};
 use serde::Deserialize;
 
 use guard::{catching, guarded};
+pub use crash::pixel_set_crash_dir;
 pub use host::{PixelCallbacks, PixelCover, PixelFrame, PixelPlacement};
 use host::{Host, SharedCallbacks};
 

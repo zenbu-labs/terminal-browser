@@ -52,6 +52,7 @@ void pixel_engine_resize(PixelEngine *engine, uint32_t width_px, uint32_t height
                          uint32_t cell_height);
 void pixel_engine_stop(PixelEngine *engine);
 void pixel_engine_free(PixelEngine *engine);
+void pixel_set_crash_dir(const char *path);
 char *pixel_call(const char *name, const char *args_json);
 void pixel_string_free(char *string);
 
