@@ -85,8 +85,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             platform: darwin-arm64
+            macos-target: "11.0"
           - os: macos-15-intel
             platform: darwin-x64
           - os: ubuntu-latest
@@ -109,8 +110,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: pixel/engine
+      - if: matrix.macos-target
+        run: echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.macos-target }}" >> "$GITHUB_ENV"
       - run: node scripts/build-native.mjs --release
         working-directory: pixel/packages/pixel
+      - if: matrix.macos-target
+        run: vtool -show-build pixel/packages/native/${{ matrix.platform }}/pixel.node | grep -qE "minos ${{ matrix.macos-target }}$"
       - if: matrix.container
         run: objdump -T pixel/packages/native/${{ matrix.platform }}/pixel.node | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1 | grep -qx GLIBC_2.28
       - uses: actions/upload-artifact@v4
