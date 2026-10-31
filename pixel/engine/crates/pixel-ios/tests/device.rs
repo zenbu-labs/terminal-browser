@@ -10,6 +10,7 @@ use pixel_ios::*;
 struct Seen {
     frames: Vec<(u32, u32, [u8; 4])>,
     events: Vec<String>,
+    placed: Vec<(u32, [f32; 4])>,
 }
 
 fn seen<'a>(context: *mut c_void) -> std::sync::MutexGuard<'a, Seen> {
@@ -31,6 +32,11 @@ extern "C" fn on_present(context: *mut c_void, frame: *const PixelFrame) {
 
 extern "C" fn on_write(_: *mut c_void, _: *const c_char) {}
 
+extern "C" fn on_place(context: *mut c_void, placements: *const PixelPlacement, count: u32, _: *const PixelCover, _: u32) {
+    let placements = unsafe { std::slice::from_raw_parts(placements, count as usize) };
+    seen(context).placed = placements.iter().map(|p| (p.surface, p.rect)).collect();
+}
+
 struct Running {
     engine: *mut PixelEngine,
     seen: Box<Mutex<Seen>>,
@@ -43,7 +49,7 @@ impl Running {
         assert!(!engine.is_null());
         let seen = Box::new(Mutex::new(Seen::default()));
         let context = &*seen as *const Mutex<Seen> as *mut c_void;
-        pixel_engine_start(engine, PixelCallbacks { context, event: on_event, present: on_present, write: on_write });
+        pixel_engine_start(engine, PixelCallbacks { context, event: on_event, present: on_present, write: on_write, place: on_place });
         Self { engine, seen }
     }
 
@@ -116,4 +122,16 @@ fn sync_calls_answer_in_json() {
     let text = unsafe { CStr::from_ptr(reply) }.to_string_lossy().into_owned();
     pixel_string_free(reply);
     assert!(text.starts_with(r#"{"ok":["#), "{text}");
+}
+
+#[test]
+fn surface_boxes_are_placed_for_native_views() {
+    let running = Running::start(300, 600);
+    running.apply(
+        r#"{"op":"create","id":1,"props":{"style":{"width":"100%","height":"100%","padding":{"top":40,"left":20}}}},
+        {"op":"create","id":2,"props":{"surface":7,"style":{"width":200,"height":120}}},
+        {"op":"insertBefore","parent":1,"child":2},
+        {"op":"insertBefore","parent":0,"child":1}"#,
+    );
+    assert!(running.wait_for(|s| s.placed == vec![(7, [20.0, 40.0, 200.0, 120.0])]), "{:?}", running.seen.lock().unwrap().placed);
 }

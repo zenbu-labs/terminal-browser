@@ -14,6 +14,8 @@ mod opaque;
 pub(crate) use opaque::painted_rects;
 
 pub use opaque::opaque_areas;
+#[cfg(feature = "device")]
+pub use opaque::native_view_covers;
 use opaque::collect_surface_occluders;
 
 #[derive(Default)]
@@ -210,6 +212,11 @@ fn paint_node(
         if let Some(at) = surface_occluders.iter().position(|(n, _)| *n == id) {
             let (_, token) = surface_occluders.swap_remove(at);
             canvas.remove_occluder(token);
+        }
+        #[cfg(feature = "device")]
+        if tree.native_views() && crate::surfaces::with(surface, |_| ()).is_none() {
+            let hole = crate::surfaces::Rect::covering(rect);
+            canvas.fill_rect(hole.x, hole.y, hole.w, hole.h, [0, 0, 0, 0]);
         }
         timed(stats.as_mut().map(|s| &mut s.surface), || {
             crate::surfaces::with(surface, |s| {

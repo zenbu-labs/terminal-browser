@@ -8,6 +8,8 @@ mod host_io;
 mod input;
 mod keys;
 mod native_pairing;
+#[cfg(feature = "device")]
+mod native_views;
 mod overlay;
 mod pointer;
 mod scroll;

@@ -93,6 +93,8 @@ impl Engine {
             let start = Instant::now();
             let mut painted: Vec<Painted> = Vec::new();
             let mut frame_kind = FrameKind::Damaged;
+            #[cfg(feature = "device")]
+            let native_views = self.native_views();
             for (i, whole) in work {
                 let size = self.comp.views[i].size;
                 if size.0 == 0 || size.1 == 0 {
@@ -115,6 +117,8 @@ impl Engine {
                 let patchable = incremental && whole && painted_before && view.tree.only_nodes_changed();
                 let scrolled_only = patchable && view.tree.only_scrolled();
                 view.tree.set_whole_pixel_scroll(incremental);
+                #[cfg(feature = "device")]
+                view.tree.set_native_views(native_views);
                 view.tree.flush_layout(fonts, base_px);
                 let built = if !whole {
                     Err(FrameKind::Damaged)
@@ -188,6 +192,8 @@ impl Engine {
             if !self.comp.dirty {
                 return Ok(());
             }
+            #[cfg(feature = "device")]
+            self.place_native_views();
             let direct = self.io.draws_locally();
             self.comp.keeps_frames = self.io.keeps_frames();
             self.compose(&painted, direct);

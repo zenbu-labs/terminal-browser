@@ -317,6 +317,8 @@ pub struct Tree {
     removed_rects: Vec<PxRect>,
     changed_surfaces: Vec<u32>,
     whole_pixel_scroll: bool,
+    #[cfg(feature = "device")]
+    native_views: bool,
 }
 
 pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
@@ -358,6 +360,8 @@ impl Tree {
             removed_rects: Vec::new(),
             changed_surfaces: Vec::new(),
             whole_pixel_scroll: false,
+            #[cfg(feature = "device")]
+            native_views: false,
         };
         let root = tree.create(Props {
             style: Style {
@@ -1085,6 +1089,24 @@ impl Tree {
             self.needs_paint = true;
             self.changed_nodes.push(id);
         }
+    }
+
+    #[cfg(feature = "device")]
+    pub(crate) fn set_native_views(&mut self, on: bool) {
+        self.native_views = on;
+    }
+
+    #[cfg(feature = "device")]
+    pub(crate) fn native_views(&self) -> bool {
+        self.native_views
+    }
+
+    #[cfg(feature = "device")]
+    pub(crate) fn surface_nodes(&self) -> impl Iterator<Item = (u32, PxRect, PxRect)> + '_ {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .filter_map(|node| Some((node.surface?, node.abs, node.visible)))
     }
 
     pub(crate) fn set_whole_pixel_scroll(&mut self, on: bool) {

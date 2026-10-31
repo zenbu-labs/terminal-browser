@@ -2,7 +2,7 @@ use std::ffi::{CString, c_char, c_void};
 use std::io;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use pixel_core::device::DeviceHost;
+use pixel_core::device::{DeviceHost, SurfaceCover, SurfacePlacement};
 
 #[repr(C)]
 pub struct PixelFrame {
@@ -19,12 +19,27 @@ pub struct PixelFrame {
 }
 
 #[repr(C)]
+pub struct PixelPlacement {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub visible: [f32; 4],
+}
+
+#[repr(C)]
+pub struct PixelCover {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub opaque: bool,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PixelCallbacks {
     pub context: *mut c_void,
     pub event: extern "C" fn(*mut c_void, *const c_char),
     pub present: extern "C" fn(*mut c_void, *const PixelFrame),
     pub write: extern "C" fn(*mut c_void, *const c_char),
+    pub place: extern "C" fn(*mut c_void, *const PixelPlacement, u32, *const PixelCover, u32),
 }
 
 // SAFETY: the app promises its context and callbacks stay valid and thread safe until pixel_engine_stop returns.
@@ -92,6 +107,16 @@ impl DeviceHost for Host {
         };
         (callbacks.present)(callbacks.context, &presented);
         Ok(canvas.pixels.len())
+    }
+
+    fn place(&mut self, surfaces: &[SurfacePlacement], covers: &[SurfaceCover]) {
+        let Some(callbacks) = *self.callbacks.lock() else {
+            return;
+        };
+        let placements: Vec<PixelPlacement> =
+            surfaces.iter().map(|s| PixelPlacement { surface: s.surface, rect: s.rect, visible: s.visible }).collect();
+        let covers: Vec<PixelCover> = covers.iter().map(|c| PixelCover { surface: c.surface, rect: c.rect, opaque: c.opaque }).collect();
+        (callbacks.place)(callbacks.context, placements.as_ptr(), placements.len() as u32, covers.as_ptr(), covers.len() as u32);
     }
 
     fn write(&mut self, data: &str) {

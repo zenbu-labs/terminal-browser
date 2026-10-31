@@ -6,8 +6,23 @@ use std::time::Duration;
 use crate::canvas::Frame;
 use crate::terminal::{Event, TerminalColors, Waker, WindowSize};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfacePlacement {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub visible: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceCover {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub opaque: bool,
+}
+
 pub trait DeviceHost: Send {
     fn present(&mut self, frame: &Frame<'_>) -> io::Result<usize>;
+    fn place(&mut self, _surfaces: &[SurfacePlacement], _covers: &[SurfaceCover]) {}
     fn write(&mut self, _data: &str) {}
     fn set_clipboard(&mut self, _text: &str) {}
     fn set_title(&mut self, _text: &str) {}
@@ -83,6 +98,7 @@ pub struct DeviceConfig {
     pub inbox: DeviceInbox,
     pub metrics: DeviceMetrics,
     pub colors: TerminalColors,
+    pub native_views: bool,
 }
 
 pub struct DeviceIo {
@@ -90,6 +106,8 @@ pub struct DeviceIo {
     inbox: DeviceInbox,
     metrics: DeviceMetrics,
     colors: TerminalColors,
+    native_views: bool,
+    placed: (Vec<SurfacePlacement>, Vec<SurfaceCover>),
     wake_rx: rustix::fd::OwnedFd,
     waker: Waker,
 }
@@ -102,7 +120,27 @@ impl DeviceIo {
             inbox.waker = Some(waker.clone());
             inbox.metrics.get_or_insert(config.metrics);
         }
-        Ok(Self { host: config.host, inbox: config.inbox, metrics: config.metrics, colors: config.colors, wake_rx, waker })
+        Ok(Self {
+            host: config.host,
+            inbox: config.inbox,
+            metrics: config.metrics,
+            colors: config.colors,
+            native_views: config.native_views,
+            placed: (Vec::new(), Vec::new()),
+            wake_rx,
+            waker,
+        })
+    }
+
+    pub(crate) fn native_views(&self) -> bool {
+        self.native_views
+    }
+
+    pub(crate) fn place(&mut self, surfaces: Vec<SurfacePlacement>, covers: Vec<SurfaceCover>) {
+        if (surfaces.as_slice(), covers.as_slice()) != (self.placed.0.as_slice(), self.placed.1.as_slice()) {
+            self.host.place(&surfaces, &covers);
+            self.placed = (surfaces, covers);
+        }
     }
 
     pub(crate) fn draw(&mut self, frame: Frame<'_>) -> io::Result<usize> {

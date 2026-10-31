@@ -14,6 +14,7 @@ final class PixelRuntime {
   var scale: CGFloat = UIScreen.main.scale
   var colors: [String: [Int]] = ["foreground": [232, 232, 232, 255], "background": [25, 25, 27, 255]]
   var emit: (([String]) -> Void)?
+  let nativeViews = NativeViews()
   weak var view: PixelView?
 
   private var engine: OpaquePointer?
@@ -91,6 +92,10 @@ final class PixelRuntime {
       guard let context, let data else { return }
       PixelRuntime.from(context).requests.handle(String(cString: data))
     }
+    callbacks.place = { context, placements, count, covers, coverCount in
+      guard let context else { return }
+      PixelRuntime.from(context).place(placements, Int(count), covers, Int(coverCount))
+    }
     pixel_engine_start(engine, callbacks)
   }
 
@@ -151,6 +156,20 @@ final class PixelRuntime {
     guard let raw else { return #"{"error":"no result"}"# }
     defer { pixel_string_free(raw) }
     return String(cString: raw)
+  }
+
+  private func place(_ placements: UnsafePointer<PixelPlacement>?, _ count: Int, _ covers: UnsafePointer<PixelCover>?, _ coverCount: Int) {
+    let s = scale
+    let points = { (x: Float, y: Float, w: Float, h: Float) in CGRect(x: CGFloat(x) / s, y: CGFloat(y) / s, width: CGFloat(w) / s, height: CGFloat(h) / s) }
+    var placed: [Int: NativeViews.Placement] = [:]
+    for p in UnsafeBufferPointer(start: placements, count: placements == nil ? 0 : count) {
+      placed[Int(p.surface)] = .init(rect: points(p.x, p.y, p.width, p.height), visible: points(p.visible_x, p.visible_y, p.visible_width, p.visible_height))
+    }
+    var covered: [Int: [NativeViews.Cover]] = [:]
+    for c in UnsafeBufferPointer(start: covers, count: covers == nil ? 0 : coverCount) {
+      covered[Int(c.surface), default: []].append(.init(rect: points(c.x, c.y, c.width, c.height), opaque: c.opaque))
+    }
+    DispatchQueue.main.async { [weak self] in self?.nativeViews.place(placed, covers: covered) }
   }
 
   func reply(_ osc: String) {

@@ -22,10 +22,24 @@ typedef struct {
 } PixelFrame;
 
 typedef struct {
+  uint32_t surface;
+  float x, y, width, height;
+  float visible_x, visible_y, visible_width, visible_height;
+} PixelPlacement;
+
+typedef struct {
+  uint32_t surface;
+  float x, y, width, height;
+  bool opaque;
+} PixelCover;
+
+typedef struct {
   void *context;
   void (*event)(void *context, const char *json);
   void (*present)(void *context, const PixelFrame *frame);
   void (*write)(void *context, const char *data);
+  void (*place)(void *context, const PixelPlacement *placements, uint32_t placement_count, const PixelCover *covers,
+                uint32_t cover_count);
 } PixelCallbacks;
 
 uint32_t pixel_abi_version(void);

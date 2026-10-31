@@ -14,7 +14,7 @@ Pod::Spec.new do |s|
   s.static_framework = true
   s.dependency "ExpoModulesCore"
   s.vendored_frameworks = "Vendor/PixelEngine.xcframework"
-  s.frameworks = "Metal", "QuartzCore", "UIKit"
+  s.frameworks = "Metal", "QuartzCore", "UIKit", "WebKit", "AVFoundation"
   s.pod_target_xcconfig = { "DEFINES_MODULE" => "YES" }
   s.source_files = "*.swift"
 end

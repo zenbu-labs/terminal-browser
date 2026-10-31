@@ -4,6 +4,8 @@ import UIKit
 
 final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecognizerDelegate {
   private let frames = MetalView()
+  private let under = PassThroughView()
+  private let above = PassThroughView()
   private let scrollProxy = ScrollProxy()
   private let emptyInput = UIView(frame: .zero)
   private var presenter: MetalPresenter?
@@ -27,6 +29,8 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
     presenter = MetalPresenter(layer: frames.metal)
     if let presenter { PixelRuntime.shared.attach(presenter) }
     PixelRuntime.shared.view = self
+    PixelRuntime.shared.nativeViews.under = under
+    PixelRuntime.shared.nativeViews.above = above
 
     let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
     let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(onTwoFingerTap(_:)))
@@ -37,7 +41,9 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
     scrollProxy.onScroll = { [weak self] delta, point in self?.scroll(by: delta, at: point) }
     scrollProxy.onPullDown = { [weak self] in self?.dismissKeyboard() }
     addSubview(scrollProxy)
+    addSubview(under)
     addSubview(frames)
+    addSubview(above)
     for recognizer in [tap, twoFingerTap, press, pinch] as [UIGestureRecognizer] {
       recognizer.delegate = self
       addGestureRecognizer(recognizer)
@@ -59,6 +65,8 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
     super.layoutSubviews()
     let scale = contentScaleFactor
     frames.frame = bounds
+    under.frame = bounds
+    above.frame = bounds
     frames.metal.contentsScale = scale
     frames.metal.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
     scrollProxy.frame = bounds
@@ -103,8 +111,13 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
     other === scrollProxy.panGestureRecognizer
   }
 
+  func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    !PixelRuntime.shared.nativeViews.owns(touch.view)
+  }
+
   @objc private func onTap(_ g: UITapGestureRecognizer) {
     let point = g.location(in: self)
+    if PixelRuntime.shared.nativeViews.tap(at: point) { return }
     pointer("down", "left", at: point)
     pointer("up", "left", at: point)
   }
@@ -150,6 +163,7 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
   override var inputView: UIView? { softKeyboardVisible ? nil : emptyInput }
 
   func setSoftKeyboard(visible: Bool) {
+    if PixelRuntime.shared.nativeViews.setSoftKeyboard(visible) { return }
     guard visible != softKeyboardVisible || !isFirstResponder else { return }
     softKeyboardVisible = visible
     if isFirstResponder {

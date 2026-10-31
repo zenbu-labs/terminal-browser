@@ -17,7 +17,7 @@ use pixel_core::{Engine, EngineConfig, TerminalColors};
 use serde::Deserialize;
 
 use guard::{catching, guarded};
-pub use host::{PixelCallbacks, PixelFrame};
+pub use host::{PixelCallbacks, PixelCover, PixelFrame, PixelPlacement};
 use host::{Host, SharedCallbacks};
 
 const ABI_VERSION: u32 = 1;
@@ -49,6 +49,12 @@ struct Config {
     cell_height: u32,
     #[serde(default)]
     colors: Colors,
+    #[serde(default = "enabled")]
+    native_views: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 #[derive(Deserialize, Default)]
@@ -97,6 +103,7 @@ pub extern "C" fn pixel_engine_new(config_json: *const c_char) -> *mut PixelEngi
             inbox: inbox.clone(),
             metrics: DeviceMetrics { width_px: config.width, height_px: config.height, cell: (config.cell_width, config.cell_height) },
             colors: TerminalColors { foreground: config.colors.foreground, background: config.colors.background, ..TerminalColors::default() },
+            native_views: config.native_views,
         };
         let engine_config = EngineConfig {
             fonts: pixel_bridge::default_fonts(),

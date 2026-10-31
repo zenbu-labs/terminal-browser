@@ -21,6 +21,49 @@ pub fn opaque_areas(tree: &Tree) -> Opaque {
     }
 }
 
+#[cfg(feature = "device")]
+pub fn native_view_covers(tree: &Tree) -> Vec<(u32, PxRect, bool)> {
+    let mut surfaces = Vec::new();
+    let mut covers = Vec::new();
+    collect_native_covers(tree, tree.root(), None, &mut surfaces, &mut covers);
+    covers
+}
+
+#[cfg(feature = "device")]
+fn collect_native_covers(tree: &Tree, id: NodeId, clip: Option<PxRect>, surfaces: &mut Vec<(u32, PxRect)>, covers: &mut Vec<(u32, PxRect, bool)>) {
+    let Some(node) = tree.get(id) else { return };
+    if node.hidden {
+        return;
+    }
+    let rect = node.abs;
+    let mut painted = painted_rects(node);
+    if let Some(clip) = clip {
+        painted = painted.into_iter().map(|p| p.intersect(clip)).filter(|p| p.w > 0.0 && p.h > 0.0).collect();
+    }
+    let opaque = matches!(node.style.background, Some(crate::style::Paint::Solid(color)) if color[3] == 255);
+    for &(surface, area) in surfaces.iter() {
+        for p in &painted {
+            let cut = area.intersect(*p);
+            if cut.w > 0.0 && cut.h > 0.0 {
+                covers.push((surface, cut, opaque));
+            }
+        }
+    }
+    if let Some(surface) = node.surface {
+        let area = clip.map_or(rect, |c| rect.intersect(c));
+        if area.w > 0.0 && area.h > 0.0 {
+            surfaces.push((surface, area));
+        }
+    }
+    let child_clip = if node.style.overflow != Overflow::Visible { Some(clip.map_or(rect, |c| c.intersect(rect))) } else { clip };
+    for &child in &node.children {
+        let skipped = tree.get(child).is_some_and(|n| (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible));
+        if !skipped {
+            collect_native_covers(tree, child, child_clip, surfaces, covers);
+        }
+    }
+}
+
 pub(crate) fn painted_rects(node: &crate::tree::RNode) -> Vec<PxRect> {
     let rect = node.abs;
     let visible_background = match &node.style.background {

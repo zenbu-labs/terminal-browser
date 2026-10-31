@@ -69,3 +69,6 @@ export type {
 export { useRect } from "../layout";
 export { makeTheme } from "../theme";
 export type { Theme } from "../theme";
+export { registerHostComponents, hostHas, WebView, Video } from "./host-components";
+export { surfaceId } from "../react/surface";
+export type { HostComponents, WebViewHandle, WebViewProps, VideoProps } from "./host-components";
