@@ -18,7 +18,8 @@ final class DeviceRequests {
     let view = runtime.view
     switch request {
     case "?":
-      runtime.reply("7717;keyboard=\(view?.softKeyboardVisible == true ? "shown" : "hidden");screenshot=1;haptics=1;host=pixel-ios")
+      runtime.reply("7717;keyboard=\(view?.softKeyboardVisible == true ? "shown" : "hidden");screenshot=1;haptics=1;insets=1;host=pixel-ios")
+      view?.reportInsets(again: true)
     case "keyboard=show":
       view?.setSoftKeyboard(visible: true)
     case "keyboard=hide":

@@ -81,6 +81,7 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
     PixelRuntime.shared.scale = window.screen.scale
     setNeedsLayout()
     _ = becomeFirstResponder()
+    reportInsets(again: true)
   }
 
   override func traitCollectionDidChange(_ previous: UITraitCollection?) {
@@ -90,7 +91,23 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
       contentScaleFactor = scale
       PixelRuntime.shared.scale = scale
       setNeedsLayout()
+      reportInsets(again: true)
     }
+  }
+
+  private var reportedInsets: UIEdgeInsets?
+
+  override func safeAreaInsetsDidChange() {
+    super.safeAreaInsetsDidChange()
+    reportInsets()
+  }
+
+  func reportInsets(again: Bool = false) {
+    let insets = safeAreaInsets
+    guard again || insets != reportedInsets else { return }
+    reportedInsets = insets
+    let px = [insets.top, insets.right, insets.bottom, insets.left].map { String(Int(($0 * contentScaleFactor).rounded())) }
+    PixelRuntime.shared.reply("7717;insets=\(px.joined(separator: ","))")
   }
 
   func pushSize() {

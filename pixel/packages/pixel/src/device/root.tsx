@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { createEngineRoot } from "../react";
+import { SafeAreaContext, createSafeArea } from "./safe-area";
 import type { EngineKeyEvent, PixelRoot, RootOptions, RootPlatform, TapEvent } from "../react";
 import { RootContext, ViewRegistry } from "../registry";
 
@@ -37,12 +38,16 @@ const devicePlatform: RootPlatform = {
 
 export function createRoot(options: DeviceRootOptions = {}): DeviceRoot {
   const { displayScale = 1, onKey, ...rest } = options;
+  const safeArea = createSafeArea();
   let registry: ViewRegistry | null = null;
   const engine = createEngineRoot(
     {
       ...rest,
       devtools: false,
       onKey: (event) => void onKey?.(event),
+      onOsc(data) {
+        if (!safeArea.accept(data)) rest.onOsc?.(data);
+      },
       onLayout(snapshot) {
         registry?.layout.set(snapshot);
         rest.onLayout?.(snapshot);
@@ -68,7 +73,11 @@ export function createRoot(options: DeviceRootOptions = {}): DeviceRoot {
     showKeyboard: (visible) => request(engine, `keyboard=${visible ? "show" : "hide"}`),
     haptic: (style) => request(engine, `haptic=${style}`),
     render(element: ReactNode) {
-      engine.render(<RootContext.Provider value={views}>{element}</RootContext.Provider>);
+      engine.render(
+        <RootContext.Provider value={views}>
+          <SafeAreaContext.Provider value={safeArea}>{element}</SafeAreaContext.Provider>
+        </RootContext.Provider>,
+      );
     },
   };
 }

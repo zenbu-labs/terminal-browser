@@ -1,5 +1,7 @@
 export { createRoot } from "./root";
 export type { DeviceRoot, DeviceRootOptions, HapticStyle } from "./root";
+export { useSafeArea } from "./safe-area";
+export type { SafeArea } from "./safe-area";
 export type { NativeBinding } from "../react/binding";
 export type { NativeEngine } from "../react/native";
 export {
