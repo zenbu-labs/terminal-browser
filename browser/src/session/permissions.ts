@@ -1,6 +1,7 @@
 import type { PermissionCheck, PermissionCheckAnswer, PermissionRequest } from "@zenbu-labs/pixel";
 import { setSitePermission, sitePermission } from "shared";
 
+import { extensionIdFromUrl } from "../extensions/ids";
 import type { IconName } from "../ui/icons";
 import type { PermissionDecision, PermissionPromptView } from "../ui/types";
 
@@ -15,11 +16,14 @@ const NEVER_PROMPTED = new Set(["display-capture", "geolocation", "geolocation-a
 
 const NEVER_REMEMBERED = new Set(["openExternal"]);
 
+const EXTENSION_FRAME_GRANTED = new Set(["clipboard-read", "clipboard-sanitized-write"]);
+
 export type MediaDevice = "camera" | "microphone";
 
 export interface PermissionHost {
   requestRender(): void;
   deviceAccess(device: MediaDevice): Promise<boolean>;
+  extensionInstalled(id: string): boolean;
 }
 
 export class PermissionPrompts {
@@ -27,8 +31,17 @@ export class PermissionPrompts {
 
   constructor(private readonly host: PermissionHost) {}
 
+  // Like Chrome, an installed extension's own frames may use the clipboard without asking
+  // (Vimium's yy and p run in its toolbar frame inside the page).
+  private grantedToExtensionFrame(check: PermissionCheck): boolean {
+    if (!EXTENSION_FRAME_GRANTED.has(check.permission)) return false;
+    const id = extensionIdFromUrl(check.origin);
+    return id !== null && this.host.extensionInstalled(id);
+  }
+
   async request(tabId: number, request: PermissionRequest): Promise<boolean> {
     if (NEVER_PROMPTED.has(request.permission)) return false;
+    if (this.grantedToExtensionFrame(request)) return true;
     const kinds = kindsOf(request);
     const known = this.recall(request, kinds);
     if (known === "blocked") return false;
@@ -49,6 +62,7 @@ export class PermissionPrompts {
 
   check(check: PermissionCheck): PermissionCheckAnswer {
     if (NEVER_PROMPTED.has(check.permission)) return false;
+    if (this.grantedToExtensionFrame(check)) return true;
     const known = this.recall(check, kindsOf(check));
     if (known === "blocked") return false;
     if (known === "allowed") return true;

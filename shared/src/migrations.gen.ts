@@ -38,5 +38,14 @@ export const migrations: { id: string; statements: string[] }[] = [
       "CREATE INDEX `history_visits_url` ON `history_visits` (`url_id`);",
       "CREATE INDEX `history_visits_time` ON `history_visits` (`visit_time`);"
     ]
+  },
+  {
+    "id": "0005_material_maria_hill",
+    "statements": [
+      "CREATE TABLE `extension_events` (\n\t`extension_id` text NOT NULL,\n\t`event` text NOT NULL,\n\tPRIMARY KEY(`extension_id`, `event`)\n);",
+      "CREATE TABLE `extensions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`path` text NOT NULL,\n\t`version` text NOT NULL,\n\t`name` text NOT NULL,\n\t`source` text NOT NULL,\n\t`enabled` integer DEFAULT true NOT NULL,\n\t`disabled_reason` text,\n\t`pinned` integer DEFAULT false NOT NULL,\n\t`granted_permissions` text DEFAULT '[]' NOT NULL,\n\t`granted_origins` text DEFAULT '[]' NOT NULL,\n\t`shortcuts` text DEFAULT '{}' NOT NULL,\n\t`installed_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\t`last_update_check` integer,\n\t`open_panel_on_action_click` integer DEFAULT false NOT NULL,\n\t`user_scripts_allowed` integer DEFAULT false NOT NULL\n);",
+      "ALTER TABLE `downloads` ADD `by_extension_id` text;",
+      "ALTER TABLE `settings` ADD `side_panel_width` real DEFAULT 360 NOT NULL;"
+    ]
   }
 ];

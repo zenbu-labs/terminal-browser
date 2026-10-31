@@ -57,3 +57,11 @@ export function lastActiveDay(): string | null {
 export function setLastActiveDay(day: string): void {
   setAppState("last-active-day", day);
 }
+
+export function extensionsDeveloperMode(): boolean {
+  return getAppState("extensions-developer-mode") === "on";
+}
+
+export function setExtensionsDeveloperMode(on: boolean): void {
+  setAppState("extensions-developer-mode", on ? "on" : "off");
+}

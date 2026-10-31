@@ -19,6 +19,13 @@ export interface HistoryVisit {
   referringVisitId: number | null;
 }
 
+export interface HistorySearch {
+  text?: string;
+  startTime?: number;
+  endTime?: number;
+  maxResults?: number;
+}
+
 interface UrlSqlRow {
   id: number;
   url: string;
@@ -95,6 +102,34 @@ export function setHistoryTitle(url: string, title: string): HistoryEntry | null
   return result.changes > 0 ? historyEntry(url) : null;
 }
 
+export function searchHistory(search: HistorySearch): HistoryEntry[] {
+  const start = search.startTime ?? 0;
+  const end = search.endTime ?? Number.MAX_SAFE_INTEGER;
+  const rows = store()
+    .sqlite.prepare(
+      `SELECT u.* FROM history_urls u WHERE EXISTS (
+         SELECT 1 FROM history_visits v WHERE v.url_id = u.id AND v.visit_time >= ? AND v.visit_time < ?)
+       ORDER BY u.last_visit_time DESC`,
+    )
+    .all(start, end) as unknown as UrlSqlRow[];
+  const words = (search.text ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const matched = rows
+    .map(entryFrom)
+    .filter((entry) => words.every((word) => entry.url.toLowerCase().includes(word) || entry.title.toLowerCase().includes(word)));
+  const limit = search.maxResults ?? 100;
+  return limit > 0 ? matched.slice(0, limit) : matched;
+}
+
+export function visitsForUrl(url: string): HistoryVisit[] {
+  const rows = store()
+    .sqlite.prepare(
+      `SELECT v.*, u.url, u.title FROM history_visits v JOIN history_urls u ON u.id = v.url_id
+       WHERE u.url = ? ORDER BY v.visit_time`,
+    )
+    .all(url) as unknown as VisitSqlRow[];
+  return rows.map(visitFrom);
+}
+
 export function recentVisits(options: { text?: string; before?: number; limit?: number }): HistoryVisit[] {
   const words = (options.text ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const conditions = ["v.visit_time < ?"];
@@ -112,6 +147,13 @@ export function recentVisits(options: { text?: string; before?: number; limit?: 
     )
     .all(...params) as unknown as VisitSqlRow[];
   return rows.map(visitFrom);
+}
+
+export function topHistorySites(limit: number): HistoryEntry[] {
+  const rows = store()
+    .sqlite.prepare("SELECT * FROM history_urls ORDER BY visit_count DESC, last_visit_time DESC LIMIT ?")
+    .all(limit) as unknown as UrlSqlRow[];
+  return rows.map(entryFrom);
 }
 
 // Removes the matching visits, then drops urls left without any visit.
@@ -137,6 +179,12 @@ function removeVisits(where: string, params: (string | number)[]): string[] {
     }
   }
   return removed;
+}
+
+export function deleteHistoryUrl(url: string): boolean {
+  const entry = historyEntry(url);
+  if (!entry) return false;
+  return removeVisits("url_id = ?", [entry.id]).length > 0;
 }
 
 export function deleteHistoryRange(startTime: number, endTime: number): string[] {

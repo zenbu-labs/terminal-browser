@@ -73,7 +73,7 @@ import type { SearchUrl } from "../url";
 import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
 import { isInternalUrl } from "../pages/internal";
-import { trackTabs } from "../pages/tabs";
+import { urlOverride } from "../pages/navigation";
 import { browsing } from "../browsing";
 import { makeTheme } from "../ui/theme";
 import { BROWSING_DATA_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
@@ -90,6 +90,8 @@ import { SettingsManager } from "./settings";
 import { Telemetry } from "../telemetry";
 import { fetchSuggestions } from "./suggest";
 import { TabManager } from "./tabs";
+import { EXTENSIONS_PAGE, PaneExtensions } from "./extensions";
+import type { ExtensionActions } from "../ui/extension-types";
 
 function displayHz(): number {
   try {
@@ -171,6 +173,7 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
 }
 
 const CLEAR_DATA_LABEL = "Clear browsing data";
+const EXTENSIONS_LABEL = "Extensions";
 
 interface ClearDataState {
   checked: Set<BrowsingDataKind>;
@@ -215,7 +218,7 @@ class Session {
     terminal: () => this.terminal?.name ?? null,
   });
   private readonly tabs: TabManager;
-  private untrackTabs: (() => void) | null = null;
+  private extensions: PaneExtensions | null = null;
   private readonly fallbackState: WebViewState;
 
   private root: Root | null = null;
@@ -240,9 +243,18 @@ class Session {
         pageY: number;
         linkURL: string;
         selectionText: string;
+        params: Electron.ContextMenuParams;
       }
     | { kind: "toolbar" }
+    | { kind: "action"; x: number; y: number; extensionId: string }
     | null = null;
+  private sidePanelCssWidth = 360;
+  // The keyboard-highlighted row path in the open page menu (outer index first).
+  private pageMenuKeys: { menu: object | null; path: number[] } = { menu: null, path: [] };
+
+  private get pageMenuCursor(): number[] {
+    return this.pageMenuKeys.menu === this.pageMenu ? this.pageMenuKeys.path : [];
+  }
 
   private clearData: ClearDataState | null = null;
   private findOpen = false;
@@ -259,6 +271,7 @@ class Session {
   private readonly permissions = new PermissionPrompts({
     requestRender: () => this.render(),
     deviceAccess: (device) => this.deviceAccess(device),
+    extensionInstalled: (id) => this.extensions?.service.get(id) != null,
   });
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();
@@ -299,6 +312,7 @@ class Session {
       {
         onActivated: () => {
           this.pageMenu = null;
+          this.extensions?.tabActivated();
           this.reconcileRecord();
           this.recalculateLayout();
           this.render();
@@ -340,6 +354,7 @@ class Session {
   }
 
   private lastZoom = 1;
+  private terminalFocused = true;
 
   async start(): Promise<void> {
     if (process.platform === "darwin") app.dock?.hide();
@@ -360,6 +375,8 @@ class Session {
       },
       onColors: () => this.render(),
       onFocus: (focused) => {
+        this.terminalFocused = focused;
+        this.extensions?.focusChanged(focused);
         if (focused) this.telemetry.used();
       },
       onVisible: (visible) => {
@@ -374,7 +391,19 @@ class Session {
     this.applyRenderSettings();
     this.settings.watch();
     this.recalculateLayout();
-    this.untrackTabs = trackTabs(this.tabs);
+    this.extensions = new PaneExtensions({
+      tabs: this.tabs,
+      focused: () => this.terminalFocused,
+      size: () => ({ width: this.layout?.page.width ?? 0, height: this.layout?.page.height ?? 0 }),
+      resolveUrl: (url) => (url ? normalizeUrl(url, this.ctx.cwd, this.searchUrl()) : (urlOverride("newtab") ?? this.defaultUrl)),
+      closeTab: (id) => this.closeOrShutdown(id),
+      activate: () => this.tabs.active?.ref.current?.focus(),
+      blurPage: () => this.blurToOverlay(),
+      openPage: (url) => this.openExtensionPage(url),
+      toast: (message) => this.showToast(message, "done"),
+      requestRender: () => this.render(),
+      layoutChanged: () => this.recalculateLayout(),
+    });
     this.tabs.create(this.fallbackState.url);
     this.registry = new Registry({
       key: this.ctx.key,
@@ -456,8 +485,8 @@ class Session {
     this.registry?.dispose();
     this.registry = null;
     this.settings.dispose();
-    this.untrackTabs?.();
-    this.untrackTabs = null;
+    this.extensions?.dispose();
+    this.extensions = null;
     this.tabs.stopAll();
     if (this.root) this.root.stop(code);
     else this.ctx.onClose(code);
@@ -514,9 +543,14 @@ class Session {
     download: (progress) => this.showDownload(progress),
     pointer: (id, event) => {
       if (id === this.tabs.active?.id) this.activeRecord()?.pointerSample(event);
+      if (event.kind === "down") this.extensions?.pagePointer();
     },
     permissionRequest: (id, request) => this.permissions.request(id, request),
     permissionCheck: (check) => this.permissions.check(check),
+    // the page went away on its own (window.close(), or closed over CDP)
+    closed: (id) => {
+      if (this.tabs.has(id)) this.closeOrShutdown(id);
+    },
   };
 
   private closeTab(id: number) {
@@ -596,6 +630,7 @@ class Session {
         devtools={this.devtoolsView()}
         profiling={this.profiling}
         grabActive={this.activeGrab()?.active ?? false}
+        extensions={this.extensions?.view(this.surfaceLayout?.scale ?? 1, this.settings.get("toolbar.extensions") === "on") ?? null}
       />,
     );
   }
@@ -696,8 +731,65 @@ class Session {
     pageMenuClose: () => this.closePageMenu(),
     pageMenuZoom: (direction) => this.applyZoom(direction),
     settings: this.settings.actions,
+    extensions: this.extensionActions(),
     record: this.recordActions(),
   };
+
+  private extensionActions(): ExtensionActions {
+    const pane = () => this.extensions;
+    return {
+      click: (id) => pane()?.clickAction(id),
+      contextMenu: (id, x, y) => {
+        pane()?.toggleMenu(false);
+        pane()?.closeActionPopup();
+        this.pageMenu = { kind: "action", x, y, extensionId: id };
+        this.render();
+      },
+      setPinned: (id, pinned) => pane()?.setPinned(id, pinned),
+      toggleMenu: () => pane()?.toggleMenu(),
+      menuHover: (index) => pane()?.hoverMenu(index),
+      openManager: () => pane()?.openManager(),
+      popupMounted: (contents) => pane()?.popupMounted(contents),
+      popupClose: () => pane()?.closeActionPopup(),
+      popupWindowMounted: (windowId, contents) => pane()?.popupWindowMounted(windowId, contents),
+      popupWindowClose: (windowId) => pane()?.closePopupWindow(windowId),
+      popupWindowFocus: (windowId) => pane()?.focusPopupWindow(windowId),
+      sidePanelMounted: (key, view) => pane()?.sidePanelMounted(key, view),
+      sidePanelClose: () => pane()?.closeSidePanel(),
+      sidePanelDividerDrag: (event) => {
+        const panel = this.layout?.sidePanel;
+        const scale = this.root?.displayScale;
+        if (!panel || !scale) return;
+        this.sidePanelCssWidth = (panel.x + panel.width - event.x) / scale;
+        const now = Date.now();
+        if (event.phase === "move" && now - this.dividerRenderAt < 50) return;
+        this.dividerRenderAt = now;
+        this.recalculateLayout();
+        if (event.phase === "end" && this.layout?.sidePanel) {
+          this.sidePanelCssWidth = Math.round(this.layout.sidePanel.width / scale);
+          this.saveDevtoolsSettings();
+        }
+        this.render();
+      },
+      answerPrompt: (accepted) => pane()?.answerPrompt(accepted),
+      openWindow: (details) => {
+        pane()?.closeActionPopup();
+        this.tabs.create(details.url, details.disposition !== "background-tab");
+        return "deny";
+      },
+    };
+  }
+
+  private openExtensionPage(url: string) {
+    const base = url.startsWith(EXTENSIONS_PAGE) ? EXTENSIONS_PAGE : url;
+    const existing = this.tabs.all().find((tab) => tab.state.url.startsWith(base));
+    if (!existing) {
+      this.tabs.create(url);
+      return;
+    }
+    this.tabs.activate(existing.id);
+    if (existing.state.url !== url) existing.ref.current?.loadURL(url);
+  }
 
   private openSettings() {
     if (this.palette || this.newTab || this.urlEditOpen || this.clearData) return;
@@ -844,6 +936,7 @@ class Session {
       return true;
     }
     if (this.pageMenu) {
+      if (this.pageMenuKey(event)) return true;
       this.closePageMenu();
       if (event.key === "escape") return true;
     }
@@ -896,6 +989,7 @@ class Session {
       if (event.key === "escape") this.closeUrlEdit();
       return true;
     }
+    if (this.extensions?.handleKey(event)) return true;
     const prompted = this.tabs.active;
     if (event.key === "escape" && prompted && this.permissions.hasPending(prompted.id)) {
       this.permissions.decide(prompted.id, "dismiss");
@@ -914,6 +1008,8 @@ class Session {
       this.runCommand(command);
       return true;
     }
+    const extensions = this.extensions;
+    if (extensions && !this.findOpen && extensions.service.commands.handleKey(extensions.window, event)) return true;
     return false;
   }
 
@@ -1176,6 +1272,7 @@ class Session {
       if (!row) return;
       this.devtoolsDockSide = row.devtoolsDock;
       this.devtoolsFraction = clampDevtoolsFraction(row.devtoolsFraction);
+      this.sidePanelCssWidth = row.sidePanelWidth;
     } catch { }
   }
 
@@ -1184,6 +1281,7 @@ class Session {
       id: 1,
       devtoolsDock: this.devtoolsDockSide,
       devtoolsFraction: this.devtoolsFraction,
+      sidePanelWidth: this.sidePanelCssWidth,
     };
     void store()
       .db.insert(settingsTable)
@@ -1204,6 +1302,7 @@ class Session {
       pageY: params.y,
       linkURL: params.linkURL,
       selectionText: params.selectionText.trim(),
+      params,
     };
     this.render();
   }
@@ -1275,9 +1374,15 @@ class Session {
     const tab = this.tabs.active;
     const handle = tab?.ref.current;
     if (!menu || !tab || !handle) return;
+    const extensionParams = menu.kind === "page" ? menu.params : null;
+    const extensionId = menu.kind === "action" ? menu.extensionId : undefined;
+    if (this.extensions?.runMenuItem(id, extensionParams, extensionId)) return;
     switch (id) {
       case "settings":
         this.openSettings();
+        return;
+      case "extensions":
+        this.extensions?.openManager();
         return;
       case "clear-data":
         this.openClearData();
@@ -1409,6 +1514,13 @@ class Session {
     return [
       ...this.toolMenuItems(),
       {
+        id: "extensions",
+        label: EXTENSIONS_LABEL,
+        enabled: true,
+        shortcut: "",
+        children: this.extensions?.toolbarMenuItems(),
+      },
+      {
         id: "clear-data",
         label: CLEAR_DATA_LABEL,
         enabled: true,
@@ -1423,7 +1535,55 @@ class Session {
     ];
   }
 
+  // Arrow keys, enter and escape inside the open page menu and its submenus.
+  private pageMenuKey(event: EngineKeyEvent): boolean {
+    const menu = this.pageMenuContent();
+    if (!menu || !this.pageMenu) return false;
+    const path = [...this.pageMenuCursor];
+    const levels: PageMenuItem[][] = [menu.items];
+    for (const index of path.slice(0, -1)) levels.push(levels[levels.length - 1][index]?.children ?? []);
+    const rows = levels[levels.length - 1];
+    const selectable = (index: number) => !!rows[index] && !rows[index].separator && rows[index].enabled;
+    const current = path.length > 0 ? rows[path[path.length - 1]] : undefined;
+    const step = listStep(event);
+    const enterChild = (item: PageMenuItem | undefined) => {
+      const first = item?.children?.findIndex((child) => !child.separator && child.enabled) ?? -1;
+      if (first < 0) return false;
+      path.push(first);
+      return true;
+    };
+    if (step) {
+      if (path.length === 0) path.push(-1);
+      let at = path[path.length - 1];
+      for (let tries = 0; tries < rows.length; tries++) {
+        at = (at + step + rows.length) % rows.length;
+        if (selectable(at)) break;
+      }
+      path[path.length - 1] = at;
+    } else if (event.key === "right") {
+      if (!enterChild(current)) return true;
+    } else if (event.key === "left" || (event.key === "escape" && path.length > 1)) {
+      if (path.length > 1) path.pop();
+    } else if (event.key === "enter") {
+      if (!current) return true;
+      if (!enterChild(current)) {
+        this.runPageMenu(current.id);
+        return true;
+      }
+    } else {
+      return false;
+    }
+    this.pageMenuKeys = { menu: this.pageMenu, path };
+    this.render();
+    return true;
+  }
+
   private pageMenuView(): PageMenuView | null {
+    const menu = this.pageMenuContent();
+    return menu && { ...menu, cursor: this.pageMenuCursor };
+  }
+
+  private pageMenuContent(): Omit<PageMenuView, "cursor"> | null {
     if (!this.pageMenu || !this.layout) return null;
     if (this.pageMenu.kind === "toolbar") {
       return {
@@ -1433,6 +1593,10 @@ class Session {
         items: this.toolbarMenuItems(),
       };
     }
+    if (this.pageMenu.kind === "action") {
+      return { x: this.pageMenu.x, y: this.pageMenu.y, items: this.extensions?.actionMenuItems(this.pageMenu.extensionId) ?? [] };
+    }
+    const extensionItems = this.extensions?.pageMenuItems(this.pageMenu.params) ?? [];
     const items: PageMenuItem[] = [
       ...(this.pageMenu.selectionText
         ? [
@@ -1451,6 +1615,13 @@ class Session {
           ]
         : []),
       this.grabMenuItem(),
+      ...(extensionItems.length > 0
+        ? [
+            { id: "extensions-start", label: "", enabled: false, shortcut: "", separator: true },
+            ...extensionItems,
+            { id: "extensions-end", label: "", enabled: false, shortcut: "", separator: true },
+          ]
+        : []),
       ...this.toolMenuItems(),
     ];
     return { x: this.pageMenu.x, y: this.pageMenu.y, items };
@@ -1472,6 +1643,11 @@ class Session {
 
   private openNewTabModal() {
     if (this.newTab) return;
+    const override = urlOverride("newtab");
+    if (override) {
+      this.tabs.create(override);
+      return;
+    }
     this.newTab = {
       query: "",
       suggestions: [],
@@ -1606,6 +1782,7 @@ class Session {
       command("grab.toggle"),
       command("devtools.toggle"),
       { id: "clear-data", label: CLEAR_DATA_LABEL, shortcut: "", run: () => this.openClearData() },
+      { id: "extensions", label: EXTENSIONS_LABEL, shortcut: "", run: () => this.extensions?.openManager() },
       ...(DEV_BUILD
         ? [
           {
@@ -1706,6 +1883,7 @@ class Session {
       reviewing ? null : placement,
       reviewing ? recordBarHeight(info) : 0,
       this.ctx.env.TERMINAL_BROWSER_NO_CHROME === "1",
+      this.extensions?.sidePanel && !reviewing ? this.sidePanelCssWidth * this.root.displayScale : null,
     );
     this.layout = result.chrome;
     this.surfaceLayout = result.surface;

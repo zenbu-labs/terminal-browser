@@ -5,12 +5,19 @@ import {
   addHistoryVisit,
   deleteAllHistory,
   deleteHistoryRange,
+  deleteHistoryUrl,
   deleteHistoryUrlInRange,
   setHistoryTitle,
 } from "shared";
+import type { HistoryEntry } from "shared";
 
 import { DOC_SCHEME } from "../url";
 import { Listeners } from "./listeners";
+
+export interface HistoryRemoval {
+  allHistory: boolean;
+  urls: string[];
+}
 
 const NOT_RECORDED = /^(?:terminal-browser|chrome-extension|chrome|devtools|about|data|blob|javascript|view-source):/i;
 const TYPED_WINDOW_MS = 30_000;
@@ -26,6 +33,8 @@ export function historyUrl(url: string): string | null {
 }
 
 export class HistoryRecorder {
+  readonly visited = new Listeners<[HistoryEntry]>();
+  readonly removed = new Listeners<[HistoryRemoval]>();
   readonly changed = new Listeners<[]>();
   private readonly typed = new Map<string, number>();
 
@@ -42,23 +51,33 @@ export class HistoryRecorder {
   add(url: string, transition: string, title?: string, referringVisitId?: number | null): number | null {
     const recorded = historyUrl(url);
     if (!recorded) return null;
-    const { visitId } = addHistoryVisit({ url: recorded, title, transition, referringVisitId });
+    const { entry, visitId } = addHistoryVisit({ url: recorded, title, transition, referringVisitId });
+    this.visited.emit(entry);
     this.changed.emit();
     return visitId;
   }
 
+  deleteUrl(url: string) {
+    if (!deleteHistoryUrl(url)) return;
+    this.removed.emit({ allHistory: false, urls: [url] });
+    this.changed.emit();
+  }
+
   deleteUrlInRange(url: string, startTime: number, endTime: number) {
-    deleteHistoryUrlInRange(url, startTime, endTime);
+    const urls = deleteHistoryUrlInRange(url, startTime, endTime);
+    if (urls.length) this.removed.emit({ allHistory: false, urls });
     this.changed.emit();
   }
 
   deleteRange(startTime: number, endTime: number) {
-    deleteHistoryRange(startTime, endTime);
+    const urls = deleteHistoryRange(startTime, endTime);
+    if (urls.length) this.removed.emit({ allHistory: false, urls });
     this.changed.emit();
   }
 
   deleteAll() {
     deleteAllHistory();
+    this.removed.emit({ allHistory: true, urls: [] });
     this.changed.emit();
   }
 

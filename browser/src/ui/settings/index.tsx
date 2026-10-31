@@ -14,9 +14,10 @@ import { GeneralPane } from "./general";
 import { CUSTOM, DropdownMenu, withCustom } from "./dropdown";
 import type { OpenDropdown } from "./dropdown";
 
-const SECTIONS: SettingsSection[] = ["general", "shortcuts", "advanced"];
+const SECTIONS: SettingsSection[] = ["general", "appearance", "shortcuts", "advanced"];
 const SECTION_ICONS: Record<SettingsSection, IconName> = {
   general: "settings",
+  appearance: "monitor",
   shortcuts: "keyboard",
   advanced: "sliders",
 };

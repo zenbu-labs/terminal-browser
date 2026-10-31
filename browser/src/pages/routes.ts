@@ -5,6 +5,7 @@ import { renderStartPage } from "./start";
 import { renderVersionPage } from "./version";
 
 const TITLES = {
+  extensions: "Extensions",
   history: "History",
   downloads: "Downloads",
   bookmarks: "Bookmarks",
@@ -16,6 +17,7 @@ const TITLES = {
 export const INTERNAL_PAGE_LIST = [
   "bookmarks",
   "downloads",
+  "extensions",
   "history",
   "newtab",
   "settings",
@@ -25,6 +27,7 @@ export const INTERNAL_PAGE_LIST = [
 ];
 
 const CLIENT_PAGES = {
+  extensions: TITLES.extensions,
   history: TITLES.history,
   downloads: TITLES.downloads,
   bookmarks: TITLES.bookmarks,

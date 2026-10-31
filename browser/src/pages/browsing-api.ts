@@ -4,10 +4,10 @@ import { recentVisits } from "shared";
 
 import { browsing } from "../browsing";
 import type { BookmarkNode } from "../browsing/bookmarks";
+import { extensionService } from "../extensions/service";
 import { isInternalUrl } from "./internal";
 import type { InternalHandlers } from "./internal";
 import { openFromPage } from "./open";
-import { tabForContents } from "./tabs";
 
 const PAGE_SIZE = 150;
 
@@ -66,9 +66,9 @@ export function downloadsHandlers(): InternalHandlers["downloads"] {
 
 // The tab the user was on before opening the bookmarks page.
 function lastOtherTab(sender: Electron.WebContents) {
-  const ref = tabForContents(sender.id);
+  const ref = extensionService().tabRef(sender.id);
   if (!ref) return null;
-  const others = ref.tabs
+  const others = ref.window.host.tabs
     .all()
     .filter((tab) => tab !== ref.tab && tab.state.url && !isInternalUrl(tab.state.url))
     .sort((a, b) => b.lastAccessed - a.lastAccessed);

@@ -21,10 +21,12 @@ export type { SitePermission } from "./site-permissions";
 export { listInstances, removeInstance, upsertInstance } from "./instances";
 export {
   anonymousId,
+  extensionsDeveloperMode,
   lastActiveDay,
   lastLaunchDay,
   lastSeenVersion,
   lastUrl,
+  setExtensionsDeveloperMode,
   setLastActiveDay,
   setLastLaunchDay,
   setLastSeenVersion,
@@ -58,17 +60,41 @@ export * from "./config/render";
 export * from "./config/search";
 export * from "./config/settings";
 export * from "./config/telemetry";
-export { bookmarks, downloads, historyUrls, historyVisits } from "./schema";
-export type { BookmarkRow, DownloadRow, HistoryUrlRow } from "./schema";
+export { bookmarks, downloads, extensionEvents, extensions, historyUrls, historyVisits } from "./schema";
+export type { BookmarkRow, DownloadRow, ExtensionRow, HistoryUrlRow } from "./schema";
+export {
+  EXTENSIONS_DIR,
+  addLazyEvent,
+  clearLazyEvents,
+  deleteExtension,
+  extensionIdForDirectory,
+  extensionIdFromBytes,
+  getExtension,
+  lazyEvents,
+  listExtensions,
+  opensSidePanelOnActionClick,
+  readManifestFile,
+  removeLazyEvent,
+  saveExtension,
+  setOpensSidePanelOnActionClick,
+  updateExtension,
+} from "./extensions";
+export type { DisabledReason, ExtensionRecord, ExtensionSource } from "./extensions";
+export * from "./manifest";
 export {
   addHistoryVisit,
   deleteAllHistory,
   deleteHistoryRange,
+  deleteHistoryUrl,
   deleteHistoryUrlInRange,
+  historyEntry,
+  visitsForUrl,
   recentVisits,
+  searchHistory,
   setHistoryTitle,
+  topHistorySites,
 } from "./history";
-export type { HistoryEntry, HistoryVisit } from "./history";
+export type { HistoryEntry, HistorySearch, HistoryVisit } from "./history";
 export {
   createDownload,
   deleteDownload,
@@ -83,10 +109,13 @@ export {
   BOOKMARKS_BAR_ID,
   OTHER_BOOKMARKS_ID,
   allBookmarks,
+  bookmarkChildren,
   createBookmark,
   ensureBookmarkRoots,
   getBookmark,
   hasBookmarkChildren,
+  moveBookmark,
   removeBookmark,
+  updateBookmark,
 } from "./bookmarks";
 export type { BookmarkRecord } from "./bookmarks";

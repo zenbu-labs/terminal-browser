@@ -10,6 +10,7 @@ import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
 import { installPages } from "./pages/install";
+import { startExtensions } from "./extensions";
 import { startBrowsing } from "./browsing";
 
 // what
@@ -45,6 +46,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
 
   const build = buildStamp();
   startBrowsing();
+  const extensions = startExtensions();
   const sessions = new Map<string, SessionHandle>();
   const pageContext = () => {
     const all = [...sessions.values()];
@@ -53,7 +55,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     return chosen?.pageContext() ?? { cwd: process.cwd(), theme: null };
   };
   servePages(pageContext);
-  installPages(pageContext);
+  installPages(extensions, pageContext);
   let seq = 0;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 

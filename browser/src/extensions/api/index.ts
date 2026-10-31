@@ -1,0 +1,47 @@
+import type { ExtensionService } from "../service";
+import { installBookmarks } from "./bookmarks";
+import { installBrowsingData } from "./browsingData";
+import { installDownloads } from "./downloads";
+import { installHistory } from "./history";
+import { installSearch } from "./search";
+import { installSessions } from "./sessions";
+import { installContexts } from "./contexts";
+import { installCookies } from "./cookies";
+import { installDebugger } from "./debugger";
+import { installIdentity } from "./identity";
+import { installManagement } from "./management";
+import { installNotifications } from "./notifications";
+import { installPermissions } from "./permissions";
+import { installRuntime } from "./runtime";
+import { installSidePanel } from "./side-panel";
+import { installTabGroups } from "./tab-groups";
+import { installTabs } from "./tabs";
+import { installTopSites } from "./topSites";
+import { installWebNavigation } from "./web-navigation";
+import { installWindows } from "./windows";
+
+export function installApis(service: ExtensionService) {
+  service.actions.install(service);
+  service.menus.install(service);
+  service.commands.install(service);
+  installTabs(service);
+  installWindows(service);
+  installHistory(service);
+  installDownloads(service);
+  installBookmarks(service);
+  installTopSites(service);
+  installSessions(service);
+  installSearch(service);
+  installBrowsingData(service);
+  installPermissions(service);
+  installCookies(service);
+  installWebNavigation(service);
+  installNotifications(service);
+  installManagement(service);
+  installSidePanel(service);
+  installIdentity(service);
+  installRuntime(service);
+  installContexts(service);
+  installDebugger(service);
+  installTabGroups(service);
+}

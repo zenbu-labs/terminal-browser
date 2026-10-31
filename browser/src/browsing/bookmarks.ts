@@ -3,11 +3,14 @@ import {
   BOOKMARKS_BAR_ID,
   OTHER_BOOKMARKS_ID,
   allBookmarks,
+  bookmarkChildren,
   createBookmark,
   ensureBookmarkRoots,
   getBookmark,
   hasBookmarkChildren,
+  moveBookmark,
   removeBookmark,
+  updateBookmark,
 } from "shared";
 import type { BookmarkRecord } from "shared";
 
@@ -35,6 +38,10 @@ function bookmarkId(value: unknown): number {
 }
 
 export class Bookmarks {
+  readonly created = new Listeners<[string, BookmarkNode]>();
+  readonly removed = new Listeners<[string, { parentId: string; index: number; node: BookmarkNode }]>();
+  readonly changed = new Listeners<[string, { title: string; url?: string }]>();
+  readonly moved = new Listeners<[string, { parentId: string; index: number; oldParentId: string; oldIndex: number }]>();
   readonly any = new Listeners<[]>();
   private ready = false;
 
@@ -65,6 +72,17 @@ export class Bookmarks {
     return record;
   }
 
+  get(ids: unknown): BookmarkNode[] {
+    const list = Array.isArray(ids) ? ids : [ids];
+    if (list.length === 0) throw new Error("Bookmark id list is empty.");
+    return list.map((id) => this.node(this.find(id)));
+  }
+
+  children(id: unknown): BookmarkNode[] {
+    const parent = this.find(id);
+    return bookmarkChildren(parent.id).map((child) => this.node(child));
+  }
+
   subtree(id: unknown): BookmarkNode {
     const record = this.find(id);
     const all = allBookmarks();
@@ -82,6 +100,34 @@ export class Bookmarks {
     return [this.subtree(String(BOOKMARK_ROOT_ID))];
   }
 
+  recent(count: number): BookmarkNode[] {
+    this.init();
+    return allBookmarks()
+      .filter((record) => record.url !== null)
+      .sort((a, b) => b.dateAdded - a.dateAdded || b.id - a.id)
+      .slice(0, Math.max(0, count))
+      .map((record) => this.node(record));
+  }
+
+  search(query: unknown): BookmarkNode[] {
+    this.init();
+    const all = allBookmarks().filter((record) => !FIXED.has(record.id));
+    if (typeof query === "string") {
+      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      if (words.length === 0) return [];
+      return all
+        .filter((record) => words.every((word) => record.title.toLowerCase().includes(word) || (record.url ?? "").toLowerCase().includes(word)))
+        .map((record) => this.node(record));
+    }
+    const { query: text, url, title } = (query ?? {}) as { query?: string; url?: string; title?: string };
+    const words = (text ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+    return all
+      .filter((record) => url === undefined || record.url === url)
+      .filter((record) => title === undefined || record.title === title)
+      .filter((record) => words.every((word) => record.title.toLowerCase().includes(word) || (record.url ?? "").toLowerCase().includes(word)))
+      .map((record) => this.node(record));
+  }
+
   create(details: { parentId?: string; index?: number; title?: string; url?: string }): BookmarkNode {
     this.init();
     const parent = this.find(details.parentId ?? String(OTHER_BOOKMARKS_ID));
@@ -94,8 +140,45 @@ export class Bookmarks {
       title: details.title ?? "",
       url: details.url ?? null,
     });
+    const node = this.node(record);
+    this.created.emit(node.id, node);
     this.any.emit();
-    return this.node(record);
+    return node;
+  }
+
+  update(id: unknown, change: { title?: string; url?: string }): BookmarkNode {
+    const record = this.find(id);
+    if (FIXED.has(record.id)) throw new Error("Can't modify the root bookmark folders.");
+    if (change.url !== undefined) {
+      if (record.url === null) throw new Error("Can't set URL of a bookmark folder.");
+      this.checkUrl(change.url);
+    }
+    const next = updateBookmark(record.id, change)!;
+    const info: { title: string; url?: string } = { title: next.title };
+    if (next.url !== null) info.url = next.url;
+    this.changed.emit(String(record.id), info);
+    this.any.emit();
+    return this.node(next);
+  }
+
+  move(id: unknown, destination: { parentId?: string; index?: number }): BookmarkNode {
+    const record = this.find(id);
+    if (FIXED.has(record.id)) throw new Error("Can't modify the root bookmark folders.");
+    const parent = destination.parentId !== undefined ? this.find(destination.parentId) : this.find(String(record.parentId));
+    if (parent.url !== null) throw new Error("Parameter 'parentId' does not specify a folder.");
+    if (parent.id === BOOKMARK_ROOT_ID) throw new Error("Can't modify the root bookmark folders.");
+    for (let at: BookmarkRecord | null = parent; at; at = at.parentId === null ? null : getBookmark(at.parentId)) {
+      if (at.id === record.id) throw new Error("Can't move a folder to itself or its descendant.");
+    }
+    const next = moveBookmark(record.id, parent.id, destination.index)!;
+    this.moved.emit(String(record.id), {
+      parentId: String(next.parentId),
+      index: next.index,
+      oldParentId: String(record.parentId),
+      oldIndex: record.index,
+    });
+    this.any.emit();
+    return this.node(next);
   }
 
   remove(id: unknown, recursive: boolean) {
@@ -104,7 +187,9 @@ export class Bookmarks {
     if (!recursive && record.url === null && hasBookmarkChildren(record.id)) {
       throw new Error("Can't remove non-empty folder (use recursive to force).");
     }
+    const node = record.url === null ? this.subtree(String(record.id)) : this.node(record);
     removeBookmark(record.id);
+    this.removed.emit(String(record.id), { parentId: String(record.parentId), index: record.index, node });
     this.any.emit();
   }
 

@@ -71,10 +71,10 @@ function startedByWebContent(request: Request): boolean {
 }
 
 // Local documents load their own files (their sandbox gives them an opaque
-// origin), but web pages must not pull local files in.
+// origin), but web pages and extensions must not pull local files in.
 function startedByOtherSite(request: Request): boolean {
   const initiator = (request as { initiatorOrigin?: string }).initiatorOrigin;
-  return initiator !== undefined && /^(https?|wss?):/.test(initiator);
+  return initiator !== undefined && /^(https?|chrome-extension|wss?):/.test(initiator);
 }
 
 export function servePages(context: () => PageContext) {

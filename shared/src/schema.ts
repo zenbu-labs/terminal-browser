@@ -50,6 +50,7 @@ export const settings = sqliteTable("settings", {
     .notNull()
     .default("bottom"),
   devtoolsFraction: real("devtools_fraction").notNull().default(0.4),
+  sidePanelWidth: real("side_panel_width").notNull().default(360),
 });
 
 export type InstanceRow = typeof instances.$inferSelect;
@@ -57,6 +58,34 @@ export type NewInstanceRow = typeof instances.$inferInsert;
 export type SettingsRow = typeof settings.$inferSelect;
 export type SitePermissionRow = typeof sitePermissions.$inferSelect;
 export type DevtoolsDock = SettingsRow["devtoolsDock"];
+
+export const extensions = sqliteTable("extensions", {
+  id: text("id").primaryKey(),
+  path: text("path").notNull(),
+  version: text("version").notNull(),
+  name: text("name").notNull(),
+  source: text("source", { enum: ["webstore", "unpacked", "crx"] }).notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  disabledReason: text("disabled_reason", { enum: ["user", "permissions_increase", "load_error"] }),
+  pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+  grantedPermissions: text("granted_permissions", { mode: "json" }).$type<string[]>().notNull().default([]),
+  grantedOrigins: text("granted_origins", { mode: "json" }).$type<string[]>().notNull().default([]),
+  shortcuts: text("shortcuts", { mode: "json" }).$type<Record<string, string>>().notNull().default({}),
+  installedAt: integer("installed_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  lastUpdateCheck: integer("last_update_check"),
+  openPanelOnActionClick: integer("open_panel_on_action_click", { mode: "boolean" }).notNull().default(false),
+  userScriptsAllowed: integer("user_scripts_allowed", { mode: "boolean" }).notNull().default(false),
+});
+
+export const extensionEvents = sqliteTable(
+  "extension_events",
+  {
+    extensionId: text("extension_id").notNull(),
+    event: text("event").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.extensionId, table.event] })],
+);
 
 export const historyUrls = sqliteTable("history_urls", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -88,6 +117,7 @@ export const downloads = sqliteTable("downloads", {
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   totalBytes: integer("total_bytes").notNull().default(0),
   receivedBytes: integer("received_bytes").notNull().default(0),
+  byExtensionId: text("by_extension_id"),
 });
 
 export const bookmarks = sqliteTable("bookmarks", {
@@ -100,6 +130,7 @@ export const bookmarks = sqliteTable("bookmarks", {
   dateGroupModified: integer("date_group_modified"),
 }, (table) => [index("bookmarks_parent").on(table.parentId)]);
 
+export type ExtensionRow = typeof extensions.$inferSelect;
 export type HistoryUrlRow = typeof historyUrls.$inferSelect;
 export type DownloadRow = typeof downloads.$inferSelect;
 export type BookmarkRow = typeof bookmarks.$inferSelect;

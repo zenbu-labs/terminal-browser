@@ -3,10 +3,12 @@ import { api, h, live, mount, toggle } from "./dom.js";
 const COPY = {
   title: "Settings",
   general: "General",
+  appearance: "Appearance",
   advanced: "Advanced",
   privacy: "Privacy",
   clearData: "Clear browsing data",
   pages: "More",
+  extensions: "Extensions",
   history: "History",
   downloads: "Downloads",
   bookmarks: "Bookmarks",
@@ -92,6 +94,7 @@ function mainView() {
     h("header", null, h("h1", null, COPY.title)),
     state.error ? h("p", { class: "error" }, state.error) : null,
     settingsSection(COPY.general, state.rows.filter((row) => row.group === "general")),
+    settingsSection(COPY.appearance, state.rows.filter((row) => row.group === "appearance")),
     h("section", null, h("h2", null, COPY.privacy), h("ul", null, link("terminal-browser://settings/clearBrowserData", COPY.clearData))),
     settingsSection(COPY.advanced, state.rows.filter((row) => row.group === "advanced")),
     h(
@@ -101,6 +104,7 @@ function mainView() {
       h(
         "ul",
         null,
+        link("terminal-browser://extensions", COPY.extensions),
         link("terminal-browser://history", COPY.history),
         link("terminal-browser://downloads", COPY.downloads),
         link("terminal-browser://bookmarks", COPY.bookmarks),

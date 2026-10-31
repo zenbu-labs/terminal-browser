@@ -97,6 +97,31 @@ export function createBookmark(node: { parentId: number; index?: number; title: 
   return getBookmark(Number(result.lastInsertRowid))!;
 }
 
+export function updateBookmark(id: number, change: { title?: string; url?: string }): BookmarkRecord | null {
+  const current = getBookmark(id);
+  if (!current) return null;
+  store()
+    .sqlite.prepare("UPDATE bookmarks SET title = ?, url = ? WHERE id = ?")
+    .run(change.title ?? current.title, current.url === null ? null : (change.url ?? current.url), id);
+  return getBookmark(id);
+}
+
+export function moveBookmark(id: number, parentId: number, index: number | undefined): BookmarkRecord | null {
+  const current = getBookmark(id);
+  if (!current || current.parentId === null) return null;
+  const { sqlite } = store();
+  sqlite.prepare("UPDATE bookmarks SET position = position - 1 WHERE parent_id = ? AND position > ?").run(current.parentId, current.index);
+  let target = index;
+  if (target !== undefined && parentId === current.parentId && target > current.index) target -= 1;
+  sqlite.prepare("UPDATE bookmarks SET parent_id = -1 WHERE id = ?").run(id);
+  const position = clampIndex(parentId, target);
+  sqlite.prepare("UPDATE bookmarks SET position = position + 1 WHERE parent_id = ? AND position >= ?").run(parentId, position);
+  sqlite.prepare("UPDATE bookmarks SET parent_id = ?, position = ? WHERE id = ?").run(parentId, position, id);
+  touchFolder(current.parentId);
+  if (parentId !== current.parentId) touchFolder(parentId);
+  return getBookmark(id);
+}
+
 export function removeBookmark(id: number): void {
   const current = getBookmark(id);
   if (!current || current.parentId === null) return;

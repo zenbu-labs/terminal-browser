@@ -5,9 +5,10 @@ import { build } from "esbuild";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const preloads = [
+  ["src/extensions/preload.ts", "extension-preload.js"],
   ["src/pages/internal-preload.ts", "internal-preload.js"],
 ];
-const pageScripts = ["history", "downloads", "bookmarks", "settings"];
+const pageScripts = ["extensions", "history", "downloads", "bookmarks", "settings"];
 const outDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, "dist");
 
 await Promise.all([

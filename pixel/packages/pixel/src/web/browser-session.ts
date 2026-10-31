@@ -69,7 +69,10 @@ export function onPermissionFor(contents: WebContents, gate: PermissionGate): vo
 function originOf(url: string | undefined): string {
   if (!url) return "";
   try {
-    return new URL(url).origin;
+    const parsed = new URL(url);
+    // Node's URL gives "null" as the origin of schemes it doesn't know, like chrome-extension:
+    if (parsed.protocol === "chrome-extension:") return `chrome-extension://${parsed.host}`;
+    return parsed.origin;
   } catch {
     return "";
   }

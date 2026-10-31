@@ -8,6 +8,7 @@ import type {
   PermissionCheckAnswer,
   PermissionRequest,
   PointerEvent,
+  Rgba,
   WebViewHandle,
   WebViewState,
   ZoomDirection,
@@ -15,6 +16,7 @@ import type {
 import type { RecordActions } from "../record/types";
 import type { BrowsingDataKind } from "../session/browsing-data";
 import type { IconName } from "./icons";
+import type { ExtensionActions } from "./extension-types";
 
 export interface ToastView {
   text: string;
@@ -68,6 +70,10 @@ export interface PageMenuItem {
   label: string;
   enabled: boolean;
   shortcut: string;
+  checked?: boolean;
+  separator?: boolean;
+  children?: PageMenuItem[];
+  badge?: { text: string; color: Rgba };
 }
 
 export interface ClearDataView {
@@ -79,6 +85,7 @@ export interface PageMenuView {
   x: number;
   y: number;
   zoomPercent?: number;
+  cursor: number[];
   items: PageMenuItem[];
 }
 
@@ -181,6 +188,7 @@ export interface ChromeActions {
   clearDataConfirm(): void;
   clearDataCancel(): void;
   settings: SettingsActions;
+  extensions: ExtensionActions;
   profileStop(): void;
   record: RecordActions;
 }
@@ -199,6 +207,7 @@ export interface ChromeLayout {
     height: number;
     dock: "bottom" | "right";
   } | null;
+  sidePanel: { x: number; y: number; width: number; height: number } | null;
   rem: number;
   frame: number;
   radius: number;
@@ -225,6 +234,7 @@ export interface TabActions {
   pointer(id: number, event: PointerEvent): void;
   permissionRequest(id: number, request: PermissionRequest): Promise<boolean>;
   permissionCheck(check: PermissionCheck): PermissionCheckAnswer;
+  closed(id: number): void;
 }
 
 export interface DevtoolsView {

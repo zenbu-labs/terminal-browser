@@ -7,7 +7,7 @@ import { z } from "zod";
 import { AUTO, DISPLAY_FPS, UNCAPPED } from "./render";
 import { SEARCH_ENGINES, SUGGESTIONS_OFF } from "./search";
 
-export type SettingGroup = "general" | "advanced";
+export type SettingGroup = "general" | "appearance" | "advanced";
 
 export interface SettingChoice {
   value: string;
@@ -91,6 +91,14 @@ export const SETTINGS = {
     group: "general",
     label: "Transparent website backgrounds",
     hint: "The terminal background will show through pages without a background color",
+    schema: z.enum(["on", "off"]),
+    default: "off",
+    choices: onOff,
+  }),
+  "toolbar.extensions": setting({
+    group: "appearance",
+    label: "Show extensions in toolbar",
+    hint: "",
     schema: z.enum(["on", "off"]),
     default: "off",
     choices: onOff,

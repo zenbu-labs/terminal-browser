@@ -82,6 +82,12 @@ export interface HostOptions {
   browserWindowOptions: BrowserWindowOptions;
 }
 
+
+interface FrameAttached {
+  sessionId: string;
+  targetInfo: { type: string };
+}
+
 export class PageHost {
   readonly surface: Surface;
   private readonly popupSurface: Surface;
@@ -103,6 +109,7 @@ export class PageHost {
   private findText = "";
   private cdpAttached = false;
   private cdpEventHandlers = new Map<string, (params: unknown) => void>();
+  private readonly frameSessions = new Set<string>();
   private readonly onDisplayChange = () => {
     if (this.stopped) return;
     this.applyFrameRate();
@@ -320,14 +327,33 @@ export class PageHost {
 
   async attachCdp(): Promise<void> {
     if (this.cdpAttached) return;
-    this.window.webContents.debugger.attach("1.3");
+    // Someone else in this process (like the extensions debugger API) may have
+    // attached first; Electron allows only one attachment, which we then share.
+    if (!this.window.webContents.debugger.isAttached()) this.window.webContents.debugger.attach("1.3");
     this.cdpAttached = true;
-    this.window.webContents.debugger.on("message", (_event, method, params) => {
-      this.cdpEventHandlers.get(method)?.(params);
+    this.window.webContents.debugger.on("message", (_event, method, params, sessionId) => {
+      if (method === "Target.attachedToTarget") this.frameAttached(params as FrameAttached);
+      else if (method === "Target.detachedFromTarget") this.frameSessions.delete((params as { sessionId: string }).sessionId);
+      if (!sessionId) this.cdpEventHandlers.get(method)?.(params);
     });
     await this.cdp("Runtime.enable");
     await this.cdp("Page.enable");
     await this.emulateColorScheme();
+    await this.cdp("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  }
+
+  // Cross-origin iframes (extension UIs like Vimium's bar) run in their own renderer, which never
+  // learns that this offscreen page is focused, so they need focus emulation of their own.
+  private frameAttached({ sessionId, targetInfo }: FrameAttached) {
+    if (targetInfo.type !== "iframe") return;
+    this.frameSessions.add(sessionId);
+    if (this.contentFocused) this.emulateFrameFocus(sessionId, true);
+  }
+
+  private emulateFrameFocus(sessionId: string, enabled: boolean) {
+    void this.window.webContents.debugger
+      .sendCommand("Emulation.setFocusEmulationEnabled", { enabled }, sessionId)
+      .catch(() => {});
   }
 
   async setBackground(background: string): Promise<void> {
@@ -449,7 +475,7 @@ export class PageHost {
   }
 
   blurContent() {
-    if (!this.contentFocused) return;
+    if (this.stopped || !this.contentFocused) return;
     this.input.releaseKeys();
     this.window.blurWebView();
     this.contentFocused = false;
@@ -458,6 +484,7 @@ export class PageHost {
 
   private async setFocusEmulation(enabled: boolean) {
     await this.attachCdp();
+    for (const sessionId of this.frameSessions) this.emulateFrameFocus(sessionId, enabled);
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled });
   }
 

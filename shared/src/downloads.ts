@@ -15,6 +15,7 @@ export interface DownloadRecord {
   paused: boolean;
   totalBytes: number;
   receivedBytes: number;
+  byExtensionId: string | null;
 }
 
 interface DownloadSqlRow {
@@ -30,6 +31,7 @@ interface DownloadSqlRow {
   paused: number;
   total_bytes: number;
   received_bytes: number;
+  by_extension_id: string | null;
 }
 
 const COLUMNS: Record<Exclude<keyof DownloadRecord, "id">, string> = {
@@ -44,6 +46,7 @@ const COLUMNS: Record<Exclude<keyof DownloadRecord, "id">, string> = {
   paused: "paused",
   totalBytes: "total_bytes",
   receivedBytes: "received_bytes",
+  byExtensionId: "by_extension_id",
 };
 
 function fromRow(row: DownloadSqlRow): DownloadRecord {
@@ -60,6 +63,7 @@ function fromRow(row: DownloadSqlRow): DownloadRecord {
     paused: row.paused === 1,
     totalBytes: row.total_bytes,
     receivedBytes: row.received_bytes,
+    byExtensionId: row.by_extension_id,
   };
 }
 
