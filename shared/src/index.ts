@@ -70,6 +70,7 @@ export {
   extensionIdForDirectory,
   extensionIdFromBytes,
   getExtension,
+  isExtensionId,
   lazyEvents,
   listExtensions,
   opensSidePanelOnActionClick,
@@ -81,6 +82,8 @@ export {
 } from "./extensions";
 export type { DisabledReason, ExtensionRecord, ExtensionSource } from "./extensions";
 export * from "./manifest";
+export * from "./crx";
+export * from "./extension-install";
 export {
   addHistoryVisit,
   deleteAllHistory,

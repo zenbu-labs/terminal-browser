@@ -146,6 +146,7 @@ export function extensionsHandlers(): InternalHandlers["extensions"] {
       }
     },
     reload: (_sender, id) => manager.reload(asId(id)),
+    update: async () => (await service.installer.checkForUpdates()).length,
     clearErrors: (_sender, id) => {
       service.errors.delete(asId(id));
       service.changed();
@@ -153,7 +154,8 @@ export function extensionsHandlers(): InternalHandlers["extensions"] {
     openUrl: (sender, url) => {
       if (typeof url !== "string") throw new Error("Invalid URL");
       const extensionId = /^chrome-extension:\/\/([a-p]{32})\//.exec(url)?.[1];
-      if (!extensionId || !service.get(extensionId)) throw new Error("Invalid URL");
+      const allowed = (extensionId && service.get(extensionId)) || url.startsWith("https://chromewebstore.google.com/");
+      if (!allowed) throw new Error("Invalid URL");
       openFromPage(sender, url, true);
     },
     developerMode: () => extensionsDeveloperMode(),

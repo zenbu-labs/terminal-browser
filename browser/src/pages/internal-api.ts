@@ -12,6 +12,7 @@ export const INTERNAL_API = {
     "setShortcut",
     "loadUnpacked",
     "reload",
+    "update",
     "clearErrors",
     "openUrl",
     "developerMode",

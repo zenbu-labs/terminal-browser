@@ -28,7 +28,11 @@ export function installManagement(service: ExtensionService) {
       return null;
     }
     const info = manager.managementInfo(new LoadedExtension(record, manifest, service.session));
-    return { ...info, enabled: false, disabledReason: "unknown" } as chrome.management.ExtensionInfo;
+    return {
+      ...info,
+      enabled: false,
+      disabledReason: record.disabledReason === "permissions_increase" ? "permissions_increase" : "unknown",
+    } as chrome.management.ExtensionInfo;
   };
 
   const find = (id: unknown): ExtensionRecord => {
@@ -84,6 +88,17 @@ export function installManagement(service: ExtensionService) {
     "management.setEnabled",
     async (caller, id, enabled) => {
       const record = find(id);
+      if (enabled && record.disabledReason === "permissions_increase") {
+        if (!hasUserGesture(caller)) {
+          throw new Error("Re-enabling an extension disabled due to permissions increase requires a user gesture.");
+        }
+        const window = service.currentWindow(caller);
+        const manifest = asManifest(readManifestFile(record.path));
+        const accepted = window
+          ? await window.host.prompt({ kind: "permissions", extensionId: record.id, name: record.name, icon: null, warnings: warningsFor(manifest) })
+          : false;
+        if (!accepted) throw new Error("The user did not accept the re-enable dialog.");
+      }
       if (record.enabled === Boolean(enabled)) return;
       if (!enabled && record.id === caller.extension.id) {
         setTimeout(() => void manager.setEnabled(record.id, false).catch(() => {}), 0);

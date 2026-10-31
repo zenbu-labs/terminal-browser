@@ -3,7 +3,7 @@ import type { WebContents } from "electron";
 import type { Tab, TabManager } from "../session/tabs";
 
 export interface ExtensionPrompt {
-  kind: "permissions" | "remove";
+  kind: "install" | "permissions" | "update" | "remove";
   extensionId: string;
   name: string;
   icon: string | null;

@@ -163,6 +163,34 @@ Examples:
   terminal-browser config path
 `,
   },
+  extensions: {
+    summary: "Install and manage Chrome extensions",
+    usage: "terminal-browser extensions <command> [args]",
+    body: `
+Works whether or not a browser is open. Changes show up in open browsers right
+away. install and remove ask first when run in a terminal; otherwise they need
+--yes.
+
+Commands:
+  list [--json]              Installed extensions and their errors
+  install <id|url|file.crx>  Install from the Chrome Web Store or a .crx file
+  load <dir>                 Load an unpacked extension (reloads on change)
+  remove <id>                Remove an extension
+  enable <id>                Turn an extension on
+  disable <id>               Turn an extension off
+  update [<id>]              Update Chrome Web Store extensions now
+  reload [<id>]              Reload unpacked extensions
+  pin <id>, unpin <id>       Show or hide the toolbar icon
+
+Options:
+  -y, --yes                  Do not ask first
+
+Examples:
+  terminal-browser extensions install https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh
+  terminal-browser extensions load ./my-extension
+  terminal-browser extensions list --json
+`,
+  },
   action: {
     summary: "Use the open browser through the agent-browser CLI",
     usage: "terminal-browser action [selectors] -- <command>",

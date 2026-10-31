@@ -9,8 +9,12 @@ type Prompt = NonNullable<ExtensionsView["prompt"]>;
 
 function copy(prompt: Prompt): { title: string; confirm: string; danger: boolean } {
   switch (prompt.kind) {
+    case "install":
+      return { title: `Add "${prompt.name}"?`, confirm: "Add extension", danger: false };
     case "permissions":
       return { title: `"${prompt.name}" wants to:`, confirm: "Allow", danger: false };
+    case "update":
+      return { title: `"${prompt.name}" needs new permissions`, confirm: "Allow", danger: false };
     case "remove":
       return { title: `Remove "${prompt.name}"?`, confirm: "Remove", danger: true };
   }

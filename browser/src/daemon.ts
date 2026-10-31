@@ -11,6 +11,9 @@ import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
 import { installPages } from "./pages/install";
 import { startExtensions } from "./extensions";
+import { extensionCommand } from "./extensions/remote";
+import type { ExtensionCommand } from "./extensions/remote";
+import { chromeUserAgent } from "./user-agent";
 import { startBrowsing } from "./browsing";
 
 // what
@@ -45,6 +48,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   fs.rmSync(DAEMON_SOCKET, { force: true });
 
   const build = buildStamp();
+  app.userAgentFallback = chromeUserAgent();
   startBrowsing();
   const extensions = startExtensions();
   const sessions = new Map<string, SessionHandle>();
@@ -144,6 +148,11 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
           session?.nudgeResize();
         } else if (message.cmd === "close") {
           session?.close();
+        } else if (message.cmd === "extensions") {
+          void extensionCommand(message as unknown as ExtensionCommand).then(
+            (data) => reply({ ok: true, data }),
+            (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+          );
         } else if (message.cmd === "shutdown") {
           reply({ ok: true, sessions: sessions.size });
           connection.end();

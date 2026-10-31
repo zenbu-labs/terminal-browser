@@ -42,6 +42,7 @@ import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 import { claudeBridgeCommand } from "./claude-bridge";
 import { configCommand } from "./config";
+import { extensionsCommand } from "./extensions";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
 const CAPABILITIES = ["embedding", "image-frames"] as const;
@@ -804,6 +805,7 @@ async function main(): Promise<number> {
   if (command === "setup") return setupCommand(electronBinary());
   if (command === "upgrade") return upgradeCommand();
   if (command === "config") return configCommand(args);
+  if (command === "extensions") return extensionsCommand(args);
   if (command === "claude-bridge") return claudeBridgeCommand(args);
   if (command === "shutdown") return shutdownDaemon();
   if (command === "register-app") return registerAppCommand(args);

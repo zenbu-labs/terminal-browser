@@ -5,6 +5,9 @@ const COPY = {
   shortcuts: "Keyboard shortcuts",
   developerMode: "Developer mode",
   loadUnpacked: "Load unpacked",
+  update: "Update",
+  updating: "Updating…",
+  updated: (count) => (count === 0 ? "Up to date" : `Updated ${count}`),
   loadPlaceholder: "~/path/to/extension",
   load: "Load",
   cancel: "Cancel",
@@ -30,6 +33,7 @@ const COPY = {
   options: "Extension options",
   openOptions: "Open",
   source: "Source",
+  webStore: "Chrome Web Store",
   unpacked: "Unpacked",
   path: "Path",
   removeExtension: "Remove extension",
@@ -47,6 +51,7 @@ const state = {
   loadOpen: false,
   loadError: "",
   loadPath: "",
+  updateStatus: "",
   confirming: null,
   recording: null,
   error: "",
@@ -181,6 +186,16 @@ function developerBar() {
       "div",
       { class: "row" },
       h("button", { onclick: () => { state.loadOpen = true; render(); } }, COPY.loadUnpacked),
+      h("button", {
+        onclick: () => run(async () => {
+          state.updateStatus = COPY.updating;
+          render();
+          const count = await api.update();
+          state.updateStatus = COPY.updated(count);
+          render();
+        }),
+      }, COPY.update),
+      h("span", { class: "muted" }, state.updateStatus),
     ),
     state.loadOpen ? loadField() : null,
     state.loadError ? h("p", { class: "error" }, state.loadError) : null,
@@ -281,7 +296,12 @@ function detailsView() {
   if (extension.optionsUrl && extension.enabled) {
     rows.push([COPY.options, linkButton(COPY.openOptions, () => run(() => api.openUrl(extension.optionsUrl)))]);
   }
-  rows.push([COPY.source, h("span", null, COPY.unpacked, h("br"), h("span", { class: "muted" }, extension.path))]);
+  rows.push([
+    COPY.source,
+    extension.source === "webstore"
+      ? linkButton(COPY.webStore, () => run(() => api.openUrl(`https://chromewebstore.google.com/detail/${extension.id}`)))
+      : h("span", null, COPY.unpacked, h("br"), h("span", { class: "muted" }, extension.path)),
+  ]);
   rows.push(["", removeButton(extension, COPY.removeExtension)]);
   return [
     h("p", null, back),

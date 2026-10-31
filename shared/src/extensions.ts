@@ -167,6 +167,10 @@ export function extensionIdForDirectory(dir: string, manifest: { key?: unknown }
   return extensionIdFromBytes(path.resolve(dir));
 }
 
+export function isExtensionId(value: string): boolean {
+  return /^[a-p]{32}$/.test(value);
+}
+
 export function readManifestFile(dir: string): Record<string, unknown> {
   const file = path.join(dir, "manifest.json");
   const text = fs.readFileSync(file, "utf8").replace(/^﻿/, "");

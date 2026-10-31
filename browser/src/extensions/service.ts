@@ -16,6 +16,7 @@ import { EventHub } from "./events";
 import type { EventFilterMatch } from "./events";
 import { ExtensionManager } from "./manage";
 import { CommandStore } from "./commands";
+import { Installer } from "./install";
 import { MenuStore } from "./menus";
 import { LoadedExtension } from "./loaded";
 import { grantNativeActiveTab, revokeNativeActiveTab, setNativeUserScriptsAllowed } from "./native";
@@ -72,6 +73,7 @@ export class ExtensionService {
   readonly manager: ExtensionManager;
   readonly menus: MenuStore;
   readonly commands: CommandStore;
+  readonly installer: Installer;
   readonly senderTabs: SenderTabs;
   readonly sidePanels: SidePanelStore;
   readonly loaded = new Map<string, LoadedExtension>();
@@ -95,11 +97,13 @@ export class ExtensionService {
     this.manager = new ExtensionManager(this);
     this.menus = new MenuStore(this);
     this.commands = new CommandStore(this);
+    this.installer = new Installer(this);
     this.senderTabs = new SenderTabs(this);
     this.sidePanels = new SidePanelStore(this);
     const preload = preloadPath();
     session.registerPreloadScript({ type: "frame", filePath: preload });
     session.registerPreloadScript({ type: "service-worker", filePath: preload });
+    session.registerPreloadScript({ type: "frame", filePath: preloadPath("chrome-web-store-preload.js") });
     this.ready = this.loadAll();
   }
 
