@@ -189,13 +189,27 @@ export const ghostty: Detect = (env, run) => {
     return found ? found.slice(1) : os.homedir();
   }
 
+  // Ghostty starts one login process per pane on that pane's tty, so these are the only
+  // ttys whose other end Ghostty holds. Opening any other tty can block forever.
+  async function ghosttyTtys(): Promise<Set<string>> {
+    const ghostty = String(await ownerPid(null));
+    const ttys = new Set<string>();
+    for (const line of (await run("ps", ["-axo", "ppid=,tty="])).split("\n")) {
+      const [parent, tty] = line.trim().split(/\s+/);
+      if (parent === ghostty && tty && !tty.startsWith("?")) ttys.add(`/dev/${tty}`);
+    }
+    return ttys;
+  }
+
   async function mapTtys(
     ttys: string[],
     listed: Pane[],
     cwdOf: (tty: string) => Promise<string>,
   ): Promise<void> {
     const alive = new Set(listed.map((pane) => pane.id));
+    const owned = await ghosttyTtys();
     const pending = ttys.filter((tty) => {
+      if (!owned.has(tty)) return false;
       const known = paneByTty.get(tty);
       if (known && alive.has(known)) return false;
       return Date.now() - (missedAt.get(tty) ?? 0) > MISS_MEMORY_MS;
@@ -290,7 +304,7 @@ export const ghostty: Detect = (env, run) => {
     const found = id ? before.find((pane) => pane.id === id) : null;
     if (!found) {
       throw new Error(
-        `could not find this pane in Ghostty — we marked ${tty} and no Ghostty pane reported it back, so ${tty} is not a Ghostty pane (a shell inside tmux or a remote session looks like this)`,
+        `could not find this pane in Ghostty: ${tty} is not a Ghostty pane (a shell inside tmux or a remote session looks like this)`,
       );
     }
     return found;
