@@ -29,14 +29,14 @@ function listen(id: number, listener: (event: NativeViewEvent) => void) {
   return () => void listeners.delete(id);
 }
 
-export function useNativeView(root: DeviceRoot, kind: string, onEvent: (event: NativeViewEvent) => void) {
+export function useNativeView<Event extends NativeViewEvent = NativeViewEvent>(root: DeviceRoot, kind: string, onEvent: (event: Event) => void) {
   const [surface] = useState(() => root.createSurface());
   const id = surfaceId(surface);
   const handler = useRef(onEvent);
   handler.current = onEvent;
   useEffect(() => {
     NativeViews.open(id, kind);
-    const stop = listen(id, (event) => handler.current(event));
+    const stop = listen(id, (event) => handler.current(event as Event));
     return () => {
       stop();
       NativeViews.close(id);

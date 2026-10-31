@@ -1,11 +1,10 @@
 export { createRoot } from "./root";
-export type { DeviceRoot, DeviceRootOptions } from "./root";
+export type { DeviceRoot, DeviceRootOptions, HapticStyle } from "./root";
 export type { NativeBinding } from "../react/binding";
 export type { NativeEngine } from "../react/native";
 export {
   Box,
   Text,
-  Input,
   Image,
   MarkedText,
   Path,
@@ -69,6 +68,6 @@ export type {
 export { useRect } from "../layout";
 export { makeTheme } from "../theme";
 export type { Theme } from "../theme";
-export { registerHostComponents, hostHas, WebView, Video } from "./host-components";
+export { registerHostComponents, hostHas, Input, WebView, Video } from "./host-components";
 export { surfaceId } from "../react/surface";
-export type { HostComponents, WebViewHandle, WebViewProps, VideoProps } from "./host-components";
+export type { AccessoryMenuItem, ComposerInputProps, HostComponents, NativeInputProps, WebViewHandle, WebViewProps, VideoProps } from "./host-components";

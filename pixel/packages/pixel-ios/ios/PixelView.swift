@@ -117,6 +117,7 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
 
   @objc private func onTap(_ g: UITapGestureRecognizer) {
     let point = g.location(in: self)
+    window?.endEditing(true)
     if PixelRuntime.shared.nativeViews.tap(at: point) { return }
     pointer("down", "left", at: point)
     pointer("up", "left", at: point)
@@ -174,6 +175,7 @@ final class PixelView: ExpoView, UIKeyInput, UITextInputTraits, UIGestureRecogni
   }
 
   func dismissKeyboard() {
+    window?.endEditing(true)
     guard softKeyboardVisible else { return }
     setSoftKeyboard(visible: false)
   }
