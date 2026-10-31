@@ -1,0 +1,13 @@
+diff --git a/shell/browser/electron_browser_client.cc b/shell/browser/electron_browser_client.cc
+--- a/shell/browser/electron_browser_client.cc
++++ b/shell/browser/electron_browser_client.cc
+@@ -1709,6 +1709,9 @@ void ElectronBrowserClient::RegisterAssociatedInterfaceBindersForServiceWorker(
+   associated_registry.AddInterface<extensions::mojom::ServiceWorkerHost>(
+       base::BindRepeating(&extensions::ServiceWorkerHost::BindReceiver,
+                           service_worker_version_info.process_id));
++  associated_registry.AddInterface<extensions::mojom::EventRouter>(
++      base::BindRepeating(&extensions::EventRouter::BindForRenderer,
++                          service_worker_version_info.process_id));
+ #endif
+ }
+ 

@@ -1,0 +1,186 @@
+diff --git a/shell/browser/api/electron_api_extensions.cc b/shell/browser/api/electron_api_extensions.cc
+--- a/shell/browser/api/electron_api_extensions.cc
++++ b/shell/browser/api/electron_api_extensions.cc
+@@ -5,12 +5,17 @@
+ #include "shell/browser/api/electron_api_extensions.h"
+ 
+ #include "chrome/browser/browser_process.h"
++#include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_registry.h"
++#include "extensions/browser/permissions/active_tab_permission_granter.h"
+ #include "gin/data_object_builder.h"
+ #include "gin/object_template_builder.h"
++#include "shell/browser/api/electron_api_web_contents.h"
+ #include "shell/browser/electron_browser_context.h"
++#include "shell/browser/extensions/electron_extension_web_contents_observer.h"
+ #include "shell/browser/extensions/electron_extension_system.h"
+ #include "shell/browser/javascript_environment.h"
++#include "shell/common/gin_converters/content_converter.h"
+ #include "shell/common/gin_converters/extension_converter.h"
+ #include "shell/common/gin_converters/file_path_converter.h"
+ #include "shell/common/gin_converters/gurl_converter.h"
+@@ -123,6 +128,45 @@ v8::Local<v8::Value> Extensions::GetAllExtensions(v8::Isolate* isolate) {
+   return gin::ConvertToV8(isolate, extensions_vector);
+ }
+ 
++bool Extensions::GrantActiveTab(const std::string& extension_id,
++                                content::WebContents* web_contents) {
++  const extensions::Extension* extension =
++      extensions::ExtensionRegistry::Get(browser_context())
++          ->enabled_extensions()
++          .GetByID(extension_id);
++  auto* contents = web_contents ? WebContents::From(web_contents) : nullptr;
++  if (!extension || !contents ||
++      web_contents->GetBrowserContext() != browser_context())
++    return false;
++
++  if (auto* observer =
++          extensions::ElectronExtensionWebContentsObserver::FromWebContents(
++              web_contents)) {
++    web_contents->ForEachRenderFrameHost(
++        [observer](content::RenderFrameHost* render_frame_host) {
++          observer->SetTabIdForFrame(render_frame_host);
++        });
++  }
++
++  // Electron's extension APIs use the WebContents id as the tab id.
++  extensions::ActiveTabPermissionGranter::CreateForWebContents(
++      web_contents, contents->ID(), browser_context());
++  auto* granter =
++      extensions::ActiveTabPermissionGranter::FromWebContents(web_contents);
++  granter->GrantIfRequested(extension);
++  return granter->IsGranted(extension);
++}
++
++void Extensions::RevokeActiveTab(const std::string& extension_id,
++                                 content::WebContents* web_contents) {
++  if (!web_contents)
++    return;
++  auto* granter =
++      extensions::ActiveTabPermissionGranter::FromWebContents(web_contents);
++  if (granter)
++    granter->ClearActiveExtensionAndNotify(extension_id);
++}
++
+ void Extensions::OnExtensionLoaded(content::BrowserContext* browser_context,
+                                    const extensions::Extension* extension) {
+   Emit("extension-loaded", extension);
+@@ -148,7 +192,9 @@ gin::ObjectTemplateBuilder Extensions::GetObjectTemplateBuilder(
+       .SetMethod("loadExtension", &Extensions::LoadExtension)
+       .SetMethod("removeExtension", &Extensions::RemoveExtension)
+       .SetMethod("getExtension", &Extensions::GetExtension)
+-      .SetMethod("getAllExtensions", &Extensions::GetAllExtensions);
++      .SetMethod("getAllExtensions", &Extensions::GetAllExtensions)
++      .SetMethod("grantActiveTab", &Extensions::GrantActiveTab)
++      .SetMethod("revokeActiveTab", &Extensions::RevokeActiveTab);
+ }
+ 
+ const gin::WrapperInfo* Extensions::wrapper_info() const {
+diff --git a/shell/browser/api/electron_api_extensions.h b/shell/browser/api/electron_api_extensions.h
+--- a/shell/browser/api/electron_api_extensions.h
++++ b/shell/browser/api/electron_api_extensions.h
+@@ -10,6 +10,10 @@
+ #include "gin/wrappable.h"
+ #include "shell/browser/event_emitter_mixin.h"
+ 
++namespace content {
++class WebContents;
++}
++
+ namespace electron {
+ 
+ class ElectronBrowserContext;
+@@ -42,6 +46,10 @@ class Extensions final : public gin::Wrappable<Extensions>,
+   v8::Local<v8::Value> GetExtension(v8::Isolate* isolate,
+                                     const std::string& extension_id);
+   v8::Local<v8::Value> GetAllExtensions(v8::Isolate* isolate);
++  bool GrantActiveTab(const std::string& extension_id,
++                      content::WebContents* web_contents);
++  void RevokeActiveTab(const std::string& extension_id,
++                       content::WebContents* web_contents);
+ 
+   // extensions::ExtensionRegistryObserver:
+   void OnExtensionLoaded(content::BrowserContext* browser_context,
+diff --git a/shell/browser/extensions/electron_extension_web_contents_observer.cc b/shell/browser/extensions/electron_extension_web_contents_observer.cc
+--- a/shell/browser/extensions/electron_extension_web_contents_observer.cc
++++ b/shell/browser/extensions/electron_extension_web_contents_observer.cc
+@@ -3,7 +3,10 @@
+ // found in the LICENSE file.
+ 
+ #include "shell/browser/extensions/electron_extension_web_contents_observer.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents_user_data.h"
++#include "extensions/common/mojom/frame.mojom.h"
++#include "shell/browser/api/electron_api_web_contents.h"
+ 
+ namespace extensions {
+ 
+@@ -25,6 +28,30 @@ void ElectronExtensionWebContentsObserver::CreateForWebContents(
+   FromWebContents(web_contents)->Initialize();
+ }
+ 
++void ElectronExtensionWebContentsObserver::InitializeRenderFrame(
++    content::RenderFrameHost* render_frame_host) {
++  ExtensionWebContentsObserver::InitializeRenderFrame(render_frame_host);
++  SetTabIdForFrame(render_frame_host);
++}
++
++void ElectronExtensionWebContentsObserver::RenderFrameDeleted(
++    content::RenderFrameHost* render_frame_host) {
++  ExtensionWebContentsObserver::RenderFrameDeleted(render_frame_host);
++  frames_with_tab_id_.erase(render_frame_host->GetGlobalId());
++}
++
++void ElectronExtensionWebContentsObserver::SetTabIdForFrame(
++    content::RenderFrameHost* render_frame_host) {
++  auto* contents = electron::api::WebContents::From(web_contents());
++  if (!contents || !render_frame_host->IsRenderFrameLive() ||
++      frames_with_tab_id_.contains(render_frame_host->GetGlobalId()))
++    return;
++  if (auto* local_frame = GetLocalFrame(render_frame_host)) {
++    local_frame->SetTabId(contents->ID());
++    frames_with_tab_id_.insert(render_frame_host->GetGlobalId());
++  }
++}
++
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(ElectronExtensionWebContentsObserver);
+ 
+ }  // namespace extensions
+diff --git a/shell/browser/extensions/electron_extension_web_contents_observer.h b/shell/browser/extensions/electron_extension_web_contents_observer.h
+--- a/shell/browser/extensions/electron_extension_web_contents_observer.h
++++ b/shell/browser/extensions/electron_extension_web_contents_observer.h
+@@ -5,6 +5,8 @@
+ #ifndef ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_WEB_CONTENTS_OBSERVER_H_
+ #define ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_WEB_CONTENTS_OBSERVER_H_
+ 
++#include "base/containers/flat_set.h"
++#include "content/public/browser/global_routing_id.h"
+ #include "content/public/browser/web_contents_user_data.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
+ 
+@@ -28,6 +30,16 @@ class ElectronExtensionWebContentsObserver
+   // |web_contents|, if it doesn't already exist.
+   static void CreateForWebContents(content::WebContents* web_contents);
+ 
++  // Tells the renderer which tab a frame belongs to, so tab-specific
++  // permissions such as activeTab apply to it. The renderer accepts this once
++  // per frame.
++  void SetTabIdForFrame(content::RenderFrameHost* render_frame_host);
++
++ protected:
++  void InitializeRenderFrame(
++      content::RenderFrameHost* render_frame_host) override;
++  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
++
+  private:
+   friend class content::WebContentsUserData<
+       ElectronExtensionWebContentsObserver>;
+@@ -35,6 +47,8 @@ class ElectronExtensionWebContentsObserver
+   explicit ElectronExtensionWebContentsObserver(
+       content::WebContents* web_contents);
+ 
++  base::flat_set<content::GlobalRenderFrameHostId> frames_with_tab_id_;
++
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+ 
