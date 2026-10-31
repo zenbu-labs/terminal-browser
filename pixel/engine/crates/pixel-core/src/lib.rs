@@ -29,7 +29,7 @@ pub mod wrapper;
 mod tree;
 mod wrap;
 
-pub use canvas::{Canvas, Frame, measure_text};
+pub use canvas::{Canvas, Frame, Move, measure_text};
 pub use desc::Desc;
 pub use engine::{
     ChangeSource, DragPhase, Engine, EngineConfig, EngineEvent, FrameStats, HighlightArea,

@@ -769,6 +769,8 @@ dependencies = [
 name = "pixel-bridge"
 version = "0.1.0"
 dependencies = [
+ "image",
+ "libc",
  "napi",
  "napi-derive",
  "pixel-core",

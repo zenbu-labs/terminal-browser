@@ -11,6 +11,7 @@ use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
 
 mod opaque;
+pub(crate) use opaque::painted_rects;
 
 pub use opaque::opaque_areas;
 use opaque::collect_surface_occluders;
@@ -641,19 +642,7 @@ fn paint_shape(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
     let Some(props) = &node.shape else {
         return;
     };
-    let rect = node.abs;
-    let scale = match props.view_box {
-        Some(view_box) if view_box > 0.0 => rect.w.min(rect.h) / view_box,
-        _ => 1.0,
-    };
-    if scale <= 0.0 {
-        return;
-    }
-    let Some(path) = crate::shape::build_path(&props.cmds) else {
-        return;
-    };
-    let to_screen = tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, rect.x, rect.y);
-    let Some(path) = path.transform(to_screen) else {
+    let Some((path, scale)) = crate::shape::placed_path(props, node.abs) else {
         return;
     };
     canvas.stroke_path(

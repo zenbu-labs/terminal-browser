@@ -24,5 +24,9 @@ tree-sitter-json = "0.24.8"
 tree-sitter-bash = "0.25.1"
 similar = { version = "3.1.1", features = ["text", "inline"] }
 
+[dev-dependencies]
+image = { workspace = true }
+libc = { workspace = true }
+
 [lints]
 workspace = true

@@ -12,6 +12,10 @@ pub struct PixelFrame {
     pub premultiplied: bool,
     pub rects: *const u32,
     pub rect_count: u32,
+    pub moves: *const i32,
+    pub move_count: u32,
+    pub work_ms: f32,
+    pub kind: u32,
 }
 
 #[repr(C)]
@@ -50,11 +54,12 @@ impl SharedCallbacks {
 pub(crate) struct Host {
     callbacks: SharedCallbacks,
     rects: Vec<u32>,
+    moves: Vec<i32>,
 }
 
 impl Host {
     pub(crate) fn new(callbacks: SharedCallbacks) -> Self {
-        Self { callbacks, rects: Vec::new() }
+        Self { callbacks, rects: Vec::new(), moves: Vec::new() }
     }
 }
 
@@ -67,6 +72,11 @@ impl DeviceHost for Host {
         for rect in frame.repainted.iter().chain(frame.changed) {
             self.rects.extend([rect.x, rect.y, rect.w, rect.h]);
         }
+        self.moves.clear();
+        for shift in frame.moves {
+            let r = shift.rect;
+            self.moves.extend([r.x as i32, r.y as i32, r.w as i32, r.h as i32, shift.dy]);
+        }
         let canvas = frame.canvas;
         let presented = PixelFrame {
             rgba: canvas.pixels.as_ptr(),
@@ -75,6 +85,10 @@ impl DeviceHost for Host {
             premultiplied: frame.premultiplied,
             rects: self.rects.as_ptr(),
             rect_count: (self.rects.len() / 4) as u32,
+            moves: self.moves.as_ptr(),
+            move_count: (self.moves.len() / 5) as u32,
+            work_ms: frame.work_ms,
+            kind: u32::from(frame.kind),
         };
         (callbacks.present)(callbacks.context, &presented);
         Ok(canvas.pixels.len())

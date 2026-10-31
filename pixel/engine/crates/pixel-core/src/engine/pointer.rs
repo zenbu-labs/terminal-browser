@@ -563,11 +563,11 @@ impl Engine {
         if hover == self.hover {
             return;
         }
-        if let Some((old, _)) = self.hover {
-            self.comp.views[old].tree.mark_paint();
+        if let Some((old, id)) = self.hover {
+            self.comp.views[old].tree.mark_node_changed(id);
         }
-        if let Some((new, _)) = hover {
-            self.comp.views[new].tree.mark_paint();
+        if let Some((new, id)) = hover {
+            self.comp.views[new].tree.mark_node_changed(id);
         }
         self.hover = hover;
     }

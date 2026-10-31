@@ -15,6 +15,10 @@ typedef struct {
   bool premultiplied;
   const uint32_t *rects;
   uint32_t rect_count;
+  const int32_t *moves;
+  uint32_t move_count;
+  float work_ms;
+  uint32_t kind;
 } PixelFrame;
 
 typedef struct {

@@ -21,6 +21,41 @@ pub fn opaque_areas(tree: &Tree) -> Opaque {
     }
 }
 
+pub(crate) fn painted_rects(node: &crate::tree::RNode) -> Vec<PxRect> {
+    let rect = node.abs;
+    let visible_background = match &node.style.background {
+        Some(crate::style::Paint::Solid(color)) => color[3] > 0, 
+        Some(crate::style::Paint::Gradient(_)) => true,
+        None => false,
+    };
+    let content = visible_background
+        || node.surface.is_some()
+        || node.text.is_some()
+        || !node.spans.is_empty()
+        || node.image.is_some()
+        || node.shape.is_some()
+        || node.input.is_some();
+    let mut painted: Vec<PxRect> = Vec::new();
+    if content {
+        painted.push(rect);
+    } else if let Some(border) = node.style.border {
+        let side = |s: Option<crate::style::BorderSide>| s.filter(|s| s.width > 0.0 && s.color[3] > 0).map(|s| s.width);
+        if let Some(w) = side(border.top) {
+            painted.push(PxRect { x: rect.x, y: rect.y, w: rect.w, h: w });
+        }
+        if let Some(w) = side(border.bottom) {
+            painted.push(PxRect { x: rect.x, y: rect.y + rect.h - w, w: rect.w, h: w });
+        }
+        if let Some(w) = side(border.left) {
+            painted.push(PxRect { x: rect.x, y: rect.y, w, h: rect.h });
+        }
+        if let Some(w) = side(border.right) {
+            painted.push(PxRect { x: rect.x + rect.w - w, y: rect.y, w, h: rect.h });
+        }
+    }
+    painted
+}
+
 fn whole_pixels(area: PxRect) -> Option<crate::surfaces::Rect> {
     let x = area.x.ceil().max(0.0);
     let y = area.y.ceil().max(0.0);
@@ -64,36 +99,7 @@ fn collect_opaque_areas(tree: &Tree, id: NodeId, clip: Option<PxRect>, areas: &m
         return;
     }
     let rect = node.abs;
-    let visible_background = match &node.style.background {
-        Some(crate::style::Paint::Solid(color)) => color[3] > 0, 
-        Some(crate::style::Paint::Gradient(_)) => true,
-        None => false,
-    };
-    let content = visible_background
-        || node.surface.is_some()
-        || node.text.is_some()
-        || !node.spans.is_empty()
-        || node.image.is_some()
-        || node.shape.is_some()
-        || node.input.is_some();
-    let mut painted: Vec<PxRect> = Vec::new();
-    if content {
-        painted.push(rect);
-    } else if let Some(border) = node.style.border {
-        let side = |s: Option<crate::style::BorderSide>| s.filter(|s| s.width > 0.0 && s.color[3] > 0).map(|s| s.width);
-        if let Some(w) = side(border.top) {
-            painted.push(PxRect { x: rect.x, y: rect.y, w: rect.w, h: w });
-        }
-        if let Some(w) = side(border.bottom) {
-            painted.push(PxRect { x: rect.x, y: rect.y + rect.h - w, w: rect.w, h: w });
-        }
-        if let Some(w) = side(border.left) {
-            painted.push(PxRect { x: rect.x, y: rect.y, w, h: rect.h });
-        }
-        if let Some(w) = side(border.right) {
-            painted.push(PxRect { x: rect.x + rect.w - w, y: rect.y, w, h: rect.h });
-        }
-    }
+    let mut painted = painted_rects(node);
     if let Some(clip) = clip {
         painted = painted.into_iter().map(|p| p.intersect(clip)).filter(|p| p.w > 0.0 && p.h > 0.0).collect();
     }

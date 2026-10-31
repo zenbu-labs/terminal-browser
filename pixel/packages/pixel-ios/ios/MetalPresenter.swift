@@ -29,6 +29,7 @@ final class MetalPresenter {
   private let queue: MTLCommandQueue
   private let pipeline: MTLRenderPipelineState
   private var texture: MTLTexture?
+  private var scratch: MTLTexture?
   private var staging: [MTLBuffer?] = Array(repeating: nil, count: MetalPresenter.inFlight)
   private var next = 0
   private var premultiplied = false
@@ -65,20 +66,50 @@ final class MetalPresenter {
       descriptor.usage = .shaderRead
       descriptor.storageMode = .private
       texture = device.makeTexture(descriptor: descriptor)
+      scratch = device.makeTexture(descriptor: descriptor)
       fresh = true
     }
-    guard let texture, let commands = queue.makeCommandBuffer() else {
+    guard let texture, let scratch, let commands = queue.makeCommandBuffer() else {
       slots.signal()
       return
     }
+    if !fresh { shift(Self.moves(frame), in: texture, through: scratch, width: width, height: height, commands: commands) }
     let damage = fresh ? [MTLRegionMake2D(0, 0, width, height)] : Self.regions(frame.rects, Int(frame.rect_count), width: width, height: height)
     let uploaded = upload(damage, from: rgba, width: width, to: texture, commands: commands)
     premultiplied = frame.premultiplied
     let cpuMs = (CACurrentMediaTime() - started) * 1000
     let slots = self.slots
     commands.addCompletedHandler { _ in slots.signal() }
+    stats.built(kind: Int(frame.kind), workMs: Double(frame.work_ms))
     draw(texture, premultiplied: frame.premultiplied, commands: commands, started: started, cpuMs: cpuMs, uploadedPixels: uploaded)
     commands.commit()
+  }
+
+  private static func moves(_ frame: PixelFrame) -> [(MTLRegion, Int)] {
+    guard let moves = frame.moves else { return [] }
+    return (0..<Int(frame.move_count)).map { i in
+      let m = moves + i * 5
+      return (MTLRegionMake2D(Int(m[0]), Int(m[1]), Int(m[2]), Int(m[3])), Int(m[4]))
+    }
+  }
+
+  private func shift(_ moves: [(MTLRegion, Int)], in texture: MTLTexture, through scratch: MTLTexture, width: Int, height: Int, commands: MTLCommandBuffer) {
+    var landing: [(MTLRegion, MTLOrigin)] = []
+    guard !moves.isEmpty, let lift = commands.makeBlitCommandEncoder() else { return }
+    for (region, dy) in moves {
+      guard let area = Self.clamped(region, width: width, height: height), area.size.height > abs(dy) else { continue }
+      let from = MTLRegionMake2D(area.origin.x, area.origin.y + (dy < 0 ? -dy : 0), area.size.width, area.size.height - abs(dy))
+      lift.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: from.origin, sourceSize: from.size,
+                to: scratch, destinationSlice: 0, destinationLevel: 0, destinationOrigin: from.origin)
+      landing.append((from, MTLOrigin(x: from.origin.x, y: from.origin.y + dy, z: 0)))
+    }
+    lift.endEncoding()
+    guard let place = commands.makeBlitCommandEncoder() else { return }
+    for (from, to) in landing {
+      place.copy(from: scratch, sourceSlice: 0, sourceLevel: 0, sourceOrigin: from.origin, sourceSize: from.size,
+                 to: texture, destinationSlice: 0, destinationLevel: 0, destinationOrigin: to)
+    }
+    place.endEncoding()
   }
 
   func redraw() {
@@ -189,6 +220,17 @@ final class FrameStats {
   private var wall: [Double] = []
   private var cpu: [Double] = []
   private var pixels: [Int] = []
+  private var work: [Double] = []
+  private var kinds: [Int: Int] = [:]
+  private static let kindNames = [0: "damaged", 1: "patched", 2: "tooMuchChanged", 3: "manyScrolls", 4: "farScroll", 5: "everything", 6: "first"]
+
+  func built(kind: Int, workMs: Double) {
+    lock.lock()
+    defer { lock.unlock() }
+    kinds[kind, default: 0] += 1
+    work.append(workMs)
+    if work.count > Self.kept { work = work.suffix(Self.kept / 2) }
+  }
 
   func presented(at time: CFTimeInterval, wallMs: Double, cpuMs: Double, pixels uploaded: Int) {
     guard time > 0 else { return }
@@ -217,6 +259,8 @@ final class FrameStats {
       wall = []
       cpu = []
       pixels = []
+      work = []
+      kinds = [:]
       lock.unlock()
     }
     func percentile(_ values: [Double], _ p: Double) -> Double {
@@ -228,6 +272,8 @@ final class FrameStats {
     return [
       "frames": intervals.count,
       "intervalMs": ["p50": percentile(intervals, 0.5), "p95": percentile(intervals, 0.95), "max": intervals.max() ?? 0],
+      "engineMs": spread(work),
+      "kinds": Dictionary(uniqueKeysWithValues: kinds.map { (Self.kindNames[$0.key] ?? "\($0.key)", $0.value) }),
       "presentCpuMs": spread(cpu),
       "presentWallMs": spread(wall),
       "uploadedMpx": pixels.isEmpty ? 0 : Double(pixels.reduce(0, +)) / Double(pixels.count) / 1e6,

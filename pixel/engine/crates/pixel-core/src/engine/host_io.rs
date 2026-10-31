@@ -215,6 +215,10 @@ impl Io {
         self.tty().is_some_and(Terminal::relayed)
     }
 
+    pub fn keeps_frames(&self) -> bool {
+        self.tty().is_none()
+    }
+
     pub fn draws_locally(&self) -> bool {
         self.tty().is_none_or(Terminal::draws_locally)
     }

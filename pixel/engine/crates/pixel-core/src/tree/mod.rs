@@ -70,6 +70,10 @@ impl PxRect {
             h: ((self.y + self.h).min(other.y + other.h) - y).max(0.0),
         }
     }
+
+    pub fn outset(&self, by: f32) -> PxRect {
+        PxRect { x: self.x - by, y: self.y - by, w: self.w + 2.0 * by, h: self.h + 2.0 * by }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -250,6 +254,9 @@ pub(crate) struct RNode {
     pub taffy: taffy::NodeId,
     pub scroll: ScrollState,
     pub scroll_max: f32,
+    pub painted_scroll: Option<f32>,
+    pub painted_at: Option<PxRect>,
+    pub clip: Option<PxRect>,
     pub content_height: Option<f32>,
     pub shape: Option<ShapeProps>,
     pub scroll_events: bool,
@@ -305,7 +312,11 @@ pub struct Tree {
     needs_layout: bool,
     needs_place: bool,
     needs_paint: bool,
+    paint_all: bool,
+    changed_nodes: Vec<NodeId>,
+    removed_rects: Vec<PxRect>,
     changed_surfaces: Vec<u32>,
+    whole_pixel_scroll: bool,
 }
 
 pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
@@ -342,7 +353,11 @@ impl Tree {
             needs_layout: true,
             needs_place: true,
             needs_paint: true,
+            paint_all: true,
+            changed_nodes: Vec::new(),
+            removed_rects: Vec::new(),
             changed_surfaces: Vec::new(),
+            whole_pixel_scroll: false,
         };
         let root = tree.create(Props {
             style: Style {
@@ -379,6 +394,7 @@ impl Tree {
             }
             self.focus = id;
             self.needs_paint = true;
+            self.paint_all = true;
         }
     }
 
@@ -458,6 +474,9 @@ impl Tree {
             taffy,
             scroll: ScrollState::default(),
             scroll_max: 0.0,
+            painted_scroll: None,
+            painted_at: None,
+            clip: None,
             content_height: props.content_height,
             shape: props.shape,
             scroll_events: props.scroll_events,
@@ -569,6 +588,10 @@ impl Tree {
         while let Some(id) = stack.pop() {
             let node = self.node_mut(id);
             stack.append(&mut node.children);
+            if let Some(at) = node.painted_at {
+                self.removed_rects.push(at);
+            }
+            let node = self.node_mut(id);
             let taffy = node.taffy;
             let key = node.key.take();
             let slot = &mut self.slots[id.index as usize];
@@ -773,6 +796,7 @@ impl Tree {
         }
         if changed {
             self.needs_paint = true;
+            self.changed_nodes.push(id);
         }
     }
 
@@ -820,6 +844,7 @@ impl Tree {
             }
         }
         self.needs_paint = true;
+        self.changed_nodes.push(id);
     }
 
     pub fn text_of(&self, id: NodeId) -> Option<&str> {
@@ -899,6 +924,133 @@ impl Tree {
             .set_style(taffy, to_taffy(&style, hidden, false))
             .expect("taffy style");
         self.needs_layout = true;
+        self.paint_all = true;
+    }
+
+    pub(crate) fn only_scrolled(&self) -> bool {
+        self.needs_place && !self.needs_layout && !self.needs_paint
+    }
+
+    pub(crate) fn scroll_shifts(&self) -> Vec<(NodeId, PxRect, i32)> {
+        self.scrollables
+            .iter()
+            .filter_map(|&id| {
+                let node = self.get(id)?;
+                let now = node.scroll.position.round();
+                let before = node.painted_scroll?;
+                (before != now).then(|| (id, node.visible, (before - now) as i32))
+            })
+            .collect()
+    }
+
+    pub(crate) fn only_nodes_changed(&self) -> bool {
+        !self.paint_all
+    }
+
+    pub(crate) fn node_damage(&mut self, shift: Option<(NodeId, i32)>) -> Vec<PxRect> {
+        let mut damage = std::mem::take(&mut self.removed_rects);
+        if let Some((_, dy)) = shift {
+            let shifted: Vec<PxRect> = damage.iter().map(|r| PxRect { y: r.y + dy as f32, ..*r }).collect();
+            damage.extend(shifted);
+        }
+        let mut changed: HashSet<NodeId> = std::mem::take(&mut self.changed_nodes).into_iter().collect();
+        let mut content: HashSet<NodeId> = shift.map(|(id, _)| id).into_iter().collect();
+        for &id in &self.paint_order {
+            let Some(node) = self.get(id) else { continue };
+            let parent = node.parent;
+            if parent.is_some_and(|p| changed.contains(&p)) {
+                changed.insert(id);
+            }
+            let in_content = parent.is_some_and(|p| content.contains(&p));
+            if in_content {
+                content.insert(id);
+            }
+            let moved = if in_content { shift.map_or(0, |(_, dy)| dy) } else { 0 };
+            let expected = node.painted_at.map(|r| PxRect { y: r.y + moved as f32, ..r });
+            let now = paint_extent(node);
+            if changed.contains(&id) || expected != now {
+                damage.extend(expected);
+                damage.extend(now);
+            }
+        }
+        damage
+    }
+
+    fn drawn_scrollbar(&self, id: NodeId) -> Vec<PxRect> {
+        let (Some(node), Some(bar)) = (self.get(id), self.scrollbar_rects(id)) else {
+            return Vec::new();
+        };
+        match (node.bar.opacity > 0.0, node.bar.expand > 0.0) {
+            (false, _) => Vec::new(),
+            (true, false) => vec![bar.thumb],
+            (true, true) => vec![bar.thumb, bar.track],
+        }
+    }
+
+    pub(crate) fn path_painted_extents(&self) -> Vec<PxRect> {
+        self.paint_order
+            .iter()
+            .filter_map(|&id| self.get(id))
+            .filter(|node| {
+                matches!(node.style.background, Some(crate::style::Paint::Gradient(_)))
+                    || node.style.corner_radius.iter().any(|r| *r > 0.0)
+                    || node.image.is_some()
+                    || node.shape.is_some()
+            })
+            .filter_map(paint_extent)
+            .chain(self.scrollables.iter().flat_map(|&id| self.drawn_scrollbar(id)))
+            .collect()
+    }
+
+    pub(crate) fn mark_nodes_painted(&mut self) {
+        self.paint_all = false;
+        self.changed_nodes.clear();
+        self.removed_rects.clear();
+        for id in self.paint_order.clone() {
+            if let Some(node) = self.get_mut(id) {
+                node.painted_at = paint_extent(node);
+            }
+        }
+    }
+
+    pub(crate) fn mark_scrolls_painted(&mut self) {
+        for id in self.scrollables.clone() {
+            if let Some(node) = self.get_mut(id) {
+                node.painted_scroll = Some(node.scroll.position.round());
+            }
+        }
+    }
+
+    pub(crate) fn fixed_paint_over(&self, scroll: NodeId, area: PxRect) -> Vec<PxRect> {
+        let mut ancestors = HashSet::new();
+        let mut at = Some(scroll);
+        while let Some(id) = at {
+            ancestors.insert(id);
+            at = self.get(id).and_then(|node| node.parent);
+        }
+        let mut content = HashSet::from([scroll]);
+        let mut out = Vec::new();
+        for &id in &self.paint_order {
+            let Some(node) = self.get(id) else { continue };
+            if node.parent.is_some_and(|parent| content.contains(&parent)) {
+                content.insert(id);
+                continue;
+            }
+            if ancestors.contains(&id) {
+                continue;
+            }
+            for rect in drawn_rects(node) {
+                let hit = rect.intersect(area);
+                if hit.w > 0.0 && hit.h > 0.0 {
+                    out.push(hit);
+                }
+            }
+        }
+        out.extend(self.drawn_scrollbar(scroll).into_iter().map(|bar| bar.intersect(area)));
+        if let Some(node) = self.get(scroll) {
+            out.extend(border_strips(node).into_iter().map(|strip| strip.intersect(area)).filter(|strip| strip.w > 0.0 && strip.h > 0.0));
+        }
+        out
     }
 
     pub fn dirty(&self) -> bool {
@@ -928,8 +1080,24 @@ impl Tree {
         self.changed_surfaces.push(surface);
     }
 
+    pub(crate) fn mark_node_changed(&mut self, id: NodeId) {
+        if self.get(id).is_some() {
+            self.needs_paint = true;
+            self.changed_nodes.push(id);
+        }
+    }
+
+    pub(crate) fn set_whole_pixel_scroll(&mut self, on: bool) {
+        if self.whole_pixel_scroll != on {
+            self.whole_pixel_scroll = on;
+            self.needs_place = true;
+            self.paint_all = true;
+        }
+    }
+
     pub(crate) fn mark_paint(&mut self) {
         self.needs_paint = true;
+        self.paint_all = true;
     }
 
     pub(crate) fn clear_paint_flag(&mut self) {
@@ -942,6 +1110,7 @@ impl Tree {
 
     pub(crate) fn mark_layout(&mut self) {
         self.needs_layout = true;
+        self.paint_all = true;
     }
 
     pub fn flush_layout(&mut self, registry: &mut crate::fonts::FontRegistry, base_px: f32) {
@@ -1232,6 +1401,7 @@ impl Tree {
         let node = self.node_mut(id);
         node.abs = rect;
         node.visible = visible;
+        node.clip = clip;
         node.text_offset_y = text_offset_y;
         let scrolls = node.style.overflow == Overflow::Scroll;
         if scrolls {
@@ -1251,7 +1421,8 @@ impl Tree {
 
         let node = self.node(id);
         let child_origin = if scrolls {
-            (rect.x, rect.y - node.scroll.position)
+            let offset = if self.whole_pixel_scroll { node.scroll.position.round() } else { node.scroll.position };
+            (rect.x, rect.y - offset)
         } else {
             (rect.x, rect.y)
         };
@@ -1777,6 +1948,7 @@ impl Tree {
         let selected = self.with_doc(|doc, tree| doc.select_down(tree, point, fonts));
         if selected {
             self.needs_paint = true;
+            self.paint_all = true;
         }
         selected
     }
@@ -1785,6 +1957,7 @@ impl Tree {
         let selected = self.with_doc(|doc, tree| doc.select_down_near(tree, point, fonts));
         if selected {
             self.needs_paint = true;
+            self.paint_all = true;
         }
         selected
     }
@@ -1792,6 +1965,7 @@ impl Tree {
     pub fn doc_select_drag(&mut self, point: (f32, f32), fonts: &[crate::fonts::Font]) {
         if self.with_doc(|doc, tree| doc.select_drag(tree, point, fonts)) {
             self.needs_paint = true;
+            self.paint_all = true;
         }
     }
 
@@ -1803,6 +1977,7 @@ impl Tree {
         let selected = self.with_doc(|doc, tree| doc.select_all(tree));
         if selected {
             self.needs_paint = true;
+            self.paint_all = true;
         }
         selected
     }
@@ -1811,6 +1986,7 @@ impl Tree {
         let (had, changed) = self.with_doc(|doc, tree| doc.collapse(tree));
         if changed {
             self.needs_paint = true;
+            self.paint_all = true;
         }
         had
     }
@@ -1819,6 +1995,7 @@ impl Tree {
         let moved = self.with_doc(|doc, tree| doc.extend(tree, left, granularity));
         if moved {
             self.needs_paint = true;
+            self.paint_all = true;
         }
         moved
     }
@@ -1827,6 +2004,7 @@ impl Tree {
         let moved = self.with_doc(|doc, tree| doc.extend_edge(tree, up));
         if moved {
             self.needs_paint = true;
+            self.paint_all = true;
         }
         moved
     }
@@ -1835,6 +2013,7 @@ impl Tree {
         let moved = self.with_doc(|doc, tree| doc.extend_vertical(tree, up, fonts));
         if moved {
             self.needs_paint = true;
+            self.paint_all = true;
         }
         moved
     }
@@ -1917,3 +2096,57 @@ impl DocLayout for Tree {
 }
 #[cfg(test)]
 mod tests;
+
+fn border_strips(node: &RNode) -> Vec<PxRect> {
+    let Some(border) = node.style.border else {
+        return Vec::new();
+    };
+    let width = |side: Option<crate::style::BorderSide>| side.map_or(0.0, |side| side.width);
+    let r = node.abs;
+    let (top, right, bottom, left) = (width(border.top), width(border.right), width(border.bottom), width(border.left));
+    [
+        PxRect { x: r.x, y: r.y, w: r.w, h: top },
+        PxRect { x: r.x, y: r.y + r.h - bottom, w: r.w, h: bottom },
+        PxRect { x: r.x, y: r.y, w: left, h: r.h },
+        PxRect { x: r.x + r.w - right, y: r.y, w: right, h: r.h },
+    ]
+    .into_iter()
+    .filter(|strip| strip.w > 0.0 && strip.h > 0.0)
+    .collect()
+}
+
+fn paint_extent(node: &RNode) -> Option<PxRect> {
+    drawn_rects(node).into_iter().reduce(|a, b| {
+        let x = a.x.min(b.x);
+        let y = a.y.min(b.y);
+        PxRect { x, y, w: (a.x + a.w).max(b.x + b.w) - x, h: (a.y + a.h).max(b.y + b.h) - y }
+    })
+}
+
+fn drawn_rects(node: &RNode) -> Vec<PxRect> {
+    let bounds = node.clip.unwrap_or(PxRect { x: -1e6, y: -1e6, w: 2e6, h: 2e6 });
+    let mut rects = crate::paint::painted_rects(node);
+    if node.style.hover_background.is_some() {
+        rects.push(node.abs);
+    }
+    if node.text.is_some() || !node.spans.is_empty() {
+        rects.push(ink_reach(node, bounds));
+    }
+    if let Some(reach) = node.shape.as_ref().and_then(|shape| crate::shape::stroked_bounds(shape, node.abs)) {
+        rects.push(reach);
+    }
+    rects.into_iter().map(|r| r.intersect(bounds)).filter(|r| r.w > 0.0 && r.h > 0.0).collect()
+}
+
+fn ink_reach(node: &RNode, bounds: PxRect) -> PxRect {
+    let mut reach = node.abs;
+    if !node.style.wrap && !node.style.ellipsis {
+        reach.x = bounds.x;
+        reach.w = bounds.w;
+    }
+    if !matches!(node.style.height, crate::style::Dimension::Auto) {
+        reach.y = bounds.y;
+        reach.h = bounds.h;
+    }
+    reach
+}

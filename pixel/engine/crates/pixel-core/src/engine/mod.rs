@@ -381,6 +381,7 @@ pub struct Engine {
     max_fps: f32,
     frame_due: Option<Instant>,
     pub stats: FrameStats,
+    pub incremental: bool,
 }
 
 const COLOR_SETTLE_DELAY: Duration = Duration::from_millis(50);
@@ -506,6 +507,7 @@ impl Engine {
             max_fps,
             frame_due: None,
             stats: FrameStats::default(),
+            incremental: std::env::var_os("PIXEL_FULL_REPAINT").is_none(),
         };
         Ok(engine)
     }

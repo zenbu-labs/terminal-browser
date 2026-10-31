@@ -6,10 +6,19 @@ use crate::text_input::{MARK_CHAR, Mark, mark_advance_at};
 pub struct Frame<'a> {
     pub canvas: &'a Canvas,
     pub premultiplied: bool,
+    pub moves: &'a [Move],
     pub changed: &'a [Rect],
     pub repainted: &'a [Rect],
     pub opaque: &'a [OpaqueArea],
     pub ui_over_surfaces: &'a [Rect],
+    pub work_ms: f32,
+    pub kind: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Move {
+    pub rect: Rect,
+    pub dy: i32,
 }
 
 type GlyphKey = (usize, char, u32);
@@ -295,6 +304,7 @@ pub struct Canvas {
     pub height: u32,
     pub pixels: Vec<u8>,
     clip_stack: Vec<(u32, u32, u32, u32)>,
+    region: Option<(u32, u32, u32, u32)>,
     occluders: Vec<(u32, (f32, f32, f32, f32))>,
     next_occluder: u32,
     scratch: Vec<u8>,
@@ -307,6 +317,7 @@ impl Canvas {
             height,
             pixels: vec![0; (width * height * 4) as usize],
             clip_stack: Vec::new(),
+            region: None,
             occluders: Vec::new(),
             next_occluder: 0,
             scratch: Vec::new(),
@@ -320,14 +331,22 @@ impl Canvas {
             height,
             pixels,
             clip_stack: Vec::new(),
+            region: None,
             occluders: Vec::new(),
             next_occluder: 0,
             scratch: Vec::new(),
         }
     }
 
+    pub fn set_region(&mut self, region: Option<Rect>) {
+        self.region = region.map(|r| {
+            let r = r.clamped(self.width, self.height);
+            (r.x, r.y, r.x + r.w, r.y + r.h)
+        });
+    }
+
     pub fn push_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let (cx1, cy1, cx2, cy2) = self.clip_bounds();
+        let (cx1, cy1, cx2, cy2) = self.structural_clip();
         let x1 = (x.round().max(0.0) as u32).clamp(cx1, cx2);
         let y1 = (y.round().max(0.0) as u32).clamp(cy1, cy2);
         let x2 = ((x + w).round().max(0.0) as u32).clamp(x1, cx2);
@@ -365,11 +384,22 @@ impl Canvas {
         inside
     }
 
-    fn clip_bounds(&self) -> (u32, u32, u32, u32) {
+    fn structural_clip(&self) -> (u32, u32, u32, u32) {
         self.clip_stack
             .last()
             .copied()
             .unwrap_or((0, 0, self.width, self.height))
+    }
+
+    fn clip_bounds(&self) -> (u32, u32, u32, u32) {
+        let (x1, y1, x2, y2) = self.structural_clip();
+        match self.region {
+            Some((rx1, ry1, rx2, ry2)) => {
+                let (x1, y1) = (x1.max(rx1), y1.max(ry1));
+                (x1, y1, x2.min(rx2).max(x1), y2.min(ry2).max(y1))
+            }
+            None => (x1, y1, x2, y2),
+        }
     }
 
     // weird impl, but its a fast way to fill an array to a given color without allocating memory beforehand
@@ -384,6 +414,31 @@ impl Canvas {
             let n = done.len().min(rest.len());
             rest[..n].copy_from_slice(&done[..n]);
             filled += n;
+        }
+    }
+
+    pub fn shift_rows(&mut self, region: Rect, dy: i32) {
+        let region = region.clamped(self.width, self.height);
+        let distance = dy.unsigned_abs();
+        if region.is_empty() || distance >= region.h {
+            return;
+        }
+        let stride = self.width as usize * 4;
+        let (left, cols) = (region.x as usize * 4, region.w as usize * 4);
+        let rows = (region.h - distance) as usize;
+        let copy = |pixels: &mut [u8], from: usize, to: usize| {
+            pixels.copy_within(from * stride + left..from * stride + left + cols, to * stride + left);
+        };
+        let top = region.y as usize;
+        let distance = distance as usize;
+        if dy < 0 {
+            for row in 0..rows {
+                copy(&mut self.pixels, top + row + distance, top + row);
+            }
+        } else {
+            for row in (0..rows).rev() {
+                copy(&mut self.pixels, top + row, top + row + distance);
+            }
         }
     }
 
@@ -1277,13 +1332,20 @@ impl Canvas {
             return;
         }
         tally(|s| &s.paths);
-        let unclipped = (cx1, cy1, cx2, cy2) == (0, 0, self.width, self.height);
+        let (sx1, sy1, sx2, sy2) = self.structural_clip();
+        let unclipped = (sx1, sy1, sx2, sy2) == (0, 0, self.width, self.height);
         let inside = unclipped
-            || (bounds.left() - pad >= cx1 as f32
-                && bounds.top() - pad >= cy1 as f32
-                && bounds.right() + pad <= cx2 as f32
-                && bounds.bottom() + pad <= cy2 as f32);
-        if !inside {
+            || (bounds.left() - pad >= sx1 as f32
+                && bounds.top() - pad >= sy1 as f32
+                && bounds.right() + pad <= sx2 as f32
+                && bounds.bottom() + pad <= sy2 as f32);
+        let in_region = self.region.is_none_or(|(rx1, ry1, rx2, ry2)| {
+            (bounds.left() - pad).max(0.0) >= rx1 as f32
+                && (bounds.top() - pad).max(0.0) >= ry1 as f32
+                && (bounds.right() + pad).min(self.width as f32) <= rx2 as f32
+                && (bounds.bottom() + pad).min(self.height as f32) <= ry2 as f32
+        });
+        if !inside || !in_region {
             tally(|s| &s.paths_clipped);
             self.paint_path_clipped(path, paint, stroke, (cx1, cy1, cx2, cy2), pad);
             return;

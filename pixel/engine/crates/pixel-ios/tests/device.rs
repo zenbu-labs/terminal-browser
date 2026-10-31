@@ -1,3 +1,5 @@
+#![allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
