@@ -1,0 +1,17 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "distribution": "internal",
+      "env": { "PIXEL_SKIP_DOWNLOAD": "1" },
+      "ios": {
+        "resourceClass": "m-medium",
+        "image": "latest",
+        "buildConfiguration": "Release"
+      }
+    }
+  }
+}

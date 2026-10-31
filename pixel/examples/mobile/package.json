@@ -1,0 +1,24 @@
+{
+  "name": "pixel-mobile-example",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zenbu-labs/pixel": "file:../../packages/pixel",
+    "@zenbu-labs/pixel-ios": "file:../../packages/pixel-ios",
+    "expo": "~58.0.21",
+    "expo-build-properties": "~58.0.11",
+    "expo-status-bar": "~58.0.4",
+    "react": "19.3.0",
+    "react-native": "0.88.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  }
+}
