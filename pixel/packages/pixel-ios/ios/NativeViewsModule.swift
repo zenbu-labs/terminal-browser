@@ -10,6 +10,7 @@ public class NativeViewsModule: Module {
       NativeViews.kinds["web"] = { id, emit in WebContent(id: id, emit: emit) }
       NativeViews.kinds["video"] = { id, emit in VideoContent(id: id, emit: emit) }
       NativeViews.kinds["input"] = { id, emit in InputContent(id: id, emit: emit) }
+      NativeViews.kinds["menu"] = { id, emit in MenuContent(id: id, emit: emit) }
       PixelRuntime.shared.nativeViews.emit = { [weak self] event in
         self?.sendEvent("onNativeViewEvent", event)
       }

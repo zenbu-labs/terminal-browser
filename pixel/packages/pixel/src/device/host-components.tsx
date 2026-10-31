@@ -1,5 +1,5 @@
 import { createElement, forwardRef } from "react";
-import type { ComponentType, ReactElement, RefAttributes } from "react";
+import type { ComponentType, ReactElement, ReactNode, RefAttributes } from "react";
 
 import { Box, Input as PixelInput } from "../react/components";
 import type { NodeHandle } from "../react/components";
@@ -50,7 +50,25 @@ export type NativeInputProps = Pick<
   "style" | "defaultValue" | "value" | "defaultMarks" | "autoFocus" | "onChange" | "onCaret" | "onSubmit" | "markLabel" | "accessories" | "accessoryMenu" | "onAccessory"
 >;
 
+export interface MenuItem {
+  id: string;
+  title: string;
+  subtitle?: string;
+  symbol?: string;
+  checked?: boolean;
+  children?: MenuItem[];
+  inline?: boolean;
+}
+
+export interface NativeMenuProps {
+  items: MenuItem[];
+  onSelect(id: string): void;
+  children: ReactNode;
+  style?: Style;
+}
+
 export interface HostComponents {
+  NativeMenu?: ComponentType<NativeMenuProps>;
   Input?: ComponentType<NativeInputProps & RefAttributes<NodeHandle>>;
   WebView?: ComponentType<WebViewProps & RefAttributes<WebViewHandle>>;
   Video?: ComponentType<VideoProps>;
@@ -82,3 +100,8 @@ export const Input = forwardRef<NodeHandle, ComposerInputProps>(function Input(p
   const { markLabel: _label, accessories: _accessories, accessoryMenu: _menu, onAccessory: _onAccessory, ...rest } = props;
   return createElement(PixelInput, { ...rest, ref });
 });
+
+export function NativeMenu(props: NativeMenuProps): ReactElement {
+  const Native = registered.NativeMenu;
+  return Native ? createElement(Native, props) : createElement(Box, { style: props.style }, props.children);
+}

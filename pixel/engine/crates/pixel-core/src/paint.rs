@@ -214,7 +214,7 @@ fn paint_node(
             canvas.remove_occluder(token);
         }
         #[cfg(feature = "device")]
-        if tree.native_views() && crate::surfaces::with(surface, |_| ()).is_none() {
+        if tree.native_views() && node.children.is_empty() && crate::surfaces::with(surface, |_| ()).is_none() {
             let hole = crate::surfaces::Rect::covering(rect);
             canvas.fill_rect(hole.x, hole.y, hole.w, hole.h, [0, 0, 0, 0]);
         }
