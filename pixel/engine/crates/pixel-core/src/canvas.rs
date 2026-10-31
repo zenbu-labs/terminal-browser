@@ -33,7 +33,16 @@ fn monospace_advance(font: &crate::fonts::Font, px: f32) -> Option<f32> {
 }
 
 fn draws_itself(font: &crate::fonts::Font, ch: char) -> bool {
-    ch.is_control() || font.lookup_glyph_index(ch) != 0 || (ch.is_whitespace() && font.fallback_for(ch).is_none())
+    ch.is_control() || font.lookup_glyph_index(ch) != 0
+}
+
+fn blank_space(font: &crate::fonts::Font, ch: char) -> bool {
+    ch.is_whitespace() && font.lookup_glyph_index(ch) == 0 && font.fallback_for(ch).is_none()
+}
+
+fn blank_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32 {
+    let space = font.metrics(' ', px).advance_width;
+    monospace_advance(font, px).unwrap_or(space) * cells(ch).max(1) as f32
 }
 
 fn cells(ch: char) -> usize {
@@ -49,6 +58,9 @@ fn natural_fallback_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32
 }
 
 fn glyph_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32 {
+    if blank_space(font, ch) {
+        return blank_advance(font, ch, px);
+    }
     if draws_itself(font, ch) {
         return font.metrics(ch, px).advance_width;
     }
@@ -59,6 +71,10 @@ fn glyph_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32 {
 }
 
 fn rasterize_glyph(font: &crate::fonts::Font, ch: char, px: f32) -> Glyph {
+    if blank_space(font, ch) {
+        let metrics = fontdue::Metrics { advance_width: blank_advance(font, ch, px), ..Default::default() };
+        return Glyph { metrics, pixels: Vec::new(), color: false };
+    }
     if draws_itself(font, ch) {
         let (metrics, pixels) = font.rasterize(ch, px);
         return Glyph { metrics, pixels, color: false };
@@ -1778,5 +1794,16 @@ mod tests {
         canvas.draw_text(&font, "🙂", 4, 30, 24.0, [255, 255, 255, 255]);
         let yellowish = canvas.pixels.chunks_exact(4).any(|p| p[0] > 150 && p[1] > 100 && p[2] < 80);
         assert!(yellowish, "emoji drew without its own colours");
+    }
+
+    #[test]
+    fn a_space_the_font_lacks_draws_blank_not_a_missing_glyph_box() {
+        let font = crate::fonts::Font::single(fontdue::Font::from_bytes(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(), fontdue::FontSettings::default()).unwrap());
+        assert_eq!(font.lookup_glyph_index('\u{202f}'), 0, "the test needs a space the font lacks");
+        assert_eq!(measure_text(&font, "2:24\u{202f}PM", 20.0), measure_text(&font, "2:24 PM", 20.0));
+        let mut canvas = Canvas::new(40, 40);
+        canvas.fill([0, 0, 0, 255]);
+        canvas.draw_text(&font, "\u{202f}", 4, 30, 24.0, [255, 255, 255, 255]);
+        assert!(canvas.pixels.chunks_exact(4).all(|p| p[0] == 0), "U+202F drew ink");
     }
 }
