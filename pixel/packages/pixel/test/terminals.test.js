@@ -236,6 +236,33 @@ test("cmux uses pane frames from the socket and answers with the neighbor's show
   assert.deepEqual(await terminal.neighbor({ id: "s-b1", tab: "ws-1" }, "left"), { id: "s-a", tab: "ws-1" });
 });
 
+test("rex reads block rectangles from the window layout tree", async () => {
+  const layout = {
+    rect: [0, 0, 1, 1],
+    split: {
+      direction: "horizontal",
+      before: { rect: [0, 0, 0.6, 1], block_id: "block:a" },
+      after: {
+        rect: [0.6, 0, 0.4, 1],
+        split: {
+          direction: "vertical",
+          before: { rect: [0.6, 0, 0.4, 0.5], block_id: "block:b" },
+          after: { rect: [0.6, 0.5, 0.4, 0.5], block_id: "block:c" },
+        },
+      },
+    },
+  };
+  const window = JSON.stringify({ layers: [{ kind: "tiled", layout }, { kind: "floating" }] });
+  const { run } = recorder({ "rex window inspect window:1 --json": window });
+  const terminal = detect({ TERM_PROGRAM: "rex", REX_BLOCK: "block:a" }, run);
+  assert.equal(terminal?.name, "rex");
+  const at = (id) => ({ id, tab: "window:1" });
+  assert.deepEqual(await terminal.neighbor(at("block:a"), "right"), at("block:b"));
+  assert.equal(await terminal.neighbor(at("block:a"), "left"), null);
+  assert.deepEqual(await terminal.neighbor(at("block:c"), "up"), at("block:b"));
+  assert.deepEqual(await terminal.neighbor(at("block:c"), "left"), at("block:a"));
+});
+
 const GHOSTTY_ENV = {
   TERM: "xterm-ghostty",
   TERM_PROGRAM: "ghostty",

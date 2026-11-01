@@ -31,12 +31,5 @@ export async function checkTerminal(
 }
 
 export function cannotOpenPanes(terminal: Terminal | null): string {
-  const who = terminal
-    ? `${terminal.name} cannot open panes from a command`
-    : "unrecogonized terminal";
-  const recommendation =
-    process.platform === "darwin"
-      ? "We recommend Ghostty (https://ghostty.org/download)."
-      : "We recommend Kitty (https://sw.kovidgoyal.net/kitty/binary)";
-  return `${who}. ${recommendation}`;
+  return terminal ? `could not open pane (unsupported terminal)` : "unrecognized terminal";
 }
