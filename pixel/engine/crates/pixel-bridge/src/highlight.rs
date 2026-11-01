@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use napi_derive::napi;
 use tree_sitter_highlight::{Highlight, HighlightConfiguration, HighlightEvent, Highlighter};
 
 pub const CAPTURE_NAMES: &[&str] = &[
@@ -119,14 +118,15 @@ fn configs() -> &'static HashMap<&'static str, HighlightConfiguration> {
     })
 }
 
-#[napi(object)]
+#[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HighlightSpan {
     pub start: u32,
     pub end: u32,
     pub capture: u32,
 }
 
-#[napi]
 pub fn highlight(source: String, language: String) -> Vec<HighlightSpan> {
     let Some(name) = canonical(&language) else {
         return Vec::new();
@@ -164,7 +164,6 @@ pub fn highlight(source: String, language: String) -> Vec<HighlightSpan> {
 }
 
 #[cfg_attr(test, allow(dead_code))]
-#[napi]
 pub fn highlight_captures() -> Vec<String> {
     CAPTURE_NAMES.iter().map(|s| s.to_string()).collect()
 }

@@ -8,7 +8,10 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | --- | --- |
 | `packages/pixel/src/index.ts` | everything exported from `@zenbu-labs/pixel` |
 | `packages/pixel/src/root.tsx` | `createRoot`, `RootOptions`, `Root` |
-| `packages/pixel/src/react/index.ts` | engine root, render settings, key events, clipboard functions |
+| `packages/pixel/src/react/index.ts` | engine root (`createEngineRoot` with a `RootPlatform`), render settings, key events, clipboard functions; no node or Electron imports |
+| `packages/pixel/src/react/node.ts` | the terminal's `createRoot` (node platform: stdout resize, process exit, console capture, profile files) and `Link` |
+| `packages/pixel/src/react/binding.ts` | `setBinding`, the engine binding a device host installs instead of `pixel.node` (`@zenbu-labs/pixel/binding`) |
+| `packages/pixel/src/device/` | `@zenbu-labs/pixel/device`: device `createRoot`, host components and their fallbacks, `useSafeArea` |
 | `packages/pixel/src/react/reconciler-config.ts` | props and event types for `Box`, `Text`, `Input`, `Image`, `Path`, `MarkedText` |
 | `packages/pixel/src/react/components.ts` | component definitions, `NodeHandle` |
 | `packages/pixel/src/react/styles.ts` | `Style`, `Color`, borders, gradients |
@@ -28,7 +31,12 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | `packages/pixel/src/electron/index.ts` | `@zenbu-labs/pixel/electron`, re-exports `electron` |
 | `packages/pixel/src/bin.ts` | the `pixel` CLI |
 | `engine/crates/pixel-core/` | Rust engine: layout, painting, terminal output |
+| `engine/crates/pixel-core/src/engine/host_io.rs` | `Io`: where frames go and input comes from, `Tty(Terminal)` or `Device(DeviceIo)` |
+| `engine/crates/pixel-core/src/device.rs` | device hosts (`DeviceHost`, `DeviceInbox`, `DeviceIo`), behind the `device` cargo feature |
+| `engine/crates/pixel-bridge/` | the JSON op/event protocol, default fonts and the markdown/highlight/diff helpers shared by every binding |
 | `engine/crates/pixel-node/` | Node binding for the engine |
+| `engine/crates/pixel-ios/` | the engine as an iOS static library with a C ABI (`include/pixel_ios.h`) |
+| `packages/pixel-ios/` | `@zenbu-labs/pixel-ios`: the Expo module (Swift) that hosts the engine in an iOS app |
 
 ## Examples
 
@@ -43,6 +51,7 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | `examples/tui-host-ts` | TypeScript TUI that embeds a pixel app with `PIXEL_EMBED` |
 | `examples/tui-host` | the same host in Python |
 | `examples/geometry-debug` | WebView with custom chrome and a live panel of engine geometry, resize events and transmits |
+| `examples/mobile` | Expo app on `@zenbu-labs/pixel-ios`: scroll-blit, native Input, web and video, menus, toolbar, safe areas, glyph fallback, crash reports |
 | `../browser` | terminal-browser, the largest pixel app |
 | `../claude-code-plugin` | pixel frames rendered inside a Claude Code pane |
 
@@ -99,10 +108,12 @@ function createRoot(options?: RootOptions): Root
 | `onExit?(code: number)` | called after the root stops; default `app.exit(code)` |
 | `onUnsupportedTerminal?(terminal: Terminal \| null): string` | text written to the terminal when `pixel` found no graphics support; the process then exits 1 |
 | `onRightClick?({ x, y })` | right click outside a WebView |
+| `onTap?(TapEvent)` | left click that didn't drag (down and up within about a cell), outside a WebView. `TapEvent { x, y, target: "input" \| "control" \| "content" }`: `input` is an `Input`, `control` anything with `onClick` or `onDrag`, `content` text or empty space. Fires after the node's `onClick` |
 | `onPaste?(text)` | text paste |
 | `onPasteImage?(image: PastedImage)` | image paste |
 | `onFocus?(focused: boolean)` | terminal focus change |
 | `onVisible?(visible: boolean)` | pane visibility change |
+| `onOsc?(data: string)` | an OSC the terminal sent that pixel doesn't handle itself (not colors, clipboard or 5522), e.g. the reply to a private query sent with `writeTerminal`. `data` is the body without `ESC ]` and the BEL/ST terminator, e.g. `"7717;keyboard=1"`. Replies that arrive while pixel is probing the terminal at startup can be lost, so query after the first render |
 | `onResize?({ width, height, basePx })` | pane resize, pixel size and base font size |
 | `onColors?(colors: TerminalColors)` | terminal color change |
 | `devtools?: boolean` | enables built in devtools; default `NODE_ENV !== "production"` |
@@ -125,6 +136,7 @@ function createRoot(options?: RootOptions): Root
 | `displayScale: number` | device pixel ratio |
 | `hosted: boolean` | true when running as a guest tab or embedded |
 | `setTitle(text)` | sets the terminal title |
+| `writeTerminal(data)` | writes raw bytes to the terminal, e.g. an OSC the terminal understands. Dropped in hosted panes |
 | `setClipboard(text)` | copies via OSC 52 |
 | `requestClipboardImage()` | requests a clipboard image, delivered to `onPasteImage` |
 | `setClearColor(rgba)` | background color behind all content; alpha 0 shows the terminal |
@@ -412,3 +424,105 @@ Rust: `engine/crates/pixel-core/src/terminal/present/`. JS side: `packages/pixel
 - **Patched mode:** used on Ghostty 1.2+ and kitty. Other terminals and tmux get full frames.
 - **tmux:** DCS passthrough plus unicode placeholders.
 - **herdr:** full frames over the herdr graphics socket (`engine/crates/pixel-core/src/herdr.rs`).
+- **Incremental frames:** a frame is built on the previous one. A scroll area whose content moved by whole pixels has its pixels shifted (`Canvas::shift_rows`), then only the strip scrolled into view, what floats over the area, and nodes that changed, moved, appeared or went away are repainted (`engine/frame.rs` `patch_frame`, `tree/mod.rs` `node_damage`, `fixed_paint_over`). Damage that touches a node drawn as a path (gradient, rounded corners, image, `Path`, a visible scrollbar thumb) grows to cover that node, so it is rasterized the same way as in a whole repaint. Over 60% damaged, several scroll areas moved, or anything that isn't one node's look (focus, selection, fonts, size) paints the whole frame. `Frame.kind` says how a frame was built. `PIXEL_FULL_REPAINT=1` turns it off.
+- **Golden frames:** `cargo test -p pixel-bridge --release --test golden -- --ignored` runs scenes (scrolling, streaming text, hover, toggles, selection, borders, gradients, `Path` strokes, images, text drawn past its box, window resizes, a strip appearing above scrolled content) through a real terminal `Engine` on a pty and checks three things: with incremental frames off, every frame hashes as in `tests/golden.txt`; every patched frame equals a whole repaint of it; every whole repaint matches `tests/golden.txt`. It also reads the kitty commands the engine writes and fails if a placement scales its image (`c=`/`r=`) or a whole frame doesn't match the window size. A change that is meant to look different regenerates the goldens with `PIXEL_GOLDEN_WRITE=1`. `PIXEL_GOLDEN_DUMP=<dir>` writes PNGs of frames that differ.
+
+## Hosts
+
+pixel's React tree, layout, painting and input handling are the same everywhere. A host decides where frames go and where input comes from (`engine/host_io.rs`):
+
+| | terminal | device (iOS) |
+| --- | --- | --- |
+| frames | kitty graphics, hosted panes, embedders | `DeviceHost::present` with damaged rects and scroll moves; the app draws them (Metal) |
+| input | escape sequences parsed by `terminal.rs` | `Event`s pushed into a `DeviceInbox` |
+| window | whole cells | exact pixels |
+| JS runtime | node in Electron, `pixel.node` | Hermes in the app, the binding from `setBinding` |
+| WebView | Electron offscreen pages | `WKWebView` placed at the box (host component) |
+| not available | | devtools, surfaces fed from JS, recording, retargeting |
+
+`Io::Device` and everything in `device.rs` compile only with the `device` feature, which `pixel-node` never enables.
+
+## @zenbu-labs/pixel/device
+
+The entry for apps on a device host. It imports nothing from node or Electron (CI bundles it with esbuild `--platform=neutral`).
+
+- `createRoot(options?: DeviceRootOptions): DeviceRoot`: `RootOptions` without the terminal ones (`tty`, `host`, `wrapper`, `sessionEnv`, `devtools`, `cwd`), plus `displayScale`. `onKey` may return `true` when it handled the key. Hosts usually wrap it (`@zenbu-labs/pixel-ios` passes the scale and registers its components).
+- `DeviceRoot` adds `displayScale`, `hostKey(event): boolean` and `hostTap(event)` (a native view hands the app a key or tap), `showKeyboard(visible)`, `haptic(style)`.
+- `useSafeArea(): { top, right, bottom, left }`: insets in pixels the host reports. pixel draws full bleed; apps pad what must stay clear.
+- Components: `Box`, `Text`, `Image`, `MarkedText`, `Path`, `Markdown`, and the host components below. Hooks: `useRect`, `useTerminalColors`, `useStore`. Helpers: `highlight`, `diff`, `parseMarkdown`, `makeTheme`.
+- `registerHostComponents({ Input, WebView, Video, NativeMenu, Toolbar })`, `hostHas(name)`.
+
+### Host components
+
+Each is the same component on every host. Without a registered native one it renders the fallback.
+
+| component | native on iOS | fallback |
+| --- | --- | --- |
+| `Input` (`ComposerInputProps`: `InputProps` + `markLabel(id)`, `accessories: { leading?: "plus", trailing?: "send" \| "stop" }`, `accessoryMenu: { id, title, symbol? }[]`, `onAccessory(name)`) | `UITextView` in a glass field at the Input's box. Marks are chips labelled by `markLabel`. `send` submits, other accessories and menu ids go to `onAccessory`. Return, arrows, escape, tab and ctrl chords go to `root.hostKey` first. Offsets stay UTF-8 bytes. Takes `NativeInputProps` only: `style` (`fontSize`, `color`, `wrap: false` for one line), `value`, `defaultValue`, `defaultMarks`, `autoFocus`, `onChange`, `onCaret`, `onSubmit` and the props above; `renderMark`, `serializeMark`, `caretColor`, `caretShape`, `selectionColor`, `spans`, `gutter`, `activeLine` and `onPasteImage` are ignored | pixel's own `Input` |
+| `WebView` (`src`, `inline`, `hidden`, `onContentHeight`, `onFocusChange`; ref `focus`, `blur`) | `WKWebView` under pixel's frames. A tap focuses it (it then scrolls and takes touches); an `inline` page never takes the swipe and gets taps as clicks. Pages load and navigate only to `https`, `http`, `about`, `blob`, `data:text/html` sources, `data` in subframes, and `file` URLs inside the app bundle | empty `Box` |
+| `Video` (`src`, `headers`, `paused`, `muted`, `loop`, `timeMs`, `onTime`, `onEnd`) | `AVPlayer` under pixel's frames; pauses while hidden | empty `Box` |
+| `NativeMenu` (`items: MenuItem[]`, `onSelect(id)`, children) | `UIMenu` from a transparent button over the pixel-drawn children. `MenuItem { id, title, subtitle?, symbol?, checked?, children?, inline? }` | the children |
+| `Toolbar` (`items: { id, label, symbol, icon?, roomy? }[]`, `onPress(id)`) | glass capsule of SF Symbols. On iPhone Duo the items move into the system's vertical bar; `roomy` items only show there | capsule drawn by pixel from `icon` (24×24 SVG path) |
+
+Native views sit at surface boxes: the engine reports each surface's box and visible part (`DeviceHost::place`), and covers where app UI is drawn over it. Pages and video sit under the frames (a childless surface box is painted as a transparent hole), so sheets and menus drawn by pixel stay on top; a view under opaque UI is hidden and paused. Fields, menus and toolbars sit above the frames and are masked where app UI covers them.
+
+### Device requests
+
+Apps ask hosts for device features with OSC 7717, the same requests ghostty-mobile answers, so `root.writeTerminal` works in a phone terminal too. `DeviceRoot.showKeyboard`, `haptic` and `useSafeArea` wrap them.
+
+| request | answer |
+| --- | --- |
+| `?` | `7717;keyboard=shown\|hidden;screenshot=1;haptics=1;insets=1;host=pixel-ios`, then `insets` |
+| `keyboard=show` / `keyboard=hide` | shows or hides the on-screen keyboard |
+| `haptic=selection\|success\|error\|light\|medium\|heavy` | plays it |
+| `screenshot` | copies the frame to the pasteboard, answers `7717;screenshot=ok\|error` |
+| (sent by the host) | `7717;insets=top,right,bottom,left` in pixels, on start and whenever they change |
+
+## @zenbu-labs/pixel-ios
+
+An Expo module (iOS only) that runs a pixel app as a native app: the engine is linked as `ios/Vendor/PixelEngine.xcframework`, frames are drawn with Metal, touches and keys become pixel input.
+
+```
+npm install @zenbu-labs/pixel @zenbu-labs/pixel-ios react-native expo
+```
+
+- `metro.config.js`: `module.exports = withPixel(getDefaultConfig(__dirname), { pixelRoots: ["src"] })` from `@zenbu-labs/pixel-ios/metro`. The app holds two Reacts: React Native's (19) renders the native shell, pixel's reconciler needs React 18. `withPixel` resolves `react` and `react/jsx-runtime` to the React 18 copy (`react-18`, a dependency of pixel-ios) for files under `@zenbu-labs/pixel`, `react-reconciler`, `@zenbu-labs/pixel-ios/src` and `pixelRoots`; everything else gets React Native's. Keep pixel UI files inside `pixelRoots`.
+- Entry: import `@zenbu-labs/pixel-ios` before any `@zenbu-labs/pixel/device` code (it installs the binding), render `PixelView` as the React Native root, and render the pixel app with its `createRoot`:
+
+```ts
+import { PixelView, createRoot } from "@zenbu-labs/pixel-ios";
+import { registerRootComponent } from "expo";
+import { createElement } from "react";
+import { App } from "./src/App";
+
+const root = createRoot();
+root.render(createElement(App));
+registerRootComponent(() => createElement(PixelView, { style: { flex: 1 } }));
+```
+
+- `createRoot(options?)`: the device root with the screen's scale, and the host components registered.
+- `Pixel`: `textSize()`, `setTextSize(points)` (pinch does the same), `frameStats()` (present intervals, engine time, how frames were built, uploaded megapixels since the last call), `displayScale()`.
+- `crashReports`: `pending(): { name, body }[]` (JSON reports from earlier launches: `rust-panic`, `objc-exception`, `signal`, MetricKit), `remove(name)` (only names `pending()` returned), `crash()` (aborts, for testing). Reports live in `Caches/pixel-crashes`.
+- Touch: tap = click, two-finger tap = right click, long press then drag = drag/selection, pan = scroll with iOS momentum (a hidden `UIScrollView`), pinch = text size, pulling down 60pt hides the keyboard. Hardware keyboards type, with key repeat and ctrl/alt/cmd chords.
+- The engine view takes the whole window (status bar hidden); its size follows the on-screen keyboard and the screen the window is on.
+- `@zenbu-labs/pixel` has a `react@^18` peer and the app has React Native's React 19, so the app's `.npmrc` needs `legacy-peer-deps=true`.
+- The `PIXEL_SKIP_DOWNLOAD=1` env var skips `@zenbu-labs/pixel`'s Electron download when installing in an app.
+- Combined emoji (ZWJ sequences, flags) draw per code point, as in terminals.
+
+### Building the iOS engine
+
+- `packages/pixel-ios/scripts/build-xcframework.sh` builds `pixel-ios` for `aarch64-apple-ios` and `aarch64-apple-ios-sim` with the `release-ios` profile and writes `packages/pixel-ios/ios/Vendor/PixelEngine.xcframework` (gitignored; the release workflow builds it and ships it inside the npm package). `PIXEL_IOS_TARGETS=aarch64-apple-ios-sim PIXEL_IOS_PROFILE=release` is a faster simulator-only build.
+- `pixel_abi_version()` must match `PixelRuntime.expectedAbiVersion`; bump both when the C ABI changes.
+- Code that needs the iOS 27.1 SDK (the Duo's vertical bar) is behind `#if canImport(UIKit, _version: 9127.0.85)`, so older Xcodes build it without that feature.
+
+### Running examples/mobile
+
+`examples/mobile` is outside the pnpm workspace with its own lockfile, and installs `@zenbu-labs/pixel` and `@zenbu-labs/pixel-ios` from the repo as real copies (`install-links=true`), the way an app gets them from npm.
+
+```
+pnpm --filter @zenbu-labs/pixel build
+packages/pixel-ios/scripts/build-xcframework.sh
+cd examples/mobile && PIXEL_SKIP_DOWNLOAD=1 npm install && npx expo run:ios
+```
+
+After changing pixel or pixel-ios, run `npm install` again in `examples/mobile`. pixel's React 18 tree doesn't take Fast Refresh; reload the app.

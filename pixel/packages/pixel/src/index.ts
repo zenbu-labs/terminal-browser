@@ -37,7 +37,6 @@ export {
   MarkedText,
   Path,
   Markdown,
-  Link,
   appLog,
   useTerminalColors,
   setClipboard,
@@ -54,6 +53,8 @@ export {
   useStore,
 } from "./react";
 export type { LogRow, LogBuffer } from "./react";
+export { Link } from "./react/node";
+export type { LinkProps } from "./react/node";
 export type {
   BoxProps,
   TextProps,
@@ -93,6 +94,7 @@ export type {
   FontFamily,
   EngineInfo,
   EngineKeyEvent,
+  TapEvent,
   KeyMods,
   Rgba,
   TerminalColors,
@@ -103,7 +105,6 @@ export type {
   CaptureIndex,
   MarkdownProps,
   MarkdownTheme,
-  LinkProps,
   MarkdownBlock,
   HighlightSpan,
   DiffRow,

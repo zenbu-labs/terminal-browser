@@ -78,6 +78,13 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             "x": x,
             "y": y,
         }),
+        EngineEvent::Tap { view, x, y, target } => json!({
+            "type": "tap",
+            "view": view,
+            "x": x,
+            "y": y,
+            "target": target.as_str(),
+        }),
         EngineEvent::Change {
             view,
             node,
@@ -161,6 +168,7 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
         }),
         EngineEvent::HostClosed => json!({ "type": "hostClosed" }),
         EngineEvent::Devtools => json!({ "type": "devtools" }),
+        EngineEvent::Osc { data } => json!({ "type": "osc", "data": data }),
         EngineEvent::Visible { visible } => json!({ "type": "visible", "visible": *visible }),
         EngineEvent::Handoff { tty, socket } => json!({
             "type": "handoff",

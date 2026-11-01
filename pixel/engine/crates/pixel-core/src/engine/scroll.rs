@@ -10,14 +10,14 @@ const PINCH_HOVER_WINDOW: Duration = Duration::from_millis(2000);
 const PINCH_WHEEL_SCALE: f32 = 100.0;
 
 impl Engine {
-    pub(super) fn animating(&self) -> bool {
+    pub fn animating(&self) -> bool {
         let scrolling = self.comp.active_views().into_iter().any(|view| {
             let tree = &self.comp.views[view].tree;
             tree.scroll_nodes()
                 .iter()
                 .any(|&id| tree.scroll_state(id).is_some_and(|s| !s.settled()))
         });
-        scrolling || self.bars_animating() || self.term.highlight_active()
+        scrolling || self.bars_animating() || self.io.highlight_active()
     }
 
     pub(super) fn bar_at(&self, view: usize, point: (f32, f32)) -> Option<NodeId> {
@@ -75,8 +75,15 @@ impl Engine {
                 let engaged = self.bar_hover == Some((view, id))
                     || self.bar_drag.map(|(v, d, _)| (v, d)) == Some((view, id));
                 let tree = &mut self.comp.views[view].tree;
-                if tree.step_bar(id, engaged, dt, now) {
-                    tree.mark_paint();
+                if !tree.step_bar(id, engaged, dt, now) {
+                    continue;
+                }
+                match tree.scrollbar_rects(id).filter(|_| self.incremental) {
+                    Some(bar) => {
+                        let damage = crate::surfaces::Rect::covering(bar.zone);
+                        self.comp.views[view].add_damage(damage);
+                    }
+                    None => tree.mark_paint(),
                 }
             }
         }

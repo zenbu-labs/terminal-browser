@@ -16,9 +16,7 @@ import type { PasteSource, PastedImage, SelectionPart } from "./reconciler-confi
 import type { FontFace } from "./styles";
 import type { EngineInfo, HostOptions, TerminalColors } from "./native";
 import { Surface } from "./surface";
-import { requestFrameRate } from "../web/frame-rate";
 import { handleDevtoolsKey } from "./devtools/app";
-import { installConsoleCapture } from "./devtools/console-capture";
 import {
   attachDevtools,
   closeDevtools,
@@ -32,8 +30,8 @@ import {
   toggleDevtools,
   unmountDevtools,
 } from "./devtools/controller";
-import { exportProfile, setProfileDirectory } from "./devtools/export-profile";
 import { installFiberHook } from "./devtools/fiber-hook";
+import { setProfileExporter } from "./devtools/profile-exporter";
 import type { Rgba } from "./native";
 import { publishColors } from "./colors";
 import { refreshTheme } from "./devtools/theme";
@@ -123,8 +121,6 @@ export type {
 } from "./surface";
 export { Markdown } from "./markdown";
 export type { MarkdownProps, MarkdownTheme } from "./markdown";
-export { Link } from "./link";
-export type { LinkProps } from "./link";
 export { openDevtools, closeDevtools, toggleDevtools, requestLayout, engineOp };
 
 /**
@@ -165,13 +161,21 @@ export interface EngineKeyEvent {
   mods: KeyMods;
 }
 
+export interface TapEvent {
+  x: number;
+  y: number;
+  target: "input" | "control" | "content";
+}
+
 export interface RootOptions {
   fonts?: FontFace[];
   onKey?: (event: EngineKeyEvent) => void;
   onRightClick?: (event: { x: number; y: number }) => void;
+  onTap?: (event: TapEvent) => void;
   onPaste?: (text: string) => void;
   onFocus?: (focused: boolean) => void;
   onVisible?: (visible: boolean) => void;
+  onOsc?: (data: string) => void;
   onPasteImage?: (image: PastedImage) => void;
   onEngineExit?: (error: string | null) => void;
   onResize?: (size: { width: number; height: number; basePx: number }) => void;
@@ -219,6 +223,7 @@ export interface PixelRoot {
   requestClipboardImage(): void;
   setClipboard(text: string): void;
   setTitle(text: string): void;
+  writeTerminal(data: string): void;
   retarget(target: RetargetTarget): Promise<void>;
 }
 
@@ -280,6 +285,7 @@ interface EngineEventJson {
   parts?: unknown[];
   level?: string;
   target?: string;
+  data?: string;
   stats?: { frameMs: number; fps: number };
   nodes?: LayoutRect[];
   spans?: Array<{
@@ -304,18 +310,29 @@ function fontFaceOp(face: FontFace) {
   return { family: face.family, path: face.src, weight: face.weight, italic: face.style === "italic" };
 }
 
-export function createRoot(options: RootOptions = {}): PixelRoot {
+export interface RootPlatform {
+  installConsoleCapture(): void;
+  setProfileDirectory(dir: string): void;
+  exportProfile(): string | null;
+  requestFrameRate(fps: number): void;
+  onTerminalResize(listener: () => void): () => void;
+  onProcessExit(listener: () => void): () => void;
+  exitWithEngine(error: string | null): void;
+}
+
+export function createEngineRoot(options: RootOptions, platform: RootPlatform): PixelRoot {
   const bridge =
     options.tty || options.host
       ? new Bridge(options.tty, options.wrapper, options.sessionEnv, options.host)
       : getBridge(options.wrapper);
   const devtoolsEnabled = options.devtools !== false;
-  if (options.cwd) setProfileDirectory(options.cwd);
+  setProfileExporter(platform.exportProfile);
+  if (options.cwd) platform.setProfileDirectory(options.cwd);
   let devtoolsInstalled = false;
   const enableDevtools = () => {
     if (devtoolsInstalled) return;
     devtoolsInstalled = true;
-    installConsoleCapture();
+    platform.installConsoleCapture();
     installFiberHook();
     reconciler.injectIntoDevTools({
       bundleType: 0,
@@ -365,7 +382,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     null
   );
-  if (devtoolsEnabled) installConsoleCapture();
+  if (devtoolsEnabled) platform.installConsoleCapture();
 
   const retargets: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
 
@@ -543,6 +560,11 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           options.onRightClick?.({ x: event.x!, y: event.y! });
         }
         break;
+      case "tap":
+        if (view === APP_VIEW) {
+          options.onTap?.({ x: event.x!, y: event.y!, target: event.target as TapEvent["target"] });
+        }
+        break;
       case "paste":
         if (view === APP_VIEW) options.onPaste?.(event.text!);
         break;
@@ -551,6 +573,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         break;
       case "visible":
         options.onVisible?.(!!event.visible);
+        break;
+      case "osc":
+        options.onOsc?.(event.data!);
         break;
       case "devtools":
         enableDevtools();
@@ -632,10 +657,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         if (options.onEngineExit) {
           options.onEngineExit(event.error ?? null);
         } else {
-          if (event.error) {
-            process.stderr.write(`pixel-react: engine exited: ${event.error}\n`);
-          }
-          process.exit(event.error ? 1 : 0);
+          platform.exitWithEngine(event.error ?? null);
         }
         break;
     }
@@ -668,10 +690,8 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
    */
   const forwardResize = () => bridge.engine.applyOps(JSON.stringify({ view: 0, ops: [] }));
   const ownsStdout = !options.tty && !options.host;
-  if (ownsStdout) process.stdout.on("resize", forwardResize);
-
-  const restore = () => bridge.engine.stop();
-  process.on("exit", restore);
+  const stopForwardingResize = ownsStdout ? platform.onTerminalResize(forwardResize) : () => {};
+  const stopRestoringOnExit = platform.onProcessExit(() => bridge.engine.stop());
 
   const onAppRender = (
     _id: string,
@@ -723,8 +743,8 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
       });
       if (devtoolsBridge() === bridge) unmountDevtools();
       bridge.engine.stop();
-      if (ownsStdout) process.stdout.off("resize", forwardResize);
-      process.off("exit", restore);
+      stopForwardingResize();
+      stopRestoringOnExit();
     },
     openDevtools(tab?: DevtoolsTab) {
       enableDevtools();
@@ -741,21 +761,21 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
       return new Promise<string | null>((resolve) => {
         const now = profilerStore.get();
         if (!now.recording && !now.pendingStop) {
-          resolve(exportProfile());
+          resolve(platform.exportProfile());
           return;
         }
         const unsubscribe = profilerStore.subscribe(() => {
           const state = profilerStore.get();
           if (state.recording || state.pendingStop) return;
           unsubscribe();
-          resolve(exportProfile());
+          resolve(platform.exportProfile());
         });
         stopRecording();
       });
     },
     setRender(settings: RenderSettings) {
       // The browser should not bother producing frames the engine would only drop.
-      if (settings.maxFps !== undefined) requestFrameRate(settings.maxFps);
+      if (settings.maxFps !== undefined) platform.requestFrameRate(settings.maxFps);
       devtoolsStore.update((s) => ({
         ...s,
         maxFps: settings.maxFps ?? s.maxFps,
@@ -800,6 +820,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     setTitle(text: string) {
       bridge.push(APP_VIEW, { op: "setTitle", text });
+      bridge.flush();
+    },
+    writeTerminal(data: string) {
+      bridge.push(APP_VIEW, { op: "writeTerminal", data });
       bridge.flush();
     },
     retarget(target: RetargetTarget) {

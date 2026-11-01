@@ -39,6 +39,7 @@ pub enum Event {
     ColorSchemeChanged,
     Colors(TerminalColors),
     Devtools,
+    Osc(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,6 +370,33 @@ impl Waker {
     pub fn wake(&self) {
         let _ = rustix::io::write(&*self.fd, &[1]);
     }
+
+    pub(crate) fn pipe() -> io::Result<(rustix::fd::OwnedFd, Waker)> {
+        let (rx, tx) = rustix::pipe::pipe()?;
+        rustix::fs::fcntl_setfl(&rx, rustix::fs::OFlags::NONBLOCK)?;
+        rustix::fs::fcntl_setfl(&tx, rustix::fs::OFlags::NONBLOCK)?;
+        Ok((rx, Waker { fd: std::sync::Arc::new(tx) }))
+    }
+}
+
+pub(crate) fn wait_for_wake(wake: &rustix::fd::OwnedFd, wait: Option<Duration>) -> io::Result<()> {
+    let timeout = match wait {
+        Some(w) => Some(
+            rustix::event::Timespec::try_from(w)
+                .map_err(|_| io::Error::other("timeout out of range"))?,
+        ),
+        None => None,
+    };
+    let mut fds = [rustix::event::PollFd::new(wake, rustix::event::PollFlags::IN)];
+    match rustix::event::poll(&mut fds, timeout.as_ref()) {
+        Ok(_) | Err(rustix::io::Errno::INTR) => {}
+        Err(e) => return Err(e.into()),
+    }
+    if fds[0].revents().contains(rustix::event::PollFlags::IN) {
+        let mut sink = [0u8; 64];
+        while matches!(rustix::io::read(wake, &mut sink), Ok(n) if n > 0) {}
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default)]
@@ -989,6 +1017,7 @@ impl Terminal {
                         Some(colors) => Event::Colors(colors),
                         None => continue,
                     },
+                    RawEvent::Osc(body) => Event::Osc(body),
                 }));
             }
             let escape_deadline = self.lone_escape_deadline();
@@ -1073,27 +1102,13 @@ impl Terminal {
     }
 
     fn wait_for_wake(&self, wait: Option<Duration>) -> io::Result<()> {
-        let Some(wake) = &self.wake_rx else {
-            std::thread::sleep(wait.unwrap_or(Duration::from_millis(50)));
-            return Ok(());
-        };
-        let timeout = match wait {
-            Some(w) => Some(
-                rustix::event::Timespec::try_from(w)
-                    .map_err(|_| io::Error::other("timeout out of range"))?,
-            ),
-            None => None,
-        };
-        let mut fds = [rustix::event::PollFd::new(wake, rustix::event::PollFlags::IN)];
-        match rustix::event::poll(&mut fds, timeout.as_ref()) {
-            Ok(_) | Err(rustix::io::Errno::INTR) => {}
-            Err(e) => return Err(e.into()),
+        match &self.wake_rx {
+            Some(wake) => wait_for_wake(wake, wait),
+            None => {
+                std::thread::sleep(wait.unwrap_or(Duration::from_millis(50)));
+                Ok(())
+            }
         }
-        if fds[0].revents().contains(rustix::event::PollFlags::IN) {
-            let mut sink = [0u8; 64];
-            while matches!(rustix::io::read(wake, &mut sink), Ok(n) if n > 0) {}
-        }
-        Ok(())
     }
 
     fn lone_escape_deadline(&mut self) -> Option<Instant> {
@@ -1108,13 +1123,8 @@ impl Terminal {
         if let Some(waker) = &self.waker {
             return Ok(waker.clone());
         }
-        let (rx, tx) = rustix::pipe::pipe()?;
-        rustix::fs::fcntl_setfl(&rx, rustix::fs::OFlags::NONBLOCK)?;
-        rustix::fs::fcntl_setfl(&tx, rustix::fs::OFlags::NONBLOCK)?;
+        let (rx, waker) = Waker::pipe()?;
         self.wake_rx = Some(rx);
-        let waker = Waker {
-            fd: std::sync::Arc::new(tx),
-        };
         self.waker = Some(waker.clone());
         Ok(waker)
     }
@@ -1412,6 +1422,14 @@ impl Terminal {
         let text: String = text.chars().filter(|c| !c.is_control()).collect();
         self.io.out()
             .write_all(format!("\x1b]2;{text}\x1b\\").as_bytes())?;
+        self.io.out().flush()
+    }
+
+    pub fn write_raw(&mut self, data: &str) -> io::Result<()> {
+        if self.hosted.is_some() {
+            return Ok(());
+        }
+        self.io.out().write_all(data.as_bytes())?;
         self.io.out().flush()
     }
 
@@ -1746,6 +1764,7 @@ enum RawEvent {
     Clip(ClipPacket),
     Color(ColorSlot, [u8; 4]),
     ColorSchemeChanged,
+    Osc(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1835,7 +1854,10 @@ fn parse_event_kitty(buf: &[u8], kitty_active: bool) -> Option<(RawEvent, usize)
                 Some(text) => (RawEvent::Paste(text), end),
                 None => match parse_osc_color_reply(&buf[..end]) {
                     Some((slot, rgba)) => (RawEvent::Color(slot, rgba), end),
-                    None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
+                    None => match osc_body(&buf[..end]) {
+                        Some(body) => (RawEvent::Osc(body), end),
+                        None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
+                    },
                 },
             })
         }
@@ -2243,6 +2265,17 @@ fn associated_text(params: &[u8]) -> Option<String> {
         text.push(character);
     }
     (!text.is_empty()).then_some(text)
+}
+
+fn osc_body(seq: &[u8]) -> Option<String> {
+    let body = seq.strip_prefix(b"\x1b]")?;
+    let body = body
+        .strip_suffix(b"\x07")
+        .or_else(|| body.strip_suffix(b"\x1b\\"))?;
+    if body.starts_with(b"52;") {
+        return None;
+    }
+    String::from_utf8(body.to_vec()).ok()
 }
 
 fn consume_string_sequence(buf: &[u8]) -> Option<usize> {
@@ -2654,6 +2687,19 @@ mod tests {
             parse_event(b"\x1bP1$r0m\x1b\\"),
             Some((key(Key::Unknown), 9))
         );
+    }
+
+    #[test]
+    fn unhandled_osc_replies_reach_the_app() {
+        assert_eq!(
+            parse_event(b"\x1b]7717;keyboard=1;accessory=1\x07x"),
+            Some((RawEvent::Osc("7717;keyboard=1;accessory=1".into()), 30))
+        );
+        assert_eq!(
+            parse_event(b"\x1b]7717;keyboard=1\x1b\\"),
+            Some((RawEvent::Osc("7717;keyboard=1".into()), 19))
+        );
+        assert_eq!(parse_event(b"\x1b]7717;keyb"), None, "reply mid-arrival");
     }
 
     #[test]

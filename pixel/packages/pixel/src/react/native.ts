@@ -1,3 +1,6 @@
+import { installedBinding } from "./binding";
+import type { NativeBinding } from "./binding";
+
 export interface DamageRect {
   x: number;
   y: number;
@@ -154,35 +157,13 @@ function loadBinding(): unknown {
   }
 }
 
-if (process.platform === "darwin" && !process.env.NATIVE_SCROLL_HELPER) {
+if (!installedBinding() && process.platform === "darwin" && !process.env.NATIVE_SCROLL_HELPER) {
   try {
     process.env.NATIVE_SCROLL_HELPER = require.resolve(`${NATIVE_PACKAGE}/native-scroll-helper`);
   } catch {}
 }
 
-const binding = loadBinding() as {
-  PixelEngine: new (
-    tty?: string,
-    wrapper?: string,
-    sessionEnv?: Record<string, string>,
-    host?: HostOptions,
-  ) => NativeEngine;
-  highlight(source: string, language: string): HighlightSpan[];
-  highlightCaptures(): string[];
-  diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];
-  parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[];
-  encodeRecording(
-    jobJson: string,
-    onProgress?: (err: unknown, percent: number) => void,
-  ): Promise<void>;
-  captureFilmstrip(
-    dir: string,
-    frames: number[],
-    tileWidth: number,
-    width: number,
-    height: number,
-  ): Promise<Buffer>;
-};
+const binding = (installedBinding() ?? loadBinding()) as NativeBinding;
 
 export function createNativeEngine(
   tty?: string,

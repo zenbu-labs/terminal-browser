@@ -1,0 +1,32 @@
+[package]
+name = "pixel-bridge"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+napi = ["dep:napi", "dep:napi-derive"]
+
+[dependencies]
+pixel-core = { workspace = true }
+napi = { version = "2", default-features = false, features = ["napi8"], optional = true }
+napi-derive = { version = "2", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+tree-sitter = "0.26.10"
+tree-sitter-highlight = "0.26.10"
+tree-sitter-rust = "0.24.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-json = "0.24.8"
+tree-sitter-bash = "0.25.1"
+similar = { version = "3.1.1", features = ["text", "inline"] }
+
+[dev-dependencies]
+image = { workspace = true }
+libc = { workspace = true }
+
+[lints]
+workspace = true

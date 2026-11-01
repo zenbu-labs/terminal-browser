@@ -1,0 +1,89 @@
+name: pixel ci
+
+on:
+  pull_request:
+    paths: ["pixel/**", ".github/workflows/pixel-ci.yml"]
+  push:
+    branches: [main]
+    paths: ["pixel/**", ".github/workflows/pixel-ci.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixel-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terminal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pixel/engine
+      - run: PIXEL_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile
+      - run: cargo test --workspace
+        working-directory: pixel/engine
+      - name: pixel.node is built without device hosts
+        run: "! cargo tree -p pixel-node -e features | grep -q 'feature \"device\"'"
+        working-directory: pixel/engine
+      - run: node scripts/build-native.mjs
+        working-directory: pixel/packages/pixel
+      - run: sudo apt-get install -y zsh
+      - run: pnpm --filter @zenbu-labs/pixel test
+      - name: pixel/device bundles without node or Electron
+        run: npx --yes esbuild@0.24.0 src/device/index.ts --bundle --platform=neutral --format=esm --external:react --external:react-reconciler --external:react/jsx-runtime --log-level=error --outfile=/tmp/device.js
+        working-directory: pixel/packages/pixel
+
+  frames:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pixel/engine
+      - name: Terminal frames match main, and patched frames match whole repaints
+        run: cargo test -p pixel-bridge --release --test golden -- --ignored
+        working-directory: pixel/engine
+
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+        working-directory: pixel/engine
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pixel/engine
+      - run: cargo test -p pixel-ios
+        working-directory: pixel/engine
+      - run: PIXEL_IOS_PROFILE=release PIXEL_IOS_TARGETS=aarch64-apple-ios-sim pixel/packages/pixel-ios/scripts/build-xcframework.sh
+      - run: PIXEL_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile
+      - run: pnpm --filter @zenbu-labs/pixel build
+      - run: PIXEL_SKIP_DOWNLOAD=1 npm ci
+        working-directory: pixel/examples/mobile
+      - run: npx tsc --noEmit
+        working-directory: pixel/examples/mobile
+      - run: CI=1 npx expo prebuild -p ios --no-install
+        working-directory: pixel/examples/mobile
+      - run: pod install
+        working-directory: pixel/examples/mobile/ios
+        env:
+          LANG: en_US.UTF-8
+      - name: Build the example for the simulator
+        run: xcodebuild -workspace pixelmobile.xcworkspace -scheme pixelmobile -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build -quiet
+        working-directory: pixel/examples/mobile/ios

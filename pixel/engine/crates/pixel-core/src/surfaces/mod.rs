@@ -28,6 +28,16 @@ impl Rect {
         self.w == 0 || self.h == 0
     }
 
+    pub fn covering(area: crate::tree::PxRect) -> Rect {
+        let (x, y) = (area.x.floor().max(0.0), area.y.floor().max(0.0));
+        Rect {
+            x: x as u32,
+            y: y as u32,
+            w: ((area.x + area.w).ceil() - x).max(0.0) as u32,
+            h: ((area.y + area.h).ceil() - y).max(0.0) as u32,
+        }
+    }
+
     pub fn union(self, other: Rect) -> Rect {
         if self.is_empty() {
             return other;

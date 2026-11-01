@@ -766,6 +766,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixel-bridge"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "libc",
+ "napi",
+ "napi-derive",
+ "pixel-core",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "similar",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-highlight",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
 name = "pixel-core"
 version = "0.1.0"
 dependencies = [
@@ -785,6 +808,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixel-ios"
+version = "0.1.0"
+dependencies = [
+ "pixel-bridge",
+ "pixel-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pixel-node"
 version = "0.1.0"
 dependencies = [
@@ -795,22 +828,13 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "openh264",
+ "pixel-bridge",
  "pixel-core",
  "png",
- "pulldown-cmark",
  "rustix",
  "serde",
  "serde_json",
- "similar",
  "tiny-skia",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-highlight",
- "tree-sitter-javascript",
- "tree-sitter-json",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
 ]
 
 [[package]]

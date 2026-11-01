@@ -108,6 +108,9 @@ Because of internal implementation details, rendering opaque UI is slightly more
 
 
 
+## pixel on iOS
+
+
 ## Questions
 If you are curious how something works or behaves, I highly recommend asking your coding agent to clone this github repo and explore this package, then ask whatever questions you want!
 
