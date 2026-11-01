@@ -2,7 +2,7 @@ import { app } from "electron";
 import type { WebContents } from "electron";
 
 import { extensionService } from "../extensions/service";
-import { internalHostOf, isInternalUrl } from "./internal";
+import { INTERNAL_SCHEME, internalHostOf, isInternalUrl } from "./internal";
 
 const OVERRIDABLE = ["newtab", "history", "bookmarks"] as const;
 
@@ -33,8 +33,15 @@ function followOverrides(contents: WebContents) {
     const host = internalHostOf(details.url);
     if (!host || !(OVERRIDABLE as readonly string[]).includes(host)) return;
     const target = urlOverride(host as OverridablePage);
-    if (target) setImmediate(() => !contents.isDestroyed() && void contents.loadURL(target));
+    if (!target) return;
+    extensionService().overridePage(contents.id, `chrome://${host}/`, target);
+    setImmediate(() => !contents.isDestroyed() && void contents.loadURL(target));
   });
+}
+
+// Where a new tab starts: Chrome's new tab page, when an extension replaced it.
+export function overriddenNewTab(): string | null {
+  return urlOverride("newtab") ? `${INTERNAL_SCHEME}://newtab/` : null;
 }
 
 export function guardInternalNavigation() {

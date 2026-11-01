@@ -233,6 +233,14 @@ export const API_SPEC = {
     methods: ["query"],
     events: [],
   },
+  omnibox: {
+    methods: ["setDefaultSuggestion", "sendSuggestions"],
+    events: ["onInputStarted", "onInputChanged", "onInputEntered", "onInputCancelled", "onDeleteSuggestion", "onActionExecuted"],
+  },
+  declarativeContent: {
+    methods: ["addRules", "getRules", "removeRules"],
+    events: ["inject"],
+  },
   topSites: {
     methods: ["get"],
     events: [],

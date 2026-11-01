@@ -4,6 +4,7 @@ import { PatternSet } from "../manifest";
 import type { Caller } from "../router";
 import { WINDOW_ID_CURRENT } from "../service";
 import type { ExtensionService } from "../service";
+import type { ZoomSettings } from "../tab-state";
 import type { ExtensionWindow, TabRef } from "../window";
 
 interface QueryInfo {
@@ -57,6 +58,9 @@ function webAccessibleTo(target: LoadedExtension, pathname: string, callerId: st
 }
 
 export function extensionNavigableUrl(service: ExtensionService, extension: LoadedExtension, raw: string): string {
+  if (extension.manifest.manifest_version >= 3 && /^\s*javascript:/i.test(raw)) {
+    throw new Error("JavaScript URLs are not allowed in API based extension navigations. Use chrome.scripting.executeScript instead.");
+  }
   const url = /^chrome:\/\//i.test(raw) ? raw.replace(/^chrome:/i, "terminal-browser:") : raw;
   const resolved = new URL(url, extension.baseUrl).href;
   if (BLOCKED_SCHEMES.some((scheme) => resolved.toLowerCase().startsWith(scheme))) {
@@ -111,9 +115,10 @@ export function installTabs(service: ExtensionService) {
         if (queryInfo.highlighted !== undefined && tabInfo.highlighted !== queryInfo.highlighted) continue;
         if (queryInfo.audible !== undefined && tabInfo.audible !== queryInfo.audible) continue;
         if (queryInfo.muted !== undefined && tabInfo.mutedInfo?.muted !== queryInfo.muted) continue;
-        if (queryInfo.pinned !== undefined && queryInfo.pinned) continue;
-        if (queryInfo.discarded === true || queryInfo.frozen === true) continue;
-        if (queryInfo.autoDiscardable === false) continue;
+        if (queryInfo.pinned !== undefined && tabInfo.pinned !== queryInfo.pinned) continue;
+        if (queryInfo.discarded !== undefined && tabInfo.discarded !== queryInfo.discarded) continue;
+        if (queryInfo.frozen === true) continue;
+        if (queryInfo.autoDiscardable !== undefined && tabInfo.autoDiscardable !== queryInfo.autoDiscardable) continue;
         if (queryInfo.groupId !== undefined && queryInfo.groupId !== -1) continue;
         if (queryInfo.status !== undefined && tabInfo.status !== queryInfo.status) continue;
         if (queryInfo.index !== undefined && tabInfo.index !== queryInfo.index) continue;
@@ -168,7 +173,7 @@ export function installTabs(service: ExtensionService) {
       index: props.index,
       openerId: opener?.window === window ? opener.tab.id : null,
     });
-    return info(caller.extension, await waitForReady(window, tab));
+    return service.tabInfo(caller.extension, await waitForReady(window, tab), true);
   });
 
   router.handle("tabs.duplicate", async (caller, tabId) => {
@@ -190,13 +195,27 @@ export function installTabs(service: ExtensionService) {
       ref.window.host.tabs.activate(ref.tab.id);
       ref.window.host.activate();
     }
-    if (props.muted !== undefined) ref.tab.ref.current?.setAudioMuted(props.muted);
+    const extras = service.tabStates.get(ref.tab.contentsId ?? -1);
+    if (props.muted !== undefined) {
+      const mute = { muted: props.muted, reason: "extension" as const, extensionId: caller.extension.id };
+      if (ref.tab.state.muted === props.muted) {
+        extras.muted = { reason: mute.reason, extensionId: mute.extensionId };
+        service.tabChanged(ref, { mutedInfo: mute });
+      } else {
+        extras.requestedMute = mute;
+        ref.tab.ref.current?.setAudioMuted(props.muted);
+      }
+    }
     if (props.openerTabId !== undefined) {
       const opener = service.tabRef(props.openerTabId);
       if (!opener || opener.window !== ref.window) throw new Error(`No tab with id: ${props.openerTabId}.`);
       ref.tab.openerId = opener.tab.id;
     }
-    if (props.pinned) throw new Error("Pinned tabs are not supported.");
+    if (props.pinned !== undefined) ref.window.host.tabs.setPinned(ref.tab.id, props.pinned);
+    if (props.autoDiscardable !== undefined && props.autoDiscardable !== extras.autoDiscardable) {
+      extras.autoDiscardable = props.autoDiscardable;
+      service.tabChanged(ref, { autoDiscardable: props.autoDiscardable });
+    }
     return info(caller.extension, ref);
   });
 
@@ -259,9 +278,29 @@ export function installTabs(service: ExtensionService) {
     return service.windowInfo(window, true, caller.extension);
   });
 
-  router.handle("tabs.discard", (caller, tabId) => {
-    const ref = tabId === undefined ? activeTabOf(caller) : find(tabId);
-    return info(caller.extension, ref);
+  const leastRecentlyUsed = (): TabRef => {
+    const candidates = service.allTabs().filter(({ window, tab }) => {
+      const extras = service.tabStates.peek(tab.contentsId ?? -1);
+      return window.host.tabs.active !== tab && extras?.autoDiscardable !== false && !extras?.discarded;
+    });
+    const oldest = candidates.sort((a, b) => a.tab.lastAccessed - b.tab.lastAccessed)[0];
+    if (!oldest) throw new Error("Cannot find a tab to discard.");
+    return oldest;
+  };
+
+  // Electron can't unload a page and keep its tab id, so a discarded page is frozen
+  // instead and, like Chrome's, reloaded once it is shown.
+  router.handle("tabs.discard", async (caller, tabId) => {
+    const ref = tabId === undefined ? leastRecentlyUsed() : find(tabId);
+    const extras = service.tabStates.get(ref.tab.contentsId ?? -1);
+    if (!extras.discarded) {
+      await ref.tab.ref.current?.cdp("Page.setWebLifecycleState", { state: "frozen" }).catch(() => {});
+      extras.discarded = true;
+      service.tabChanged(ref, { discarded: true });
+    }
+    const discarded = info(caller.extension, ref);
+    if (ref.window.host.tabs.active === ref.tab) service.reloadDiscarded(ref);
+    return discarded;
   });
 
   router.handle("tabs.captureVisibleTab", async (caller, first, second) => {
@@ -270,7 +309,8 @@ export function installTabs(service: ExtensionService) {
     const tab = window?.host.tabs.active;
     if (!window || !tab || tab.contentsId === null) throw new Error("No active tab.");
     const extension = caller.extension;
-    const allowed = extension.hasHostAccess(tab.state.url) || extension.hasActiveTab(tab.contentsId, tab.state.url);
+    const allUrls = extension.hosts.includes("<all_urls>") && extension.hasHostAccess(tab.state.url);
+    const allowed = allUrls || extension.hasActiveTab(tab.contentsId, tab.state.url);
     if (!allowed) throw new Error("Either the '<all_urls>' or 'activeTab' permission is required.");
     const contents = service.contentsOf(tab);
     if (!contents) throw new Error("No active tab.");
@@ -289,12 +329,32 @@ export function installTabs(service: ExtensionService) {
   router.handle("tabs.setZoom", (caller, first, second) => {
     const [tabId, factor] = second === undefined ? [undefined, first] : [first, second];
     const ref = tabId === undefined ? activeTabOf(caller) : find(tabId);
+    if (service.tabStates.get(ref.tab.contentsId ?? -1).zoom.mode === "disabled") {
+      throw new Error("Cannot zoom a tab in disabled mode.");
+    }
     const zoom = typeof factor === "number" && factor > 0 ? factor : 1;
     service.contentsOf(ref.tab)?.setZoomFactor(zoom);
+    service.zoomMayHaveChanged();
   });
 
-  router.handle("tabs.getZoomSettings", () => ({ mode: "automatic", scope: "per-origin", defaultZoomFactor: 1 }));
-  router.handle("tabs.setZoomSettings", () => undefined);
+  router.handle("tabs.getZoomSettings", (caller, tabId) => {
+    const ref = tabId === undefined ? activeTabOf(caller) : find(tabId);
+    return { ...service.tabStates.get(ref.tab.contentsId ?? -1).zoom, defaultZoomFactor: 1 };
+  });
+
+  router.handle("tabs.setZoomSettings", (caller, first, second) => {
+    const [tabId, settings] = typeof first === "number" ? [first, second] : [undefined, first];
+    const ref = tabId === undefined ? activeTabOf(caller) : find(tabId);
+    const requested = (settings ?? {}) as Partial<ZoomSettings>;
+    const mode = requested.mode === "manual" || requested.mode === "disabled" ? requested.mode : "automatic";
+    if (requested.scope === "per-origin" && mode !== "automatic") {
+      throw new Error('Can only set scope to "per-origin" in "automatic" mode.');
+    }
+    const scope = mode === "automatic" && requested.scope !== "per-tab" ? "per-origin" : "per-tab";
+    service.tabStates.get(ref.tab.contentsId ?? -1).zoom = { mode, scope };
+    if (mode === "disabled") service.contentsOf(ref.tab)?.setZoomFactor(1);
+    service.zoomMayHaveChanged();
+  });
 
   router.handle("tabs.detectLanguage", async (caller, tabId) => {
     const ref = tabId === undefined ? activeTabOf(caller) : find(tabId);

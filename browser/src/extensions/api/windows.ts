@@ -76,11 +76,13 @@ export function installWindows(service: ExtensionService) {
         width: data.width ?? null,
         height: data.height ?? null,
       });
-      const entry = { id, owner, extensionId: caller.extension.id, contents };
+      const url = urls[0] ?? "about:blank";
+      const entry = { id, owner, extensionId: caller.extension.id, contents, tabId: contents.id, url };
       service.registerPopupWindow(entry);
-      const info = service.popupWindowInfo(entry, true, caller.extension);
       service.broadcast("windows.onCreated", () => [service.popupWindowInfo(entry, false)]);
-      return info;
+      service.broadcast("tabs.onCreated", (extension) => [service.popupTabInfo(extension, entry)]);
+      if (data.focused !== false) owner.host.updatePopupWindow(id, { focused: true });
+      return service.popupWindowInfo(entry, true, caller.extension);
     }
     const opened = (urls.length > 0 ? urls : [owner.host.resolveUrl("")]).map((url, index) =>
       owner.host.tabs.create(url, (data.focused ?? true) && index === 0),
@@ -93,8 +95,21 @@ export function installWindows(service: ExtensionService) {
   router.handle("windows.update", (caller, windowId, updateInfo) => {
     if (typeof windowId !== "number") throw new Error(`No window with id: ${windowId}.`);
     const info = (updateInfo ?? {}) as chrome.windows.UpdateInfo;
+    const popup = service.popupWindow(windowId);
     const window = service.window(windowId);
-    if (window && info.focused) window.host.activate();
+    if (!popup && !window) throw new Error(`No window with id: ${windowId}.`);
+    // A pane's size, position and state belong to the terminal, so like Chrome with a
+    // window it can't move, those requests leave the pane as it is.
+    if (popup) {
+      const size = (value: number | undefined) => (typeof value === "number" && value > 0 ? Math.round(value) : undefined);
+      popup.owner.host.updatePopupWindow(popup.id, {
+        width: size(info.width),
+        height: size(info.height),
+        focused: info.focused === true,
+      });
+    } else if (window && info.focused) {
+      window.host.activate();
+    }
     return describe(caller, windowId, { populate: false });
   });
 

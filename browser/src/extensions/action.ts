@@ -25,6 +25,11 @@ interface ActionFields {
   enabled: boolean;
 }
 
+interface DeclarativeState {
+  shown: boolean;
+  icon: string | null;
+}
+
 interface ActionState {
   defaults: ActionFields;
   tabs: Map<number, Partial<ActionFields>>;
@@ -68,7 +73,7 @@ function parseColor(value: unknown): Rgba | null {
   return null;
 }
 
-function writeImageData(extensionId: string, image: { width: number; height: number; data: Uint8Array }): string {
+export function writeImageData(extensionId: string, image: { width: number; height: number; data: Uint8Array }): string {
   const { width, height, data } = image;
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || width > 512 || height > 512) {
     throw new Error("Icon invalid.");
@@ -99,6 +104,7 @@ export class ActionStore {
   private readonly states = new Map<string, ActionState>();
   // Get first say over an icon click; returning true means the click was handled.
   readonly clickHandlers: ActionClickHandler[] = [];
+  private readonly declarative = new Map<string, Map<number, DeclarativeState>>();
 
   constructor(private readonly service: ExtensionService) {}
 
@@ -124,6 +130,7 @@ export class ActionStore {
 
   tabRemoved(tabId: number) {
     for (const state of this.states.values()) state.tabs.delete(tabId);
+    for (const perTab of this.declarative.values()) perTab.delete(tabId);
   }
 
   tabNavigated(tab: Tab, urlChanged: boolean) {
@@ -152,7 +159,26 @@ export class ActionStore {
   resolved(id: string, tabId: number | null): ActionFields {
     const state = this.state(id);
     const override = tabId !== null ? state.tabs.get(tabId) : undefined;
-    return { ...state.defaults, ...override };
+    const declared = tabId !== null ? this.declarative.get(id)?.get(tabId) : undefined;
+    const fields = { ...state.defaults, ...override };
+    if (declared?.shown) fields.enabled = true;
+    if (declared?.icon && override?.icon === undefined) fields.icon = declared.icon;
+    return fields;
+  }
+
+  // What chrome.declarativeContent rules currently say for one tab; like Chrome,
+  // an icon set for the tab with setIcon still wins.
+  setDeclarative(id: string, tabId: number, state: DeclarativeState | null) {
+    const perTab = this.declarative.get(id) ?? new Map<number, DeclarativeState>();
+    const before = perTab.get(tabId);
+    if (state) perTab.set(tabId, state);
+    else perTab.delete(tabId);
+    this.declarative.set(id, perTab);
+    if (before?.shown !== state?.shown || before?.icon !== state?.icon) this.service.changed();
+  }
+
+  clearDeclarative(id: string) {
+    this.declarative.delete(id);
   }
 
   private set(caller: Caller, tabId: unknown, change: Partial<ActionFields>) {
@@ -229,9 +255,10 @@ export class ActionStore {
     });
     router.handle("action.getTitle", (caller, details) => this.resolved(caller.extension.id, tabArg(details) ?? null).title);
     router.handle("action.setIcon", (caller, details) => {
-      const { imageData, path: iconPath, tabId } = details as {
+      const { imageData, path: iconPath, requestedPath, tabId } = details as {
         imageData?: { width: number; height: number; data: Uint8Array } | Record<string, { width: number; height: number; data: Uint8Array }>;
         path?: string | Record<string, string>;
+        requestedPath?: string | Record<string, string>;
         tabId?: number;
       };
       type Bitmap = { width: number; height: number; data: Uint8Array };
@@ -248,7 +275,9 @@ export class ActionStore {
           ? decodeURIComponent(new URL(picked).pathname)
           : picked;
         icon = relative ? resolveExtensionPath(caller.extension.path, relative) : null;
-        if (!icon || !fs.existsSync(icon)) throw new Error(`Failed to set icon '${picked}'`);
+        if (!icon || !fs.existsSync(icon)) {
+          throw new Error(`Failed to set icon '${pickIcon(requestedPath ?? iconPath, TOOLBAR_ICON_PX) ?? picked}': Failed to fetch`);
+        }
       } else {
         throw new Error("Icon invalid.");
       }

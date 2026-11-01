@@ -23,6 +23,7 @@ export function installSessions(service: ExtensionService) {
       url: entry.url,
       title: entry.title,
       favIconUrl: entry.favIconUrl,
+      lastAccessed: entry.lastAccessed,
       active: false,
       highlighted: false,
       selected: false,

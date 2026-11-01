@@ -7,6 +7,7 @@ export interface ClosedTab {
   url: string;
   title: string;
   favIconUrl: string | undefined;
+  lastAccessed: number;
   closedAt: number;
 }
 
@@ -19,7 +20,7 @@ export class RecentlyClosed {
   private seq = 1;
 
   add(tab: Omit<ClosedTab, "sessionId" | "closedAt">) {
-    if (!tab.url || /^(?:about:blank|terminal-browser:\/\/newtab)/.test(tab.url)) return;
+    if (!tab.url || /^terminal-browser:\/\/newtab/.test(tab.url)) return;
     this.entries.unshift({ ...tab, sessionId: String(this.seq++), closedAt: Date.now() });
     this.entries.length = Math.min(this.entries.length, MAX_CLOSED);
     this.changed.emit();

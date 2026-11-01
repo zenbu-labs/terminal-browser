@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { Box, Text, WebView, useRect } from "@zenbu-labs/pixel";
 import type { DragEvent, NodeHandle, Rgba, WebViewHandle } from "@zenbu-labs/pixel";
+import { DEFAULT_POPUP_WINDOW_SIZE } from "../extensions/window";
 import { Icon } from "./icons";
 import { mix } from "./theme";
 import type { Theme } from "./theme";
@@ -383,7 +384,7 @@ function Outline({
   );
 }
 
-const DEFAULT_WINDOW = { width: 420, height: 560 };
+const DEFAULT_WINDOW = DEFAULT_POPUP_WINDOW_SIZE;
 
 export function PopupWindows({
   windows,

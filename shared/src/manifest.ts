@@ -40,6 +40,7 @@ export interface Manifest {
   side_panel?: { default_path?: string };
   chrome_url_overrides?: { newtab?: string; history?: string; bookmarks?: string };
   commands?: Record<string, ManifestCommand>;
+  omnibox?: { keyword?: string };
   devtools_page?: string;
   homepage_url?: string;
   update_url?: string;

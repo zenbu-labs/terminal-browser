@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { Box, Input, Text } from "@zenbu-labs/pixel";
+import { useEffect, useRef } from "react";
+import { Box, Image, Input, Text } from "@zenbu-labs/pixel";
 import type { NodeHandle } from "@zenbu-labs/pixel";
-import type { WebViewState } from "@zenbu-labs/pixel";
 import { Icon } from "./icons";
+import { mix } from "./theme";
 import type { Theme } from "./theme";
-import type { ChromeActions, ChromeLayout, NewTabView, PaletteView } from "./types";
+import type { ChromeActions, ChromeLayout, KeywordView, NewTabView, PaletteView } from "./types";
 
 export function Backdrop({ layout, onClose }: { layout: ChromeLayout; onClose(): void }) {
   return (
@@ -149,20 +149,117 @@ export function PaletteCard({
   );
 }
 
+function KeywordChip({ keyword, rem, theme }: { keyword: KeywordView; rem: number; theme: Theme }) {
+  const icon = rem * 0.9;
+  return (
+    <Box
+      style={{
+        alignItems: "center",
+        gap: rem * 0.35,
+        padding: { left: rem * 0.4, right: rem * 0.5, top: rem * 0.1, bottom: rem * 0.1 },
+        cornerRadius: rem * 0.4,
+        background: mix(theme.overlay, theme.accent, 0.22),
+        flexShrink: 0,
+      }}
+    >
+      {keyword.icon ? (
+        <Image
+          src={keyword.icon}
+          error={<Icon icon="puzzle" size={icon} color={theme.muted} />}
+          style={{ width: icon, height: icon, flexShrink: 0 }}
+        />
+      ) : (
+        <Icon icon="puzzle" size={icon} color={theme.muted} />
+      )}
+      <Text style={{ fontSize: rem * 0.9, color: theme.fg, wrap: false, selectable: false }}>{keyword.name}</Text>
+    </Box>
+  );
+}
+
+function KeywordRows({
+  keyword,
+  actions,
+  rem,
+  theme,
+}: {
+  keyword: KeywordView;
+  actions: ChromeActions;
+  rem: number;
+  theme: Theme;
+}) {
+  if (keyword.rows.length === 0) return null;
+  return (
+    <Box style={{ flexDirection: "column", border: { top: [1, theme.hairline] } }}>
+      {keyword.rows.map((row, i) => {
+        const selected = i === keyword.index;
+        return (
+          <Box
+            key={i}
+            style={{
+              height: rem * 2,
+              alignItems: "center",
+              gap: rem * 0.6,
+              padding: { left: rem * 0.85, right: rem * 0.85 },
+              background: selected ? theme.hover : undefined,
+              hoverBackground: theme.hover,
+              cornerRadius: lastRowRadius(i === keyword.rows.length - 1, rem),
+            }}
+            onClick={() => actions.keywordPick(i)}
+          >
+            <Icon icon="puzzle" size={rem * 0.8} color={theme.disabled} />
+            <Box style={{ flexGrow: 1, flexBasis: 0, flexShrink: 1, overflow: "hidden" }}>
+              {row.runs.map((run, j) => (
+                <Text
+                  key={j}
+                  style={{
+                    fontSize: rem * 0.95,
+                    wrap: false,
+                    selectable: false,
+                    flexShrink: 0,
+                    fontWeight: run.styles.includes("match") ? "bold" : "normal",
+                    color: run.styles.includes("url")
+                      ? theme.accent
+                      : run.styles.includes("dim")
+                        ? theme.disabled
+                        : selected || run.styles.includes("match")
+                          ? theme.fg
+                          : theme.muted,
+                  }}
+                >
+                  {run.text}
+                </Text>
+              ))}
+            </Box>
+            {row.deletable && (
+              <Box
+                style={{ padding: rem * 0.2, cornerRadius: rem * 0.3, hoverBackground: theme.hover, flexShrink: 0 }}
+                onClick={() => actions.keywordRemove(i)}
+              >
+                <Icon icon="close" size={rem * 0.75} color={theme.muted} />
+              </Box>
+            )}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
 export function UrlCard({
-  state,
+  text,
+  keyword,
   actions,
   layout,
   theme,
 }: {
-  state: WebViewState;
+  text: string;
+  keyword: KeywordView | null;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
 }) {
   const rem = layout.rem;
   const cardW = Math.min(rem * 28, layout.width - rem * 4);
-  const [value, setValue] = useState(state.url === "about:blank" ? "" : state.url);
   const input = useRef<NodeHandle | null>(null);
   useEffect(() => {
     input.current?.focus();
@@ -178,29 +275,32 @@ export function UrlCard({
           padding: { left: rem * 0.85, right: rem * 0.85 },
         }}
       >
-        <Icon icon="search" size={rem} color={theme.muted} />
+        {keyword ? <KeywordChip keyword={keyword} rem={rem} theme={theme} /> : <Icon icon="search" size={rem} color={theme.muted} />}
         <Input
           ref={input}
           autoFocus
-          value={value}
+          value={text}
           style={{ flexGrow: 1, flexBasis: 0, wrap: false, fontSize: rem }}
           caretColor={theme.accent}
           selectionColor={theme.selection}
-          onChange={setValue}
-          onSubmit={(text) => actions.urlSubmit(text)}
+          onChange={(next) => actions.urlInput(next)}
+          onSubmit={(next) => actions.urlSubmit(next)}
         />
       </Box>
+      {keyword && <KeywordRows keyword={keyword} actions={actions} rem={rem} theme={theme} />}
     </ModalCard>
   );
 }
 
 export function NewTabCard({
   view,
+  keyword,
   actions,
   layout,
   theme,
 }: {
   view: NewTabView;
+  keyword: KeywordView | null;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
@@ -220,20 +320,22 @@ export function NewTabCard({
           alignItems: "center",
           gap: rem * 0.5,
           padding: { left: rem * 0.85, right: rem * 0.85 },
-          border: view.suggestions.length ? { bottom: [1, theme.hairline] } : undefined,
+          border: !keyword && view.suggestions.length ? { bottom: [1, theme.hairline] } : undefined,
         }}
       >
-        <Icon icon="search" size={rem} color={theme.muted} />
+        {keyword ? <KeywordChip keyword={keyword} rem={rem} theme={theme} /> : <Icon icon="search" size={rem} color={theme.muted} />}
         <Input
           ref={input}
           autoFocus
+          value={view.query}
           style={{ flexGrow: 1, flexBasis: 0, wrap: false, fontSize: rem }}
           caretColor={theme.accent}
           selectionColor={theme.selection}
           onChange={(text) => actions.newTabQuery(text)}
         />
       </Box>
-      {view.suggestions.length > 0 && (
+      {keyword && <KeywordRows keyword={keyword} actions={actions} rem={rem} theme={theme} />}
+      {!keyword && view.suggestions.length > 0 && (
         <Box style={{ flexDirection: "column" }}>
           {view.suggestions.map((suggestion, i) => {
             const text = suggestion.kind === "app" ? suggestion.name : suggestion.text;

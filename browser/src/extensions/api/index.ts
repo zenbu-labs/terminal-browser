@@ -10,7 +10,9 @@ import { installCookies } from "./cookies";
 import { installDebugger } from "./debugger";
 import { installIdentity } from "./identity";
 import { installManagement } from "./management";
+import { installDeclarativeContent } from "./declarative-content";
 import { installNotifications } from "./notifications";
+import { installOmnibox } from "./omnibox";
 import { installPermissions } from "./permissions";
 import { installRuntime } from "./runtime";
 import { installSidePanel } from "./side-panel";
@@ -44,4 +46,6 @@ export function installApis(service: ExtensionService) {
   installContexts(service);
   installDebugger(service);
   installTabGroups(service);
+  installOmnibox(service);
+  installDeclarativeContent(service);
 }

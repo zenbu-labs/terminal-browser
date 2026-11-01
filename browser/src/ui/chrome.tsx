@@ -35,6 +35,7 @@ import type {
   ChromeLayout,
   ClearDataView,
   DownloadView,
+  KeywordView,
   NewTabView,
   DevtoolsView,
   PageMenuView,
@@ -57,6 +58,7 @@ export function Chrome({
   tabs,
   newTab,
   urlEdit,
+  keyword,
   zoomHud,
   download,
   toast,
@@ -82,7 +84,8 @@ export function Chrome({
   palette: PaletteView | null;
   tabs: TabRow[];
   newTab: NewTabView | null;
-  urlEdit: boolean;
+  urlEdit: string | null;
+  keyword: KeywordView | null;
   zoomHud: number | null;
   download: DownloadView | null;
   toast: ToastView | null;
@@ -238,8 +241,8 @@ export function Chrome({
       {pageMenu && (
         <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
       )}
-      {newTab && <NewTabCard view={newTab} actions={actions} layout={layout} theme={theme} />}
-      {urlEdit && <UrlCard state={state} actions={actions} layout={layout} theme={theme} />}
+      {newTab && <NewTabCard view={newTab} keyword={keyword} actions={actions} layout={layout} theme={theme} />}
+      {urlEdit !== null && <UrlCard text={urlEdit} keyword={keyword} actions={actions} layout={layout} theme={theme} />}
       {palette && <PaletteCard view={palette} actions={actions} layout={layout} theme={theme} />}
       {settings && (
         <SettingsCard view={settings} actions={actions.settings} layout={layout} theme={theme} />

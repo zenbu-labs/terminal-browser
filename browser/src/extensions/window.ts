@@ -18,6 +18,14 @@ export interface PopupWindowRequest {
   height: number | null;
 }
 
+export const DEFAULT_POPUP_WINDOW_SIZE = { width: 420, height: 560 };
+
+export interface PopupWindowChange {
+  width?: number;
+  height?: number;
+  focused?: boolean;
+}
+
 // What an extension needs from one terminal-browser pane. A pane is a Chrome
 // "window": it owns a strip of tabs and draws the extension UI.
 export interface WindowHost {
@@ -32,6 +40,8 @@ export interface WindowHost {
   closeActionPopup(extensionId?: string): void;
   openPopupWindow(request: PopupWindowRequest): Promise<WebContents>;
   closePopupWindow(windowId: number): void;
+  popupWindowBounds(windowId: number): { width: number; height: number } | null;
+  updatePopupWindow(windowId: number, change: PopupWindowChange): void;
   // The window's side panels changed; focus means the user just opened one.
   sidePanelsChanged(focus: boolean): void;
   prompt(request: ExtensionPrompt): Promise<boolean>;

@@ -488,7 +488,7 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
         details.path && typeof details.path === "object"
           ? Object.fromEntries(Object.entries(details.path as Record<string, unknown>).map(([size, p]) => [size, absolute(p)]))
           : absolute(details.path);
-      return setIcon({ ...details, imageData, path }, ...(callback ? [callback] : []));
+      return setIcon({ ...details, imageData, path, requestedPath: details.path }, ...(callback ? [callback] : []));
     },
   };
   if (manifest.action) {
@@ -700,6 +700,113 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
       constants: { MAX_SESSION_RESULTS: 25 },
     });
   });
+
+  if (manifest.omnibox) {
+    const sendSuggestions = method("omnibox.sendSuggestions");
+    const inputChanged = new ExtensionEvent("omnibox.onInputChanged");
+    const withSuggest = new WeakMap<Fn, Fn>();
+    const { addListener, removeListener, hasListener } = inputChanged;
+    // Chrome hands onInputChanged listeners a suggest() bound to this round of typing.
+    Object.assign(inputChanged, {
+      addListener(listener: Fn) {
+        if (typeof listener !== "function") throw new TypeError("listener must be a function");
+        let wrapper = withSuggest.get(listener);
+        if (!wrapper) {
+          wrapper = (text: unknown, requestId: unknown) =>
+            listener(text, (results: unknown) => {
+              (sendSuggestions(requestId, results) as Promise<unknown>).catch((error: Error) => console.error(error.message));
+            });
+          withSuggest.set(listener, wrapper);
+        }
+        addListener.call(inputChanged, wrapper);
+      },
+      removeListener(listener: Fn) {
+        const wrapper = withSuggest.get(listener);
+        if (wrapper) removeListener.call(inputChanged, wrapper);
+      },
+      hasListener(listener: Fn) {
+        const wrapper = withSuggest.get(listener);
+        return wrapper ? hasListener.call(inputChanged, wrapper) : false;
+      },
+    });
+    namespace("omnibox", {
+      methods: spec.omnibox.methods,
+      events: spec.omnibox.events.filter((event) => event !== "onInputChanged"),
+      constants: {
+        OnInputEnteredDisposition: {
+          CURRENT_TAB: "currentTab",
+          NEW_FOREGROUND_TAB: "newForegroundTab",
+          NEW_BACKGROUND_TAB: "newBackgroundTab",
+        },
+        DescriptionStyleType: { URL: "url", MATCH: "match", DIM: "dim" },
+      },
+      extra: { onInputChanged: inputChanged },
+    });
+  }
+
+  let declarativeContentInjectListening = false;
+  gated("declarativeContent", () => has("declarativeContent"), () => {
+    const declarative = (type: string) =>
+      function (this: Record<string, unknown>, options?: Record<string, unknown>) {
+        Object.assign(this, options ?? {});
+        this.instanceType = `declarativeContent.${type}`;
+      };
+    const encode = (image: unknown) => {
+      const data = image as { width: number; height: number; data: Uint8ClampedArray };
+      return { width: data.width, height: data.height, data: new Uint8Array(data.data.buffer.slice(0)) };
+    };
+    const plainAction = (action: Record<string, unknown>) => {
+      const imageData = action.imageData as Record<string, unknown> | undefined;
+      if (!imageData || typeof imageData !== "object") return { ...action };
+      const encoded =
+        "data" in imageData
+          ? encode(imageData)
+          : Object.fromEntries(Object.entries(imageData).map(([size, image]) => [size, encode(image)]));
+      return { ...action, imageData: encoded };
+    };
+    const callbackStyle = (name: string) => {
+      const run = method(`declarativeContent.${name}`);
+      return (...args: unknown[]) => {
+        const callback = typeof args[args.length - 1] === "function" ? (args.pop() as Fn) : () => void chrome.runtime.lastError;
+        run(...args, callback);
+      };
+    };
+    const addRules = callbackStyle("addRules");
+    namespace("declarativeContent", {
+      extra: {
+        PageStateMatcher: declarative("PageStateMatcher"),
+        ShowAction: declarative("ShowAction"),
+        ShowPageAction: declarative("ShowPageAction"),
+        SetIcon: declarative("SetIcon"),
+        RequestContentScript: declarative("RequestContentScript"),
+        onPageChanged: {
+          addRules(rules: Record<string, unknown>[], callback?: Fn) {
+            const plain = (rules ?? []).map((rule) => ({
+              ...rule,
+              conditions: ((rule.conditions as Record<string, unknown>[]) ?? []).map((condition) => ({ ...condition })),
+              actions: ((rule.actions as Record<string, unknown>[]) ?? []).map(plainAction),
+            }));
+            addRules(plain, ...(callback ? [callback] : []));
+          },
+          getRules: callbackStyle("getRules"),
+          removeRules: callbackStyle("removeRules"),
+        },
+      },
+    });
+    if (isWorker && !declarativeContentInjectListening) {
+      declarativeContentInjectListening = true;
+      localHandlers.set("declarativeContent.inject", ([tabId, details]) => {
+        const scripting = chrome.scripting as Record<string, Fn> | undefined;
+        const { js, css, allFrames } = details as { js: string[]; css: string[]; allFrames: boolean };
+        const target = { tabId, allFrames };
+        if (!scripting) return;
+        if (css.length > 0) (scripting.insertCSS({ target, files: css }) as Promise<unknown>).catch(() => {});
+        if (js.length > 0) (scripting.executeScript({ target, files: js }) as Promise<unknown>).catch(() => {});
+      });
+      bridge.listen("declarativeContent.inject");
+    }
+  });
+
 
   gated("search", () => has("search"), () => void namespace("search", { methods: spec.search.methods }));
   gated("topSites", () => has("topSites"), () => void namespace("topSites", { methods: spec.topSites.methods }));

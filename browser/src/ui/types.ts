@@ -13,6 +13,8 @@ import type {
   WebViewState,
   ZoomDirection,
 } from "@zenbu-labs/pixel";
+
+import type { DescriptionRun } from "../extensions/omnibox-xml";
 import type { RecordActions } from "../record/types";
 import type { BrowsingDataKind } from "../session/browsing-data";
 import type { IconName } from "./icons";
@@ -45,6 +47,15 @@ export type NewTabSuggestion =
 
 export interface NewTabView {
   suggestions: NewTabSuggestion[];
+  index: number;
+  query: string;
+}
+
+// An extension's omnibox keyword took over the address bar.
+export interface KeywordView {
+  name: string;
+  icon: string | null;
+  rows: { runs: DescriptionRun[]; deletable: boolean }[];
   index: number;
 }
 
@@ -162,6 +173,9 @@ export interface ChromeActions {
   urlEdit(): void;
   urlEditCancel(): void;
   urlSubmit(text: string): void;
+  urlInput(text: string): void;
+  keywordPick(index: number): void;
+  keywordRemove(index: number): void;
   findChange(text: string): void;
   findNext(forward: boolean): void;
   findClose(): void;

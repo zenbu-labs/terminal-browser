@@ -22,6 +22,15 @@ export function frameForId(contents: WebContents, frameId: number): WebFrameMain
 }
 
 // Chromium accepts either case and treats the all-zero id as no id.
+// Electron throws when a page's frame is being swapped out (e.g. mid-navigation).
+function liveMainFrame(contents: WebContents): WebFrameMain | null {
+  try {
+    return contents.mainFrame;
+  } catch {
+    return null;
+  }
+}
+
 function parseDocumentId(documentId: string): string | null {
   if (!/^[0-9A-Fa-f]{32}$/.test(documentId) || /^0+$/.test(documentId)) return null;
   return documentId.toUpperCase();
@@ -239,10 +248,11 @@ export function installWebNavigation(service: ExtensionService) {
     const navigation = watch(contents);
     const opener = ref.tab.openerId !== null ? ref.window.host.tabs.get(ref.tab.openerId) : null;
     const source = opener ? service.contentsOf(opener) : null;
-    if (source) {
+    const sourceFrame = source ? liveMainFrame(source) : null;
+    if (source && sourceFrame) {
       const details = {
         sourceTabId: source.id,
-        sourceProcessId: source.mainFrame.processId,
+        sourceProcessId: sourceFrame.processId,
         sourceFrameId: 0,
         url: ref.tab.url,
         tabId: contents.id,

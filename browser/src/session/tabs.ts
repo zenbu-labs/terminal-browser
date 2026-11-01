@@ -19,6 +19,7 @@ export interface Tab {
   contentsId: number | null;
   openerId: number | null;
   lastAccessed: number;
+  pinned: boolean;
 }
 
 export interface TabObserver {
@@ -27,6 +28,7 @@ export interface TabObserver {
   updated(tab: Tab, previous: WebViewState): void;
   activated(tab: Tab, previous: Tab | null): void;
   moved(tab: Tab, from: number, to: number): void;
+  pinned(tab: Tab): void;
   removed(tab: Tab): void;
 }
 
@@ -105,9 +107,10 @@ export class TabManager {
       contentsId: null,
       openerId: options.openerId ?? null,
       lastAccessed: Date.now(),
+      pinned: false,
     };
     const index = options.index ?? this.tabs.length;
-    this.tabs.splice(Math.max(0, Math.min(index, this.tabs.length)), 0, tab);
+    this.tabs.splice(Math.max(this.pinnedCount(), Math.min(index, this.tabs.length)), 0, tab);
     this.observer?.created(tab);
     if (activate) this.activate(tab.id);
     this.host.onTabsChanged();
@@ -161,15 +164,30 @@ export class TabManager {
     return this.tabs.find((tab) => tab.contentsId === contentsId) ?? null;
   }
 
+  private pinnedCount(): number {
+    return this.tabs.filter((tab) => tab.pinned).length;
+  }
+
+  // Like Chrome, pinned tabs always come first.
   move(id: number, index: number) {
     const from = this.tabs.findIndex((tab) => tab.id === id);
     if (from < 0) return;
     const [tab] = this.tabs.splice(from, 1);
-    const to = Math.max(0, Math.min(index < 0 ? this.tabs.length : index, this.tabs.length));
+    const pinned = this.pinnedCount();
+    const wanted = index < 0 ? this.tabs.length : index;
+    const to = tab.pinned ? Math.max(0, Math.min(wanted, pinned)) : Math.max(pinned, Math.min(wanted, this.tabs.length));
     this.tabs.splice(to, 0, tab);
     if (from !== to) this.observer?.moved(tab, from, to);
     this.host.onTabsChanged();
     this.host.requestRender();
+  }
+
+  setPinned(id: number, pinned: boolean) {
+    const tab = this.get(id);
+    if (!tab || tab.pinned === pinned) return;
+    tab.pinned = pinned;
+    this.observer?.pinned(tab);
+    this.move(id, this.tabs.filter((other) => other.pinned && other !== tab).length);
   }
 
   openWindow(id: number, details: Electron.HandlerDetails): OpenWindowDecision {

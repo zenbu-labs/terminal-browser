@@ -9,11 +9,12 @@ import type { ToolbarAction } from "../extensions/action";
 import { extensionIcon } from "../extensions/action";
 import { optionsPage } from "../extensions/manifest";
 import { SIDE_PANEL_PERMISSION } from "../extensions/side-panel";
-import type { ExtensionPrompt, ExtensionWindow, PopupWindowRequest, WindowHost } from "../extensions/window";
+import { DEFAULT_POPUP_WINDOW_SIZE } from "../extensions/window";
+import type { ExtensionPrompt, ExtensionWindow, PopupWindowChange, PopupWindowRequest, WindowHost } from "../extensions/window";
 import type { ExtensionMenuItem, MenuContext } from "../extensions/menus";
 import type { ExtensionSidePanelView, ExtensionsView } from "../ui/extension-types";
 import type { PageMenuItem } from "../ui/types";
-import type { TabManager } from "./tabs";
+import type { Tab, TabManager } from "./tabs";
 
 export const EXTENSIONS_PAGE = "terminal-browser://extensions";
 
@@ -125,6 +126,7 @@ export class PaneExtensions implements WindowHost {
   }
 
   activate() {
+    this.focusPopupWindow(null);
     this.hooks.activate();
   }
 
@@ -278,6 +280,33 @@ export class PaneExtensions implements WindowHost {
 
   focusPopupWindow(windowId: number | null) {
     this.focusedPopupWindow = windowId;
+    this.service.popupWindowFocused(this.window, windowId);
+  }
+
+  popupWindowBounds(windowId: number) {
+    const entry = this.popupWindows.find((popup) => popup.windowId === windowId);
+    if (!entry) return null;
+    return { width: entry.width ?? DEFAULT_POPUP_WINDOW_SIZE.width, height: entry.height ?? DEFAULT_POPUP_WINDOW_SIZE.height };
+  }
+
+  updatePopupWindow(windowId: number, change: PopupWindowChange) {
+    const entry = this.popupWindows.find((popup) => popup.windowId === windowId);
+    if (!entry) return;
+    const before = this.popupWindowBounds(windowId);
+    if (change.width !== undefined) entry.width = change.width;
+    if (change.height !== undefined) entry.height = change.height;
+    const after = this.popupWindowBounds(windowId);
+    if (change.focused) this.focusPopupWindow(windowId);
+    if (before?.width !== after?.width || before?.height !== after?.height) this.service.popupWindowBoundsChanged(windowId);
+    this.hooks.requestRender();
+  }
+
+  zoomDisabled(tab: Tab | null): boolean {
+    return tab?.contentsId != null && this.service.tabStates.peek(tab.contentsId)?.zoom.mode === "disabled";
+  }
+
+  boundsChanged() {
+    this.service.windowBoundsChanged(this.window);
   }
 
   closePopupWindow(windowId: number) {
@@ -491,7 +520,7 @@ export class PaneExtensions implements WindowHost {
   }
 
   pagePointer() {
-    this.focusedPopupWindow = null;
+    this.focusPopupWindow(null);
     if (this.popup) this.closeActionPopup();
   }
 

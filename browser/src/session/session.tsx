@@ -73,7 +73,7 @@ import type { SearchUrl } from "../url";
 import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
 import { isInternalUrl } from "../pages/internal";
-import { urlOverride } from "../pages/navigation";
+import { overriddenNewTab } from "../pages/navigation";
 import { browsing } from "../browsing";
 import { makeTheme } from "../ui/theme";
 import { BROWSING_DATA_KINDS, DEFAULT_CLEAR_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
@@ -89,6 +89,7 @@ import type { DevtoolsPlacement, SurfaceLayout } from "./layout";
 import { SettingsManager } from "./settings";
 import { Telemetry } from "../telemetry";
 import { fetchSuggestions } from "./suggest";
+import { AddressKeyword } from "./address-keyword";
 import { TabManager } from "./tabs";
 import { EXTENSIONS_PAGE, PaneExtensions } from "./extensions";
 import type { ExtensionActions } from "../ui/extension-types";
@@ -259,6 +260,14 @@ class Session {
   private clearData: ClearDataState | null = null;
   private findOpen = false;
   private urlEditOpen = false;
+  private urlText = "";
+  private readonly keyword = new AddressKeyword(
+    () => this.extensions?.service.omnibox ?? null,
+    () => {
+      this.refreshAddressCapture();
+      this.render();
+    },
+  );
   private palette: { query: string; index: number } | null = null;
   private newTab: NewTabState | null = null;
   private zoomHud: number | null = null;
@@ -372,6 +381,7 @@ class Session {
         // really?
         this.recalculateLayout();
         this.render();
+        this.extensions?.boundsChanged();
       },
       onColors: () => this.render(),
       onFocus: (focused) => {
@@ -395,7 +405,7 @@ class Session {
       tabs: this.tabs,
       focused: () => this.terminalFocused,
       size: () => ({ width: this.layout?.page.width ?? 0, height: this.layout?.page.height ?? 0 }),
-      resolveUrl: (url) => (url ? normalizeUrl(url, this.ctx.cwd, this.searchUrl()) : (urlOverride("newtab") ?? this.defaultUrl)),
+      resolveUrl: (url) => (url ? normalizeUrl(url, this.ctx.cwd, this.searchUrl()) : (overriddenNewTab() ?? this.defaultUrl)),
       closeTab: (id) => this.closeOrShutdown(id),
       activate: () => this.tabs.active?.ref.current?.focus(),
       blurPage: () => this.blurToOverlay(),
@@ -592,10 +602,11 @@ class Session {
         tabs={this.tabs.view()}
         newTab={
           this.newTab
-            ? { suggestions: this.newTabRows(), index: this.newTab.index }
+            ? { suggestions: this.newTabRows(), index: this.newTab.index, query: this.newTab.query }
             : null
         }
-        urlEdit={this.urlEditOpen}
+        urlEdit={this.urlEditOpen ? this.urlText : null}
+        keyword={this.keyword.view()}
         zoomHud={this.zoomHud}
         download={this.download}
         toast={this.toast}
@@ -668,9 +679,25 @@ class Session {
     clearDataCancel: () => this.closeClearData(),
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
+      if (this.keyword.active) {
+        this.keyword.enter(0, "currentTab");
+        this.closeUrlEdit();
+        return;
+      }
       this.closeUrlEdit();
       if (text.trim()) this.tabs.activeHandle?.loadURL(this.resolveInput(text));
     },
+    urlInput: (text) => {
+      this.urlText = this.keyword.type(text);
+      this.refreshAddressCapture();
+      this.render();
+    },
+    keywordPick: (index) => {
+      this.keyword.enter(index, this.newTab ? "newForegroundTab" : "currentTab");
+      if (this.newTab) this.closeNewTabModal();
+      else this.closeUrlEdit();
+    },
+    keywordRemove: (index) => this.keyword.remove(index),
     findChange: (text) => this.tabs.activeHandle?.find(text),
     findNext: (forward) => this.tabs.activeHandle?.findNext(forward),
     findClose: () => this.closeFind(),
@@ -962,6 +989,7 @@ class Session {
       } else if (event.key === "enter") this.runPalette();
       return true;
     }
+    if ((this.newTab || this.urlEditOpen) && this.keywordKey(event)) return true;
     if (this.newTab) {
       const session = this.newTab;
       const step = listStep(event);
@@ -1094,6 +1122,7 @@ class Session {
   }
 
   private applyZoom(direction: ZoomDirection) {
+    if (this.extensions?.zoomDisabled(this.tabs.active)) return;
     this.tabs.activeHandle?.zoom(direction);
   }
 
@@ -1627,9 +1656,33 @@ class Session {
     return { x: this.pageMenu.x, y: this.pageMenu.y, items };
   }
 
+  private keywordKey(event: EngineKeyEvent): boolean {
+    const result = this.keyword.key(event, this.newTab ? "newForegroundTab" : "currentTab");
+    if (!result) return false;
+    if (result.done) {
+      if (this.newTab) this.closeNewTabModal();
+      else this.closeUrlEdit();
+      return true;
+    }
+    if (this.newTab) this.newTab.query = result.text;
+    else this.urlText = result.text;
+    this.refreshAddressCapture();
+    this.render();
+    return true;
+  }
+
+  // The address bar's own keys, plus the ones keyword mode needs.
+  private refreshAddressCapture() {
+    if (!this.newTab && !this.urlEditOpen) return;
+    const base = this.newTab ? ["enter", "up", "down"] : [];
+    this.root?.setKeyCapture([...new Set([...base, ...this.keyword.captureKeys()])]);
+  }
+
   private openUrlEdit() {
     if (this.urlEditOpen) return;
     this.urlEditOpen = true;
+    const url = this.tabs.activeState?.url ?? "";
+    this.urlText = url === "about:blank" ? "" : url;
     this.blurToOverlay();
     this.render();
   }
@@ -1637,13 +1690,15 @@ class Session {
   private closeUrlEdit() {
     if (!this.urlEditOpen) return;
     this.urlEditOpen = false;
+    this.keyword.cancel();
+    this.root?.setKeyCapture(this.findOpen ? ["enter"] : []);
     this.refocusPage();
     this.render();
   }
 
   private openNewTabModal() {
     if (this.newTab) return;
-    const override = urlOverride("newtab");
+    const override = overriddenNewTab();
     if (override) {
       this.tabs.create(override);
       return;
@@ -1689,6 +1744,7 @@ class Session {
 
   private closeNewTabModal() {
     if (!this.newTab) return;
+    this.keyword.cancel();
     if (this.newTab.timer) clearTimeout(this.newTab.timer);
     this.newTab = null;
     this.root?.setKeyCapture(this.findOpen ? ["enter"] : []);
@@ -1699,8 +1755,16 @@ class Session {
   private newTabQuery(text: string) {
     const session = this.newTab;
     if (!session) return;
-    session.query = text;
+    session.query = this.keyword.type(text);
     session.index = -1;
+    this.refreshAddressCapture();
+    if (this.keyword.active) {
+      session.seq++;
+      session.suggestions = [];
+      session.appMatches = [];
+      this.render();
+      return;
+    }
     session.appMatches = matchApps(session.apps, text);
     if (session.timer) clearTimeout(session.timer);
     session.timer = null;

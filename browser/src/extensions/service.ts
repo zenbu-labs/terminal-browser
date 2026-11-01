@@ -34,6 +34,9 @@ import { asManifest } from "./manifest";
 import { Router } from "./router";
 import { SenderTabs } from "./sender-tabs";
 import { SidePanelStore } from "./side-panel";
+import { TabStates } from "./tab-state";
+import { OmniboxStore } from "./api/omnibox";
+import { DeclarativeContentStore } from "./api/declarative-content";
 import type { Caller } from "./router";
 import type { ExtensionWindow, TabRef, WindowHost } from "./window";
 
@@ -42,6 +45,8 @@ export interface PopupWindowEntry {
   owner: ExtensionWindow;
   extensionId: string;
   contents: WebContents;
+  tabId: number;
+  url: string;
 }
 
 export type SurfaceKind = "action-popup" | "side-panel";
@@ -87,6 +92,8 @@ export class ExtensionService {
   readonly importer: Importer;
   readonly senderTabs: SenderTabs;
   readonly sidePanels: SidePanelStore;
+  readonly omnibox: OmniboxStore;
+  readonly declarativeContent: DeclarativeContentStore;
   readonly loaded = new Map<string, LoadedExtension>();
   readonly errors = new Map<string, string[]>();
   readonly loadErrors = new Map<string, string>();
@@ -102,6 +109,11 @@ export class ExtensionService {
   private readonly unloadListeners = new Set<(id: string) => void>();
   private readonly contentsListeners = new Set<(contents: WebContents, ref: TabRef) => void>();
   readonly debugging = new Map<number, Set<string>>();
+  readonly tabStates = new TabStates();
+  private readonly tabEvents = new Map<number, TabEvents>();
+  private readonly focusedPopups = new Map<number, number>();
+  // Pages like chrome://newtab that an extension replaced keep reporting Chrome's URL.
+  private readonly overriddenPages = new Map<number, { chromeUrl: string; url: string }>();
 
   constructor(readonly session: Session) {
     this.router = new Router(session, (id) => this.loaded.get(id) ?? null);
@@ -114,6 +126,8 @@ export class ExtensionService {
     this.importer = new Importer(this);
     this.senderTabs = new SenderTabs(this);
     this.sidePanels = new SidePanelStore(this);
+    this.omnibox = new OmniboxStore(this);
+    this.declarativeContent = new DeclarativeContentStore(this);
     session.registerPreloadScript({ type: "frame", filePath: preloadPath("chrome-web-store-preload.js") });
     this.ready = this.loadAll();
   }
@@ -157,7 +171,13 @@ export class ExtensionService {
   }
 
   tabContentsReady(contents: WebContents, ref: TabRef) {
-    for (const listener of [...this.contentsListeners]) listener(contents, ref);
+    for (const listener of [...this.contentsListeners]) {
+      try {
+        listener(contents, ref);
+      } catch (error) {
+        console.error(error);
+      }
+    }
   }
 
   changed() {
@@ -285,13 +305,19 @@ export class ExtensionService {
     const window: ExtensionWindow = { id: this.nextWindowId++, host };
     this.windows.set(window.id, window);
     if (this.lastFocusedWindowId === null || host.focused()) this.lastFocusedWindowId = window.id;
-    host.tabs.observer = new TabEvents(this, window);
+    const events = new TabEvents(this, window);
+    this.tabEvents.set(window.id, events);
+    host.tabs.observer = events;
     this.broadcastWindow("windows.onCreated", window);
     return window;
   }
 
   removeWindow(window: ExtensionWindow) {
-    if (!this.windows.delete(window.id)) return;
+    if (!this.windows.has(window.id)) return;
+    const events = this.tabEvents.get(window.id);
+    for (const tab of [...window.host.tabs.all()]) events?.removed(tab, true);
+    this.windows.delete(window.id);
+    this.tabEvents.delete(window.id);
     this.sidePanels.windowRemoved(window);
     for (const entry of [...this.popupWindows.values()]) {
       if (entry.owner === window) this.removePopupWindow(entry.id);
@@ -308,12 +334,27 @@ export class ExtensionService {
       if (this.lastFocusedWindowId === window.id) this.broadcast("windows.onFocusChanged", () => [WINDOW_ID_NONE]);
       return;
     }
-    if (this.lastFocusedWindowId === window.id) {
-      this.broadcast("windows.onFocusChanged", () => [window.id]);
-      return;
-    }
     this.lastFocusedWindowId = window.id;
-    this.broadcast("windows.onFocusChanged", () => [window.id]);
+    this.broadcast("windows.onFocusChanged", () => [this.focusedPopups.get(window.id) ?? window.id]);
+  }
+
+  // Inside a focused pane, focus moves between the pane's tabs and its popup windows.
+  popupWindowFocused(window: ExtensionWindow, popupId: number | null) {
+    if ((this.focusedPopups.get(window.id) ?? null) === popupId) return;
+    if (popupId === null) this.focusedPopups.delete(window.id);
+    else this.focusedPopups.set(window.id, popupId);
+    if (this.lastFocusedWindowId === window.id && window.host.focused()) {
+      this.broadcast("windows.onFocusChanged", () => [popupId ?? window.id]);
+    }
+  }
+
+  windowBoundsChanged(window: ExtensionWindow) {
+    this.broadcastWindow("windows.onBoundsChanged", window);
+  }
+
+  popupWindowBoundsChanged(id: number) {
+    const entry = this.popupWindows.get(id);
+    if (entry) this.broadcast("windows.onBoundsChanged", () => [this.popupWindowInfo(entry, false)]);
   }
 
   allWindows(): ExtensionWindow[] {
@@ -380,7 +421,11 @@ export class ExtensionService {
   }
 
   removePopupWindow(id: number) {
-    if (!this.popupWindows.delete(id)) return;
+    const entry = this.popupWindows.get(id);
+    if (!entry) return;
+    this.popupWindows.delete(id);
+    if (this.focusedPopups.get(entry.owner.id) === id) this.focusedPopups.delete(entry.owner.id);
+    this.broadcast("tabs.onRemoved", () => [entry.tabId, { windowId: id, isWindowClosing: true }]);
     this.broadcast("windows.onRemoved", () => [id]);
   }
 
@@ -444,7 +489,7 @@ export class ExtensionService {
     const { width, height } = window.host.size();
     const info: chrome.windows.Window = {
       id: window.id,
-      focused: window.id === this.lastFocusedWindowId && window.host.focused(),
+      focused: window.id === this.lastFocusedWindowId && window.host.focused() && !this.focusedPopups.has(window.id),
       top: 0,
       left: 0,
       width,
@@ -464,13 +509,14 @@ export class ExtensionService {
   }
 
   popupWindowInfo(entry: PopupWindowEntry, populate: boolean, extension?: LoadedExtension): chrome.windows.Window {
+    const bounds = entry.owner.host.popupWindowBounds(entry.id);
     const info: chrome.windows.Window = {
       id: entry.id,
-      focused: false,
+      focused: this.focusedPopups.get(entry.owner.id) === entry.id && entry.owner.id === this.lastFocusedWindowId && entry.owner.host.focused(),
       top: 0,
       left: 0,
-      width: 0,
-      height: 0,
+      width: bounds?.width ?? 0,
+      height: bounds?.height ?? 0,
       incognito: false,
       type: "popup",
       state: "normal",
@@ -480,11 +526,17 @@ export class ExtensionService {
     return info;
   }
 
-  tabInfo(extension: LoadedExtension, { window, tab }: TabRef): chrome.tabs.Tab {
+  // `asCreated` describes the tab as it was when it opened, before its first page
+  // committed: the pane only reports a new tab once it's running, often after that.
+  tabInfo(extension: LoadedExtension, { window, tab }: TabRef, asCreated = false): chrome.tabs.Tab {
     const tabs = window.host.tabs;
     const active = tabs.active === tab;
     const contents = this.contentsOf(tab);
-    const url = tab.state.url;
+    const extras = tab.contentsId !== null ? this.tabStates.peek(tab.contentsId) : null;
+    const committed = asCreated || (extras && !extras.committed) ? "" : tab.state.url;
+    const pending = asCreated ? tab.url : extras?.pendingUrl;
+    const url = this.chromeUrlFor(tab.contentsId, committed);
+    const pendingUrl = pending && pending !== committed ? this.chromeUrlFor(tab.contentsId, pending) : undefined;
     const info: chrome.tabs.Tab = {
       id: tab.contentsId ?? -1,
       index: tabs.all().indexOf(tab),
@@ -492,31 +544,79 @@ export class ExtensionService {
       active,
       highlighted: active,
       selected: active,
-      pinned: false,
+      pinned: tab.pinned,
       audible: tab.state.audible,
-      discarded: false,
-      autoDiscardable: true,
+      discarded: extras?.discarded ?? false,
+      autoDiscardable: extras?.autoDiscardable ?? true,
       frozen: false,
       groupId: -1,
       incognito: false,
-      mutedInfo: { muted: tab.state.muted },
-      status: tab.state.loading ? "loading" : "complete",
+      mutedInfo: { muted: tab.state.muted, ...extras?.muted } as chrome.tabs.MutedInfo,
+      status: extras?.discarded ? "unloaded" : asCreated || tab.state.loading ? "loading" : "complete",
       width: contents ? window.host.size().width : 0,
       height: contents ? window.host.size().height : 0,
       lastAccessed: tab.lastAccessed,
       url,
-      title: tab.state.title || url,
-      favIconUrl: this.favicons.get(tab.contentsId ?? -1),
+      title: (asCreated ? "" : tab.state.title) || url || pendingUrl || "",
     };
+    if (pendingUrl) info.pendingUrl = pendingUrl;
+    if (extras?.favIconUrl) info.favIconUrl = extras.favIconUrl;
     const opener = tab.openerId !== null ? tabs.get(tab.openerId) : null;
     if (opener?.contentsId) info.openerTabId = opener.contentsId;
     return this.scrubTab(extension, info);
   }
 
+  overridePage(contentsId: number, chromeUrl: string, url: string) {
+    this.overriddenPages.set(contentsId, { chromeUrl, url });
+  }
+
+  tabGone(contentsId: number) {
+    this.tabStates.delete(contentsId);
+    this.overriddenPages.delete(contentsId);
+  }
+
+  private chromeUrlFor(contentsId: number | null, url: string): string {
+    const overridden = contentsId !== null ? this.overriddenPages.get(contentsId) : undefined;
+    return overridden?.url === url ? overridden.chromeUrl : url;
+  }
+
+  // Chrome reloads a discarded tab once it is shown again.
+  reloadDiscarded({ tab }: TabRef) {
+    const extras = tab.contentsId !== null ? this.tabStates.peek(tab.contentsId) : null;
+    if (!extras?.discarded) return;
+    extras.discarded = false;
+    this.contentsOf(tab)?.reload();
+  }
+
+  // Zoom can change for many tabs at once (one origin shares a zoom level), so every tab is checked.
+  zoomMayHaveChanged() {
+    for (const { tab } of this.allTabs()) {
+      const contents = this.contentsOf(tab);
+      if (!contents || tab.contentsId === null) continue;
+      const extras = this.tabStates.get(tab.contentsId);
+      const factor = contents.getZoomFactor();
+      if (Math.abs(factor - extras.zoomFactor) < 1e-6) continue;
+      const change = {
+        tabId: tab.contentsId,
+        oldZoomFactor: extras.zoomFactor,
+        newZoomFactor: factor,
+        zoomSettings: { mode: extras.zoom.mode, scope: extras.zoom.scope },
+      };
+      extras.zoomFactor = factor;
+      this.broadcast("tabs.onZoomChange", () => [change]);
+    }
+  }
+
+  tabChanged({ window, tab }: TabRef, change: chrome.tabs.OnUpdatedInfo) {
+    this.tabEvents.get(window.id)?.announce(tab, change);
+  }
+
   popupTabInfo(extension: LoadedExtension, entry: PopupWindowEntry): chrome.tabs.Tab {
     const contents = entry.contents;
     const url = contents.isDestroyed() ? "" : contents.getURL();
+    const pending = !url || (!contents.isDestroyed() && contents.isLoading() && url !== entry.url);
     return this.scrubTab(extension, {
+      ...(pending ? { pendingUrl: entry.url } : {}),
       id: contents.id,
       index: 0,
       windowId: entry.id,
@@ -536,12 +636,11 @@ export class ExtensionService {
   }
 
   scrubTab(extension: LoadedExtension, info: chrome.tabs.Tab): chrome.tabs.Tab {
-    if (info.url !== undefined && extension.canSeeTab(info.id ?? -1, info.url)) return info;
+    const url = info.url || info.pendingUrl;
+    if (url !== undefined && extension.canSeeTab(info.id ?? -1, url)) return info;
     const { url: _url, pendingUrl: _pending, title: _title, favIconUrl: _favicon, ...rest } = info;
     return rest as chrome.tabs.Tab;
   }
-
-  readonly favicons = new Map<number, string>();
 
   // Called for every user action aimed at an extension (icon click, shortcut, menu item).
   grantActiveTab(extension: LoadedExtension, tab: Tab) {
@@ -561,6 +660,15 @@ export class ExtensionService {
   }
 }
 
+// WebContents.getURL() already shows a navigation that hasn't committed yet; the frame doesn't.
+function committedUrl(contents: WebContents): string {
+  try {
+    return contents.mainFrame.url;
+  } catch {
+    return "";
+  }
+}
+
 // Turns tab changes in one pane into chrome.tabs events for every extension.
 class TabEvents {
   constructor(
@@ -574,10 +682,16 @@ class TabEvents {
     const contents = this.service.contentsOf(tab);
     const ref = { window: this.window, tab };
     if (contents) {
+      const extras = this.service.tabStates.get(contents.id);
+      const committed = committedUrl(contents);
+      extras.reportedUrl = committed;
+      extras.committed = committed !== "";
+      extras.pendingUrl = committed ? null : tab.url;
+      extras.zoomFactor = contents.getZoomFactor();
       this.watchContents(contents, tab);
       this.service.tabContentsReady(contents, ref);
     }
-    this.service.broadcast("tabs.onCreated", (extension) => [this.service.tabInfo(extension, ref)]);
+    this.service.broadcast("tabs.onCreated", (extension) => [this.service.tabInfo(extension, ref, true)]);
     if (this.window.host.tabs.active === tab) {
       this.service.sidePanels.tabActivated(this.window);
       this.announceActivated(tab);
@@ -585,20 +699,42 @@ class TabEvents {
   }
 
   updated(tab: Tab, previous: WebViewState) {
+    if (tab.contentsId === null) return;
     const next = tab.state;
+    const extras = this.service.tabStates.get(tab.contentsId);
     const change: chrome.tabs.OnUpdatedInfo = {};
     if (next.loading !== previous.loading) change.status = next.loading ? "loading" : "complete";
-    if (next.url !== previous.url) change.url = next.url;
-    if (next.title !== previous.title) change.title = next.title;
+    const shownUrl = next.loading && extras.pendingUrl ? extras.pendingUrl : next.url;
+    if (shownUrl !== extras.reportedUrl && (change.status === "loading" || next.url !== previous.url)) {
+      change.url = shownUrl;
+      extras.reportedUrl = shownUrl;
+    }
     if (next.audible !== previous.audible) change.audible = next.audible;
-    if (next.muted !== previous.muted) change.mutedInfo = { muted: next.muted };
+    if (next.muted !== previous.muted) {
+      const requested = extras.requestedMute?.muted === next.muted ? extras.requestedMute : null;
+      extras.muted = requested ? { reason: requested.reason, extensionId: requested.extensionId } : { reason: "user" };
+      change.mutedInfo = { muted: next.muted, ...extras.muted } as chrome.tabs.MutedInfo;
+      extras.requestedMute = null;
+    }
+    if (next.favicon !== previous.favicon) {
+      const url = next.favicon ? extras.faviconCandidates[0] : undefined;
+      if (url !== extras.favIconUrl) {
+        extras.favIconUrl = url;
+        if (url) change.favIconUrl = url;
+      }
+    }
+    if (next.zoom !== previous.zoom || next.url !== previous.url) this.service.zoomMayHaveChanged();
     if (Object.keys(change).length === 0) return;
-    if (change.url && tab.contentsId !== null) {
+    if (change.url) {
       for (const extension of this.service.loaded.values()) {
         if (!extension.hasActiveTab(tab.contentsId, next.url)) this.service.revokeActiveTab(extension, tab);
       }
     }
     this.service.actions.tabNavigated(tab, change.url !== undefined);
+    this.announceUpdate(tab, change);
+  }
+
+  private announceUpdate(tab: Tab, change: chrome.tabs.OnUpdatedInfo) {
     const ref = { window: this.window, tab };
     this.service.broadcast("tabs.onUpdated", (extension) => {
       const info = this.service.tabInfo(extension, ref);
@@ -613,9 +749,16 @@ class TabEvents {
     });
   }
 
+  announce(tab: Tab, change: chrome.tabs.OnUpdatedInfo) {
+    if (tab.contentsId !== null) this.announceUpdate(tab, change);
+  }
+
   activated(tab: Tab) {
     this.service.sidePanels.tabActivated(this.window);
-    if (tab.contentsId !== null) this.announceActivated(tab);
+    if (tab.contentsId !== null) {
+      this.service.reloadDiscarded({ window: this.window, tab });
+      this.announceActivated(tab);
+    }
   }
 
   private announceActivated(tab: Tab) {
@@ -634,41 +777,63 @@ class TabEvents {
     this.service.broadcast("tabs.onMoved", () => [tab.contentsId, info]);
   }
 
-  removed(tab: Tab) {
+  pinned(tab: Tab) {
+    this.announce(tab, { pinned: tab.pinned });
+  }
+
+  removed(tab: Tab, isWindowClosing = false) {
     if (tab.contentsId === null) return;
     const id = tab.contentsId;
-    browsing().closed.add({
-      windowId: this.window.id,
-      index: this.window.host.tabs.count,
-      url: tab.state.url,
-      title: tab.state.title,
-      favIconUrl: this.service.favicons.get(id),
-    });
-    this.service.favicons.delete(id);
+    const extras = this.service.tabStates.get(id);
+    // Like Chrome, a tab closed before its first page committed isn't recently closed.
+    if (extras.committed) {
+      browsing().closed.add({
+        windowId: this.window.id,
+        index: this.window.host.tabs.count,
+        url: tab.state.url,
+        title: tab.state.title,
+        favIconUrl: extras.favIconUrl,
+        lastAccessed: tab.lastAccessed,
+      });
+    }
+    this.service.tabGone(id);
     for (const extension of this.service.loaded.values()) extension.revokeActiveTab(id);
     this.service.actions.tabRemoved(id);
     this.service.sidePanels.tabRemoved(this.window, id);
-    const info = { windowId: this.window.id, isWindowClosing: false };
+    const info = { windowId: this.window.id, isWindowClosing };
     this.service.broadcast("tabs.onRemoved", () => [id, info]);
   }
 
   private watchContents(contents: WebContents, tab: Tab) {
-    contents.on("page-favicon-updated", (_event, favicons) => {
-      const url = favicons[0];
-      if (!url || this.service.favicons.get(contents.id) === url) return;
-      this.service.favicons.set(contents.id, url);
-      const ref = { window: this.window, tab };
-      this.service.broadcast("tabs.onUpdated", (extension) => {
-        const info = this.service.tabInfo(extension, ref);
-        if (info.favIconUrl === undefined) return null;
-        return [info.id, { favIconUrl: url }, info];
-      });
+    const extras = () => this.service.tabStates.peek(contents.id);
+    // Runs before the pane's own listener, so the pending URL is known when loading starts.
+    contents.prependListener("did-start-navigation", (details) => {
+      const state = extras();
+      if (state && details.isMainFrame && !details.isSameDocument) state.pendingUrl = details.url;
     });
-    contents.on("zoom-changed", () => {
-      const zoom = contents.getZoomFactor();
-      this.service.broadcast("tabs.onZoomChange", () => [
-        { tabId: contents.id, oldZoomFactor: zoom, newZoomFactor: zoom, zoomSettings: { mode: "automatic", scope: "per-origin" } },
-      ]);
+    const settled = () => {
+      const state = extras();
+      if (state) state.pendingUrl = null;
+    };
+    contents.prependListener("did-navigate", () => {
+      const state = extras();
+      if (state) state.committed = true;
+      settled();
+    });
+    contents.on("did-fail-load", (_event, _code, _description, _url, isMainFrame) => {
+      if (isMainFrame) settled();
+    });
+    contents.prependListener("did-stop-loading", () => {
+      const state = extras();
+      if (state && committedUrl(contents)) state.committed = true;
+      settled();
+    });
+    contents.on("page-favicon-updated", (_event, favicons) => {
+      const state = extras();
+      if (state) state.faviconCandidates = favicons;
+    });
+    contents.on("page-title-updated", (_event, title) => {
+      if (extras()) this.announce(tab, { title: title || tab.state.url });
     });
   }
 }
