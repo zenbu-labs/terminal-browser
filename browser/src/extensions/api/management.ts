@@ -98,6 +98,7 @@ export function installManagement(service: ExtensionService) {
           ? await window.host.prompt({ kind: "permissions", extensionId: record.id, name: record.name, icon: null, warnings: warningsFor(manifest) })
           : false;
         if (!accepted) throw new Error("The user did not accept the re-enable dialog.");
+        return service.installer.acceptNewPermissions(record.id);
       }
       if (record.enabled === Boolean(enabled)) return;
       if (!enabled && record.id === caller.extension.id) {

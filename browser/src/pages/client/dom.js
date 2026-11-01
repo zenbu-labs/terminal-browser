@@ -104,6 +104,12 @@ export function dayStart(time) {
   return date.getTime();
 }
 
+export function nextDayStart(time) {
+  const date = new Date(dayStart(time));
+  date.setDate(date.getDate() + 1);
+  return date.getTime();
+}
+
 export function dayLabel(time) {
   const start = dayStart(time);
   const today = dayStart(Date.now());

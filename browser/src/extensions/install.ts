@@ -14,6 +14,7 @@ import {
   readZipFile,
   recordForPackage,
   removeOtherVersions,
+  restoreExtension,
   saveExtension,
   unpackPackage,
   updateExtension,
@@ -77,8 +78,16 @@ export class Installer {
     const dir = unpackPackage(pkg);
     const record = recordForPackage(pkg, dir, enabled ? {} : { enabled: false, disabledReason: "user" });
     saveExtension(record);
-    if (enabled) await this.service.manager.start(record, previous ? "update" : "install", previous?.version);
-    else this.service.changed();
+    if (enabled) {
+      try {
+        await this.service.manager.start(record, previous ? "update" : "install", previous?.version);
+      } catch (error) {
+        await this.restore(pkg.id, previous, dir);
+        throw error;
+      }
+    } else {
+      this.service.changed();
+    }
     removeOtherVersions(pkg.id, dir);
     return { id: pkg.id, name: pkg.name, version: pkg.version };
   }
@@ -126,12 +135,14 @@ export class Installer {
     const records = listExtensions().filter((record) => id === undefined || record.id === id);
     const results = await downloadStoreUpdates(records, process.versions.chrome);
     for (const result of results) {
+      const previous = records.find((record) => record.id === result.id) ?? null;
       if (result.status === "updated" && result.record) {
-        await this.applyUpdate(result.record, result.previousVersion);
+        const error = await this.applyUpdate(result.record, previous);
+        if (error) Object.assign(result, { status: "failed", record: null, error });
       } else if (result.status === "needs_permission" && result.record) {
         await this.service.unload(result.id);
         this.service.changed();
-        if (prompt) void this.askForNewPermissions(result);
+        if (prompt && previous?.enabled) void this.askForNewPermissions(result, previous);
       }
     }
     return results;
@@ -144,12 +155,27 @@ export class Installer {
     if (record) removeOtherVersions(id, record.path);
   }
 
-  private async applyUpdate(record: ExtensionRecord, previousVersion: string) {
-    if (record.enabled) await this.service.manager.start(record, "update", previousVersion).catch(() => null);
+  // Returns why the new version failed to load, after putting the previous one back.
+  private async applyUpdate(record: ExtensionRecord, previous: ExtensionRecord | null): Promise<string | null> {
+    if (record.enabled) {
+      try {
+        await this.service.manager.start(record, "update", previous?.version);
+      } catch (error) {
+        await this.restore(record.id, previous, record.path);
+        return error instanceof Error ? error.message : String(error);
+      }
+    }
     removeOtherVersions(record.id, record.path);
+    return null;
   }
 
-  private async askForNewPermissions(result: UpdateResult) {
+  private async restore(id: string, previous: ExtensionRecord | null, failedDir: string) {
+    restoreExtension(id, previous, failedDir);
+    if (previous?.enabled) await this.service.load(previous).catch(() => null);
+    this.service.changed();
+  }
+
+  private async askForNewPermissions(result: UpdateResult, previous: ExtensionRecord) {
     const record = result.record!;
     const window = this.service.lastFocusedWindow();
     if (!window) return;
@@ -163,7 +189,7 @@ export class Installer {
     });
     if (!accepted || getExtension(record.id)?.disabledReason !== "permissions_increase") return;
     const enabled = updateExtension(record.id, { enabled: true, disabledReason: null });
-    if (enabled) await this.applyUpdate(enabled, result.previousVersion);
+    if (enabled) await this.applyUpdate(enabled, previous);
   }
 
   // Checks at startup (once the last check is old enough) and then every 5 hours.

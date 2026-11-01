@@ -168,14 +168,18 @@ function removeVisits(where: string, params: (string | number)[]): string[] {
   const removed: string[] = [];
   for (const { id } of touched) {
     const stats = sqlite
-      .prepare("SELECT COUNT(*) AS count, MAX(visit_time) AS last FROM history_visits WHERE url_id = ?")
-      .get(id) as { count: number; last: number | null };
+      .prepare(
+        "SELECT COUNT(*) AS count, SUM(transition = 'typed') AS typed, MAX(visit_time) AS last FROM history_visits WHERE url_id = ?",
+      )
+      .get(id) as { count: number; typed: number | null; last: number | null };
     if (stats.count === 0) {
       const row = sqlite.prepare("SELECT url FROM history_urls WHERE id = ?").get(id) as { url: string } | undefined;
       sqlite.prepare("DELETE FROM history_urls WHERE id = ?").run(id);
       if (row) removed.push(row.url);
     } else {
-      sqlite.prepare("UPDATE history_urls SET visit_count = ?, last_visit_time = ? WHERE id = ?").run(stats.count, stats.last, id);
+      sqlite
+        .prepare("UPDATE history_urls SET visit_count = ?, typed_count = ?, last_visit_time = ? WHERE id = ?")
+        .run(stats.count, stats.typed ?? 0, stats.last, id);
     }
   }
   return removed;

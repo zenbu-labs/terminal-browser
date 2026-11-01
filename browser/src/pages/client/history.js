@@ -1,4 +1,4 @@
-import { api, clock, dayLabel, dayStart, groupByDay, h, hostOf, linkButton, live, mount } from "./dom.js";
+import { api, clock, dayLabel, dayStart, groupByDay, h, hostOf, linkButton, live, mount, nextDayStart } from "./dom.js";
 
 const COPY = {
   title: "History",
@@ -9,8 +9,6 @@ const COPY = {
   remove: "Remove",
   more: "Show more",
 };
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const state = { text: "", visits: [], more: false, loaded: false, limit: 1 };
 
@@ -46,7 +44,6 @@ function entries() {
 }
 
 function entryRow(visit) {
-  const start = dayStart(visit.time);
   return h(
     "li",
     { class: "row" },
@@ -65,7 +62,7 @@ function entryRow(visit) {
       visit.title || visit.url,
     ),
     h("span", { class: "muted clip", style: "max-width: 220px" }, hostOf(visit.url)),
-    linkButton(COPY.remove, () => api.remove(visit.url, start, start + DAY_MS), "quiet hover-only"),
+    linkButton(COPY.remove, () => api.remove(visit.url, dayStart(visit.time), nextDayStart(visit.time)), "quiet hover-only"),
   );
 }
 

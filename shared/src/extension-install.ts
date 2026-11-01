@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { CrxError, checkStoreUpdates, downloadStoreCrx, downloadUpdate, readZipFile, unzipTo, verifyCrx } from "./crx";
 import type { VerifyOptions } from "./crx";
-import { EXTENSIONS_DIR, getExtension, saveExtension, updateExtension } from "./extensions";
+import { EXTENSIONS_DIR, deleteExtension, getExtension, saveExtension, updateExtension } from "./extensions";
 import type { ExtensionRecord, ExtensionSource } from "./extensions";
 import { asManifest, permissionWarnings, requiredPermissions } from "./manifest";
 
@@ -153,6 +153,13 @@ export function removeOtherVersions(id: string, keep: string): void {
     const dir = path.join(root, entry);
     if (dir !== keep) fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// Puts back what was installed before a new version that failed to load.
+export function restoreExtension(id: string, previous: ExtensionRecord | null, failedDir: string): void {
+  if (previous) saveExtension(previous);
+  else deleteExtension(id);
+  if (failedDir !== previous?.path) fs.rmSync(failedDir, { recursive: true, force: true });
 }
 
 export function recordForPackage(pkg: ExtensionPackage, dir: string, change: Partial<ExtensionRecord> = {}): ExtensionRecord {

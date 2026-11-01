@@ -265,6 +265,16 @@ export class DownloadManager {
     this.progressed.emit();
     void (async () => {
       const file = fs.createWriteStream(savePath);
+      let fileFailed = false;
+      file.on("error", () => {
+        fileFailed = true;
+        abort.abort();
+      });
+      const settled = (event: "drain" | "finish") =>
+        new Promise<void>((resolve) => {
+          file.once(event, () => resolve());
+          file.once("error", () => resolve());
+        });
       try {
         const response = await electronSession.defaultSession.fetch(request.url, {
           method: request.method ?? "GET",
@@ -281,14 +291,18 @@ export class DownloadManager {
         let received = 0;
         for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
           received += chunk.byteLength;
-          if (!file.write(chunk)) await new Promise<void>((resolve) => file.once("drain", () => resolve()));
+          if (!file.write(chunk)) await settled("drain");
+          if (fileFailed) throw new Error("FILE_FAILED");
           this.update(record.id, { receivedBytes: received });
         }
-        await new Promise<void>((resolve) => file.end(() => resolve()));
+        const finished = settled("finish");
+        file.end();
+        await finished;
+        if (fileFailed) throw new Error("FILE_FAILED");
         this.update(record.id, { state: "complete", endTime: Date.now(), totalBytes: received, receivedBytes: received });
       } catch (error) {
         file.destroy();
-        const reason = abort.signal.aborted ? "USER_CANCELED" : error instanceof Error && error.message === "SERVER_BAD_CONTENT" ? "SERVER_BAD_CONTENT" : "NETWORK_FAILED";
+        const reason = fileFailed ? "FILE_FAILED" : abort.signal.aborted ? "USER_CANCELED" : error instanceof Error && error.message === "SERVER_BAD_CONTENT" ? "SERVER_BAD_CONTENT" : "NETWORK_FAILED";
         this.update(record.id, { state: "interrupted", error: reason, endTime: Date.now() });
       } finally {
         this.live.delete(record.id);

@@ -25,6 +25,7 @@ import {
   readManifestFile,
   recordForPackage,
   removeOtherVersions,
+  restoreExtension,
   saveExtension,
   unpackPackage,
   updateExtension,
@@ -252,7 +253,13 @@ async function installCommand(args: string[]): Promise<number> {
   const previous = getExtension(pkg.id);
   const dir = unpackPackage(pkg);
   saveExtension(recordForPackage(pkg, dir));
-  await inBrowser({ action: "installed", id: pkg.id, previousVersion: previous?.version }).catch(() => undefined);
+  try {
+    await inBrowser({ action: "installed", id: pkg.id, previousVersion: previous?.version });
+  } catch (error) {
+    restoreExtension(pkg.id, previous, dir);
+    await inBrowser({ action: "reconcile" }).catch(() => undefined);
+    throw error;
+  }
   removeOtherVersions(pkg.id, dir);
   out(`installed ${pkg.name} ${pkg.version} (${pkg.id})`);
   return 0;
@@ -498,7 +505,12 @@ async function importCommand(args: string[]): Promise<number> {
       const pkg = await fetchStorePackage(item.id);
       const dir = unpackPackage(pkg);
       saveExtension(recordForPackage(pkg, dir, item.enabled ? {} : { enabled: false, disabledReason: "user" }));
-      await inBrowser({ action: "installed", id: pkg.id }).catch(() => undefined);
+      try {
+        await inBrowser({ action: "installed", id: pkg.id });
+      } catch (error) {
+        restoreExtension(pkg.id, null, dir);
+        throw error;
+      }
       removeOtherVersions(pkg.id, dir);
       out(`installed ${pkg.name} ${pkg.version}${item.enabled ? "" : " (off)"}`);
     } catch (error) {
