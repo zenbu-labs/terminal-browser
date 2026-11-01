@@ -1,0 +1,81 @@
+#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+
+const models = require("./codex-models.json");
+const log = (entry) => process.env.FAKE_CODEX_LOG && fs.appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify(entry) + "\n");
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
+const threadId = "thread-1";
+let turns = 0;
+let waiting = null;
+let nextServerId = 1000;
+const replies = new Map();
+
+function notify(method, params) {
+  send({ method, params });
+}
+
+function complete(turnId, status) {
+  notify("turn/completed", { threadId, turn: { id: turnId, items: [], status, error: status === "failed" ? { message: "boom" } : null } });
+}
+
+function runTurn(turnId, text) {
+  notify("turn/started", { threadId, turn: { id: turnId, status: "inProgress" } });
+  if (text.startsWith("question")) {
+    for (const delta of ["Hel", "lo"]) notify("item/agentMessage/delta", { threadId, turnId, itemId: "m", delta });
+    return complete(turnId, "completed");
+  }
+  if (text.startsWith("slow")) {
+    waiting = turnId;
+    return notify("item/started", { threadId, turnId, item: { type: "commandExecution", id: "c", command: "sleep 9" } });
+  }
+  if (text.startsWith("fail")) return complete(turnId, "failed");
+  if (text.startsWith("long")) {
+    for (let line = 1; line <= 60; line++) notify("item/agentMessage/delta", { threadId, turnId, itemId: "m", delta: `line ${line}\n\n` });
+    return complete(turnId, "completed");
+  }
+  if (text.startsWith("tall")) {
+    for (let line = 1; line <= 12; line++) notify("item/agentMessage/delta", { threadId, turnId, itemId: "m", delta: `answer line ${line}\n\n` });
+    return complete(turnId, "completed");
+  }
+  notify("item/agentMessage/delta", { threadId, turnId, itemId: "m1", delta: "Listing. " });
+  const id = nextServerId++;
+  replies.set(id, () => {
+    notify("item/agentMessage/delta", { threadId, turnId, itemId: "m2", delta: "Done." });
+    complete(turnId, "completed");
+  });
+  send({ id, method: "item/tool/call", params: { threadId, turnId, callId: "call", namespace: null, tool: "write_command", arguments: { command: "ls -la\n" } } });
+}
+
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  log(message);
+  if (message.method == null) {
+    replies.get(message.id)?.();
+    replies.delete(message.id);
+    return;
+  }
+  const reply = (result) => send({ id: message.id, result });
+  switch (message.method) {
+    case "initialize":
+      return reply({ userAgent: "fake" });
+    case "account/read":
+      return reply(process.env.FAKE_CODEX_SIGNED_OUT ? models.account : { account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+    case "model/list":
+      return reply(models.models);
+    case "thread/start":
+      return reply({ thread: { id: threadId } });
+    case "turn/start": {
+      const turnId = `turn-${++turns}`;
+      reply({ turn: { id: turnId, status: "inProgress" } });
+      return setTimeout(() => runTurn(turnId, message.params.input[0].text), 5);
+    }
+    case "turn/interrupt":
+      reply({});
+      if (waiting === message.params.turnId) complete(waiting, "interrupted");
+      waiting = null;
+      return;
+    default:
+      if (message.id != null) send({ id: message.id, error: { code: -32601, message: "unknown" } });
+  }
+});
