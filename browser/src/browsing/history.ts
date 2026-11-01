@@ -1,7 +1,11 @@
-import { app } from "electron";
+import { app, session as electronSession } from "electron";
 import type { WebContents } from "electron";
 
 import {
+  ConfigStore,
+  SETTINGS,
+  SETTINGS_FILE,
+  SHORTCUTS_FILE,
   addHistoryVisit,
   deleteAllHistory,
   deleteHistoryRange,
@@ -9,7 +13,7 @@ import {
   deleteHistoryUrlInRange,
   setHistoryTitle,
 } from "shared";
-import type { HistoryEntry } from "shared";
+import type { HistoryEntry, Settings } from "shared";
 
 import { DOC_SCHEME } from "../url";
 import { Listeners } from "./listeners";
@@ -37,11 +41,25 @@ export class HistoryRecorder {
   readonly removed = new Listeners<[HistoryRemoval]>();
   readonly changed = new Listeners<[]>();
   private readonly typed = new Map<string, number>();
+  private readonly settings = new ConfigStore({ settings: SETTINGS_FILE, shortcuts: SHORTCUTS_FILE });
+  private mode: Settings["history.record"] = SETTINGS["history.record"].default;
 
   start() {
+    this.readMode();
+    this.settings.watch(() => this.readMode());
     app.on("web-contents-created", (_event, contents) => {
       if (TAB_TYPES.has(contents.getType())) this.watch(contents);
     });
+  }
+
+  // SSH windows browse through their own session, so "local" leaves them out.
+  private records(contents: WebContents): boolean {
+    if (this.mode === "off") return false;
+    return this.mode === "all" || contents.session === electronSession.defaultSession;
+  }
+
+  private readMode() {
+    this.mode = this.settings.load().settings?.["history.record"] ?? SETTINGS["history.record"].default;
   }
 
   typedUrl(url: string) {
@@ -50,7 +68,7 @@ export class HistoryRecorder {
 
   add(url: string, transition: string, title?: string, referringVisitId?: number | null): number | null {
     const recorded = historyUrl(url);
-    if (!recorded) return null;
+    if (!recorded || this.mode === "off") return null;
     const { entry, visitId } = addHistoryVisit({ url: recorded, title, transition, referringVisitId });
     this.visited.emit(entry);
     this.changed.emit();
@@ -103,18 +121,20 @@ export class HistoryRecorder {
           : "link";
       linkTarget = null;
       committed = url;
+      if (!this.records(contents)) return;
       const visit = this.add(url, transition, undefined, transition === "link" ? lastVisit : null);
       if (visit !== null) lastVisit = visit;
     });
     contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
       if (!isMainFrame || url === committed) return;
       committed = url;
+      if (!this.records(contents)) return;
       const visit = this.add(url, "link", undefined, lastVisit);
       if (visit !== null) lastVisit = visit;
     });
     contents.on("page-title-updated", (_event, title) => {
       const url = historyUrl(contents.getURL());
-      if (!url || !title) return;
+      if (!url || !title || !this.records(contents)) return;
       if (setHistoryTitle(url, title)) this.changed.emit();
     });
   }

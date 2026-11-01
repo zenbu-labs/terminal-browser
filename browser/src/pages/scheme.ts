@@ -8,6 +8,7 @@ import { MARKDOWN_CSP, renderMarkdown } from "./markdown";
 import { routeInternalPage } from "./routes";
 import type { Theme } from "../ui/theme";
 import { DOC_SCHEME } from "../url";
+import { forEverySession } from "./sessions";
 
 
 
@@ -78,14 +79,16 @@ function startedByOtherSite(request: Request): boolean {
 }
 
 export function servePages(context: () => PageContext) {
-  protocol.handle(SCHEME, async (request) => {
-    if (startedByWebContent(request)) return new Response("", { status: 403 });
-    return routeInternalPage(new URL(request.url), context());
-  });
-  protocol.handle(DOC_SCHEME, async (request) => {
-    if (startedByOtherSite(request)) return new Response("", { status: 403 });
-    const url = new URL(request.url);
-    return serveDocument(decodeURIComponent(url.pathname), request.headers.get("range"), context().theme);
+  forEverySession((session) => {
+    session.protocol.handle(SCHEME, async (request) => {
+      if (startedByWebContent(request)) return new Response("", { status: 403 });
+      return routeInternalPage(new URL(request.url), context());
+    });
+    session.protocol.handle(DOC_SCHEME, async (request) => {
+      if (startedByOtherSite(request)) return new Response("", { status: 403 });
+      const url = new URL(request.url);
+      return serveDocument(decodeURIComponent(url.pathname), request.headers.get("range"), context().theme);
+    });
   });
 }
 

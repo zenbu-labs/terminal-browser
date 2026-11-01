@@ -6,6 +6,7 @@ import type { IpcMainInvokeEvent, Session, WebContents } from "electron";
 
 import { INTERNAL_API, INTERNAL_CHANGED_CHANNEL, internalChannel } from "./internal-api";
 import type { InternalHost } from "./internal-api";
+import { forEverySession } from "./sessions";
 
 export type InternalHandler = (sender: WebContents, ...args: unknown[]) => unknown;
 
@@ -35,25 +36,31 @@ export function internalHostOf(url: string): string | null {
 
 // Like Chrome's WebUI: a call is answered only for the top frame of one of our
 // tabs whose committed origin is exactly the page that owns the method.
-function allowed(event: IpcMainInvokeEvent, host: InternalHost, session: Session, isTab: (contents: WebContents) => boolean) {
+export function allowedInternalCall(
+  event: Pick<IpcMainInvokeEvent, "sender" | "senderFrame">,
+  host: InternalHost,
+  servedSession: (session: Session) => boolean,
+  isTab: (contents: WebContents) => boolean,
+): boolean {
   const frame = event.senderFrame;
   return (
     frame !== null &&
     frame.parent === null &&
     frame === event.sender.mainFrame &&
     frame.origin === `${INTERNAL_SCHEME}://${host}` &&
-    event.sender.session === session &&
+    servedSession(event.sender.session) &&
     isTab(event.sender)
   );
 }
 
-export function installInternalApi(session: Session, handlers: InternalHandlers, isTab: (contents: WebContents) => boolean) {
-  session.registerPreloadScript({ type: "frame", filePath: preloadPath() });
+export function installInternalApi(handlers: InternalHandlers, isTab: (contents: WebContents) => boolean) {
+  const preload = preloadPath();
+  const servedSession = forEverySession((session) => session.registerPreloadScript({ type: "frame", filePath: preload }));
   for (const host of Object.keys(INTERNAL_API) as InternalHost[]) {
     const pageHandlers = handlers[host] as Record<string, InternalHandler>;
     for (const method of INTERNAL_API[host]) {
       ipcMain.handle(internalChannel(host, method), (event, ...args) => {
-        if (!allowed(event, host, session, isTab)) throw new Error("Not allowed");
+        if (!allowedInternalCall(event, host, servedSession, isTab)) throw new Error("Not allowed");
         return pageHandlers[method](event.sender, ...args);
       });
     }

@@ -83,6 +83,7 @@ Examples:
   terminal-browser new-tab --browser 90107-1 localhost:3000
 `,
   },
+  // fixme: placeholder copy
   "clear-browsing-data": {
     summary: "Clear cookies, site data and cache, like a browser's Clear browsing data",
     usage: "terminal-browser clear-browsing-data [options]",
@@ -95,6 +96,7 @@ Options:
   -y, --yes           Clear without asking
   --cookies           Only clear cookies and site data
   --cache             Only clear cached images and files
+  --history           Only clear browsing history
   --browser <key>     A browser key from terminal-browser ls
 
 Examples:

@@ -1,5 +1,3 @@
-import { session as electronSession } from "electron";
-
 import { browsing } from "../browsing";
 import type { ExtensionService } from "../extensions/service";
 import { bookmarksHandlers, downloadsHandlers, historyHandlers } from "./browsing-api";
@@ -26,7 +24,6 @@ function throttledNotify(host: InternalHost): () => void {
 export function installPages(service: ExtensionService, context: () => PageContext) {
   const data = () => startPageData(context().cwd);
   installInternalApi(
-    electronSession.defaultSession,
     {
       start: { data },
       newtab: { data },

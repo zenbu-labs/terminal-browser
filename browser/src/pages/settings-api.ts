@@ -60,6 +60,9 @@ export function settingsHandlers(): InternalHandlers["settings"] {
         PAGE_DATA_KINDS.includes(kind),
       );
       const start = typeof since === "number" && since > 0 ? since : 0;
+      const siteKinds = chosen.filter((kind): kind is BrowsingDataKind => kind === "siteData" || kind === "cache");
+      // fixme: placeholder copy
+      if (start > 0 && siteKinds.length) throw new Error("Cookies, site data and cache can only be cleared for all time");
       const { history, downloads } = browsing();
       if (chosen.includes("history")) {
         if (start === 0) history.deleteAll();
@@ -70,7 +73,6 @@ export function settingsHandlers(): InternalHandlers["settings"] {
           if (record.state !== "in_progress" && record.startTime >= start) downloads.erase(record.id);
         }
       }
-      const siteKinds = chosen.filter((kind): kind is BrowsingDataKind => kind === "siteData" || kind === "cache");
       if (siteKinds.length) await clearBrowsingData(electronSession.defaultSession, siteKinds);
     },
   };

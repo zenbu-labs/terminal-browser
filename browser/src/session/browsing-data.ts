@@ -2,9 +2,13 @@ import { clearFavicons } from "@zenbu-labs/pixel";
 import { session as electronSession } from "electron";
 import type { Session } from "electron";
 
-export const BROWSING_DATA_KINDS = ["siteData", "cache"] as const;
+import { browsing } from "../browsing";
+
+export const BROWSING_DATA_KINDS = ["history", "siteData", "cache"] as const;
 
 export type BrowsingDataKind = (typeof BROWSING_DATA_KINDS)[number];
+
+export const DEFAULT_CLEAR_KINDS: readonly BrowsingDataKind[] = ["siteData", "cache"];
 
 export function isBrowsingDataKind(value: unknown): value is BrowsingDataKind {
   return BROWSING_DATA_KINDS.includes(value as BrowsingDataKind);
@@ -16,6 +20,7 @@ export function browsingSession(partition: string | null): Session {
 }
 
 export async function clearBrowsingData(session: Session, kinds: readonly BrowsingDataKind[]): Promise<void> {
+  if (kinds.includes("history")) browsing().history.deleteAll();
   if (kinds.includes("siteData")) {
     await session.clearStorageData();
     await session.clearAuthCache();

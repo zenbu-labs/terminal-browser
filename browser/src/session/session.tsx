@@ -76,7 +76,7 @@ import { isInternalUrl } from "../pages/internal";
 import { urlOverride } from "../pages/navigation";
 import { browsing } from "../browsing";
 import { makeTheme } from "../ui/theme";
-import { BROWSING_DATA_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
+import { BROWSING_DATA_KINDS, DEFAULT_CLEAR_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
 import type { BrowsingDataKind } from "./browsing-data";
 import { fuzzyScore } from "./fuzzy";
 import { PermissionPrompts } from "./permissions";
@@ -547,9 +547,9 @@ class Session {
     },
     permissionRequest: (id, request) => this.permissions.request(id, request),
     permissionCheck: (check) => this.permissions.check(check),
-    // the page went away on its own (window.close(), or closed over CDP)
+    // the page went away on its own (window.close(), or closed over CDP); the last tab is replaced instead
     closed: (id) => {
-      if (this.tabs.has(id)) this.closeOrShutdown(id);
+      if (this.tabs.has(id)) this.closeTab(id);
     },
   };
 
@@ -1310,7 +1310,7 @@ class Session {
   private openClearData() {
     if (this.clearData || this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
     this.closePageMenu();
-    this.clearData = { checked: new Set(BROWSING_DATA_KINDS), clearing: false };
+    this.clearData = { checked: new Set(DEFAULT_CLEAR_KINDS), clearing: false };
     this.enterOverlay(["enter"]);
     this.render();
   }

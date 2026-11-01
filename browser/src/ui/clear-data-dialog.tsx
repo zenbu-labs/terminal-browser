@@ -13,9 +13,12 @@ const COPY = {
   clearing: "Deleting…",
   siteData: "Cookies and site data",
   cache: "Cached images and files",
+  // fixme: placeholder copy
+  history: "Browsing history",
 };
 
 const ROWS: { kind: BrowsingDataKind; label: string }[] = [
+  { kind: "history", label: COPY.history },
   { kind: "siteData", label: COPY.siteData },
   { kind: "cache", label: COPY.cache },
 ];

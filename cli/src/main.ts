@@ -489,12 +489,14 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
 }
 
 const BROWSING_DATA_NAMES: Record<string, string> = {
+  // fixme: placeholder copy
+  history: "browsing history",
   siteData: "cookies and site data",
   cache: "cached images and files",
 };
 
 function clearSummary(kinds: string[]): string {
-  const shown = kinds.length > 0 ? kinds : Object.keys(BROWSING_DATA_NAMES);
+  const shown = kinds.length > 0 ? kinds : ["siteData", "cache"];
   const what = shown.map((kind) => BROWSING_DATA_NAMES[kind]).join(", and ");
   return `This clears ${what}${shown.length > 1 ? "," : ""} for every site in every terminal-browser window${shown.includes("siteData") ? ", signing you out" : ""}.`;
 }
@@ -513,6 +515,7 @@ async function clearBrowsingDataCommand(args: string[]): Promise<number> {
   const key = takeFlag(args, "--browser");
   const confirmed = takeBoolFlag(args, "--yes") || takeBoolFlag(args, "-y");
   const kinds = [
+    ...(takeBoolFlag(args, "--history") ? ["history"] : []),
     ...(takeBoolFlag(args, "--cookies") ? ["siteData"] : []),
     ...(takeBoolFlag(args, "--cache") ? ["cache"] : []),
   ];
