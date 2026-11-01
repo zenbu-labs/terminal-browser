@@ -49,6 +49,8 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
 
   const build = buildStamp();
   app.userAgentFallback = chromeUserAgent();
+  // The daemon decides when to exit; a pane whose only page closed itself gets a new page.
+  app.on("window-all-closed", () => {});
   startBrowsing();
   const extensions = startExtensions();
   const sessions = new Map<string, SessionHandle>();
