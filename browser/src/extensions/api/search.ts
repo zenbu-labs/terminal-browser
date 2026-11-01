@@ -29,7 +29,7 @@ export function installSearch(service: ExtensionService) {
         active.ref.current?.loadURL(url);
         return;
       }
-      window.host.tabs.create(url, disposition !== "NEW_BACKGROUND_TAB");
+      window.host.tabs.create(url, true);
     },
     { permission: "search" },
   );
