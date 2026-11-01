@@ -49,28 +49,17 @@ export const ghostty: Detect = (env, run) => {
     Boolean(env.GHOSTTY_RESOURCES_DIR);
   if (!looksLikeGhostty) return null;
 
-  if (process.platform !== "darwin") {
-    return {
-      name: "ghostty",
-      async split() {
-        throw new Error(
-          "--split is not supported inside ghostty on this platform",
-        );
-      },
-    };
-  }
+  if (process.platform !== "darwin") return { name: "ghostty" };
 
   const tooOld =
     (env.TERM_PROGRAM_VERSION?.localeCompare("1.3.0", undefined, { numeric: true }) ?? 0) < 0;
   if (tooOld) {
-    return {
-      name: "ghostty",
-      async split() {
-        throw new Error(
-          `Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`,
-        );
-      },
+    const unsupported = async (): Promise<never> => {
+      throw new Error(
+        `Ghostty ${env.TERM_PROGRAM_VERSION} does not support automation: upgrade to Ghostty 1.3.0 or newer.`,
+      );
     };
+    return { name: "ghostty", getCurrentPane: unsupported, split: unsupported };
   }
 
   const osascript = appleScript("Ghostty", run, "JavaScript");
