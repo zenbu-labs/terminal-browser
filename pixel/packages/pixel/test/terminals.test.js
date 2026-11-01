@@ -299,6 +299,46 @@ test("ghostty finds the instance through the caller tty when ancestry does not r
   assert.ok(commands.includes("osascript -l JavaScript - 7000 list"));
 });
 
+// the ttys are plain files reached through /dev/.., and the pretend ghostty reports as a
+// pane's directory whatever OSC 7 was last written to that pane's tty
+test("ghostty only writes to ttys that its own panes hold", onMac, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-ttys-"));
+  const fakeTty = (name) => {
+    fs.writeFileSync(path.join(dir, name), "");
+    return path.relative("/dev", path.join(dir, name));
+  };
+  const pane = fakeTty("pane");
+  const orphan = fakeTty("orphan");
+  const rows = [
+    [process.pid, 1, "??", "node daemon"],
+    [7000, 1, "??", GHOSTTY_BIN],
+    [7001, 7000, pane, "login"],
+    [7002, 7001, pane, "claude"],
+    [9000, 1, orphan, "claude"],
+  ];
+  const directory = () => {
+    const written = /file:\/\/[^/]*(\/[^\x07]*)\x07/.exec(fs.readFileSync(`/dev/${pane}`, "utf8"));
+    return written ? decodeURIComponent(written[1]) : "/Users/me";
+  };
+  const exec = {
+    "ps -axo pid=,ppid=,tty=,command=": () => processTable(rows),
+    "ps -axo ppid=,tty=": () => processTable(rows.map(([, parent, tty]) => [parent, tty])),
+    "ps -e -o pid=,tty=,args=": () => processTable(rows.map(([pid, , tty, command]) => [pid, tty, command])),
+    "osascript -l JavaScript - 7000 list": () => `w1\tt1\tAAAA\t\t\t${directory()}\n`,
+  };
+  const run = async (bin, args) => {
+    const output = exec[[bin, ...args].join(" ")];
+    if (!output) throw new Error(`nothing recorded for: ${[bin, ...args].join(" ")}`);
+    return output();
+  };
+  const terminal = detect(GHOSTTY_ENV, run);
+  const panes = await terminal.listPanes({ commands: (command) => command.includes("claude") });
+  assert.deepEqual(panes, [{ id: "AAAA", tab: "w1:t1", tty: `/dev/${pane}`, command: "login\nclaude" }]);
+  await assert.rejects(terminal.getCurrentPane({ tty: `/dev/${orphan}`, cwd: "/" }), /not a Ghostty pane/);
+  assert.equal(fs.readFileSync(path.join(dir, "orphan"), "utf8"), "");
+  assert.equal(directory(), "/Users/me");
+});
+
 test("ghostty refuses to guess between instances it cannot connect to this shell", onMac, async () => {
   const { run } = recorder({
     "ps -axo pid=,ppid=,tty=,command=": processTable([
