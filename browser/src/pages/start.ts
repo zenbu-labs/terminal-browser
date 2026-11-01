@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +9,9 @@ import { z } from "zod";
 
 import type { Theme } from "../ui/theme";
 import { documentUrl } from "../url";
-import { escape, html, json, pageColors } from "./scheme";
+import { escape, pageColors } from "./scheme";
 import type { PageContext } from "./scheme";
+import { pageCsp } from "./shell";
 
 
 
@@ -33,12 +35,15 @@ const MAX_PORTS = 10;
 const MAX_DOCUMENTS = 8;
 const PORT_NOISE = ["ControlCe", "rapportd", "sharingd", "agent-bro", "identitys", "Electron", "terminal-"];
 
-export async function renderStartPage(url: URL, context: PageContext): Promise<Response> {
-  const data = await collect(context.cwd);
-  return url.searchParams.has("data") ? json(data) : html(render(data, context.theme));
+export async function renderStartPage(_url: URL, context: PageContext): Promise<Response> {
+  const data = await startPageData(context.cwd);
+  const nonce = crypto.randomBytes(16).toString("base64");
+  return new Response(render(data, context.theme, nonce), {
+    headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": pageCsp(nonce), "cache-control": "no-store" },
+  });
 }
 
-async function collect(cwd: string) {
+export async function startPageData(cwd: string) {
   const [ports, documents, pr] = await Promise.all([listeningPorts(), recentDocuments(cwd), openPullRequest(cwd)]);
   return { ports, documents, pr };
 }
@@ -119,7 +124,7 @@ function ago(ms: number): string {
   return `${Math.round(hours / 24)}d`;
 }
 
-function render(data: Awaited<ReturnType<typeof collect>>, theme: Theme | null): string {
+function render(data: Awaited<ReturnType<typeof startPageData>>, theme: Theme | null, nonce: string): string {
   const { fg, muted, accent, hairline } = pageColors(theme);
   const link = (href: string, text: string) => `<a href="${escape(href)}" target="_blank">${escape(text)}</a>`;
   const section = (title: string, rows: string[]) =>
@@ -136,7 +141,7 @@ function render(data: Awaited<ReturnType<typeof collect>>, theme: Theme | null):
     );
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>terminal-browser</title>
-<style>
+<style nonce="${nonce}">
   :root { color-scheme: dark light; }
   html, body { margin: 0; background: transparent; color: ${fg}; }
   body { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 28px 32px; max-width: 720px; }
@@ -151,9 +156,9 @@ function render(data: Awaited<ReturnType<typeof collect>>, theme: Theme | null):
 </style></head>
 <body>
 ${body || `<p class="empty">no running servers, no recent documents, no open pull request</p>`}
-<script>
+<script nonce="${nonce}">
   // dev servers come and go: reload only when the lists changed
-  const data = () => fetch(location.origin + location.pathname + "?data").then(r => r.ok ? r.text() : null).catch(() => null);
+  const data = () => window.terminalBrowser.data().then(d => JSON.stringify(d)).catch(() => null);
   data().then(t => { window.__start = t; });
   setInterval(async () => {
     const fresh = await data();

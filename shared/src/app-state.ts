@@ -10,6 +10,10 @@ function getAppState(key: string): string | null {
   return row?.value ?? null;
 }
 
+function deleteAppState(key: string): void {
+  store().sqlite.prepare("DELETE FROM app_state WHERE key = ?").run(key);
+}
+
 function setAppState(key: string, value: string): void {
   store()
     .sqlite.prepare(
@@ -56,4 +60,22 @@ export function lastActiveDay(): string | null {
 
 export function setLastActiveDay(day: string): void {
   setAppState("last-active-day", day);
+}
+
+export function extensionsDeveloperMode(): boolean {
+  return getAppState("extensions-developer-mode") === "on";
+}
+
+export function setExtensionsDeveloperMode(on: boolean): void {
+  setAppState("extensions-developer-mode", on ? "on" : "off");
+}
+
+export function extensionErrorCollection(id: string): boolean | null {
+  const value = getAppState(`extension-error-collection:${id}`);
+  return value === null ? null : value === "on";
+}
+
+export function setExtensionErrorCollection(id: string, on: boolean | null): void {
+  if (on === null) deleteAppState(`extension-error-collection:${id}`);
+  else setAppState(`extension-error-collection:${id}`, on ? "on" : "off");
 }

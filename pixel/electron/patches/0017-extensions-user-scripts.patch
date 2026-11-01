@@ -1,0 +1,71 @@
+diff --git a/shell/browser/api/electron_api_extensions.cc b/shell/browser/api/electron_api_extensions.cc
+--- a/shell/browser/api/electron_api_extensions.cc
++++ b/shell/browser/api/electron_api_extensions.cc
+@@ -11,6 +11,7 @@
+ #include "extensions/browser/extension_util.h"
+ #include "extensions/browser/permissions/active_tab_permission_granter.h"
+ #include "extensions/browser/permissions/permissions_updater.h"
++#include "extensions/browser/user_script_manager.h"
+ #include "extensions/common/manifest_handlers/permissions_parser.h"
+ #include "extensions/common/permissions/permission_set.h"
+ #include "extensions/common/permissions/permissions_data.h"
+@@ -286,6 +287,17 @@ v8::Local<v8::Value> Extensions::GetActivePermissions(
+       .Build();
+ }
+ 
++bool Extensions::SetUserScriptsAllowed(const std::string& extension_id,
++                                       bool allowed) {
++  if (!extensions::ExtensionRegistry::Get(browser_context())
++           ->GetInstalledExtension(extension_id))
++    return false;
++  extensions::ExtensionSystem::Get(browser_context())
++      ->user_script_manager()
++      ->SetUserScriptPrefEnabled(extension_id, allowed);
++  return true;
++}
++
+ void Extensions::OnExtensionLoaded(content::BrowserContext* browser_context,
+                                    const extensions::Extension* extension) {
+   Emit("extension-loaded", extension);
+@@ -315,7 +327,8 @@ gin::ObjectTemplateBuilder Extensions::GetObjectTemplateBuilder(
+       .SetMethod("grantActiveTab", &Extensions::GrantActiveTab)
+       .SetMethod("revokeActiveTab", &Extensions::RevokeActiveTab)
+       .SetMethod("setRuntimePermissions", &Extensions::SetRuntimePermissions)
+-      .SetMethod("getActivePermissions", &Extensions::GetActivePermissions);
++      .SetMethod("getActivePermissions", &Extensions::GetActivePermissions)
++      .SetMethod("setUserScriptsAllowed", &Extensions::SetUserScriptsAllowed);
+ }
+ 
+ const gin::WrapperInfo* Extensions::wrapper_info() const {
+diff --git a/shell/browser/api/electron_api_extensions.h b/shell/browser/api/electron_api_extensions.h
+--- a/shell/browser/api/electron_api_extensions.h
++++ b/shell/browser/api/electron_api_extensions.h
+@@ -57,6 +57,7 @@ class Extensions final : public gin::Wrappable<Extensions>,
+       gin_helper::Dictionary granted);
+   v8::Local<v8::Value> GetActivePermissions(v8::Isolate* isolate,
+                                             const std::string& extension_id);
++  bool SetUserScriptsAllowed(const std::string& extension_id, bool allowed);
+ 
+   // extensions::ExtensionRegistryObserver:
+   void OnExtensionLoaded(content::BrowserContext* browser_context,
+diff --git a/shell/common/extensions/electron_extensions_client.cc b/shell/common/extensions/electron_extensions_client.cc
+--- a/shell/common/extensions/electron_extensions_client.cc
++++ b/shell/common/extensions/electron_extensions_client.cc
+@@ -14,6 +14,7 @@
+ #include "extensions/common/extension_urls.h"
+ #include "extensions/common/features/simple_feature.h"
+ #include "extensions/common/permissions/permission_message_provider.h"
++#include "extensions/common/user_scripts_availability.h"
+ #include "extensions/common/url_pattern_set.h"
+ #include "shell/common/extensions/electron_extensions_api_provider.h"
+ 
+@@ -66,6 +67,9 @@ ElectronExtensionsClient::ElectronExtensionsClient()
+       webstore_update_url_(extension_urls::kChromeWebstoreUpdateURL) {
+   AddAPIProvider(std::make_unique<extensions::CoreExtensionsAPIProvider>());
+   AddAPIProvider(std::make_unique<ElectronExtensionsAPIProvider>());
++  // chrome.userScripts is only exposed once the user allowed it per extension.
++  SetFeatureDelegatedAvailabilityCheckMap(
++      extensions::user_scripts_availability::CreateAvailabilityCheckMap());
+ }
+ 
+ ElectronExtensionsClient::~ElectronExtensionsClient() = default;

@@ -157,7 +157,7 @@ export function SettingLine({
           <TemplateField row={row} actions={actions} width={dropdownWidth} rem={rem} theme={theme} />
         )}
       </Box>
-      <Text style={{ fontSize: rem * 0.85, color: theme.muted, selectable: false }}>{row.hint}</Text>
+      {row.hint && <Text style={{ fontSize: rem * 0.85, color: theme.muted, selectable: false }}>{row.hint}</Text>}
       {customShown && (
         <Box style={{ justifyContent: "end" }}>
           <TemplateField row={row} actions={actions} width={dropdownWidth} rem={rem} theme={theme} />

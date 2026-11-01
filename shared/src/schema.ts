@@ -1,4 +1,4 @@
-import { integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const instances = sqliteTable("instances", {
   key: text("key").primaryKey(),
@@ -50,6 +50,7 @@ export const settings = sqliteTable("settings", {
     .notNull()
     .default("bottom"),
   devtoolsFraction: real("devtools_fraction").notNull().default(0.4),
+  sidePanelWidth: real("side_panel_width").notNull().default(360),
 });
 
 export type InstanceRow = typeof instances.$inferSelect;
@@ -57,3 +58,79 @@ export type NewInstanceRow = typeof instances.$inferInsert;
 export type SettingsRow = typeof settings.$inferSelect;
 export type SitePermissionRow = typeof sitePermissions.$inferSelect;
 export type DevtoolsDock = SettingsRow["devtoolsDock"];
+
+export const extensions = sqliteTable("extensions", {
+  id: text("id").primaryKey(),
+  path: text("path").notNull(),
+  version: text("version").notNull(),
+  name: text("name").notNull(),
+  source: text("source", { enum: ["webstore", "unpacked", "crx"] }).notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  disabledReason: text("disabled_reason", { enum: ["user", "permissions_increase", "load_error"] }),
+  pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+  grantedPermissions: text("granted_permissions", { mode: "json" }).$type<string[]>().notNull().default([]),
+  grantedOrigins: text("granted_origins", { mode: "json" }).$type<string[]>().notNull().default([]),
+  shortcuts: text("shortcuts", { mode: "json" }).$type<Record<string, string>>().notNull().default({}),
+  installedAt: integer("installed_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  lastUpdateCheck: integer("last_update_check"),
+  openPanelOnActionClick: integer("open_panel_on_action_click", { mode: "boolean" }).notNull().default(false),
+  userScriptsAllowed: integer("user_scripts_allowed", { mode: "boolean" }).notNull().default(false),
+});
+
+export const extensionEvents = sqliteTable(
+  "extension_events",
+  {
+    extensionId: text("extension_id").notNull(),
+    event: text("event").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.extensionId, table.event] })],
+);
+
+export const historyUrls = sqliteTable("history_urls", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  url: text("url").notNull().unique(),
+  title: text("title").notNull().default(""),
+  visitCount: integer("visit_count").notNull().default(0),
+  typedCount: integer("typed_count").notNull().default(0),
+  lastVisitTime: integer("last_visit_time").notNull(),
+});
+
+export const historyVisits = sqliteTable("history_visits", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  urlId: integer("url_id").notNull(),
+  visitTime: integer("visit_time").notNull(),
+  transition: text("transition").notNull(),
+  referringVisitId: integer("referring_visit_id"),
+}, (table) => [index("history_visits_url").on(table.urlId), index("history_visits_time").on(table.visitTime)]);
+
+export const downloads = sqliteTable("downloads", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  url: text("url").notNull(),
+  finalUrl: text("final_url").notNull(),
+  filename: text("filename").notNull(),
+  mime: text("mime").notNull().default(""),
+  startTime: integer("start_time").notNull(),
+  endTime: integer("end_time"),
+  state: text("state", { enum: ["in_progress", "interrupted", "complete"] }).notNull(),
+  error: text("error"),
+  paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+  totalBytes: integer("total_bytes").notNull().default(0),
+  receivedBytes: integer("received_bytes").notNull().default(0),
+  byExtensionId: text("by_extension_id"),
+});
+
+export const bookmarks = sqliteTable("bookmarks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  parentId: integer("parent_id"),
+  position: integer("position").notNull().default(0),
+  title: text("title").notNull().default(""),
+  url: text("url"),
+  dateAdded: integer("date_added").notNull(),
+  dateGroupModified: integer("date_group_modified"),
+}, (table) => [index("bookmarks_parent").on(table.parentId)]);
+
+export type ExtensionRow = typeof extensions.$inferSelect;
+export type HistoryUrlRow = typeof historyUrls.$inferSelect;
+export type DownloadRow = typeof downloads.$inferSelect;
+export type BookmarkRow = typeof bookmarks.$inferSelect;
