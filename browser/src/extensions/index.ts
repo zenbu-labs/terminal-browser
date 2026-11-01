@@ -8,9 +8,11 @@ import { WebStore } from "./webstore";
 
 export function startExtensions(): ExtensionService {
   const service = startExtensionService(electronSession.defaultSession);
-  installApis(service);
   new WebStore(service);
-  new DevReloader(service);
-  service.installer.startPeriodicChecks();
+  service.onActivate(() => {
+    installApis(service);
+    new DevReloader(service);
+    service.installer.startPeriodicChecks();
+  });
   return service;
 }

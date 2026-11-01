@@ -233,6 +233,7 @@ export function installWebNavigation(service: ExtensionService) {
   };
 
   app.on("web-contents-created", (_event, contents) => watch(contents));
+  for (const contents of webContents.getAllWebContents()) watch(contents);
 
   service.onTabContents((contents, ref) => {
     const navigation = watch(contents);

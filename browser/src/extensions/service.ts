@@ -97,7 +97,8 @@ export class ExtensionService {
   private nextWindowId = 1;
   private lastFocusedWindowId: number | null = null;
   private readonly ready: Promise<void>;
-  private readonly apiInstallers: ((service: ExtensionService) => void)[] = [];
+  private activated = false;
+  private readonly activateListeners: (() => void)[] = [];
   private readonly unloadListeners = new Set<(id: string) => void>();
   private readonly contentsListeners = new Set<(contents: WebContents, ref: TabRef) => void>();
   readonly debugging = new Map<number, Set<string>>();
@@ -113,9 +114,6 @@ export class ExtensionService {
     this.importer = new Importer(this);
     this.senderTabs = new SenderTabs(this);
     this.sidePanels = new SidePanelStore(this);
-    const preload = preloadPath();
-    session.registerPreloadScript({ type: "frame", filePath: preload });
-    session.registerPreloadScript({ type: "service-worker", filePath: preload });
     session.registerPreloadScript({ type: "frame", filePath: preloadPath("chrome-web-store-preload.js") });
     this.ready = this.loadAll();
   }
@@ -124,9 +122,22 @@ export class ExtensionService {
     return this.ready;
   }
 
-  install(installer: (service: ExtensionService) => void) {
-    this.apiInstallers.push(installer);
-    installer(this);
+  // Nothing extension-specific runs in pages or listens for IPC until the first
+  // extension is installed, so people without extensions don't pay for it.
+  onActivate(listener: () => void) {
+    if (this.activated) listener();
+    else this.activateListeners.push(listener);
+  }
+
+  activate() {
+    if (this.activated) return;
+    this.activated = true;
+    const preload = preloadPath();
+    this.session.registerPreloadScript({ type: "frame", filePath: preload });
+    this.session.registerPreloadScript({ type: "service-worker", filePath: preload });
+    this.router.listen();
+    this.events.listen();
+    for (const listener of this.activateListeners.splice(0)) listener();
   }
 
   onChange(listener: ServiceListener): () => void {
@@ -156,7 +167,9 @@ export class ExtensionService {
 
   private async loadAll() {
     await app.whenReady();
-    for (const record of listExtensions()) {
+    const records = listExtensions();
+    if (records.length > 0) this.activate();
+    for (const record of records) {
       if (!record.enabled) continue;
       const extension = await this.load(record).catch(() => null);
       if (extension) this.events.dispatch(extension.id, "runtime.onStartup", []);
@@ -165,6 +178,7 @@ export class ExtensionService {
   }
 
   async load(record: ExtensionRecord): Promise<LoadedExtension> {
+    this.activate();
     if (this.loaded.has(record.id)) await this.unload(record.id);
     let electronExtension: Electron.Extension;
     try {

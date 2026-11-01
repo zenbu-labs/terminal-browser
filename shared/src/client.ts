@@ -17,7 +17,7 @@ export function openStore(file: string = DB_FILE) {
   const sqlite = new DatabaseSync(file);
   sqlite.exec("PRAGMA journal_mode = WAL");
   sqlite.exec("PRAGMA busy_timeout = 5000");
-  migrate(sqlite, migrations);
+  migrate(sqlite, migrations, file);
   const db = drizzle(
     async (sql, params, method) => {
       const stmt = sqlite.prepare(sql);

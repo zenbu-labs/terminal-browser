@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
 export interface Migration {
@@ -5,7 +6,7 @@ export interface Migration {
   statements: string[];
 }
 
-export function migrate(sqlite: DatabaseSync, migrations: Migration[]): void {
+export function migrate(sqlite: DatabaseSync, migrations: Migration[], backupBase?: string): void {
   sqlite.exec(
     "CREATE TABLE IF NOT EXISTS migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)",
   );
@@ -21,9 +22,11 @@ export function migrate(sqlite: DatabaseSync, migrations: Migration[]): void {
       `database was migrated by a newer version of the app (unknown migrations: ${unknown.join(", ")}); refusing to open it`,
     );
   }
+  const pending = migrations.filter((migration) => !applied.has(migration.id));
+  const current = migrations.filter((migration) => applied.has(migration.id)).pop();
+  if (backupBase && current && pending.length > 0) backup(sqlite, `${backupBase}.bak-${current.id}`);
   const record = sqlite.prepare("INSERT INTO migration (id, time_completed) VALUES (?, ?)");
-  for (const migration of migrations) {
-    if (applied.has(migration.id)) continue;
+  for (const migration of pending) {
     sqlite.exec("BEGIN");
     try {
       for (const statement of migration.statements) sqlite.exec(statement);
@@ -34,4 +37,9 @@ export function migrate(sqlite: DatabaseSync, migrations: Migration[]): void {
       throw error;
     }
   }
+}
+
+function backup(sqlite: DatabaseSync, file: string) {
+  fs.rmSync(file, { force: true });
+  sqlite.prepare("VACUUM INTO ?").run(file);
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app } from "electron";
+import { app, webContents } from "electron";
 import type { WebContents } from "electron";
 
 import { listExtensions } from "shared";
@@ -41,6 +41,7 @@ export class DevReloader {
       if (id) this.addError(id, `${details.message} (${details.sourceUrl}:${details.lineNumber})`);
     });
     app.on("web-contents-created", (_event, contents) => this.watchContents(contents));
+    for (const contents of webContents.getAllWebContents()) this.watchContents(contents);
   }
 
   private workerExtension(versionId: number): string | null {

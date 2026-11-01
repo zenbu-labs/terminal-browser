@@ -86,13 +86,15 @@ export class EventHub {
     private readonly session: Session,
     private readonly router: Router,
     private readonly isLoaded: (id: string) => boolean,
-  ) {
+  ) {}
+
+  listen() {
     ipcMain.on(LISTEN_CHANNEL, (event, name: string, key?: number, filter?: unknown) =>
       this.frameListen(event, name, true, key, filter),
     );
     ipcMain.on(UNLISTEN_CHANNEL, (event, name: string, key?: number) => this.frameListen(event, name, false, key));
-    session.serviceWorkers.on("running-status-changed", ({ runningStatus, versionId }) => {
-      const worker = session.serviceWorkers.getWorkerFromVersionID(versionId);
+    this.session.serviceWorkers.on("running-status-changed", ({ runningStatus, versionId }) => {
+      const worker = this.session.serviceWorkers.getWorkerFromVersionID(versionId);
       const id = worker ? extensionIdFromUrl(worker.scope) : null;
       if (!worker || !id) return;
       if (runningStatus === "starting") this.workerStarting(id, worker);

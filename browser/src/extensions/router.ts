@@ -32,7 +32,9 @@ export class Router {
   constructor(
     private readonly session: Session,
     private readonly extension: (id: string) => LoadedExtension | null,
-  ) {
+  ) {}
+
+  listen() {
     for (const method of API_METHODS) {
       ipcMain.handle(channelFor(method), (event, ...args) => this.fromFrame(method, event, args));
     }
