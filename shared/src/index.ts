@@ -3,6 +3,7 @@ export {
   DATA_DIR,
   LOGS_DIR,
   FAVICONS_DIR,
+  ADBLOCK_DIR,
   INSTANCES_DIR,
   AGENT_SOCKETS_DIR,
   DAEMON_SOCKET,
@@ -20,11 +21,15 @@ export { setSitePermission, sitePermission } from "./site-permissions";
 export type { SitePermission } from "./site-permissions";
 export { listInstances, removeInstance, upsertInstance } from "./instances";
 export {
+  adblockAllowlist,
+  adblockEnabled,
   anonymousId,
   lastActiveDay,
   lastLaunchDay,
   lastSeenVersion,
   lastUrl,
+  setAdblockAllowlist,
+  setAdblockEnabled,
   setLastActiveDay,
   setLastLaunchDay,
   setLastSeenVersion,
