@@ -11,8 +11,13 @@ import path from "node:path";
 import { z } from "zod";
 
 import { callerTty } from "@zenbu-labs/pixel/terminal";
+import { connectionUid, listenPrivately, peerAllowed, privateServer } from "@zenbu-labs/pixel/private-socket";
+import { ensurePrivateDir, ownUid } from "@zenbu-labs/pixel/private-dir";
+import { appendPrivateFile, BRIDGE_SOCKETS_DIR, ensureOwnedDir, openPrivateLog } from "shared";
 
+import { err, outJson } from "./output";
 import { installedVersion } from "./upgrade";
+import { AGENT_TOKEN_ON_STDIN } from "./agent-token";
 
 const execFile = promisify(execFileCb);
 
@@ -24,7 +29,7 @@ const DEBUG = process.env.CC_BROWSER_DEBUG === "1";
 
 function log(event: string, detail?: unknown): void {
   const line = `${new Date().toISOString()} ${event}${detail === undefined ? "" : " " + JSON.stringify(detail)}\n`;
-  process.stderr.write(line);
+  err(line);
 }
 
 function flag(argv: string[], name: string): string | undefined {
@@ -46,7 +51,7 @@ function parseCell(text: string | undefined): [number, number] | null {
 
 
 function report(value: unknown, exitCode = 0): never {
-  process.stdout.write(JSON.stringify(value) + "\n");
+  outJson(value, 0);
   process.exit(exitCode);
 }
 
@@ -55,19 +60,24 @@ async function launch(argv: string[]): Promise<never> {
   if (!tty) report({ error: "no tty: Claude Code is not running on a terminal", code: "tty" }, 2);
   const cellOverride = flag(argv, "--cell") ?? process.env.CC_BROWSER_CELL ?? "";
   const token = crypto.randomBytes(24).toString("hex");
-  const socket = path.join(os.tmpdir(), `cc-browser-${process.pid}-${Date.now().toString(36)}.sock`);
-  fs.mkdirSync(LOG_DIR, { recursive: true });
-  const logFd = fs.openSync(LOG_FILE, "a");
+  const name = `${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+  const bridgeDir = ensurePrivateDir(BRIDGE_SOCKETS_DIR);
+  const socket = path.join(bridgeDir, `${name}.sock`);
+  const apiSocket = path.join(bridgeDir, `${name}.api.sock`);
+  ensureOwnedDir(LOG_DIR);
+  const logFd = openPrivateLog(LOG_FILE);
   const [self, ...selfArgs] = selfCommand();
   const child = spawn(
     self,
-    [...selfArgs, "claude-bridge", "serve", "--tty", tty, "--socket", socket, "--cell", cellOverride, "--token", token],
-    { detached: true, stdio: ["ignore", "pipe", logFd] },
+    [...selfArgs, "claude-bridge", "serve", "--tty", tty, "--socket", socket, "--api-socket", apiSocket, "--cell", cellOverride],
+    { detached: true, stdio: ["pipe", "pipe", logFd], env: withoutNodeOptions(process.env) },
   );
+  child.stdin!.end(`${token}\n`);
   let line = "";
   try {
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("bridge did not report its port")), 10_000);
+      // fixme: placeholder copy
+      const timer = setTimeout(() => reject(new Error("bridge did not report its socket")), 10_000);
       child.stdout!.on("data", (chunk: Buffer) => {
         line += chunk.toString();
         if (line.includes("\n")) {
@@ -83,11 +93,11 @@ async function launch(argv: string[]): Promise<never> {
   } catch (error) {
     report({ error: error instanceof Error ? error.message : String(error), code: "start" }, 1);
   }
-  const { port } = JSON.parse(line.split("\n")[0]) as { port: number };
+  const { socket: listening } = JSON.parse(line.split("\n")[0]) as { socket: string };
   child.stdout!.destroy();
   child.unref();
-  const launched = { port, pid: child.pid, tty, terminalBrowser: installedVersion() ?? "dev", token };
-  fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} launch ${JSON.stringify({ ...launched, token: undefined })}\n`);
+  const launched = { socket: listening, pid: child.pid, tty, terminalBrowser: installedVersion() ?? "dev", token };
+  appendPrivateFile(LOG_FILE, `${new Date().toISOString()} launch ${JSON.stringify({ ...launched, token: undefined })}\n`);
   report(launched);
 }
 
@@ -140,7 +150,7 @@ const AgentTextBody = z.object({ text: z.string().trim().min(1), screenshot: z.s
 type AgentText = { text: string; screenshot: string | null };
 
 class Bridge {
-  port: number | null = null;
+  apiSocket: string | null = null;
   size: Size = { cols: 80, rows: 24 };
   url: string | null = null;
   frame: Frame | null = null;
@@ -235,8 +245,7 @@ class Bridge {
   }
 
   listenForPixel(): void {
-    fs.rmSync(this.socketPath, { force: true });
-    this.pixelServer = net.createServer((conn) => {
+    this.pixelServer = privateServer((conn) => {
       if (this.conn) {
         conn.destroy();
         return;
@@ -260,7 +269,7 @@ class Bridge {
         }
       });
     });
-    this.pixelServer.listen(this.socketPath);
+    listenPrivately(this.pixelServer, this.socketPath);
   }
 
   private handlePixelLine(line: string): void {
@@ -319,18 +328,20 @@ class Bridge {
     this.error = null;
     this.alive = true;
     this.setFrame(null);
-    const env = { ...process.env };
+    const env = withoutNodeOptions(process.env);
     delete env.PIXEL_PANE;
     env.PIXEL_EMBED = this.socketPath;
     env.PIXEL_TTY = this.tty;
     env.TERMINAL_BROWSER_COPY_ON_SELECT = "1";
     env.TERMINAL_BROWSER_START_PAGE = "1";
-    if (this.port) {
-      env.TERMINAL_BROWSER_AGENT_BRIDGE = `http://127.0.0.1:${this.port}`;
-      env.TERMINAL_BROWSER_AGENT_TOKEN = this.token;
+    if (this.apiSocket) {
+      env.TERMINAL_BROWSER_AGENT_BRIDGE = this.apiSocket;
+      env[AGENT_TOKEN_ON_STDIN] = "1";
     }
     const [command, ...args] = selfCommand();
-    const child = spawn(command, [...args, "open", this.url], { env, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(command, [...args, "open", this.url], { env, stdio: ["pipe", "ignore", "pipe"] });
+    child.stdin!.on("error", () => {});
+    child.stdin!.end(this.apiSocket ? `${this.token}\n` : "");
     let stderr = "";
     child.stderr!.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString()).slice(-2000);
@@ -371,7 +382,7 @@ class Bridge {
     const key = await this.browserKey();
     const [command, ...args] = selfCommand();
     const selectors = key ? ["--browser", key] : [];
-    spawn(command, [...args, "action", ...selectors, "--", "open", url], { env: process.env, stdio: "ignore" }).on("error", () => {});
+    spawn(command, [...args, "action", ...selectors, "--", "open", url], { env: withoutNodeOptions(process.env), stdio: "ignore" }).on("error", () => {});
   }
 
   resize(size: Size): void {
@@ -421,6 +432,7 @@ class Bridge {
         this.pixelServer?.close();
       } catch {}
       fs.rmSync(this.socketPath, { force: true });
+      if (this.apiSocket) fs.rmSync(this.apiSocket, { force: true });
       process.exit(0);
     };
     if (child && child.exitCode === null) {
@@ -438,10 +450,21 @@ class Bridge {
   }
 }
 
+const MAX_BODY_BYTES = 1024 * 1024;
+
+class BodyTooLarge extends Error {}
+
 function readJson(request: http.IncomingMessage): Promise<unknown> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let body = "";
+    let bytes = 0;
     request.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > MAX_BODY_BYTES) {
+        reject(new BodyTooLarge());
+        request.destroy();
+        return;
+      }
       body += chunk.toString();
     });
     request.on("end", () => {
@@ -507,41 +530,96 @@ function routes(bridge: Bridge): Record<string, Handler> {
 }
 
 const IDLE_EXIT_MS = 60_000;
+const HEADERS_TIMEOUT_MS = 10_000;
+const MAX_CONNECTIONS = 64;
 
-function serve(argv: string[]): void {
+// NODE_OPTIONS=--inspect would make each child open a debugger on a TCP port.
+function withoutNodeOptions(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { NODE_OPTIONS: _ignored, ...rest } = env;
+  return rest;
+}
+
+function sameSecret(given: string | undefined, expected: string): boolean {
+  const a = Buffer.from(given ?? "");
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// The launcher writes the token to our stdin, so it never shows up in process listings.
+function readToken(): Promise<string> {
+  return new Promise((resolve) => {
+    let text = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk: string) => (text += chunk));
+    process.stdin.on("end", () => resolve(text.trim()));
+    process.stdin.on("error", () => resolve(""));
+  });
+}
+
+async function serve(argv: string[]): Promise<void> {
   const tty = flag(argv, "--tty");
   const socket = flag(argv, "--socket");
+  const apiSocket = flag(argv, "--api-socket");
   const cellOverride = parseCell(flag(argv, "--cell"));
-  const token = flag(argv, "--token") ?? "";
-  if (!tty || !socket) {
-    process.stderr.write("claude-bridge serve needs --tty and --socket\n");
+  const token = await readToken();
+  if (!/^[0-9a-f]{48}$/.test(token)) {
+    // fixme: placeholder copy
+    err("claude-bridge serve needs its token on stdin\n");
     process.exit(2);
   }
-  const bridge = new Bridge(tty, socket, cellOverride, token);
+  if (!tty || !socket || !apiSocket) {
+    // fixme: placeholder copy
+    err("claude-bridge serve needs --tty, --socket and --api-socket\n");
+    process.exit(2);
+  }
+  const bridgeDir = ensurePrivateDir(BRIDGE_SOCKETS_DIR);
+  const realDir = (file: string) => (fs.existsSync(path.dirname(file)) ? fs.realpathSync(path.dirname(file)) : null);
+  const socketPath = path.join(bridgeDir, path.basename(socket));
+  const apiPath = path.join(bridgeDir, path.basename(apiSocket));
+  if (realDir(socket) !== bridgeDir || realDir(apiSocket) !== bridgeDir || socketPath === apiPath) {
+    // fixme: placeholder copy
+    err(`claude-bridge serve only listens inside ${bridgeDir}\n`);
+    process.exit(2);
+  }
+  const bridge = new Bridge(tty, socketPath, cellOverride, token);
   bridge.listenForPixel();
   const table = routes(bridge);
   let lastSeen = Date.now();
-  const server = http.createServer(async (request, response) => {
-    if (token && request.headers.authorization !== `Bearer ${token}`) {
+  const server = http.createServer({ connectionsCheckingInterval: 1000 }, async (request, response) => {
+    if (!sameSecret(request.headers.authorization, `Bearer ${token}`)) {
       response.writeHead(401, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
     lastSeen = Date.now();
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const handler = table[`${request.method} ${url.pathname}`];
-    const [status, value] = handler
-      ? await handler(request.method === "POST" ? await readJson(request) : {}, url.searchParams)
-      : [404, { error: "not found" }];
+    const handler = table[`${request.method} ${url.pathname}`] as Handler | undefined;
+    let body: unknown = {};
+    if (handler && request.method === "POST") {
+      try {
+        body = await readJson(request);
+      } catch {
+        response.writeHead(413, { "content-type": "application/json", connection: "close" });
+        response.end(JSON.stringify({ error: "request too large" }));
+        return;
+      }
+    }
+    const [status, value] = handler ? await handler(body, url.searchParams) : [404, { error: "not found" }];
     response.writeHead(status, { "content-type": "application/json" });
     response.end(JSON.stringify(value));
   });
-  server.listen(0, "127.0.0.1", () => {
-    const address = server.address();
-    if (!address || typeof address === "string") process.exit(1);
-    bridge.port = address.port;
-    process.stdout.write(JSON.stringify({ port: bridge.port }) + "\n");
+  // Only processes of our own user get to talk to the bridge, the same check privateServer makes.
+  server.prependListener("connection", (connection: net.Socket) => {
+    if (!peerAllowed(connectionUid(connection), ownUid())) connection.destroy();
   });
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.requestTimeout = HEADERS_TIMEOUT_MS * 3;
+  server.maxConnections = MAX_CONNECTIONS;
+  server.on("listening", () => {
+    bridge.apiSocket = apiPath;
+    outJson({ socket: apiPath }, 0);
+  });
+  listenPrivately(server, apiPath);
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => bridge.close());
   setInterval(() => {
     if (Date.now() - lastSeen > IDLE_EXIT_MS) bridge.close();
@@ -552,9 +630,9 @@ export async function claudeBridgeCommand(args: string[]): Promise<number> {
   const [mode, ...rest] = args;
   if (mode === "launch") await launch(rest);
   if (mode === "serve") {
-    serve(rest);
+    await serve(rest);
     return new Promise<never>(() => {});
   }
-  process.stderr.write("usage: terminal-browser claude-bridge launch|serve ...\n");
+  err("usage: terminal-browser claude-bridge launch|serve ...\n");
   return 2;
 }

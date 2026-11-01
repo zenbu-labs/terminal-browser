@@ -1,0 +1,15 @@
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -4831,6 +4831,11 @@ bool WebContents::CanOverscrollContent() {
+ std::unique_ptr<content::EyeDropper> WebContents::OpenEyeDropper(
+     content::RenderFrameHost* frame,
+     content::EyeDropperListener* listener) {
++  // The system color sampler waits for a click on the real screen, which an
++  // offscreen page never gets, so EyeDropper.open() would never settle.
++  // Returning no dropper makes it reject right away.
++  if (IsOffScreen())
++    return nullptr;
+   return ShowEyeDropper(frame, listener);
+ }
+ 

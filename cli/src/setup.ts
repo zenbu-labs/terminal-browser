@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { ensureOwnedDir, writePrivateFile } from "shared";
+
 import { enableTerminalImages } from "./editors";
+import { err, out } from "./output";
 import { apparmorSetup } from "./sandbox";
 import { installedVersion } from "./upgrade";
 
@@ -71,7 +74,7 @@ export function linkSkills(): SkillLinks {
       result.left.push(link);
       return false;
     }
-    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
     fs.rmSync(link, { force: true });
     fs.symlinkSync(target, link);
     wrote.add(link);
@@ -109,8 +112,8 @@ export function linkSkills(): SkillLinks {
     const target = fs.readlinkSync(link);
     if (target.startsWith(root + path.sep) || !fs.existsSync(target)) fs.rmSync(link, { force: true });
   }
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(receiptFile(), [...wrote].sort().join("\n") + (wrote.size > 0 ? "\n" : ""));
+  ensureOwnedDir(stateDir());
+  writePrivateFile(receiptFile(), [...wrote].sort().join("\n") + (wrote.size > 0 ? "\n" : ""));
   return result;
 }
 
@@ -146,8 +149,8 @@ function skillsDeclined(): boolean {
 }
 
 function rememberSkillChoice(install: boolean): void {
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(skillChoiceFile(), install ? "yes\n" : "no\n");
+  ensureOwnedDir(stateDir());
+  writePrivateFile(skillChoiceFile(), install ? "yes\n" : "no\n");
 }
 
 function askOnTerminal(prompt: string): string | null {
@@ -196,8 +199,8 @@ function marker(): { file: string; want: string } | null {
 export function markSetupDone(): void {
   const state = marker();
   if (!state) return;
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(state.file, `${state.want}\n`);
+  ensureOwnedDir(stateDir());
+  writePrivateFile(state.file, `${state.want}\n`);
 }
 
 export function ensureSetup(): void {
@@ -216,7 +219,7 @@ export function ensureSetup(): void {
 function reportEditorFailures(): number {
   const failed = enableTerminalImages().filter((editor) => editor.outcome === "failed");
   for (const editor of failed) {
-    process.stderr.write(`could not edit ${editor.settings}: ${editor.error ?? "unknown error"}\n`);
+    err(`could not edit ${editor.settings}: ${editor.error ?? "unknown error"}\n`);
   }
   return failed.length > 0 ? 1 : 0;
 }
@@ -228,7 +231,7 @@ export function setupCommand(electronBinary: string): number {
   if (install) {
     const { linkedAgents } = linkSkills();
     const where = linkedAgents.length > 0 ? `for ${linkedAgents.join(", ")}` : "to ~/.agents/skills";
-    process.stdout.write(`installed skill ${where}\n`);
+    out(`installed skill ${where}\n`);
   } else {
     unlinkSkills();
   }

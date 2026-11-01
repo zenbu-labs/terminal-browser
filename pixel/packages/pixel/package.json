@@ -30,6 +30,18 @@
       "types": "./dist/terminal/index.d.ts",
       "default": "./dist/terminal/index.js"
     },
+    "./native": {
+      "types": "./dist/react/native.d.ts",
+      "default": "./dist/react/native.js"
+    },
+    "./private-dir": {
+      "types": "./dist/private-dir.d.ts",
+      "default": "./dist/private-dir.js"
+    },
+    "./private-socket": {
+      "types": "./dist/host/private-socket.d.ts",
+      "default": "./dist/host/private-socket.js"
+    },
     "./app-executable": {
       "types": "./dist/app-executable.d.ts",
       "default": "./dist/app-executable.js"

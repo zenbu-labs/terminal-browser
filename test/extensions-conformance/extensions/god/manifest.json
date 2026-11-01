@@ -1,0 +1,220 @@
+{
+  "manifest_version": 3,
+  "name": "God Extension",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz5qS+LNALfeJF1l16BPx68xKI6RgaaTervWZFu0+ggiZ9Y4SpY5R5nCOVk4Zok2sGn34B2hd+K0INGQnDD2HLyXia8eY+cRToC5R185AyMuYCv9+FRrBF7sdMQ5vfEYUt8ZG1bIfZwfq0yO3TAiZHbBAtuIbxXDvYK/tkK6g91ew/fYjUM1+FiOca9daggqWZmVWYuPvobYz1D51Rb3B8QB3m3i++nH6+HZHb/9Weks33WO3luFHqCMOcdyxQN8lKNI+qh6g66CysRZqR8R7ruo5Y/L9106GzmdP4nwH8+5LMpq1OSphCbFGdSl4p0aPeEBAPl28NQJfah3kTq9V5QIDAQAB",
+  "description": "Calls every chrome.* API and checks it against Chrome",
+  "default_locale": "en",
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "permissions": [
+    "accessibilityFeatures.modify",
+    "accessibilityFeatures.read",
+    "activeTab",
+    "alarms",
+    "audio",
+    "background",
+    "bookmarks",
+    "browsingData",
+    "certificateProvider",
+    "clipboardRead",
+    "clipboardWrite",
+    "contentSettings",
+    "contextMenus",
+    "cookies",
+    "debugger",
+    "declarativeContent",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "declarativeNetRequestWithHostAccess",
+    "desktopCapture",
+    "dns",
+    "documentScan",
+    "downloads",
+    "downloads.open",
+    "downloads.ui",
+    "enterprise.deviceAttributes",
+    "enterprise.hardwarePlatform",
+    "enterprise.networkingAttributes",
+    "enterprise.platformKeys",
+    "favicon",
+    "fileBrowserHandler",
+    "fileSystemProvider",
+    "fontSettings",
+    "gcm",
+    "geolocation",
+    "history",
+    "identity",
+    "identity.email",
+    "idle",
+    "management",
+    "nativeMessaging",
+    "notifications",
+    "offscreen",
+    "pageCapture",
+    "platformKeys",
+    "power",
+    "printerProvider",
+    "privacy",
+    "processes",
+    "proxy",
+    "publicSuffix",
+    "readingList",
+    "runtime",
+    "scripting",
+    "search",
+    "sessions",
+    "sidePanel",
+    "storage",
+    "system.cpu",
+    "system.display",
+    "system.memory",
+    "system.storage",
+    "tabCapture",
+    "tabGroups",
+    "tabs",
+    "topSites",
+    "tts",
+    "ttsEngine",
+    "unlimitedStorage",
+    "userScripts",
+    "vpnProvider",
+    "wallpaper",
+    "webAuthenticationProxy",
+    "webNavigation",
+    "webRequest",
+    "webRequestBlocking",
+    "webRequestAuthProvider"
+  ],
+  "optional_permissions": [],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "optional_host_permissions": [
+    "https://optional.test/*"
+  ],
+  "background": {
+    "service_worker": "sw.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "God",
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "devtools_page": "devtools.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*"
+      ],
+      "js": [
+        "t.js",
+        "surface.js",
+        "tests/core.js",
+        "tests/platform.js",
+        "cs.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "http://localhost/*"
+      ],
+      "js": [
+        "cs-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "war.txt"
+      ],
+      "matches": [
+        "http://localhost/*"
+      ]
+    },
+    {
+      "resources": [
+        "war-ext.txt"
+      ],
+      "extension_ids": [
+        "lcklaejdobalopdokfonmbaebpondmhh"
+      ]
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "static_on",
+        "enabled": true,
+        "path": "dnr/static-on.json"
+      },
+      {
+        "id": "static_off",
+        "enabled": false,
+        "path": "dnr/static-off.json"
+      }
+    ]
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+G"
+      }
+    },
+    "god-command": {
+      "suggested_key": {
+        "default": "Alt+Shift+Y"
+      },
+      "description": "God command"
+    },
+    "god-unbound": {
+      "description": "God unbound"
+    }
+  },
+  "omnibox": {
+    "keyword": "god"
+  },
+  "externally_connectable": {
+    "ids": [
+      "lcklaejdobalopdokfonmbaebpondmhh"
+    ],
+    "matches": [
+      "http://localhost/*"
+    ]
+  },
+  "storage": {
+    "managed_schema": "managed-schema.json"
+  },
+  "tts_engine": {
+    "voices": [
+      {
+        "voice_name": "God Voice",
+        "lang": "en-US",
+        "event_types": [
+          "start",
+          "end"
+        ]
+      }
+    ]
+  },
+  "minimum_chrome_version": "120"
+}

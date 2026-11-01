@@ -5,10 +5,19 @@ import path from "node:path";
 import { app } from "electron";
 
 // why is this defined in pixel store?
-import { DAEMON_SOCKET } from "shared";
+import { CDP_SOCKET, DAEMON_SOCKET, debuggingPortRefusal, ensurePrivateDir, isLaunchToken } from "shared";
 import { createSession } from "./session/session";
+import { claimLaunch, hasPendingLaunches, stashLaunch } from "./session/pane-launch";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
+import { serveCdp } from "./cdp/server";
+import { installPages } from "./pages/install";
+import { startExtensions } from "./extensions";
+import { extensionCommand } from "./extensions/remote";
+import type { ExtensionCommand } from "./extensions/remote";
+import { connectPrivately, listenPrivately, privateServer } from "@zenbu-labs/pixel/private-socket";
+import { chromeUserAgent } from "./user-agent";
+import { startBrowsing } from "./browsing";
 
 // what
 const IDLE_EXIT_MS = 15_000;
@@ -21,6 +30,7 @@ interface OpenRequest {
   env?: Record<string, string | undefined>;
   cwd?: string;
   build?: string;
+  agentToken?: string;
 }
 
 export function buildStamp(): string {
@@ -32,30 +42,58 @@ export function buildStamp(): string {
   }
 }
 
-export async function runDaemon(cdpPort: number | null): Promise<void> {
+export async function runDaemon(debuggingPipe: net.Socket | null, requestedPort: number | null): Promise<void> {
+  // Chromium's debugging-pipe threads block shutdown until our end of the pipe closes.
+  const exit = (code: number) => {
+    debuggingPipe?.destroy();
+    app.exit(code);
+  };
   if (await socketAlive()) {
     process.stderr.write("terminal-browser daemon already running\n");
-    app.exit(3);
+    exit(3);
     return;
   }
-  fs.mkdirSync(path.dirname(DAEMON_SOCKET), { recursive: true });
-  fs.rmSync(DAEMON_SOCKET, { force: true });
+  let debuggingPort: number | null = null;
+  try {
+    const cdp = debuggingPipe ? serveCdp(debuggingPipe, CDP_SOCKET) : null;
+    if (cdp && requestedPort !== null) debuggingPort = (await cdp.openPort(requestedPort)).port;
+  } catch (error) {
+    process.stderr.write(`terminal-browser: ${error instanceof Error ? error.message : String(error)}\n`);
+    exit(1);
+    return;
+  }
+  try {
+    ensurePrivateDir(path.dirname(DAEMON_SOCKET));
+  } catch (error) {
+    process.stderr.write(`terminal-browser: ${error instanceof Error ? error.message : String(error)}\n`);
+    exit(1);
+    return;
+  }
 
   const build = buildStamp();
+  app.userAgentFallback = chromeUserAgent();
+  // The daemon decides when to exit; a pane whose only page closed itself gets a new page.
+  app.on("window-all-closed", () => {});
+  startBrowsing();
+  const extensions = startExtensions();
   const sessions = new Map<string, SessionHandle>();
-  servePages(() => {
+  const pageContext = () => {
     const all = [...sessions.values()];
     const shown = all.filter((open) => open.showsStartPage());
     const chosen = shown[shown.length - 1] ?? all[all.length - 1];
     return chosen?.pageContext() ?? { cwd: process.cwd(), theme: null };
-  });
+  };
+  servePages(pageContext);
+  installPages(extensions, pageContext);
   let seq = 0;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const scheduleIdleExit = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (sessions.size === 0) app.exit(0);
+      if (sessions.size > 0) return;
+      if (hasPendingLaunches()) scheduleIdleExit();
+      else exit(0);
     }, IDLE_EXIT_MS);
   };
   scheduleIdleExit();
@@ -67,12 +105,12 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
       } catch {}
     }
     sessions.clear();
-    setTimeout(() => app.exit(code), 200);
+    setTimeout(() => exit(code), 200);
   };
   process.on("SIGINT", () => stopEverything(130));
   process.on("SIGTERM", () => stopEverything(143));
 
-  const server = net.createServer((connection) => {
+  const server = privateServer((connection) => {
     let key: string | null = null;
     let session: SessionHandle | null = null;
     const reply = (value: unknown) => {
@@ -99,7 +137,13 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
           if (message.build && message.build !== build) {
             reply({ ok: false, error: "stale" });
             connection.end();
-            if (sessions.size === 0) app.exit(0);
+            if (sessions.size === 0) exit(0);
+            return;
+          }
+          const refused = debuggingPortRefusal(message.argv ?? [], debuggingPort);
+          if (refused) {
+            reply({ ok: false, error: refused });
+            connection.end();
             return;
           }
           if (!message.tty) {
@@ -117,7 +161,8 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
               argv: message.argv ?? [],
               env: message.env ?? {},
               cwd: message.cwd ?? process.cwd(),
-              cdpPort,
+              agentToken: typeof message.agentToken === "string" ? message.agentToken : null,
+              cdpPort: debuggingPort,
               onClose: (code) => {
                 sessions.delete(sessionKey);
                 reply({ event: "closed", code });
@@ -137,10 +182,23 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
           session?.nudgeResize();
         } else if (message.cmd === "close") {
           session?.close();
+        } else if (message.cmd === "extensions") {
+          void extensionCommand(message as unknown as ExtensionCommand).then(
+            (data) => reply({ ok: true, data }),
+            (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+          );
+        } else if (message.cmd === "stash-launch") {
+          const { argv } = message as unknown as { argv?: unknown };
+          if (!Array.isArray(argv) || !argv.every((arg) => typeof arg === "string")) reply({ ok: false, error: "bad argv" });
+          else reply({ ok: true, token: stashLaunch(argv) });
+        } else if (message.cmd === "claim-launch") {
+          const { token } = message as unknown as { token?: unknown };
+          const argv = isLaunchToken(token) ? claimLaunch(token) : null;
+          reply(argv ? { ok: true, argv } : { ok: false, error: "unknown launch" });
         } else if (message.cmd === "shutdown") {
           reply({ ok: true, sessions: sessions.size });
           connection.end();
-          setTimeout(() => app.exit(0), 50);
+          setTimeout(() => exit(0), 50);
         }
       }
     });
@@ -156,18 +214,17 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   });
   server.on("error", (error) => {
     process.stderr.write(`terminal-browser daemon socket error: ${error}\n`);
-    app.exit(1);
+    exit(1);
   });
-  server.listen(DAEMON_SOCKET);
+  listenPrivately(server, DAEMON_SOCKET);
 }
 
 function socketAlive(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const probe = net.connect(DAEMON_SOCKET);
-    probe.once("connect", () => {
+  return connectPrivately(DAEMON_SOCKET).then(
+    (probe) => {
       probe.end();
-      resolve(true);
-    });
-    probe.once("error", () => resolve(false));
-  });
+      return true;
+    },
+    () => false,
+  );
 }

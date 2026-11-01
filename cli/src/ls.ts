@@ -1,13 +1,17 @@
+import { CDP_SOCKET } from "shared";
+import { privateSocketPath } from "@zenbu-labs/pixel/private-socket";
 import { callerTty } from "@zenbu-labs/pixel/terminal";
 import type { Terminal } from "@zenbu-labs/pixel/terminal";
 
 import { browsers, recordKey, targets } from "./instances";
 import type { Browser, TabTarget } from "./instances";
+import { oneLine, out, outJson } from "./output";
 
 interface Listed {
   key: string;
   pid: number;
-  cdpPort: number | null;
+  cdpSocket: string;
+  cdpPort?: number;
   socket: string;
   tty: string | null;
   pane: { tab: string | null; pane: string | null };
@@ -23,7 +27,8 @@ async function collect(list: Browser[]): Promise<Listed[]> {
     list.map(async (browser) => ({
       key: recordKey(browser),
       pid: browser.pid,
-      cdpPort: browser.cdpPort,
+      cdpSocket: privateSocketPath(CDP_SOCKET),
+      ...(browser.cdpPort != null ? { cdpPort: browser.cdpPort } : {}),
       socket: browser.socket,
       tty: browser.tty,
       pane: { tab: browser.paneTab, pane: browser.pane },
@@ -41,14 +46,14 @@ function render(list: Listed[]): string {
   const lines: string[] = [];
   for (const browser of list) {
     const where = browser.pane.pane ? `${browser.pane.tab}:${browser.pane.pane}` : "no pane";
-    lines.push(`${browser.key}  ${where}${browser.inCurrentTab ? "  (this tab)" : ""}`);
+    lines.push(`${oneLine(browser.key)}  ${oneLine(where)}${browser.inCurrentTab ? "  (this tab)" : ""}`);
     for (const tab of browser.tabs) {
       const mark = tab.active ? "*" : " ";
       const page = tab.title || tab.url;
       const label = tab.app ? `${tab.app.name ?? page} (app)` : page;
-      lines.push(`  ${mark} ${tab.id}  ${label}`);
-      lines.push(`      ${tab.url}`);
-      lines.push(`      target ${tab.targetId ?? "pending"}`);
+      lines.push(`  ${mark} ${tab.id}  ${oneLine(label)}`);
+      lines.push(`      ${oneLine(tab.url)}`);
+      lines.push(`      target ${oneLine(tab.targetId ?? "pending")}`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -59,18 +64,12 @@ export async function lsCommand(terminal: Terminal | null, all: boolean, json: b
   const scoped = all ? found : found.filter((browser) => browser.inCurrentTab);
   const list = await collect(scoped);
   if (!json) {
-    process.stdout.write(render(list));
+    out(render(list));
     if (!all && found.length > list.length) {
-      process.stdout.write(`\n${found.length - list.length} more elsewhere — terminal-browser ls --all\n`);
+      out(`\n${found.length - list.length} more elsewhere — terminal-browser ls --all\n`);
     }
     return;
   }
   const self = (await terminal?.getCurrentPane?.({ tty: callerTty().path, cwd: process.cwd() })) ?? null;
-  process.stdout.write(
-    `${JSON.stringify(
-      { self: self ? { tab: self.tab, pane: self.id } : null, browsers: list },
-      null,
-      2,
-    )}\n`,
-  );
+  outJson({ self: self ? { tab: self.tab, pane: self.id } : null, browsers: list });
 }

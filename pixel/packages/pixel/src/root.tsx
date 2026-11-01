@@ -32,6 +32,7 @@ import { CellZoomFollower, hostDisplayScale } from "./scale";
 import { UNSUPPORTED_ENV, detect } from "./terminal";
 import type { Terminal } from "./terminal";
 import { initOffscreenMode } from "./web/offscreen";
+import { privateSocketPath } from "./host/private-socket";
 import {
   broadcastTheme,
   flushSessions,
@@ -180,12 +181,12 @@ export function createRoot(options: RootOptions = {}): Root {
     tty: owner || embed ? undefined : tty,
     host: owner
       ? {
-          socket: owner.socket,
+          socket: privateSocketPath(owner.socket),
           pane: env.PIXEL_PANE ?? randomBytes(8).toString("hex"),
           name,
         }
       : embed && tty
-        ? { socket: embed, pane: randomBytes(8).toString("hex"), name, tty }
+        ? { socket: privateSocketPath(embed), pane: randomBytes(8).toString("hex"), name, tty }
         : undefined,
     wrapper: options.wrapper ?? (owner || embed ? undefined : terminal?.wrapper),
     keyEventTypes: true,

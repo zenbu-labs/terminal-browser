@@ -1,0 +1,1 @@
+ALTER TABLE `downloads` ADD `danger` text DEFAULT 'safe' NOT NULL;

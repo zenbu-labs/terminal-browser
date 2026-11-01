@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "First Frame Fixture",
+  "version": "1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "First Frame Fixture",
+    "default_icon": { "16": "icons/16.png", "48": "icons/48.png" }
+  },
+  "icons": { "16": "icons/16.png", "48": "icons/48.png" },
+  "background": { "service_worker": "sw.js" },
+  "omnibox": { "keyword": "ff" }
+}

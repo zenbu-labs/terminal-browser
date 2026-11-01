@@ -1,0 +1,49 @@
+diff --git a/patches/chromium/.patches b/patches/chromium/.patches
+--- a/patches/chromium/.patches
++++ b/patches/chromium/.patches
+@@ -239,3 +239,4 @@ cherry-pick-194c74ee5e48.patch
+ cherry-pick-564bdde2ce69.patch
+ cherry-pick-5a8114db13d5.patch
+ fix_keep_single-request_navigation_factories_across_resets.patch
++fix_mark_the_display_scheduler_as_observing_before_adding_its_observer.patch
+diff --git a/patches/chromium/fix_mark_the_display_scheduler_as_observing_before_adding_its_observer.patch b/patches/chromium/fix_mark_the_display_scheduler_as_observing_before_adding_its_observer.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/chromium/fix_mark_the_display_scheduler_as_observing_before_adding_its_observer.patch
+@@ -0,0 +1,36 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: pixel <pixel@zenbu.dev>
++Date: Sun, 1 Nov 2026 18:00:00 -0500
++Subject: fix: mark the display scheduler as observing before adding its
++ observer
++
++ExternalBeginFrameSource::AddObserver() can deliver a missed BeginFrame
++synchronously. Drawing it can damage the display again, for example when a
++FrameSinkVideoCapturer requests a copy of the frame, which re-entered
++StartObservingBeginFrames() and added the same observer twice.
++---
++ components/viz/service/display/display_scheduler.cc | 4 +++-
++ 1 file changed, 3 insertions(+), 1 deletion(-)
++
++diff --git a/components/viz/service/display/display_scheduler.cc b/components/viz/service/display/display_scheduler.cc
++index d3a2bf969c14f..6ab75af706ae8 100644
++--- a/components/viz/service/display/display_scheduler.cc
+++++ b/components/viz/service/display/display_scheduler.cc
++@@ -574,6 +574,9 @@ void DisplayScheduler::MaybeStartObservingBeginFrames() {
++ 
++ void DisplayScheduler::StartObservingBeginFrames() {
++   if (!observing_begin_frame_source_) {
+++    // AddObserver() can deliver a missed BeginFrame synchronously, and drawing
+++    // it can damage the display and come back here.
+++    observing_begin_frame_source_ = true;
++     begin_frame_source_->AddObserver(&begin_frame_observer_);
++     // TODO(crbug.com/40900977): Some tests still have reliance on Missed
++     // begin frames. We should update the test helpers.
++@@ -584,7 +587,6 @@ void DisplayScheduler::StartObservingBeginFrames() {
++         OnBeginFrame(begin_frame_observer_.LastUsedBeginFrameArgs());
++       }
++     }
++-    observing_begin_frame_source_ = true;
++   }
++ }
++ 

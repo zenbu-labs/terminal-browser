@@ -6,14 +6,22 @@ import path from "node:path";
 import readline from "node:readline";
 
 import {
+  CDP_SOCKET,
   DAEMON_SOCKET,
+  DAEMON_PORT_SWITCH,
+  LAUNCH_ENV,
   LOGS_DIR,
   TERMINAL_SOCKET_ENV,
   appId,
-  ensureDataDir,
+  ensurePrivateDir,
+  ensurePrivateState,
   instanceKey,
+  isLaunchToken,
+  openPrivateLog,
+  paneLaunchCommand,
   listApps,
   registerApp,
+  requestedDebuggingPort,
   socketTerminal,
   unregisterApp,
 } from "shared";
@@ -34,6 +42,10 @@ import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
 import { findHosts, openInHost } from "./interop";
 import { lsCommand } from "./ls";
+import { socketPair } from "./socket-pair";
+import { readAgentToken } from "./agent-token";
+import { reclaimPrivateDir } from "@zenbu-labs/pixel/private-dir";
+import { connectPrivately } from "@zenbu-labs/pixel/private-socket";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
 import { appExecutable } from "@zenbu-labs/pixel/app-executable";
@@ -42,23 +54,27 @@ import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 import { claudeBridgeCommand } from "./claude-bridge";
 import { configCommand } from "./config";
+import { extensionsCommand } from "./extensions";
+import { err, errOwnStyling, out, outJson } from "./output";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
 const CAPABILITIES = ["embedding", "image-frames"] as const;
 delete process.env.ELECTRON_RUN_AS_NODE;
+// Node starts a debugger listening on a TCP port when it gets SIGUSR1, unless something handles the signal.
+process.on("SIGUSR1", () => {});
 
 function fail(message: string): never {
-  process.stderr.write(`terminal-browser: ${message}\n`);
+  err(`terminal-browser: ${message}\n`);
   process.exit(1);
 }
 
 function print(value: unknown) {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  outJson(value);
 }
 
 function reportOpened(browser: string, tab?: number | string | null) {
   const where = tab === undefined || tab === null ? browser : `tab ${tab} in ${browser}`;
-  process.stdout.write(`opened ${where} (terminal-browser ls for details)\n`);
+  out(`opened ${where} (terminal-browser ls for details)\n`);
 }
 
 function takeFlag(args: string[], name: string): string | undefined {
@@ -100,7 +116,7 @@ function electronBinary(): string {
   return path.join(path.dirname(library), "electron", "dist", ...ELECTRON_DEV_BIN);
 }
 
-function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
+function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string; stderrLog: string } {
   const browserDir = browserDirectory();
   let electron: string;
   try {
@@ -127,21 +143,12 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     argv = [...argv, "--ozone-platform=headless", "--screen-info={8192x8192}"];
   }
-  ensureDataDir();
-  const logDir = LOGS_DIR;
-  fs.mkdirSync(logDir, { recursive: true });
-  const quoted = [electron, main, ...argv]
-    .map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`)
-    .join(" ");
-  const line = `exec ${quoted} 2>>'${logDir.replaceAll("'", `'\\''`)}/stderr.log'`;
-  return { command: ["/bin/sh", "-c", line], cwd: browserDir };
+  ensurePrivateState();
+  return { command: [electron, main, ...argv], cwd: browserDir, stderrLog: path.join(LOGS_DIR, "stderr.log") };
 }
 
-function clientLaunchCommand(argv: string[]): string[] {
-  const runner = DIST_ROOT
-    ? [path.join(DIST_ROOT, "bin", "terminal-browser")]
-    : [process.execPath, path.resolve(__dirname, "main.js")];
-  return [...runner, "open", ...argv];
+function clientRunner(): string[] {
+  return DIST_ROOT ? [path.join(DIST_ROOT, "bin", "terminal-browser")] : [process.execPath, path.resolve(__dirname, "main.js")];
 }
 
 function ownTtyPath(): string | null {
@@ -171,28 +178,40 @@ function browserBuildStamp(): string {
 }
 
 function connectDaemon(): Promise<net.Socket> {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect(DAEMON_SOCKET);
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", reject);
-  });
+  return connectPrivately(DAEMON_SOCKET);
 }
 
-function spawnDaemon() {
-  const { command, cwd } = browserLaunchCommand(["--daemon"]);
+function spawnDaemon(debuggingPort: number | null) {
+  const port = debuggingPort === null ? [] : [`--${DAEMON_PORT_SWITCH}=${debuggingPort}`];
+  const { command, cwd, stderrLog } = browserLaunchCommand(["--daemon", "--remote-debugging-pipe", ...port]);
   const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
+    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_") && key !== "NODE_OPTIONS"),
   );
   env.NODE_ENV ??= "production";
-  const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });
-  child.unref();
+  const stderr = openPrivateLog(stderrLog);
+  const sockets = socketPair();
+  const [chromium, relay] = sockets.pair;
+  try {
+    const child = spawn(command[0], command.slice(1), {
+      cwd,
+      detached: true,
+      stdio: ["ignore", "ignore", stderr, chromium, chromium, relay],
+      env,
+    });
+    child.unref();
+  } finally {
+    fs.closeSync(stderr);
+    sockets.close();
+  }
 }
 
-async function daemonSocket(): Promise<net.Socket> {
+async function daemonSocket(debuggingPort: number | null = null): Promise<net.Socket> {
+  reclaimPrivateDir(path.dirname(DAEMON_SOCKET));
+  ensurePrivateDir(path.dirname(CDP_SOCKET));
   try {
     return await connectDaemon();
   } catch {}
-  spawnDaemon();
+  spawnDaemon(debuggingPort);
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
@@ -211,6 +230,35 @@ interface DaemonReply {
   event?: string;
   code?: number;
   sessions?: number;
+  token?: string;
+  argv?: string[];
+}
+
+async function askDaemon(message: Record<string, unknown>): Promise<DaemonReply> {
+  const socket = await daemonSocket();
+  try {
+    return await new Promise<DaemonReply>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("daemon did not answer")), 5000);
+      nextReply(socket, (reply) => {
+        clearTimeout(timer);
+        resolve(reply);
+      });
+      socket.once("close", () => {
+        clearTimeout(timer);
+        reject(new Error("daemon closed the connection"));
+      });
+      socket.write(`${JSON.stringify(message)}\n`);
+    });
+  } finally {
+    socket.destroy();
+  }
+}
+
+async function claimLaunch(token: string): Promise<string[]> {
+  const reply = await askDaemon({ cmd: "claim-launch", token }).catch(() => null);
+  // fixme: placeholder copy
+  if (!reply?.ok || !reply.argv) fail("this pane's browser launch expired or was already used");
+  return reply.argv;
 }
 
 function nextReply(socket: net.Socket, onLine: (reply: DaemonReply) => void): void {
@@ -231,12 +279,14 @@ function nextReply(socket: net.Socket, onLine: (reply: DaemonReply) => void): vo
 
 
 async function openSession(argv: string[], tty: string): Promise<{ socket: net.Socket; reply: DaemonReply }> {
+  const agentToken = await readAgentToken();
   const payload = {
     cmd: "open",
     tty,
     argv,
     env: process.env,
     cwd: process.cwd(),
+    ...(agentToken ? { agentToken } : {}),
   };
   const ask = (socket: net.Socket, build: string | null) =>
     new Promise<DaemonReply>((resolve, reject) => {
@@ -251,17 +301,18 @@ async function openSession(argv: string[], tty: string): Promise<{ socket: net.S
       });
       socket.write(`${JSON.stringify(build ? { ...payload, build } : payload)}\n`);
     });
-  let socket = await daemonSocket();
+  const debuggingPort = requestedDebuggingPort(argv);
+  let socket = await daemonSocket(debuggingPort);
   let reply = await ask(socket, browserBuildStamp());
   if (reply.ok === false && reply.error === "stale") {
     socket.destroy();
     await sleep(700);
-    socket = await daemonSocket();
+    socket = await daemonSocket(debuggingPort);
     reply = await ask(socket, browserBuildStamp());
   }
   if (reply.ok === false && reply.error === "stale") {
     socket.destroy();
-    socket = await daemonSocket();
+    socket = await daemonSocket(debuggingPort);
     reply = await ask(socket, null);
   }
   return { socket, reply };
@@ -298,7 +349,7 @@ async function shutdownDaemon(): Promise<number> {
   const pid = await daemonPid();
   if (!socket) {
     if (pid === null) {
-      process.stdout.write("no daemon running\n");
+      out("no daemon running\n");
       return 0;
     }
     return kill(pid, "it was not listening");
@@ -319,7 +370,7 @@ async function shutdownDaemon(): Promise<number> {
     return kill(pid, "it did not answer");
   }
   const browsers = answer.sessions ?? 0;
-  process.stdout.write(
+  out(
     browsers === 0 ? "daemon stopped\n" : `daemon stopped, with ${browsers} open\n`,
   );
   return 0;
@@ -328,7 +379,7 @@ async function shutdownDaemon(): Promise<number> {
 async function kill(pid: number, why: string): Promise<number> {
   process.kill(pid, "SIGTERM");
   if (!(await gone(pid, 2000))) process.kill(pid, "SIGKILL");
-  process.stdout.write(`daemon stopped, killed ${pid} because ${why}\n`);
+  out(`daemon stopped, killed ${pid} because ${why}\n`);
   return 0;
 }
 
@@ -381,8 +432,8 @@ async function sshSetup(argv: string[]): Promise<void> {
   const interrupt = () => process.exit(130);
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.on(signal, interrupt);
-  const session = await connectSsh({ target, status: (line) => process.stdout.write(`ssh: ${line}\n`) });
-  argv.push(`--socks-port=${session.socksPort}`);
+  const session = await connectSsh({ target, status: (line) => out(`ssh: ${line}\n`) });
+  argv.push(`--ssh-proxy=${session.view.proxy}`);
   for (const signal of signals) process.removeListener(signal, interrupt);
 }
 
@@ -422,10 +473,13 @@ async function launchInSplit(
   const from = await terminal.getCurrentPane?.({ tty: ownTtyPath() ?? callerTty().path, cwd: process.cwd() });
   if (!from) fail(`could not work out which ${terminal.name} pane you are in`);
   const before = new Set((await instances()).map(recordKey));
+  const stashed = await askDaemon({ cmd: "stash-launch", argv }).catch(() => null);
+  // fixme: placeholder copy
+  if (!stashed?.ok || !isLaunchToken(stashed.token)) fail("could not hand the new pane its arguments (is the daemon running?)");
   await terminal.split!({
     from,
     direction,
-    command: clientLaunchCommand(argv),
+    command: paneLaunchCommand(process.env, clientRunner(), stashed.token),
     size: size ?? null,
     tty: ownTtyPath() ?? callerTty().path,
   });
@@ -488,12 +542,14 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
 }
 
 const BROWSING_DATA_NAMES: Record<string, string> = {
+  // fixme: placeholder copy
+  history: "browsing history",
   siteData: "cookies and site data",
   cache: "cached images and files",
 };
 
 function clearSummary(kinds: string[]): string {
-  const shown = kinds.length > 0 ? kinds : Object.keys(BROWSING_DATA_NAMES);
+  const shown = kinds.length > 0 ? kinds : ["siteData", "cache"];
   const what = shown.map((kind) => BROWSING_DATA_NAMES[kind]).join(", and ");
   return `This clears ${what}${shown.length > 1 ? "," : ""} for every site in every terminal-browser window${shown.includes("siteData") ? ", signing you out" : ""}.`;
 }
@@ -512,6 +568,7 @@ async function clearBrowsingDataCommand(args: string[]): Promise<number> {
   const key = takeFlag(args, "--browser");
   const confirmed = takeBoolFlag(args, "--yes") || takeBoolFlag(args, "-y");
   const kinds = [
+    ...(takeBoolFlag(args, "--history") ? ["history"] : []),
     ...(takeBoolFlag(args, "--cookies") ? ["siteData"] : []),
     ...(takeBoolFlag(args, "--cache") ? ["cache"] : []),
   ];
@@ -526,7 +583,7 @@ async function clearBrowsingDataCommand(args: string[]): Promise<number> {
     const summary = clearSummary(kinds);
     if (!process.stdin.isTTY) fail(`${summary}\nPass --yes to confirm when not running interactively.`);
     if (!(await confirmClear(summary))) {
-      process.stdout.write("cancelled\n");
+      out("cancelled\n");
       return 0;
     }
   }
@@ -534,7 +591,7 @@ async function clearBrowsingDataCommand(args: string[]): Promise<number> {
     cmd: "clear-browsing-data",
     ...(kinds.length > 0 ? { kinds } : {}),
   })) as { cleared: string[] };
-  process.stdout.write(`cleared ${reply.cleared.map((kind) => BROWSING_DATA_NAMES[kind] ?? kind).join(", and ")}\n`);
+  out(`cleared ${reply.cleared.map((kind) => BROWSING_DATA_NAMES[kind] ?? kind).join(", and ")}\n`);
   return 0;
 }
 
@@ -554,12 +611,14 @@ function unsupportedGraphicsMessage(color: boolean): string {
 
 async function requireGraphics(check: TerminalCheck) {
   if (check.graphics !== "unsupported") return;
-  process.stderr.write(unsupportedGraphicsMessage(process.stderr.isTTY === true));
+  errOwnStyling(unsupportedGraphicsMessage(process.stderr.isTTY === true));
   process.exit(1);
 }
 
 const BROWSER_FLAGS = [
   "--allow-clipboard-read",
+  "--remote-debugging-port",
+  "--remote-debugging-port=",
   "--transparent",
   "--ssh=",
   "--split-dir=",
@@ -647,7 +706,14 @@ async function tryAdopt(args: string[], direction: Direction | null): Promise<bo
 }
 
 async function openCommand(args: string[]) {
+  try {
+    requestedDebuggingPort(args);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
   requirePaneAccess();
+  const launch = process.env[LAUNCH_ENV];
+  if (launch && args.length === 0) args = await claimLaunch(launch);
   const owned = process.env.PIXEL_TTY ?? ownTtyPath();
   if (process.env.PIXEL_EMBED || (owned && findOwner(owned))) {
     rejectUnknownFlags(args);
@@ -688,6 +754,25 @@ async function openCommand(args: string[]) {
   reportOpened(recordKey(await launchInSplit(terminal!, direction, argv, size)));
 }
 
+// `action --stdin` takes the command as a JSON array of words, so secrets it
+// carries never appear in this process's argv.
+async function readPassthroughFromStdin(): Promise<string[]> {
+  let text = "";
+  for await (const chunk of process.stdin) text += chunk;
+  let words: unknown;
+  try {
+    words = JSON.parse(text);
+  } catch {
+    // fixme: placeholder copy
+    fail('--stdin expects a JSON array of words, e.g. ["fill", "@e3", "hunter2"]');
+  }
+  if (!Array.isArray(words) || words.length === 0 || !words.every((word) => typeof word === "string")) {
+    // fixme: placeholder copy
+    fail('--stdin expects a JSON array of words, e.g. ["fill", "@e3", "hunter2"]');
+  }
+  return words as string[];
+}
+
 function splitPassthrough(args: string[]): { own: string[]; passthrough: string[] } {
   const at = args.indexOf("--");
   if (at < 0) return { own: args, passthrough: [] };
@@ -724,7 +809,7 @@ function registerAppCommand(args: string[]): number {
     bin: binPath,
     args: argsFlag ? argsFlag.split(/\s+/).filter(Boolean) : [],
   });
-  process.stdout.write(`registered ${name} (${id})\n`);
+  out(`registered ${name} (${id})\n`);
   return 0;
 }
 
@@ -732,7 +817,7 @@ function unregisterAppCommand(args: string[]): number {
   const id = args.find((arg) => !arg.startsWith("-"));
   if (!id) fail("unregister-app needs an app id (terminal-browser apps)");
   if (!unregisterApp(appId(id))) fail(`no registered app ${id}`);
-  process.stdout.write(`unregistered ${id}\n`);
+  out(`unregistered ${id}\n`);
   return 0;
 }
 
@@ -744,7 +829,7 @@ function appsCommand(args: string[]): number {
     return 0;
   }
   if (apps.length === 0) {
-    process.stdout.write("no apps registered\n");
+    out("no apps registered\n");
     return 0;
   }
   const rows = apps.map((app) => [app.id, app.name, app.bin]);
@@ -754,39 +839,39 @@ function appsCommand(args: string[]): number {
   );
   for (const row of [header, ...rows]) {
     const line = row.map((cell, col) => cell.padEnd(widths[col])).join("  ");
-    process.stdout.write(`${line.trimEnd()}\n`);
+    out(`${line.trimEnd()}\n`);
   }
   return 0;
 }
 
-function helpCommand(topic: string | undefined): number {
+function helpCommand(topic: string | undefined, subcommand: string | undefined): number {
   if (!topic) {
-    process.stdout.write(rootHelp());
+    out(rootHelp());
     return 0;
   }
-  const help = commandHelp(topic);
+  const help = commandHelp(topic, subcommand);
   if (!help) fail(`no help for ${topic} (try ${helpTopics().join(", ")})`);
-  process.stdout.write(help);
+  out(help);
   return 0;
 }
 
 async function main(): Promise<number> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "--help" || command === "-h") {
-    process.stdout.write(rootHelp());
+    out(rootHelp());
     return 0;
   }
   if (command === "--version" || command === "-v") {
-    process.stdout.write(`terminal-browser ${installedVersion() ?? "dev"}\n`);
+    out(`terminal-browser ${installedVersion() ?? "dev"}\n`);
     return 0;
   }
   if (command === "capabilities") {
-    process.stdout.write(`${JSON.stringify({ capabilities: CAPABILITIES })}\n`);
+    outJson({ capabilities: CAPABILITIES }, 0);
     return 0;
   }
-  if (command === "help") return helpCommand(args[0]);
+  if (command === "help") return helpCommand(args[0], args[1]);
   if (asksForHelp(args)) {
-    process.stdout.write(commandHelp(command) ?? rootHelp());
+    out(commandHelp(command, args[0]) ?? rootHelp());
     return 0;
   }
   if (command !== "setup") ensureSetup();
@@ -804,6 +889,7 @@ async function main(): Promise<number> {
   if (command === "setup") return setupCommand(electronBinary());
   if (command === "upgrade") return upgradeCommand();
   if (command === "config") return configCommand(args);
+  if (command === "extensions") return extensionsCommand(args);
   if (command === "claude-bridge") return claudeBridgeCommand(args);
   if (command === "shutdown") return shutdownDaemon();
   if (command === "register-app") return registerAppCommand(args);
@@ -829,6 +915,10 @@ async function main(): Promise<number> {
       done: false,
       passthrough,
     };
+    if (takeBoolFlag(own, "--stdin")) {
+      if (passthrough.length > 0) fail("--stdin reads the command from stdin, so leave out -- and what follows");
+      options.passthrough = await readPassthroughFromStdin();
+    }
     if (own[0] === "done") {
       own.shift();
       options.done = true;
@@ -839,7 +929,7 @@ async function main(): Promise<number> {
   }
   const rest = process.argv.slice(2);
   if (asksForHelp(rest)) {
-    process.stdout.write(commandHelp("open") ?? rootHelp());
+    out(commandHelp("open") ?? rootHelp());
     return 0;
   }
   await openCommand(rest);

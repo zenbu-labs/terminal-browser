@@ -1,0 +1,73 @@
+diff --git a/shell/common/extensions/electron_extensions_client.cc b/shell/common/extensions/electron_extensions_client.cc
+--- a/shell/common/extensions/electron_extensions_client.cc
++++ b/shell/common/extensions/electron_extensions_client.cc
+@@ -4,19 +4,28 @@
+ 
+ #include "shell/common/extensions/electron_extensions_client.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <string>
++#include <vector>
+ 
++#include "base/command_line.h"
+ #include "base/no_destructor.h"
++#include "base/strings/string_split.h"
+ #include "base/notimplemented.h"
+ #include "components/version_info/version_info.h"
+ #include "extensions/common/core_extensions_api_provider.h"
+ #include "extensions/common/extension_urls.h"
+ #include "extensions/common/features/simple_feature.h"
++#include "extensions/common/manifest_constants.h"
++#include "extensions/common/permissions/permissions_data.h"
+ #include "extensions/common/permissions/permission_message_provider.h"
+ #include "extensions/common/user_scripts_availability.h"
++#include "extensions/common/url_pattern.h"
+ #include "extensions/common/url_pattern_set.h"
+ #include "shell/common/extensions/electron_extensions_api_provider.h"
++#include "shell/common/options_switches.h"
++#include "url/gurl.h"
+ 
+ using extensions::ExtensionsClient;
+ 
+@@ -59,6 +68,31 @@ class ElectronPermissionMessageProvider
+   }
+ };
+ 
++// The app's own standard schemes (protocol.registerSchemesAsPrivileged) that
++// don't allow extensions hold the app's UI, which extensions may not script,
++// just as they may not script chrome:// pages in Chrome.
++class ElectronPermissionsPolicyDelegate
++    : public extensions::PermissionsData::PolicyDelegate {
++ public:
++  bool IsRestrictedUrl(const GURL& document_url, std::string* error) override {
++    if (!document_url.IsStandard() ||
++        URLPattern::IsValidSchemeForExtensions(
++            document_url.GetScheme())) {
++      return false;
++    }
++    const std::vector<std::string> app_schemes = base::SplitString(
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            switches::kStandardSchemes),
++        ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++    if (std::ranges::find(app_schemes, document_url.GetScheme()) ==
++        app_schemes.end())
++      return false;
++    if (error)
++      *error = extensions::manifest_errors::kCannotAccessChromeUrl;
++    return true;
++  }
++};
++
+ }  // namespace
+ 
+ ElectronExtensionsClient::ElectronExtensionsClient()
+@@ -70,6 +104,8 @@ ElectronExtensionsClient::ElectronExtensionsClient()
+   // chrome.userScripts is only exposed once the user allowed it per extension.
+   SetFeatureDelegatedAvailabilityCheckMap(
+       extensions::user_scripts_availability::CreateAvailabilityCheckMap());
++  static base::NoDestructor<ElectronPermissionsPolicyDelegate> policy_delegate;
++  extensions::PermissionsData::SetPolicyDelegate(policy_delegate.get());
+ }
+ 
+ ElectronExtensionsClient::~ElectronExtensionsClient() = default;

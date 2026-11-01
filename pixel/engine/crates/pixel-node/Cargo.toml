@@ -29,8 +29,6 @@ mp4 = "0.14.0"
 png = "0.18.1"
 tiny-skia.workspace = true
 rustix = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
 
 [build-dependencies]

@@ -1,0 +1,109 @@
+diff --git a/shell/browser/extensions/electron_extension_host_delegate.cc b/shell/browser/extensions/electron_extension_host_delegate.cc
+--- a/shell/browser/extensions/electron_extension_host_delegate.cc
++++ b/shell/browser/extensions/electron_extension_host_delegate.cc
+@@ -47,16 +47,18 @@ const MediaStreamDevice* GetRequestedDeviceOrDefault(
+   return nullptr;
+ }
+ 
+-void VerifyMediaAccessPermission(blink::mojom::MediaStreamType type,
+-                                 const Extension* extension) {
++// audioCapture and videoCapture are platform-app permissions, so extension
++// pages (offscreen documents, popups) never have them and are denied.
++bool HasMediaAccessPermission(blink::mojom::MediaStreamType type,
++                              const Extension* extension) {
+   const PermissionsData* permissions_data = extension->permissions_data();
+-  if (type == blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE) {
+-    CHECK(permissions_data->HasAPIPermission(APIPermissionID::kAudioCapture))
+-        << "Audio capture request but no audioCapture permission in manifest.";
+-  } else {
+-    DCHECK(type == blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
+-    CHECK(permissions_data->HasAPIPermission(APIPermissionID::kVideoCapture))
+-        << "Video capture request but no videoCapture permission in manifest.";
++  switch (type) {
++    case blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE:
++      return permissions_data->HasAPIPermission(APIPermissionID::kAudioCapture);
++    case blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE:
++      return permissions_data->HasAPIPermission(APIPermissionID::kVideoCapture);
++    default:
++      return false;
+   }
+ }
+ 
+@@ -64,19 +66,26 @@ void GrantMediaStreamRequest(content::WebContents* web_contents,
+                              const content::MediaStreamRequest& request,
+                              content::MediaResponseCallback callback,
+                              const Extension* extension) {
+-  DCHECK(request.audio_type ==
+-             blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE ||
+-         request.video_type ==
+-             blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE);
++  const bool wants_audio = request.audio_type !=
++                           blink::mojom::MediaStreamType::NO_SERVICE;
++  const bool wants_video = request.video_type !=
++                           blink::mojom::MediaStreamType::NO_SERVICE;
++  if ((!wants_audio && !wants_video) ||
++      (wants_audio && !HasMediaAccessPermission(request.audio_type, extension)) ||
++      (wants_video &&
++       !HasMediaAccessPermission(request.video_type, extension))) {
++    std::move(callback).Run(
++        blink::mojom::StreamDevicesSet(),
++        blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED, nullptr);
++    return;
++  }
+ 
+   blink::mojom::StreamDevicesSet stream_devices_set;
+   stream_devices_set.stream_devices.emplace_back(
+       blink::mojom::StreamDevices::New());
+   blink::mojom::StreamDevices& devices = *stream_devices_set.stream_devices[0];
+ 
+-  if (request.audio_type ==
+-      blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE) {
+-    VerifyMediaAccessPermission(request.audio_type, extension);
++  if (wants_audio) {
+     const MediaStreamDevice* device = GetRequestedDeviceOrDefault(
+         MediaCaptureDevices::GetInstance()->GetAudioCaptureDevices(),
+         request.requested_audio_device_ids);
+@@ -84,9 +93,7 @@ void GrantMediaStreamRequest(content::WebContents* web_contents,
+       devices.audio_device = *device;
+   }
+ 
+-  if (request.video_type ==
+-      blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE) {
+-    VerifyMediaAccessPermission(request.video_type, extension);
++  if (wants_video) {
+     const MediaStreamDevice* device = GetRequestedDeviceOrDefault(
+         MediaCaptureDevices::GetInstance()->GetVideoCaptureDevices(),
+         request.requested_video_device_ids);
+@@ -124,8 +131,8 @@ void ElectronExtensionHostDelegate::CreateTab(
+     WindowOpenDisposition disposition,
+     const blink::mojom::WindowFeatures& window_features,
+     bool user_gesture) {
+-  // TODO(jamescook): Should app_shell support opening popup windows?
+-  NOTREACHED();
++  // Extension hosts can't open tabs here; dropping |web_contents| refuses the
++  // window.open.
+ }
+ 
+ void ElectronExtensionHostDelegate::ProcessMediaAccessRequest(
+@@ -143,18 +150,15 @@ bool ElectronExtensionHostDelegate::CheckMediaAccessPermission(
+     const url::Origin& security_origin,
+     blink::mojom::MediaStreamType type,
+     const Extension* extension) {
+-  VerifyMediaAccessPermission(type, extension);
+-  return true;
++  return HasMediaAccessPermission(type, extension);
+ }
+ 
+ content::PictureInPictureResult
+ ElectronExtensionHostDelegate::EnterPictureInPicture(
+     content::WebContents* web_contents) {
+-  NOTREACHED();
++  return content::PictureInPictureResult::kNotSupported;
+ }
+ 
+-void ElectronExtensionHostDelegate::ExitPictureInPicture() {
+-  NOTREACHED();
+-}
++void ElectronExtensionHostDelegate::ExitPictureInPicture() {}
+ 
+ }  // namespace extensions

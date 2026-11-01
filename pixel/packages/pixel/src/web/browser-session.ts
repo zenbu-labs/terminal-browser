@@ -3,8 +3,13 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { app, net } from "electron";
+import { app, net, webContents } from "electron";
 import type { Session, WebContents } from "electron";
+
+import { parseSshProxyRules } from "../ssh";
+import { requestHooks } from "./request-hooks";
+import { gatePasskeyAccounts, installAuthHandlers } from "./auth";
+import { sshProxyFor, sshProxyLogin } from "./ssh-proxies";
 
 export interface DownloadProgress {
   name: string;
@@ -28,15 +33,47 @@ const proxied = new WeakSet<Session>();
 let webrtcGuard = false;
 
 
-export function routeThroughProxy(target: Session, rules: string): Promise<void> {
+let answersProxyLogins = false;
+const sshProxyPorts = new WeakMap<Session, number>();
+
+// A proxy's password goes only to the session routed through that proxy.
+function answerProxyLogins() {
+  if (answersProxyLogins) return;
+  answersProxyLogins = true;
+  app.on("login", (event, contents, _details, authInfo, callback) => {
+    if (!authInfo.isProxy || authInfo.host !== "127.0.0.1") return;
+    const session = contents && !contents.isDestroyed() ? contents.session : null;
+    const proxy = session ? sshProxyLogin(sshProxyPorts.get(session), authInfo.port) : undefined;
+    if (!proxy) return;
+    event.preventDefault();
+    callback(proxy.username, proxy.password);
+  });
+}
+
+// WebRTC may only use the proxy, for every page in the session: the ones that
+// already exist (the window that asked for the proxy) and any opened later.
+function keepWebRtcOnProxy(target: Session) {
   proxied.add(target);
-  if (!webrtcGuard) {
-    webrtcGuard = true;
-    app.on("web-contents-created", (_event, contents) => {
-      if (proxied.has(contents.session)) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
-    });
+  for (const contents of webContents.getAllWebContents()) {
+    if (contents.session === target) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
   }
-  return target.setProxy({ proxyRules: rules, proxyBypassRules: "<-loopback>" });
+  if (webrtcGuard) return;
+  webrtcGuard = true;
+  app.on("web-contents-created", (_event, contents) => {
+    if (proxied.has(contents.session)) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+  });
+}
+
+export async function routeThroughProxy(target: Session, rules: string): Promise<void> {
+  keepWebRtcOnProxy(target);
+  const route = parseSshProxyRules(rules);
+  if (route) {
+    answerProxyLogins();
+    const proxy = await sshProxyFor(route);
+    sshProxyPorts.set(target, proxy.port);
+    rules = `http://127.0.0.1:${proxy.port}`;
+  }
+  await target.setProxy({ proxyRules: rules, proxyBypassRules: "<-loopback>" });
 }
 const clipboardReaders = new WeakSet<WebContents>();
 
@@ -69,7 +106,10 @@ export function onPermissionFor(contents: WebContents, gate: PermissionGate): vo
 function originOf(url: string | undefined): string {
   if (!url) return "";
   try {
-    return new URL(url).origin;
+    const parsed = new URL(url);
+    // Node's URL gives "null" as the origin of schemes it doesn't know, like chrome-extension:
+    if (parsed.protocol === "chrome-extension:") return `chrome-extension://${parsed.host}`;
+    return parsed.origin;
   } catch {
     return "";
   }
@@ -114,6 +154,8 @@ export function onDownloadFor(
 export function configureBrowserSession(target: Session): void {
   if (configured.has(target)) return;
   configured.add(target);
+  installAuthHandlers();
+  gatePasskeyAccounts(target);
 
   target.registerPreloadScript({ type: "frame", filePath: selectPreloadPath() });
 
@@ -161,9 +203,9 @@ export function configureBrowserSession(target: Session): void {
     });
   });
 
-  target.webRequest.onBeforeRequest({ urls: ["file://*", "file://*/*"] }, (details, callback) => {
-    callback({ cancel: details.resourceType === "xhr" });
-  });
+  requestHooks(target).beforeRequest({ urls: ["file://*", "file://*/*"] }, (details) =>
+    details.resourceType === "xhr" ? { cancel: true } : undefined,
+  );
 
   target.protocol.handle("file", async (request) => {
     const directory = requestedDirectory(request.url);
@@ -173,11 +215,12 @@ export function configureBrowserSession(target: Session): void {
     return ranged ?? net.fetch(request, { bypassCustomProtocolHandlers: true });
   });
 
-  target.on("will-download", (_event, item, contents) => {
-    const onDownload = downloadHandlers.get(contents.id);
+  target.on("will-download", (event, item, contents) => {
+    if (event.defaultPrevented) return;
+    const onDownload = contents ? downloadHandlers.get(contents.id) : undefined;
     if (!onDownload) return;
-    const savePath = downloadPath(item.getFilename());
-    item.setSavePath(savePath);
+    if (!item.getSavePath()) item.setSavePath(downloadPath(item.getFilename()));
+    const savePath = item.getSavePath();
     const report = (state: DownloadProgress["state"]) =>
       onDownload({
         name: path.basename(savePath),
@@ -240,6 +283,16 @@ function requestedDirectory(url: string): string | null {
 }
 
 function directoryListing(directory: string): Response {
+  return new Response(directoryListingHtml(directory), {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
+// `href` gives each entry's link, so an app serving local files through its own scheme can list folders too.
+export function directoryListingHtml(
+  directory: string,
+  href: (file: string) => string = (file) => pathToFileURL(file).toString(),
+): string {
   const entries = fs
     .readdirSync(directory, { withFileTypes: true })
     .map((entry) => ({ name: entry.name, directory: isDirectory(directory, entry) }))
@@ -248,14 +301,13 @@ function directoryListing(directory: string): Response {
     );
   const parent = path.dirname(directory);
   const rows = entries.map((entry) => {
-    const href = pathToFileURL(path.join(directory, entry.name)).toString();
-    return `<li><a href="${escapeHtml(href)}">${escapeHtml(entry.name)}${entry.directory ? "/" : ""}</a></li>`;
+    const link = href(path.join(directory, entry.name));
+    return `<li><a href="${escapeHtml(link)}">${escapeHtml(entry.name)}${entry.directory ? "/" : ""}</a></li>`;
   });
-  const up = parent === directory ? "" : `<li><a href="${pathToFileURL(parent)}">../</a></li>`;
-  const html = `<!doctype html><meta charset="utf-8"><title>Index of ${escapeHtml(directory)}</title>
+  const up = parent === directory ? "" : `<li><a href="${escapeHtml(href(parent))}">../</a></li>`;
+  return `<!doctype html><meta charset="utf-8"><title>Index of ${escapeHtml(directory)}</title>
 <style>:root{color-scheme:light dark}body{font:14px ui-monospace,Menlo,monospace;margin:2rem}h1{font-size:1rem;font-weight:600;margin:0 0 1rem}ul{list-style:none;padding:0}li{padding:2px 0}a{text-decoration:none}a:hover{text-decoration:underline}</style>
 <h1>Index of ${escapeHtml(directory)}</h1><ul>${up}${rows.join("")}</ul>`;
-  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
 function isDirectory(parent: string, entry: fs.Dirent): boolean {

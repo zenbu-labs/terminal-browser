@@ -22,7 +22,7 @@ export type BridgeState = {
 }
 
 export type LaunchReport =
-  | { port: number; token: string }
+  | { socket: string; token: string }
   | { error: string; code: 'tty' | 'start' }
 
 export type SizeMessage = { type: 'size'; cols: number; rows: number }
@@ -48,7 +48,7 @@ export const isBridgeState = (value: unknown): value is BridgeState =>
   && (value.frame === null || isFrame(value.frame))
 
 export const isLaunchReport = (value: unknown): value is LaunchReport =>
-  isRecord(value) && (typeof value.port === 'number' || typeof value.error === 'string')
+  isRecord(value) && ((typeof value.socket === 'string' && value.socket.startsWith('/')) || typeof value.error === 'string')
 
 export const isSizeMessage = (data: unknown): data is SizeMessage =>
   isRecord(data) && data.type === 'size' && Number.isInteger(data.cols) && Number.isInteger(data.rows)

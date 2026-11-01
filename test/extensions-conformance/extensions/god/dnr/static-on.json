@@ -1,0 +1,3 @@
+[
+  { "id": 1, "priority": 1, "action": { "type": "block" }, "condition": { "urlFilter": "/dnr-static-block", "resourceTypes": ["xmlhttprequest", "main_frame", "sub_frame"] } }
+]

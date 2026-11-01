@@ -26,8 +26,21 @@ export type { DevToolsProps } from "./devtools";
 export type { DevtoolsDock } from "./web/types";
 export type { ZoomDirection } from "./web/zoom";
 export type { TerminalTheme } from "./web/session";
-export { QUIT_URL, defaultOpenWindow } from "./web/host";
+export { QUIT_URL, defaultOpenWindow, setWebPreferenceDefaults } from "./web/host";
+export type {
+  AuthGate,
+  CertificateErrorRequest,
+  CertificateSummary,
+  ClientCertificateRequest,
+  LoginCredentials,
+  LoginRequest,
+  PasskeyAccount,
+  PasskeyAccountRequest,
+} from "./web/auth";
 export { clearFavicons } from "./web/favicon";
+export { requestHooks } from "./web/request-hooks";
+export { directoryListingHtml } from "./web/browser-session";
+export type { BeforeRedirectHook, BeforeRequestHook, HeadersReceivedHook, RequestFilter, RequestHooks, SendHeadersHook } from "./web/request-hooks";
 
 export {
   Box,

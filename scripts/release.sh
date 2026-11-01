@@ -30,6 +30,8 @@ if [ -z "$NATIVE_PKG" ] || [ ! -f "$NATIVE_PKG/pixel.node" ]; then
   exit 1
 fi
 cp -RL "$NATIVE_PKG" "$STAGE/browser/node_modules/@zenbu-labs/pixel-native-$TARGET"
+# the CLI loads the same native addon
+ln -s ../browser/node_modules "$STAGE/cli/node_modules"
 if [ -n "$DARWIN_ARCH" ]; then
   cp "$NATIVE_PKG/native-scroll-helper" "$STAGE/bin/native-scroll-helper"
   rm -f "$STAGE/browser/node_modules/@zenbu-labs/pixel-native-$TARGET/native-scroll-helper"
@@ -40,6 +42,14 @@ cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
 
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
 "$ROOT/scripts/bundle.sh" "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
+node "$ROOT/browser/scripts/bundle-preloads.mjs" "$STAGE/browser/dist"
+
+# The conformance harness's main-process hook (test/extensions-conformance/harness/main-hook.cjs) is test-only.
+if [ -n "$(find "$STAGE" -name 'main-hook.cjs')" ] || grep -rqF "terminal-browser-test-hook" "$STAGE/cli" "$STAGE/browser"; then
+  # fixme: placeholder copy
+  echo "refusing to build: the test-only main-process hook is in the release" >&2
+  exit 1
+fi
 
 cp "$ROOT/scripts/apparmor.sh" "$STAGE/scripts/apparmor.sh"
 
@@ -94,15 +104,14 @@ else
   FUSE_TARGET="$STAGE/electron/pixel"
 fi
 
-TOOLS="$OUT/tools"
-mkdir -p "$TOOLS"
-[ -f "$TOOLS/package.json" ] || echo '{"private":true}' > "$TOOLS/package.json"
-(cd "$TOOLS" && npm install --no-audit --no-fund --silent @electron/fuses@2.1.3)
-FUSES="$TOOLS/node_modules/.bin/electron-fuses"
-[ -x "$FUSES" ] || { echo "release.sh: @electron/fuses did not install" >&2; exit 1; }
-NO_COLOR=1 "$FUSES" write --app "$FUSE_TARGET" EnableCookieEncryption=on
-NO_COLOR=1 "$FUSES" read --app "$FUSE_TARGET" | sed $'s/\x1b\[[0-9;]*m//g' | tee "$OUT/fuses.txt"
+# --inspect, SIGUSR1 and NODE_OPTIONS=--inspect would each open an unauthenticated debugger on a TCP port.
+# The fuses cover the browser; the CLI runs as plain Node (ELECTRON_RUN_AS_NODE), so its wrapper
+# below also passes --disable-sigusr1.
+node "$ROOT/scripts/fuses.mjs" write "$FUSE_TARGET" | tee "$OUT/fuses.txt"
 grep -q "EnableCookieEncryption is Enabled" "$OUT/fuses.txt"
+grep -q "EnableNodeCliInspectArguments is Disabled" "$OUT/fuses.txt"
+grep -q "EnableNodeOptionsEnvironmentVariable is Disabled" "$OUT/fuses.txt"
+grep -q "GrantFileProtocolExtraPrivileges is Disabled" "$OUT/fuses.txt"
 grep -q "RunAsNode is Enabled" "$OUT/fuses.txt"
 
 cat > "$STAGE/bin/terminal-browser" <<EOF
@@ -119,7 +128,7 @@ ROOT="\$(CDPATH= cd -- "\$(dirname -- "\$SELF")/.." && pwd -P)"
 export TERMINAL_BROWSER_DIST_ROOT="\$ROOT"
 export ELECTRON_RUN_AS_NODE=1
 $NATIVE_SCROLL
-exec "\$ROOT/$ELECTRON_EXE" "\$ROOT/cli/dist/main.js" "\$@"
+exec "\$ROOT/$ELECTRON_EXE" --disable-sigusr1 "\$ROOT/cli/dist/main.js" "\$@"
 EOF
 chmod +x "$STAGE/bin/terminal-browser"
 echo "$VERSION" > "$STAGE/VERSION"

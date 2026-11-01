@@ -1,0 +1,30 @@
+diff --git a/shell/browser/extensions/electron_extensions_browser_client.cc b/shell/browser/extensions/electron_extensions_browser_client.cc
+--- a/shell/browser/extensions/electron_extensions_browser_client.cc
++++ b/shell/browser/extensions/electron_extensions_browser_client.cc
+@@ -18,6 +18,7 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/frame_tree_node_id.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/common/url_constants.h"
+ #include "extensions/browser/api/core_extensions_browser_api_provider.h"
+ #include "extensions/browser/api/extensions_api_client.h"
+ #include "extensions/browser/component_extension_resource_manager.h"
+@@ -233,11 +234,13 @@ bool AllowCrossRendererResourceLoad(
+     return true;
+   }
+ 
+-  // If there aren't any explicitly marked web accessible resources, the
+-  // load should be allowed only if it is by DevTools. A close approximation is
+-  // checking if the extension contains a DevTools page.
+-  if (extension && !extensions::chrome_manifest_urls::GetDevToolsPage(extension)
+-                        .is_empty()) {
++  // An extension with a DevTools page may load its resources into DevTools,
++  // and the browser may load them, but other pages and extensions may not.
++  if (extension &&
++      !extensions::chrome_manifest_urls::GetDevToolsPage(extension)
++           .is_empty() &&
++      (!request.request_initiator ||
++       request.request_initiator->scheme() == content::kChromeDevToolsScheme)) {
+     *allowed = true;
+     return true;
+   }

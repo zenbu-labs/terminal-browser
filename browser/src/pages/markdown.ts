@@ -2,15 +2,18 @@ import type { Element, ElementContent, Root } from "hast";
 import type { Options as SanitizeSchema } from "rehype-sanitize" with { "resolution-mode": "import" };
 
 import type { Theme } from "../ui/theme";
+import { DOC_SCHEME } from "../url";
 import { escape, pageColors } from "./scheme";
 
+// Sandboxed like every local document, so its images and media come from its own folder only.
 export const MARKDOWN_CSP = [
+  "sandbox allow-scripts allow-popups",
   "default-src 'none'",
   "script-src 'none'",
   "style-src 'unsafe-inline'",
-  "img-src 'self' https: http: data:",
-  "media-src 'self' https: http: data:",
-  "font-src 'self' data:",
+  `img-src ${DOC_SCHEME}: https: http: data:`,
+  `media-src ${DOC_SCHEME}: https: http: data:`,
+  `font-src ${DOC_SCHEME}: data:`,
   "frame-src 'none'",
   "object-src 'none'",
   "form-action 'none'",

@@ -26,7 +26,12 @@ if [ -z "${MACOS_SIGN_P12:-}" ]; then
   for binary in "${LOOSE_BINARIES[@]}"; do
     codesign --force --sign - --timestamp=none "$binary"
   done
+  # The fuse write changed Electron Framework, so the frameworks and helpers are re-signed before the app that seals them.
+  for nested in "$APP/Contents/Frameworks/"*.framework "$APP/Contents/Frameworks/"*.app; do
+    codesign --force --deep --sign - --timestamp=none "$nested"
+  done
   codesign --force --sign - --timestamp=none "$APP"
+  codesign --verify --deep --strict "$APP"
   echo "signed ad-hoc (MACOS_SIGN_P12 not set)"
   exit 0
 fi
@@ -64,9 +69,17 @@ for binary in "${LOOSE_BINARIES[@]}"; do
   codesign --force --sign "$IDENTITY" --keychain "$KEYCHAIN" --options runtime --timestamp "$binary"
 done
 
+# The profile lets the app keep Touch ID passkeys in its own keychain group.
+cp "$ROOT/scripts/terminal-browser.provisionprofile" "$APP/Contents/embedded.provisionprofile"
 xattr -cr "$APP" 2>/dev/null || true
-node "$ROOT/scripts/sign-app.mjs" "$APP" "$IDENTITY" "$KEYCHAIN" "$ROOT/scripts/entitlements.plist"
+node "$ROOT/scripts/sign-app.mjs" "$APP" "$IDENTITY" "$KEYCHAIN" "$ROOT/scripts/entitlements.plist" "$ROOT/scripts/entitlements-app.plist"
 codesign --verify --deep --strict "$APP"
+# macOS kills an app whose entitlements and profile disagree before it runs any code.
+if ! ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/terminal-browser" -e "process.exit(0)"; then
+  # fixme: placeholder copy
+  echo "the signed app does not launch: its entitlements and provisioning profile do not match" >&2
+  exit 1
+fi
 
 if [ "$CHANNEL" != stable ]; then
   echo "signed with Developer ID ($CHANNEL build, notarization skipped)"

@@ -1,0 +1,110 @@
+diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
+--- a/docs/api/web-contents.md
++++ b/docs/api/web-contents.md
+@@ -609,6 +609,17 @@ Returns:
+ 
+ Emitted when the user is requesting to change the zoom level using the mouse wheel.
+ 
++#### Event: 'zoom-level-changed'
++
++Returns:
++
++* `event` Event
++* `details` Object
++  * `oldZoomFactor` number
++  * `newZoomFactor` number
++
++Emitted when the zoom level of the page changes, whatever changed it.
++
+ #### Event: 'blur'
+ 
+ Emitted when the `WebContents` loses focus.
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -1045,6 +1045,8 @@ void WebContents::InitZoomController(content::WebContents* web_contents,
+                                      const gin_helper::Dictionary& options) {
+   WebContentsZoomController* const zoom_controller =
+       WebContentsZoomController::GetOrCreateForWebContents(web_contents);
++  if (!zoom_observation_.IsObserving())
++    zoom_observation_.Observe(zoom_controller);
+ 
+   double zoom_factor = 0;
+   if (options.Get(options::kZoomFactor, &zoom_factor))
+@@ -1730,6 +1732,26 @@ void WebContents::ContentsZoomChange(bool zoom_in) {
+   Emit("zoom-changed", std::string_view{zoom_in ? "in" : "out"});
+ }
+ 
++void WebContents::OnZoomControllerDestroyed(
++    WebContentsZoomController* zoom_controller) {
++  zoom_observation_.Reset();
++}
++
++void WebContents::OnZoomChanged(
++    const WebContentsZoomController::ZoomChangedEventData& data) {
++  if (data.old_zoom_level == data.new_zoom_level)
++    return;
++  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
++  v8::HandleScope handle_scope(isolate);
++  Emit("zoom-level-changed",
++       gin::DataObjectBuilder(isolate)
++           .Set("oldZoomFactor",
++                blink::ZoomLevelToZoomFactor(data.old_zoom_level))
++           .Set("newZoomFactor",
++                blink::ZoomLevelToZoomFactor(data.new_zoom_level))
++           .Build());
++}
++
+ Profile* WebContents::GetProfile() {
+   return nullptr;
+ }
+diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/electron_api_web_contents.h
+--- a/shell/browser/api/electron_api_web_contents.h
++++ b/shell/browser/api/electron_api_web_contents.h
+@@ -24,6 +24,7 @@
+ #include "content/common/frame.mojom-forward.h"
+ #include "content/public/browser/frame_tree_node_id.h"
+ #include "content/public/browser/global_routing_id.h"
++#include "base/scoped_observation.h"
+ #include "content/public/browser/javascript_dialog_manager.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+@@ -40,6 +41,7 @@
+ #include "shell/browser/preload_script.h"
+ #include "shell/browser/ui/inspectable_web_contents_delegate.h"
+ #include "shell/browser/ui/inspectable_web_contents_view_delegate.h"
++#include "shell/browser/web_contents_zoom_observer.h"
+ #include "shell/common/gin_helper/cleaned_up_at_exit.h"
+ #include "shell/common/gin_helper/constructible.h"
+ #include "shell/common/gin_helper/pinnable.h"
+@@ -133,6 +135,7 @@ class WebContents final : public ExclusiveAccessContext,
+                           public content::JavaScriptDialogManager,
+                           public InspectableWebContentsDelegate,
+                           public InspectableWebContentsViewDelegate,
++                          public WebContentsZoomObserver,
+                           public BackgroundThrottlingSource {
+  public:
+   enum class Type {
+@@ -590,6 +593,12 @@ class WebContents final : public ExclusiveAccessContext,
+       content::WebContents* source,
+       const input::NativeWebKeyboardEvent& event) override;
+   void ContentsZoomChange(bool zoom_in) override;
++
++  // WebContentsZoomObserver:
++  void OnZoomControllerDestroyed(
++      WebContentsZoomController* zoom_controller) override;
++  void OnZoomChanged(
++      const WebContentsZoomController::ZoomChangedEventData& data) override;
+   void EnterFullscreenModeForTab(
+       content::RenderFrameHost* requesting_frame,
+       const blink::mojom::FullscreenOptions& options) override;
+@@ -863,6 +872,9 @@ class WebContents final : public ExclusiveAccessContext,
+   // The type of current WebContents.
+   Type type_ = Type::kBrowserWindow;
+ 
++  base::ScopedObservation<WebContentsZoomController, WebContentsZoomObserver>
++      zoom_observation_{this};
++
+   // Weather the guest view should be transparent
+   bool guest_transparent_ = true;
+ 

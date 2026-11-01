@@ -1,0 +1,80 @@
+diff --git a/shell/browser/api/electron_api_web_frame_main.cc b/shell/browser/api/electron_api_web_frame_main.cc
+--- a/shell/browser/api/electron_api_web_frame_main.cc
++++ b/shell/browser/api/electron_api_web_frame_main.cc
+@@ -19,6 +19,7 @@
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/isolated_world_ids.h"
++#include "electron/buildflags/buildflags.h"
+ #include "gin/object_template_builder.h"
+ #include "gin/persistent.h"
+ #include "printing/buildflags/buildflags.h"
+@@ -42,6 +43,11 @@
+ #include "shell/common/node_includes.h"
+ #include "shell/common/v8_util.h"
+ 
++#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++#include "extensions/browser/extension_api_frame_id_map.h"
++#include "extensions/common/api/extension_types.h"
++#endif
++
+ #if BUILDFLAG(ENABLE_PRINTING)
+ #include "shell/browser/printing/print_to_pdf.h"
+ #endif
+@@ -526,6 +532,23 @@ blink::mojom::PageVisibilityState WebFrameMain::VisibilityState() const {
+   return render_frame_host()->GetVisibilityState();
+ }
+ 
++#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++std::string WebFrameMain::DocumentId() const {
++  if (!CheckRenderFrame())
++    return "";
++  return extensions::ExtensionApiFrameIdMap::GetDocumentId(render_frame_host())
++      .ToString();
++}
++
++std::string WebFrameMain::DocumentLifecycle() const {
++  if (!CheckRenderFrame())
++    return "";
++  return extensions::api::extension_types::ToString(
++      extensions::ExtensionApiFrameIdMap::GetDocumentLifecycle(
++          render_frame_host()));
++}
++#endif
++
+ content::RenderFrameHost* WebFrameMain::Top() const {
+   if (!CheckRenderFrame())
+     return nullptr;
+@@ -731,6 +754,10 @@ void WebFrameMain::FillObjectTemplate(v8::Isolate* isolate,
+       .SetProperty("url", &WebFrameMain::URL)
+       .SetProperty("origin", &WebFrameMain::Origin)
+       .SetProperty("visibilityState", &WebFrameMain::VisibilityState)
++#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++      .SetProperty("documentId", &WebFrameMain::DocumentId)
++      .SetProperty("documentLifecycle", &WebFrameMain::DocumentLifecycle)
++#endif
+       .SetProperty("top", &WebFrameMain::Top)
+       .SetProperty("parent", &WebFrameMain::Parent)
+       .SetProperty("frames", &WebFrameMain::Frames)
+diff --git a/shell/browser/api/electron_api_web_frame_main.h b/shell/browser/api/electron_api_web_frame_main.h
+--- a/shell/browser/api/electron_api_web_frame_main.h
++++ b/shell/browser/api/electron_api_web_frame_main.h
+@@ -13,6 +13,7 @@
+ #include "base/values.h"
+ #include "content/public/browser/frame_tree_node_id.h"
+ #include "content/public/browser/global_routing_id.h"
++#include "electron/buildflags/buildflags.h"
+ #include "gin/weak_cell.h"
+ #include "gin/wrappable.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+@@ -142,6 +143,10 @@ class WebFrameMain final : public gin::Wrappable<WebFrameMain>,
+   GURL URL() const;
+   std::string Origin() const;
+   blink::mojom::PageVisibilityState VisibilityState() const;
++#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++  std::string DocumentId() const;
++  std::string DocumentLifecycle() const;
++#endif
+ 
+   content::RenderFrameHost* Top() const;
+   content::RenderFrameHost* Parent() const;

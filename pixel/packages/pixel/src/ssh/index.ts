@@ -5,10 +5,12 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { Duplex } from "node:stream";
+
+import { ensurePrivateDir } from "../private-dir";
 
 export interface SshTunnel {
   destination: string;
-  socksPort: number;
   controlPath: string;
   stop(): void;
 }
@@ -24,114 +26,106 @@ export interface SshOptions {
   terminal?: boolean;
 }
 
+// A target is only ever [user@]host[:port]: anything else could smuggle ssh
+// options (ProxyCommand, -F, -o ...) that run commands or turn off host checks.
+// IPv6 literals go in brackets, as in [::1] or user@[fe80::1]:2222.
+const TARGET = /^(?:([A-Za-z0-9_][A-Za-z0-9._-]*)@)?(?:([A-Za-z0-9_][A-Za-z0-9._-]*)|\[([0-9A-Fa-f:.]+)\])(?::(\d{1,5}))?$/;
+const DESTINATION = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]*@)?(?:[A-Za-z0-9_][A-Za-z0-9._-]*|[0-9A-Fa-f:.]+)$/;
+
 export function parseSshTarget(target: string): { destination: string; sshPort: string | null } {
-  const match = /^([A-Za-z0-9._-]+@)?([A-Za-z0-9._-]+)(:(\d+))?$/.exec(target);
-  if (!match) {
-    throw new Error(
-      `invalid ssh target ${target} (user@host, host, user@host:port, or a shell alias for ssh)`,
-    );
+  const match = TARGET.exec(target);
+  const port = match?.[4] ? Number(match[4]) : null;
+  const literal = match?.[3];
+  if (!match || (port !== null && (port < 1 || port > 65535)) || (literal !== undefined && !net.isIPv6(literal))) {
+    // fixme: placeholder copy
+    throw new Error(`invalid ssh target ${JSON.stringify(target)} (use host, user@host, user@host:port or user@[ipv6]:port)`);
   }
-  return { destination: `${match[1] ?? ""}${match[2]}`, sshPort: match[4] ?? null };
+  return { destination: `${match[1] ? `${match[1]}@` : ""}${match[2] ?? literal}`, sshPort: match[4] ?? null };
+}
+
+function isDestination(destination: string): boolean {
+  if (!DESTINATION.test(destination)) return false;
+  const host = destination.slice(destination.lastIndexOf("@") + 1);
+  return !host.includes(":") || net.isIPv6(host);
+}
+
+export function validateSshTarget(target: string): void {
+  parseSshTarget(target);
 }
 
 interface ResolvedTarget {
   destination: string;
   hostArgs: string[];
-  aliasCommand: string | null;
 }
 
 export function resolveSshTarget(target: string): ResolvedTarget {
-  const words = target.trim().split(/\s+/).filter(Boolean);
-  if (words.length > 1) {
-    return { ...parseSshWords(words, target), aliasCommand: null };
-  }
-  const single = words[0] ?? "";
-  if (!single.includes("@") && !single.includes(":")) {
-    const alias = shellAlias(single);
-    if (alias) {
-      const parsed = parseSshCommand(alias);
-      if (parsed) return { ...parsed, aliasCommand: alias.join(" ") };
-    }
-  }
-  const { destination, sshPort } = parseSshTarget(single);
-  return { destination, hostArgs: sshPort ? ["-p", sshPort] : [], aliasCommand: null };
+  const { destination, sshPort } = parseSshTarget(target);
+  return { destination, hostArgs: sshPort ? ["-p", sshPort] : [] };
 }
 
-export function validateSshTarget(target: string): void {
-  const words = target.trim().split(/\s+/).filter(Boolean);
-  if (words.length > 1) parseSshWords(words, target);
-  else parseSshTarget(words[0] ?? "");
+// Forwards from the user's ssh config (LocalForward, DynamicForward, ...) would
+// open TCP ports any local user can reach, so the connection drops them all and
+// the commands that reuse it through the control socket read no config at all,
+// and fail rather than connect on their own if the connection is gone.
+const NO_FORWARDS = ["-o", "ClearAllForwardings=yes"];
+const NO_CONFIG = ["-F", "/dev/null", "-o", "ProxyCommand=false", "-o", "BatchMode=yes", "-o", "ControlMaster=no"];
+
+// ssh runs ProxyCommand=false through $SHELL, which for zsh would source ~/.zshenv;
+// plain sh started this way reads no startup files.
+function muxEnv(): NodeJS.ProcessEnv {
+  const { ENV: _env, BASH_ENV: _bashEnv, ...env } = process.env;
+  return { ...env, SHELL: "/bin/sh" };
 }
 
-function parseSshWords(
-  words: string[],
-  target: string,
-): { destination: string; hostArgs: string[] } {
-  const tokens = words[0] === "ssh" ? words.slice(1) : words;
-  const hostArgs: string[] = [];
-  let found: string | null = null;
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("-")) {
-      hostArgs.push(token);
-      if (SSH_VALUE_FLAGS.has(token) && i + 1 < tokens.length) hostArgs.push(tokens[++i]);
-      continue;
-    }
-    if (found) {
-      throw new Error(
-        `invalid ssh target ${target} (both ${found} and ${token} look like destinations)`,
-      );
-    }
-    found = token;
+// The only config ssh reads is the user's own ~/.ssh/config, and only when
+// nobody else could have written it; a project can't pick another with -F.
+// A symlinked config (dotfile managers do this) is followed when the link is
+// ours, and ssh is handed the checked real file so the link can't be re-pointed.
+export function userSshConfig(home = os.homedir(), uid = process.getuid?.() ?? -1): string {
+  const config = path.join(home, ".ssh", "config");
+  const safe = (stat: fs.Stats) => stat.isFile() && stat.uid === uid && (stat.mode & 0o022) === 0;
+  try {
+    const link = fs.lstatSync(config);
+    if (!link.isSymbolicLink()) return safe(link) ? config : "/dev/null";
+    if (link.uid !== uid) return "/dev/null";
+    const real = fs.realpathSync(config);
+    return safe(fs.lstatSync(real)) ? real : "/dev/null";
+  } catch {
+    return "/dev/null";
   }
-  if (!found) throw new Error(`invalid ssh target ${target} (no destination)`);
-  const { destination, sshPort } = parseSshTarget(found);
-  return { destination, hostArgs: [...hostArgs, ...(sshPort ? ["-p", sshPort] : [])] };
 }
 
-function shellAlias(name: string): string[] | null {
-  if (!/^[A-Za-z0-9._-]+$/.test(name)) return null;
-  const shell = process.env.SHELL ?? "/bin/sh";
-  const result = spawnSync(shell, ["-ic", `alias ${name}`], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5000,
-  });
-  if (result.status !== 0 || !result.stdout) return null;
-  const line = result.stdout.trim().split("\n").pop() ?? "";
-  const eq = line.indexOf("=");
-  if (eq < 0) return null;
-  const tokens = unquote(line.slice(eq + 1).trim())
-    .split(/\s+/)
-    .filter(Boolean);
-  if (!/(^|\/)ssh$/.test(tokens[0] ?? "")) return null;
-  return tokens.slice(1);
-}
-
-function unquote(value: string): string {
-  if (value.startsWith("'") && value.endsWith("'")) {
-    return value.slice(1, -1).replaceAll(`'\\''`, "'");
-  }
-  if (value.startsWith('"') && value.endsWith('"')) return value.slice(1, -1);
-  return value.replaceAll("\\ ", " ");
-}
-
-const SSH_VALUE_FLAGS = new Set(
-  "-B -b -c -D -E -e -F -I -i -J -L -l -m -O -o -P -p -R -S -W -w".split(" "),
-);
-
-function parseSshCommand(tokens: string[]): { destination: string; hostArgs: string[] } | null {
-  const hostArgs: string[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("-")) {
-      hostArgs.push(token);
-      if (SSH_VALUE_FLAGS.has(token) && i + 1 < tokens.length) hostArgs.push(tokens[++i]);
-      continue;
-    }
-    return { destination: token, hostArgs };
-  }
-  return null;
+export function sshMasterArgs(
+  controlPath: string,
+  hostArgs: string[],
+  destination: string,
+  terminal: boolean,
+  config = userSshConfig(),
+): string[] {
+  return [
+    "-F",
+    config,
+    ...NO_FORWARDS,
+    "-o",
+    `StrictHostKeyChecking=${terminal ? "ask" : "yes"}`,
+    "-o",
+    "PermitLocalCommand=no",
+    ...(terminal ? [] : ["-o", "BatchMode=yes"]),
+    "-f",
+    "-N",
+    "-M",
+    "-S",
+    controlPath,
+    "-o",
+    "ExitOnForwardFailure=yes",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+    ...hostArgs,
+    "--",
+    destination,
+  ];
 }
 
 export async function openSshTunnel(
@@ -140,28 +134,10 @@ export async function openSshTunnel(
   options: SshOptions = {},
 ): Promise<SshTunnel> {
   const terminal = options.terminal ?? true;
-  const { destination, hostArgs, aliasCommand } = resolveSshTarget(target);
-  if (aliasCommand) status(`${target} is an alias for ssh ${aliasCommand}`);
-  const controlPath = freshControlPath();
-  const socksPort = await freePort();
-  const args = [
-    ...(terminal ? [] : ["-o", "BatchMode=yes"]),
-    "-f",
-    "-N",
-    "-M",
-    "-S",
-    controlPath,
-    "-D",
-    `127.0.0.1:${socksPort}`,
-    "-o",
-    "ExitOnForwardFailure=yes",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=3",
-    ...hostArgs,
-    destination,
-  ];
+  const { destination, hostArgs } = resolveSshTarget(target);
+  const dir = privateTunnelDir();
+  const controlPath = path.join(dir, "control");
+  const args = sshMasterArgs(controlPath, hostArgs, destination, terminal);
   status(`connecting to ${destination}`);
   const stderr: string[] = [];
   const code = await new Promise<number>((resolve, reject) => {
@@ -171,22 +147,32 @@ export async function openSshTunnel(
     child.once("exit", (exitCode) => resolve(exitCode ?? 1));
   });
   if (code !== 0) {
+    fs.rmSync(dir, { recursive: true, force: true });
     const detail = stderr.filter(Boolean).join("\n");
     throw new Error(`ssh to ${destination} failed${detail ? `: ${detail}` : ""}`);
   }
-  await waitForSocks(socksPort, destination);
+  const check = spawnSync("ssh", [...NO_CONFIG, "-S", controlPath, "-O", "check", "--", destination], {
+    env: muxEnv(),
+    stdio: "ignore",
+    timeout: 10_000,
+  });
+  if (check.status !== 0) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw new Error(`ssh to ${destination} did not stay connected`);
+  }
   status(`connected ${destination}`);
   return {
     destination,
-    socksPort,
     controlPath,
     stop: () => {
       try {
-        spawnSync("ssh", ["-S", controlPath, "-O", "exit", destination], {
+        spawnSync("ssh", [...NO_CONFIG, "-S", controlPath, "-O", "exit", "--", destination], {
+          env: muxEnv(),
           stdio: "ignore",
           timeout: 5000,
         });
       } catch {}
+      fs.rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -200,7 +186,7 @@ export interface SshSessionOptions extends SshOptions {
 
 export interface SshSession {
   destination: string;
-  socksPort: number;
+  controlPath: string;
   url: string | undefined;
   view: { proxy: string; partition: string };
   stop(): void;
@@ -234,18 +220,65 @@ export async function connectSsh(options: SshSessionOptions): Promise<SshSession
   }
   return {
     destination: tunnel.destination,
-    socksPort: tunnel.socksPort,
+    controlPath: tunnel.controlPath,
     url: bundle?.url,
     view: {
-      proxy: socksProxyRules(tunnel),
-      partition: `ssh-${tunnel.destination.replace(/[^A-Za-z0-9@._-]/g, "-")}`,
+      proxy: sshProxyRules(tunnel),
+      partition: sshPartition(tunnel),
     },
     stop,
   };
 }
 
-export function socksProxyRules(tunnel: SshTunnel): string {
-  return `socks5://127.0.0.1:${tunnel.socksPort}`;
+// Chromium only speaks to proxies over TCP, so this marks traffic for an ssh
+// connection; routeThroughProxy puts an authenticated loopback proxy in front.
+export const SSH_PROXY_PREFIX = "ssh-mux:";
+
+export interface SshRoute {
+  controlPath: string;
+  destination: string;
+}
+
+// Each ssh connection gets its own browser session, so two windows to the same
+// host never share proxy settings, cookies or a proxy port.
+export function sshPartition(route: SshRoute): string {
+  const connection = path.basename(path.dirname(route.controlPath));
+  return `ssh-${route.destination.replace(/[^A-Za-z0-9@._-]/g, "-")}-${connection.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+}
+
+export function sshProxyRules(tunnel: SshRoute): string {
+  return `${SSH_PROXY_PREFIX}${JSON.stringify({ controlPath: tunnel.controlPath, destination: tunnel.destination })}`;
+}
+
+export function parseSshProxyRules(rules: string): SshRoute | null {
+  if (!rules.startsWith(SSH_PROXY_PREFIX)) return null;
+  try {
+    const route = JSON.parse(rules.slice(SSH_PROXY_PREFIX.length)) as Partial<SshRoute>;
+    if (typeof route.controlPath !== "string" || typeof route.destination !== "string") return null;
+    if (!path.isAbsolute(route.controlPath) || !isDestination(route.destination)) return null;
+    return { controlPath: route.controlPath, destination: route.destination };
+  } catch {
+    return null;
+  }
+}
+
+const FORWARD_HOST = /^[A-Za-z0-9._~-]+$|^[0-9A-Fa-f:.]+$/;
+
+// One connection to host:port made from the remote machine, carried over the
+// existing ssh connection as the stdin and stdout of `ssh -W`.
+export function sshForward(route: SshRoute, host: string, port: number): Duplex {
+  // fixme: placeholder copy
+  if (!FORWARD_HOST.test(host) || host.startsWith("-") || !(port > 0 && port < 65536)) throw new Error(`invalid destination ${host}:${port}`);
+  const child = spawn("ssh", [...NO_CONFIG, "-S", route.controlPath, "-W", host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`, "--", route.destination], {
+    env: muxEnv(),
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const stream = Duplex.from({ readable: child.stdout!, writable: child.stdin! });
+  stream.on("error", () => {});
+  child.on("error", () => stream.destroy());
+  stream.on("close", () => child.kill());
+  child.on("exit", () => stream.destroy());
+  return stream;
 }
 
 export function validateBundleDir(dir: string): void {
@@ -327,7 +360,8 @@ function run(
   command: string,
   options: { input?: Buffer; stdio?: "inherit" | "ignore" | "pipe"; timeout?: number } = {},
 ): SpawnSyncReturns<string> {
-  return spawnSync("ssh", ["-S", tunnel.controlPath, tunnel.destination, command], {
+  return spawnSync("ssh", [...NO_CONFIG, "-S", tunnel.controlPath, "--", tunnel.destination, command], {
+    env: muxEnv(),
     input: options.input,
     stdio: options.input ? undefined : options.stdio ?? "ignore",
     timeout: options.timeout,
@@ -378,13 +412,15 @@ function launch(
   const child = spawn(
     "ssh",
     [
+      ...NO_CONFIG,
       "-tt",
       "-S",
       tunnel.controlPath,
+      "--",
       tunnel.destination,
       `cd "${remoteDir}" || exit 9; [ -x ./stop ] && ./stop >/dev/null 2>&1; exec ./start`,
     ],
-    { stdio: ["ignore", "pipe", "ignore"] },
+    { env: muxEnv(), stdio: ["ignore", "pipe", "ignore"] },
   );
   const stop = () => {
     try {
@@ -456,45 +492,11 @@ function pageUrl(token: string): string | null {
   }
 }
 
-function freshControlPath(): string {
-  const name = `${process.pid.toString(36)}-${Date.now().toString(36).slice(-5)}`;
-  const dir = path.join(os.tmpdir(), "pixel-ssh");
-  const candidate = path.join(dir, name);
-  if (candidate.length <= 80) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    return candidate;
-  }
-  fs.mkdirSync("/tmp/pixel-ssh", { recursive: true, mode: 0o700 });
-  return path.join("/tmp/pixel-ssh", name);
+// ssh's control and SOCKS sockets live in a fresh folder inside a per-user
+// folder we have checked nobody else can write to.
+function privateTunnelDir(env: NodeJS.ProcessEnv = process.env): string {
+  const absolute = (value: string | undefined) => (value && path.isAbsolute(value) ? value : null);
+  const base = absolute(env.XDG_RUNTIME_DIR) ?? absolute(env.XDG_STATE_HOME) ?? path.join(os.homedir(), ".local", "state");
+  return fs.mkdtempSync(path.join(ensurePrivateDir(path.join(base, "pixel", "ssh")), "t-"));
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : null;
-      server.close(() => (port ? resolve(port) : reject(new Error("no free port"))));
-    });
-  });
-}
-
-function waitForSocks(port: number, destination: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect(port, "127.0.0.1");
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error(`the ssh proxy for ${destination} never started listening`));
-    }, 5000);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.end();
-      resolve();
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-}

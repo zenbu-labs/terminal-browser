@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "God NewTab",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq6k7IToGulX54nzreug09IFZ+VpgEJdE8Jinp/ToOybOYwmnHsJPrfnXDIHSvRRX9iC7MFUP+bnND5NP+kUIhnUfA3MqaSuu3e862RzwCMG769vZJsUWEhWC8eRhbrSW1F9AH6HZeaJqyOZv0z9MMoeuTn99kcsTLVB1lPSDDxwc4hJYmoKiaUbpQLWs6pX8SFDne8iDrSkrG1OEV32OTXvBZLWCRx/INHGwy2cAInrP/bemOi8YdQlGTYrHtalt4wVl5CFkwJuTRwXtYiQ10w3A1HWxx2TAEvRGYzJkmh4+6CnfM8XzmDWqnk0n0b0I8hsY5Ujvjmeiqh751poHVwIDAQAB",
+  "chrome_url_overrides": {
+    "newtab": "page.html"
+  }
+}

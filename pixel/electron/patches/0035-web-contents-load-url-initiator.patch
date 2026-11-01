@@ -1,0 +1,80 @@
+diff --git a/docs/api/browser-window.md b/docs/api/browser-window.md
+--- a/docs/api/browser-window.md
++++ b/docs/api/browser-window.md
+@@ -1270,6 +1270,7 @@ Captures a snapshot of the page within `rect`. Omitting `rect` will capture the
+   * `extraHeaders` string (optional) - Extra headers separated by "\n"
+   * `postData` ([UploadRawData](structures/upload-raw-data.md) | [UploadFile](structures/upload-file.md))[] (optional)
+   * `baseURLForDataURL` string (optional) - Base URL (with trailing path separator) for files to be loaded by the data URL. This is needed only if the specified `url` is a data URL and needs to load other files.
++  * `initiatorOrigin` string (optional) - Load the `url` as if a page of this origin started the navigation, e.g. for an extension's `chrome.tabs.update()`. The navigation follows that origin's rules (an extension's pages and web accessible resources) and carries no user activation.
+ 
+ Returns `Promise<void>` - the promise will resolve when the page has finished loading
+ (see [`did-finish-load`](web-contents.md#event-did-finish-load)), and rejects
+diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
+--- a/docs/api/web-contents.md
++++ b/docs/api/web-contents.md
+@@ -1116,6 +1116,7 @@ Emitted when the [mainFrame](web-contents.md#contentsmainframe-readonly), an `<i
+   * `extraHeaders` string (optional) - Extra headers separated by "\n".
+   * `postData` ([UploadRawData](structures/upload-raw-data.md) | [UploadFile](structures/upload-file.md))[] (optional)
+   * `baseURLForDataURL` string (optional) - Base url (with trailing path separator) for files to be loaded by the data url. This is needed only if the specified `url` is a data url and needs to load other files.
++  * `initiatorOrigin` string (optional) - Load the `url` as if a page of this origin started the navigation, e.g. for an extension's `chrome.tabs.update()`. The navigation follows that origin's rules (an extension's pages and web accessible resources) and carries no user activation.
+ 
+ Returns `Promise<void>` - the promise will resolve when the page has finished loading
+ (see [`did-finish-load`](web-contents.md#event-did-finish-load)), and rejects
+diff --git a/docs/api/webview-tag.md b/docs/api/webview-tag.md
+--- a/docs/api/webview-tag.md
++++ b/docs/api/webview-tag.md
+@@ -283,6 +283,7 @@ webview.addEventListener('dom-ready', () => {
+   * `extraHeaders` string (optional) - Extra headers separated by "\n"
+   * `postData` ([UploadRawData](structures/upload-raw-data.md) | [UploadFile](structures/upload-file.md))[] (optional)
+   * `baseURLForDataURL` string (optional) - Base url (with trailing path separator) for files to be loaded by the data url. This is needed only if the specified `url` is a data url and needs to load other files.
++  * `initiatorOrigin` string (optional) - Load the `url` as if a page of this origin started the navigation, e.g. for an extension's `chrome.tabs.update()`. The navigation follows that origin's rules (an extension's pages and web accessible resources) and carries no user activation.
+ 
+ Returns `Promise<void>` - The promise will resolve when the page has finished loading
+ (see [`did-finish-load`](webview-tag.md#event-did-finish-load)), and rejects
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -3035,6 +3035,25 @@ void WebContents::LoadURL(const GURL& url,
+       ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
+   params.override_user_agent = content::NavigationController::UA_OVERRIDE_TRUE;
+ 
++  // A navigation started on behalf of another origin, such as an extension's
++  // tabs.update(), is treated like that origin started it from a page: the
++  // initiator's navigation rules apply and it carries no user activation.
++  GURL initiator;
++  if (options.Get("initiatorOrigin", &initiator)) {
++    url::Origin initiator_origin = url::Origin::Create(initiator);
++    if (initiator_origin.opaque()) {
++      Emit("did-fail-load", static_cast<int>(net::ERR_INVALID_ARGUMENT),
++           net::ErrorToShortString(net::ERR_INVALID_ARGUMENT),
++           url.possibly_invalid_spec(), true);
++      return;
++    }
++    params.is_renderer_initiated = true;
++    params.initiator_origin = initiator_origin;
++    params.source_site_instance = content::SiteInstance::CreateForURL(
++        web_contents()->GetBrowserContext(), initiator_origin.GetURL());
++    params.transition_type = ui::PAGE_TRANSITION_FROM_API;
++  }
++
+   // It's not safe to start a new navigation or otherwise discard the current
+   // one while the call that started it is still on the stack. See
+   // http://crbug.com/347742.
+@@ -3063,6 +3082,7 @@ void WebContents::LoadURLWithParams(
+ 
+   // Calling LoadURLWithParams() can trigger JS which destroys |this|.
+   auto weak_this = GetWeakPtr();
++  const bool started_by_page = params.is_renderer_initiated;
+ 
+   // Discard non-committed entries to ensure we don't re-use a pending entry.
+   web_contents()->GetController().DiscardNonCommittedEntries();
+@@ -3075,7 +3095,8 @@ void WebContents::LoadURLWithParams(
+     return;
+ 
+   // Required to make beforeunload handler work.
+-  NotifyUserActivation();
++  if (!started_by_page)
++    NotifyUserActivation();
+ }
+ 
+ // TODO(MarshallOfSound): Figure out what we need to do with post data here, I

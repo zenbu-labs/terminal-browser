@@ -24,6 +24,12 @@ for the user if after the last time you plan to use terminal-browser action you
 run terminal-browser action done, which immediately clears the indication
 that you are using the browser tab
 
+<!-- fixme: placeholder copy (the next paragraph) -->
+Anything after `--` is visible to other processes on the machine while the
+command runs. When a command carries a secret (a password for `fill` or
+`type`, `set credentials`, `cookies set`), pass it on stdin instead:
+`echo '["fill", "@e3", "the password"]' | terminal-browser action --stdin`.
+
 Some pages publish WebMCP tools: named actions with a JSON schema that the
 page runs itself. agent-browser announces them when a page has them, and
 `terminal-browser action -- webmcp list --json` shows the full schemas. Prefer

@@ -62,6 +62,23 @@ const REGISTER_PLUGIN = `(api) => {
   });
 }`;
 
+// react-grab claims the React DevTools hook first and hides it from only one hasOwnProperty check.
+// The React DevTools extension checks twice, so keep hiding the placeholder until a real hook replaces it.
+const YIELD_HOOK_TO_REACT_DEVTOOLS = `;(() => {
+  const key = "__REACT_DEVTOOLS_GLOBAL_HOOK__";
+  const placeholder = Object.getOwnPropertyDescriptor(window, key)?.get;
+  if (!placeholder) return;
+  const hasOwn = Object.prototype.hasOwnProperty;
+  Object.defineProperty(window, "hasOwnProperty", {
+    configurable: true,
+    writable: true,
+    value: function (name) {
+      if (this === window && name === key && Object.getOwnPropertyDescriptor(window, key)?.get === placeholder) return false;
+      return hasOwn.call(this, name);
+    },
+  });
+})();`;
+
 const COPY_ON_SELECT_BINDING = "__terminalBrowserCopyOnSelect";
 const COPY_ON_SELECT_WORLD_ID = 1013;
 const COPY_ON_SELECT_WORLD = "terminal-browser-copy-on-select";
@@ -84,7 +101,7 @@ const COPY_ON_SELECT_WATCHER = `;(() => {
 let preloadFile: string | null = null;
 export function reactGrabPreloadPath(copyOnSelect = false): string {
   if (!preloadFile) {
-    const early = `window.__REACT_GRAB_DISABLED__ = true;\n${reactGrabLibrary()}`;
+    const early = `window.__REACT_GRAB_DISABLED__ = true;\n${reactGrabLibrary()}\n${YIELD_HOOK_TO_REACT_DEVTOOLS}`;
     const copyOnSelectInjection = copyOnSelect
       ? `
   webFrame.setIsolatedWorldInfo(${COPY_ON_SELECT_WORLD_ID}, { name: ${JSON.stringify(COPY_ON_SELECT_WORLD)} });

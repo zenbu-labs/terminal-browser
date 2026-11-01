@@ -29,7 +29,7 @@ const DENIALS_BEFORE_LOGGING = 3
 
 
 const state = {
-  port: null as number | null,
+  socket: null as string | null,
   token: null as string | null,
   open: false,
   pendingUrl: null as string | null,
@@ -42,7 +42,7 @@ const state = {
   viewGeneration: 0,
 }
 
-const bridgeUrl = (path: string) => `http://127.0.0.1:${state.port}${path}`
+const bridgeUrl = (path: string) => `http://bridge${path}`
 const authHeaders = () => ({ authorization: `Bearer ${state.token}` })
 const viewKey = () => `view${state.viewGeneration}`
 
@@ -91,37 +91,53 @@ async function startBridge($: EngineInterface): Promise<{ ok: true } | { ok: fal
   } catch (err) {
     report = { error: String(err), code: 'start' }
   }
-  if (!isLaunchReport(report) || !('port' in report)) {
+  if (!isLaunchReport(report) || !('socket' in report)) {
     const detail = isLaunchReport(report) && 'error' in report ? report.error : 'terminal-browser could not start'
     return { ok: false, error: `${detail}` }
   }
-  state.port = report.port
+  state.socket = report.socket
   state.token = report.token
   void watchBridge($)
   return { ok: true }
 }
 
+// A bridge that stops answering is gone for good; the next open starts a new one
+// rather than sending the token and keystrokes anywhere else.
+function forgetBridge() {
+  state.socket = null
+  state.token = null
+  state.last = null
+}
+
 async function post($: EngineInterface, path: string, body: unknown): Promise<unknown> {
-  if (state.port === null) return null
+  if (state.socket === null) return null
   try {
     const response = await $.http.fetch(bridgeUrl(path), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body),
+      socketPath: state.socket,
     })
+    if (response.status === 401) forgetBridge()
     return response.ok ? JSON.parse(response.text || '{}') : null
   } catch {
+    forgetBridge()
     return null
   }
 }
 
 async function fetchState($: EngineInterface, version: number): Promise<BridgeState | null> {
-  if (state.port === null) return null
+  if (state.socket === null) return null
   try {
-    const response = await $.http.fetch(bridgeUrl(`/state?version=${version}`), { headers: authHeaders() })
+    const response = await $.http.fetch(bridgeUrl(`/state?version=${version}`), {
+      headers: authHeaders(),
+      socketPath: state.socket,
+    })
+    if (response.status === 401) forgetBridge()
     const parsed: unknown = response.ok ? JSON.parse(response.text) : null
     return isBridgeState(parsed) ? parsed : null
   } catch {
+    forgetBridge()
     return null
   }
 }
@@ -147,7 +163,7 @@ function fitsMounted(frame: Frame): boolean {
 
 async function watchBridge($: EngineInterface): Promise<void> {
   const watcher = ++state.watcher
-  const live = () => state.watcher === watcher && state.port !== null
+  const live = () => state.watcher === watcher && state.socket !== null
   let version = -1
   let denials = 0
   let lastDeniedRedraw = 0
@@ -198,7 +214,7 @@ async function watchBridge($: EngineInterface): Promise<void> {
 }
 
 async function openBrowser($: EngineInterface, raw: string | null): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
-  if (state.port === null) {
+  if (state.socket === null) {
     const started = await startBridge($)
     if (!started.ok) return started
   }
@@ -337,7 +353,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.message', async ($, e, next) => {
-    if (e.requestId !== PANE || state.port === null) return next(e)
+    if (e.requestId !== PANE || state.socket === null) return next(e)
     if (isSizeMessage(e.data)) {
       state.region = { cols: e.data.cols, rows: e.data.rows }
       if (state.pendingUrl) {
@@ -354,7 +370,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.scroll', { requestId: PANE }, async ($, e) => {
-    if (state.port === null || !state.open || e.by === 0) return {}
+    if (state.socket === null || !state.open || e.by === 0) return {}
     const kind = e.by < 0 ? 'scrollup' : 'scrolldown'
     const ticks = Math.min(Math.round(Math.abs(e.by)) || 1, 10)
     const x = e.pointer?.column ?? Math.floor((state.region?.cols ?? 0) / 2)

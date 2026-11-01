@@ -28,7 +28,7 @@ pub(crate) struct Joined {
 }
 
 pub(crate) fn join(socket: &str, pane: &str, name: &str) -> io::Result<Joined> {
-    let stream = UnixStream::connect(socket)?;
+    let stream = crate::own_socket::connect_own(socket)?;
     stream.set_read_timeout(Some(INIT_TIMEOUT))?;
     let mut reader = BufReader::new(stream);
     let announce = json!({
