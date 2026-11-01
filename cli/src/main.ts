@@ -42,6 +42,7 @@ import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 import { claudeBridgeCommand } from "./claude-bridge";
 import { configCommand } from "./config";
+import { extensionsCommand } from "./extensions";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
 const CAPABILITIES = ["embedding", "image-frames"] as const;
@@ -488,12 +489,14 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
 }
 
 const BROWSING_DATA_NAMES: Record<string, string> = {
+  // fixme: placeholder copy
+  history: "browsing history",
   siteData: "cookies and site data",
   cache: "cached images and files",
 };
 
 function clearSummary(kinds: string[]): string {
-  const shown = kinds.length > 0 ? kinds : Object.keys(BROWSING_DATA_NAMES);
+  const shown = kinds.length > 0 ? kinds : ["siteData", "cache"];
   const what = shown.map((kind) => BROWSING_DATA_NAMES[kind]).join(", and ");
   return `This clears ${what}${shown.length > 1 ? "," : ""} for every site in every terminal-browser window${shown.includes("siteData") ? ", signing you out" : ""}.`;
 }
@@ -512,6 +515,7 @@ async function clearBrowsingDataCommand(args: string[]): Promise<number> {
   const key = takeFlag(args, "--browser");
   const confirmed = takeBoolFlag(args, "--yes") || takeBoolFlag(args, "-y");
   const kinds = [
+    ...(takeBoolFlag(args, "--history") ? ["history"] : []),
     ...(takeBoolFlag(args, "--cookies") ? ["siteData"] : []),
     ...(takeBoolFlag(args, "--cache") ? ["cache"] : []),
   ];
@@ -759,12 +763,12 @@ function appsCommand(args: string[]): number {
   return 0;
 }
 
-function helpCommand(topic: string | undefined): number {
+function helpCommand(topic: string | undefined, subcommand: string | undefined): number {
   if (!topic) {
     process.stdout.write(rootHelp());
     return 0;
   }
-  const help = commandHelp(topic);
+  const help = commandHelp(topic, subcommand);
   if (!help) fail(`no help for ${topic} (try ${helpTopics().join(", ")})`);
   process.stdout.write(help);
   return 0;
@@ -784,9 +788,9 @@ async function main(): Promise<number> {
     process.stdout.write(`${JSON.stringify({ capabilities: CAPABILITIES })}\n`);
     return 0;
   }
-  if (command === "help") return helpCommand(args[0]);
+  if (command === "help") return helpCommand(args[0], args[1]);
   if (asksForHelp(args)) {
-    process.stdout.write(commandHelp(command) ?? rootHelp());
+    process.stdout.write(commandHelp(command, args[0]) ?? rootHelp());
     return 0;
   }
   if (command !== "setup") ensureSetup();
@@ -804,6 +808,7 @@ async function main(): Promise<number> {
   if (command === "setup") return setupCommand(electronBinary());
   if (command === "upgrade") return upgradeCommand();
   if (command === "config") return configCommand(args);
+  if (command === "extensions") return extensionsCommand(args);
   if (command === "claude-bridge") return claudeBridgeCommand(args);
   if (command === "shutdown") return shutdownDaemon();
   if (command === "register-app") return registerAppCommand(args);

@@ -42,6 +42,13 @@ export type BrowserWindowOptions = Omit<Electron.BrowserWindowConstructorOptions
   webPreferences?: Omit<Electron.WebPreferences, ReservedWebPreferences>;
 };
 
+let webPreferenceDefaults: (partition: string | undefined) => Electron.WebPreferences = () => ({});
+
+// Preferences every new page in a partition starts with, unless its WebView overrides them.
+export function setWebPreferenceDefaults(provider: (partition: string | undefined) => Electron.WebPreferences) {
+  webPreferenceDefaults = provider;
+}
+
 function windowOptions(
   passthrough: BrowserWindowOptions,
   size: { width: number; height: number },
@@ -66,6 +73,7 @@ function windowOptions(
       // with sandbox true this is safe, we enable so a users preload script runs inside iframes/webviews
       nodeIntegrationInSubFrames: true,
       contextIsolation: true,
+      ...webPreferenceDefaults(webPreferences?.partition),
       ...webPreferences,
       offscreen,
       disableDialogs: true,
@@ -80,6 +88,12 @@ export interface HostOptions {
   clipboardRead: boolean;
   proxy: string | null;
   browserWindowOptions: BrowserWindowOptions;
+}
+
+
+interface FrameAttached {
+  sessionId: string;
+  targetInfo: { type: string };
 }
 
 export class PageHost {
@@ -103,6 +117,7 @@ export class PageHost {
   private findText = "";
   private cdpAttached = false;
   private cdpEventHandlers = new Map<string, (params: unknown) => void>();
+  private readonly frameSessions = new Set<string>();
   private readonly onDisplayChange = () => {
     if (this.stopped) return;
     this.applyFrameRate();
@@ -177,6 +192,11 @@ export class PageHost {
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.window.webContents.on("paint", (event, dirtyRect, image) => {
       const shmFrame = event.softwareFrame;
+      if (!this.alive()) {
+        event.texture?.release();
+        shmFrame?.release();
+        return;
+      }
       const size = event.texture
         ? {
             width: event.texture.textureInfo.codedSize.width,
@@ -320,14 +340,33 @@ export class PageHost {
 
   async attachCdp(): Promise<void> {
     if (this.cdpAttached) return;
-    this.window.webContents.debugger.attach("1.3");
+    // Someone else in this process (like the extensions debugger API) may have
+    // attached first; Electron allows only one attachment, which we then share.
+    if (!this.window.webContents.debugger.isAttached()) this.window.webContents.debugger.attach("1.3");
     this.cdpAttached = true;
-    this.window.webContents.debugger.on("message", (_event, method, params) => {
-      this.cdpEventHandlers.get(method)?.(params);
+    this.window.webContents.debugger.on("message", (_event, method, params, sessionId) => {
+      if (method === "Target.attachedToTarget") this.frameAttached(params as FrameAttached);
+      else if (method === "Target.detachedFromTarget") this.frameSessions.delete((params as { sessionId: string }).sessionId);
+      if (!sessionId) this.cdpEventHandlers.get(method)?.(params);
     });
     await this.cdp("Runtime.enable");
     await this.cdp("Page.enable");
     await this.emulateColorScheme();
+    await this.cdp("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  }
+
+  // Cross-origin iframes (extension UIs like Vimium's bar) run in their own renderer, which never
+  // learns that this offscreen page is focused, so they need focus emulation of their own.
+  private frameAttached({ sessionId, targetInfo }: FrameAttached) {
+    if (targetInfo.type !== "iframe") return;
+    this.frameSessions.add(sessionId);
+    if (this.contentFocused) this.emulateFrameFocus(sessionId, true);
+  }
+
+  private emulateFrameFocus(sessionId: string, enabled: boolean) {
+    void this.window.webContents.debugger
+      .sendCommand("Emulation.setFocusEmulationEnabled", { enabled }, sessionId)
+      .catch(() => {});
   }
 
   async setBackground(background: string): Promise<void> {
@@ -449,7 +488,7 @@ export class PageHost {
   }
 
   blurContent() {
-    if (!this.contentFocused) return;
+    if (this.stopped || !this.contentFocused) return;
     this.input.releaseKeys();
     this.window.blurWebView();
     this.contentFocused = false;
@@ -458,6 +497,7 @@ export class PageHost {
 
   private async setFocusEmulation(enabled: boolean) {
     await this.attachCdp();
+    for (const sessionId of this.frameSessions) this.emulateFrameFocus(sessionId, enabled);
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled });
   }
 
@@ -547,14 +587,21 @@ export class PageHost {
   }
 
   private async loadFavicon(urls: string[]) {
+    if (!this.alive()) return;
     const seq = ++this.faviconSeq;
     const file = await this.favicons.resolve(urls, this.window.webContents.session).catch(() => null);
     if (file && seq === this.faviconSeq && !this.stopped) this.updateState({ favicon: file });
   }
 
-  private updateNavigation(loading: boolean, url = this.window.webContents.getURL()) {
+  // The page keeps emitting events while it is being destroyed, after its window is gone.
+  private alive(): boolean {
+    return !this.stopped && !this.window.isDestroyed() && !this.window.webContents.isDestroyed();
+  }
+
+  private updateNavigation(loading: boolean, url?: string) {
+    if (!this.alive()) return;
     this.updateState({
-      url,
+      url: url ?? this.window.webContents.getURL(),
       loading,
       canGoBack: this.window.webContents.navigationHistory.canGoBack(),
       canGoForward: this.window.webContents.navigationHistory.canGoForward(),
@@ -563,6 +610,7 @@ export class PageHost {
   }
 
   private updateState(update: Partial<WebViewState>) {
+    if (this.stopped) return;
     this.state = { ...this.state, ...update };
     this.onState(this.state);
   }

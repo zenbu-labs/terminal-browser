@@ -1,0 +1,295 @@
+diff --git a/shell/browser/api/electron_api_extensions.cc b/shell/browser/api/electron_api_extensions.cc
+--- a/shell/browser/api/electron_api_extensions.cc
++++ b/shell/browser/api/electron_api_extensions.cc
+@@ -5,6 +5,8 @@
+ #include "shell/browser/api/electron_api_extensions.h"
+ 
+ #include "base/barrier_closure.h"
++#include "base/containers/fixed_flat_map.h"
++#include "base/containers/map_util.h"
+ #include "chrome/browser/browser_process.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_registry.h"
+@@ -13,6 +15,7 @@
+ #include "extensions/browser/permissions/permissions_updater.h"
+ #include "extensions/browser/user_script_manager.h"
+ #include "extensions/common/manifest_handlers/permissions_parser.h"
++#include "extensions/common/mojom/view_type.mojom.h"
+ #include "extensions/common/permissions/permission_set.h"
+ #include "extensions/common/permissions/permissions_data.h"
+ #include "extensions/common/permissions/permissions_info.h"
+@@ -298,6 +301,27 @@ bool Extensions::SetUserScriptsAllowed(const std::string& extension_id,
+   return true;
+ }
+ 
++bool Extensions::SetViewType(content::WebContents* web_contents,
++                             const std::string& view_type) {
++  static constexpr auto kViewTypes =
++      base::MakeFixedFlatMap<std::string_view, extensions::mojom::ViewType>({
++          {"popup", extensions::mojom::ViewType::kExtensionPopup},
++          {"sidePanel", extensions::mojom::ViewType::kExtensionSidePanel},
++          {"tab", extensions::mojom::ViewType::kTabContents},
++      });
++  auto* type = base::FindOrNull(kViewTypes, view_type);
++  if (!type || !web_contents ||
++      web_contents->GetBrowserContext() != browser_context())
++    return false;
++  auto* observer =
++      extensions::ElectronExtensionWebContentsObserver::FromWebContents(
++          web_contents);
++  if (!observer)
++    return false;
++  observer->SetViewType(*type);
++  return true;
++}
++
+ void Extensions::OnExtensionLoaded(content::BrowserContext* browser_context,
+                                    const extensions::Extension* extension) {
+   Emit("extension-loaded", extension);
+@@ -328,7 +352,8 @@ gin::ObjectTemplateBuilder Extensions::GetObjectTemplateBuilder(
+       .SetMethod("revokeActiveTab", &Extensions::RevokeActiveTab)
+       .SetMethod("setRuntimePermissions", &Extensions::SetRuntimePermissions)
+       .SetMethod("getActivePermissions", &Extensions::GetActivePermissions)
+-      .SetMethod("setUserScriptsAllowed", &Extensions::SetUserScriptsAllowed);
++      .SetMethod("setUserScriptsAllowed", &Extensions::SetUserScriptsAllowed)
++      .SetMethod("setViewType", &Extensions::SetViewType);
+ }
+ 
+ const gin::WrapperInfo* Extensions::wrapper_info() const {
+diff --git a/shell/browser/api/electron_api_extensions.h b/shell/browser/api/electron_api_extensions.h
+--- a/shell/browser/api/electron_api_extensions.h
++++ b/shell/browser/api/electron_api_extensions.h
+@@ -51,6 +51,8 @@ class Extensions final : public gin::Wrappable<Extensions>,
+                       content::WebContents* web_contents);
+   void RevokeActiveTab(const std::string& extension_id,
+                        content::WebContents* web_contents);
++  bool SetViewType(content::WebContents* web_contents,
++                   const std::string& view_type);
+   v8::Local<v8::Promise> SetRuntimePermissions(
+       v8::Isolate* isolate,
+       const std::string& extension_id,
+diff --git a/shell/browser/extensions/electron_extension_tab_util.cc b/shell/browser/extensions/electron_extension_tab_util.cc
+--- a/shell/browser/extensions/electron_extension_tab_util.cc
++++ b/shell/browser/extensions/electron_extension_tab_util.cc
+@@ -5,6 +5,8 @@
+ #include "shell/browser/extensions/electron_extension_tab_util.h"
+ 
+ #include "content/public/browser/web_contents.h"
++#include "extensions/browser/view_type_utils.h"
++#include "extensions/common/constants.h"
+ #include "shell/browser/api/electron_api_web_contents.h"
+ 
+ namespace extensions {
+@@ -20,4 +22,20 @@ electron::api::WebContents* GetElectronTabById(
+   return contents;
+ }
+ 
++int GetElectronTabId(content::WebContents* web_contents) {
++  auto* contents =
++      web_contents ? electron::api::WebContents::From(web_contents) : nullptr;
++  if (!contents ||
++      contents->type() == electron::api::WebContents::Type::kRemote ||
++      contents->type() == electron::api::WebContents::Type::kBackgroundPage)
++    return extension_misc::kUnknownTabId;
++  switch (GetViewType(web_contents)) {
++    case mojom::ViewType::kInvalid:
++    case mojom::ViewType::kTabContents:
++      return contents->ID();
++    default:
++      return extension_misc::kUnknownTabId;
++  }
++}
++
+ }  // namespace extensions
+diff --git a/shell/browser/extensions/electron_extension_tab_util.h b/shell/browser/extensions/electron_extension_tab_util.h
+--- a/shell/browser/extensions/electron_extension_tab_util.h
++++ b/shell/browser/extensions/electron_extension_tab_util.h
+@@ -7,6 +7,7 @@
+ 
+ namespace content {
+ class BrowserContext;
++class WebContents;
+ }  // namespace content
+ 
+ namespace electron::api {
+@@ -24,6 +25,11 @@ electron::api::WebContents* GetElectronTabById(
+     int tab_id,
+     content::BrowserContext* browser_context);
+ 
++// Returns the tab id extensions see for |web_contents|: its
++// electron::api::WebContents id, or -1 when it is not a tab, such as an
++// extension's background page, popup, side panel or offscreen document.
++int GetElectronTabId(content::WebContents* web_contents);
++
+ }  // namespace extensions
+ 
+ #endif  // ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_TAB_UTIL_H_
+diff --git a/shell/browser/extensions/electron_extension_web_contents_observer.cc b/shell/browser/extensions/electron_extension_web_contents_observer.cc
+--- a/shell/browser/extensions/electron_extension_web_contents_observer.cc
++++ b/shell/browser/extensions/electron_extension_web_contents_observer.cc
+@@ -3,10 +3,15 @@
+ // found in the LICENSE file.
+ 
+ #include "shell/browser/extensions/electron_extension_web_contents_observer.h"
++#include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents_user_data.h"
++#include "extensions/browser/api/declarative_net_request/rules_monitor_service.h"
++#include "extensions/browser/view_type_utils.h"
++#include "extensions/common/constants.h"
+ #include "extensions/common/mojom/frame.mojom.h"
+ #include "shell/browser/api/electron_api_web_contents.h"
++#include "shell/browser/extensions/electron_extension_tab_util.h"
+ 
+ namespace extensions {
+ 
+@@ -52,6 +57,50 @@ void ElectronExtensionWebContentsObserver::SetTabIdForFrame(
+   }
+ }
+ 
++void ElectronExtensionWebContentsObserver::SetViewType(
++    mojom::ViewType view_type) {
++  extensions::SetViewType(web_contents(), view_type);
++  web_contents()->ForEachRenderFrameHost(
++      [this, view_type](content::RenderFrameHost* render_frame_host) {
++        if (!render_frame_host->IsRenderFrameLive())
++          return;
++        if (auto* local_frame = GetLocalFrame(render_frame_host))
++          local_frame->NotifyRenderViewType(view_type);
++      });
++}
++
++// Matched declarativeNetRequest rules belong to the document they matched in,
++// as in Chrome's ExtensionActionRunner.
++void ElectronExtensionWebContentsObserver::DidFinishNavigation(
++    content::NavigationHandle* navigation_handle) {
++  ExtensionWebContentsObserver::DidFinishNavigation(navigation_handle);
++  auto* rules_monitor_service =
++      declarative_net_request::RulesMonitorService::Get(
++          web_contents()->GetBrowserContext());
++  if (!rules_monitor_service || navigation_handle->IsSameDocument())
++    return;
++  auto& action_tracker = rules_monitor_service->action_tracker();
++  int tab_id = GetElectronTabId(web_contents());
++  if (!navigation_handle->IsInPrimaryMainFrame() ||
++      !navigation_handle->HasCommitted() ||
++      tab_id == extension_misc::kUnknownTabId) {
++    action_tracker.ClearPendingNavigation(navigation_handle->GetNavigationId());
++    return;
++  }
++  tracked_tab_id_ = tab_id;
++  action_tracker.ResetTrackedInfoForTab(tab_id,
++                                        navigation_handle->GetNavigationId());
++}
++
++void ElectronExtensionWebContentsObserver::WebContentsDestroyed() {
++  auto* rules_monitor_service =
++      declarative_net_request::RulesMonitorService::Get(
++          web_contents()->GetBrowserContext());
++  if (rules_monitor_service &&
++      tracked_tab_id_ != extension_misc::kUnknownTabId)
++    rules_monitor_service->action_tracker().ClearTabData(tracked_tab_id_);
++}
++
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(ElectronExtensionWebContentsObserver);
+ 
+ }  // namespace extensions
+diff --git a/shell/browser/extensions/electron_extension_web_contents_observer.h b/shell/browser/extensions/electron_extension_web_contents_observer.h
+--- a/shell/browser/extensions/electron_extension_web_contents_observer.h
++++ b/shell/browser/extensions/electron_extension_web_contents_observer.h
+@@ -9,6 +9,7 @@
+ #include "content/public/browser/global_routing_id.h"
+ #include "content/public/browser/web_contents_user_data.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
++#include "extensions/common/mojom/view_type.mojom.h"
+ 
+ namespace extensions {
+ 
+@@ -35,10 +36,17 @@ class ElectronExtensionWebContentsObserver
+   // per frame.
+   void SetTabIdForFrame(content::RenderFrameHost* render_frame_host);
+ 
++  // Records what kind of extension view this WebContents shows, which decides
++  // whether extensions see it as a tab.
++  void SetViewType(mojom::ViewType view_type);
++
+  protected:
+   void InitializeRenderFrame(
+       content::RenderFrameHost* render_frame_host) override;
+   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
++  void DidFinishNavigation(
++      content::NavigationHandle* navigation_handle) override;
++  void WebContentsDestroyed() override;
+ 
+  private:
+   friend class content::WebContentsUserData<
+@@ -48,6 +56,9 @@ class ElectronExtensionWebContentsObserver
+       content::WebContents* web_contents);
+ 
+   base::flat_set<content::GlobalRenderFrameHostId> frames_with_tab_id_;
++  // The tab whose matched rules are tracked, kept for when the WebContents
++  // goes away and can no longer be asked.
++  int tracked_tab_id_ = -1;
+ 
+   WEB_CONTENTS_USER_DATA_KEY_DECL();
+ };
+diff --git a/shell/browser/extensions/electron_extensions_browser_client.cc b/shell/browser/extensions/electron_extensions_browser_client.cc
+--- a/shell/browser/extensions/electron_extensions_browser_client.cc
++++ b/shell/browser/extensions/electron_extensions_browser_client.cc
+@@ -29,6 +29,7 @@
+ #include "extensions/browser/safe_browsing_delegate.h"
+ #include "extensions/browser/updater/null_extension_cache.h"
+ #include "extensions/browser/url_request_util.h"
++#include "extensions/common/constants.h"
+ #include "extensions/common/features/feature_channel.h"
+ #include "extensions/common/file_util.h"
+ #include "extensions/common/manifest_constants.h"
+@@ -409,6 +410,15 @@ bool ElectronExtensionsBrowserClient::IsValidTabId(
+   return true;
+ }
+ 
++void ElectronExtensionsBrowserClient::GetTabAndWindowIdForWebContents(
++    content::WebContents* web_contents,
++    int* tab_id,
++    int* window_id) {
++  *tab_id = extensions::GetElectronTabId(web_contents);
++  // Electron has no windows that extensions know about.
++  *window_id = extension_misc::kUnknownWindowId;
++}
++
+ extensions::ScriptExecutor*
+ ElectronExtensionsBrowserClient::GetScriptExecutorForTab(
+     content::WebContents& web_contents) {
+diff --git a/shell/browser/extensions/electron_extensions_browser_client.h b/shell/browser/extensions/electron_extensions_browser_client.h
+--- a/shell/browser/extensions/electron_extensions_browser_client.h
++++ b/shell/browser/extensions/electron_extensions_browser_client.h
+@@ -147,6 +147,9 @@ class ElectronExtensionsBrowserClient
+                     int tab_id,
+                     bool include_incognito,
+                     content::WebContents** web_contents) const override;
++  void GetTabAndWindowIdForWebContents(content::WebContents* web_contents,
++                                       int* tab_id,
++                                       int* window_id) override;
+   extensions::ScriptExecutor* GetScriptExecutorForTab(
+       content::WebContents& web_contents) override;
+   extensions::KioskDelegate* GetKioskDelegate() override;
+diff --git a/shell/browser/extensions/electron_messaging_delegate.cc b/shell/browser/extensions/electron_messaging_delegate.cc
+--- a/shell/browser/extensions/electron_messaging_delegate.cc
++++ b/shell/browser/extensions/electron_messaging_delegate.cc
+@@ -20,6 +20,7 @@
+ #include "extensions/browser/extension_api_frame_id_map.h"
+ #include "extensions/browser/pref_names.h"
+ #include "extensions/common/api/messaging/port_id.h"
++#include "extensions/common/constants.h"
+ #include "extensions/common/extension.h"
+ #include "shell/browser/api/electron_api_web_contents.h"
+ #include "shell/browser/extensions/electron_extension_tab_util.h"
+@@ -42,7 +43,7 @@ ElectronMessagingDelegate::IsNativeMessagingHostAllowed(
+ 
+ std::optional<base::DictValue> ElectronMessagingDelegate::MaybeGetTabInfo(
+     content::WebContents* web_contents) {
+-  if (web_contents) {
++  if (GetElectronTabId(web_contents) != extension_misc::kUnknownTabId) {
+     auto* api_contents = electron::api::WebContents::From(web_contents);
+     if (api_contents) {
+       api::tabs::Tab tab;

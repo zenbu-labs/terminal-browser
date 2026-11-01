@@ -1,0 +1,84 @@
+diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
+--- a/docs/api/web-contents.md
++++ b/docs/api/web-contents.md
+@@ -1623,7 +1623,7 @@ Chromium can display (25% to 500%, about -7.6 to 8.8).
+ 
+ Returns `number` - the current zoom level.
+ 
+-#### `contents.setZoomMode(mode)`
++#### `contents.setZoomMode(mode[, options])`
+ 
+ <!--
+ ```YAML history
+@@ -1633,6 +1633,9 @@ added:
+ -->
+ 
+ * `mode` string - Can be `default`, `isolated`, `manual`, or `disabled`.
++* `options` Object (optional)
++  * `persist` boolean (optional) - Whether an `isolated` or `manual` mode survives navigations. When `false`, the
++    next navigation resets the mode to `default`, like Chrome's per-tab zoom. Default is `true`.
+ 
+ Sets the zoom mode for this web contents.
+ 
+@@ -1646,7 +1649,7 @@ Sets the zoom mode for this web contents.
+ * `disabled` - All zooming in this webContents is disabled. The webContents will revert
+   to the default zoom level and all zoom changes will be ignored.
+ 
+-The `isolated` and `manual` zoom modes persist across navigations.
++The `isolated` and `manual` zoom modes persist across navigations unless `options.persist` is `false`.
+ 
+ #### `contents.getZoomMode()`
+ 
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -4482,21 +4482,27 @@ double WebContents::GetZoomFactor() const {
+   return blink::ZoomLevelToZoomFactor(level);
+ }
+ 
+-void WebContents::SetZoomMode(gin_helper::ErrorThrower thrower,
+-                              const std::string& mode) {
+-  auto zoom_mode = ParseZoomMode(mode);
++void WebContents::SetZoomMode(gin::Arguments* args) {
++  std::string mode;
++  std::optional<WebContentsZoomController::ZoomMode> zoom_mode;
++  if (args->GetNext(&mode))
++    zoom_mode = ParseZoomMode(mode);
+   if (!zoom_mode) {
+-    thrower.ThrowError(
+-        "'zoomMode' must be 'default', 'isolated', 'manual', or 'disabled'");
++    gin_helper::ErrorThrower(args->isolate())
++        .ThrowError(
++            "'zoomMode' must be 'default', 'isolated', 'manual', or 'disabled'");
+     return;
+   }
++  bool persist = true;
++  if (gin_helper::Dictionary options; args->GetNext(&options))
++    options.Get("persist", &persist);
+ 
+-  // When set via the Electron JS API, persist isolated/manual modes across
+-  // navigations. The extensions API calls SetZoomMode on the controller
+-  // directly and won't set this flag, preserving Chromium's default behavior.
++  // By default isolated/manual modes set from JS persist across navigations.
++  // With persist: false they reset to default on navigation, as Chromium's
++  // ZoomController (and so Chrome's tabs.setZoomSettings) does.
+   GetZoomController()->SetPersistZoomMode(
+-      *zoom_mode == WebContentsZoomController::ZOOM_MODE_ISOLATED ||
+-      *zoom_mode == WebContentsZoomController::ZOOM_MODE_MANUAL);
++      persist && (*zoom_mode == WebContentsZoomController::ZOOM_MODE_ISOLATED ||
++                  *zoom_mode == WebContentsZoomController::ZOOM_MODE_MANUAL));
+   GetZoomController()->SetZoomMode(*zoom_mode);
+ }
+ 
+diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/electron_api_web_contents.h
+--- a/shell/browser/api/electron_api_web_contents.h
++++ b/shell/browser/api/electron_api_web_contents.h
+@@ -351,7 +351,7 @@ class WebContents final : public ExclusiveAccessContext,
+   double GetZoomLevel() const;
+   void SetZoomFactor(gin_helper::ErrorThrower thrower, double factor);
+   double GetZoomFactor() const;
+-  void SetZoomMode(gin_helper::ErrorThrower thrower, const std::string& mode);
++  void SetZoomMode(gin::Arguments* args);
+   std::string GetZoomMode() const;
+ 
+   // Callback triggered on permission response.

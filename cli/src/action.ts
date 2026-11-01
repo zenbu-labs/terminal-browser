@@ -114,6 +114,10 @@ function matchTab(
   agentView: AgentTab[],
   tab: TabTarget,
 ): AgentTab {
+  // Extension background pages and popups are page targets too, but never one of our tabs.
+  if (!tab.url.startsWith("chrome-extension://")) {
+    agentView = agentView.filter((entry) => !entry.url.startsWith("chrome-extension://"));
+  }
   if (agentView.length === 0) throw new Error("agent-browser sees no tabs on this browser");
   const sameUrl = agentView.filter((entry) => entry.url === tab.url);
   if (sameUrl.length === 1) return sameUrl[0];

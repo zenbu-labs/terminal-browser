@@ -40,7 +40,7 @@ export function searchOrUrl(text: string, cwd: string | undefined, search: Searc
 }
 
 export function normalizeUrl(value: string, cwd: string | undefined, search: SearchUrl): string {
-  const input = value.trim();
+  const input = value.trim().replace(/^chrome:\/\//i, "terminal-browser://");
   if (!input) return "about:blank";
   if (HAS_AUTHORITY.test(input) || SCHEMES_WITHOUT_HOST.test(input)) {
     try {

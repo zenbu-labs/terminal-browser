@@ -7,7 +7,7 @@ import { z } from "zod";
 import { AUTO, DISPLAY_FPS, UNCAPPED } from "./render";
 import { SEARCH_ENGINES, SUGGESTIONS_OFF } from "./search";
 
-export type SettingGroup = "general" | "advanced";
+export type SettingGroup = "general" | "appearance" | "advanced";
 
 export interface SettingChoice {
   value: string;
@@ -87,10 +87,35 @@ export const SETTINGS = {
     choices: onOff,
     inverted: true,
   }),
+  "history.record": setting({
+    group: "general",
+    // fixme: placeholder copy
+    label: "Save browsing history",
+    // fixme: placeholder copy
+    hint: "Which windows add the pages you visit to terminal-browser://history",
+    schema: z.enum(["all", "local", "off"]),
+    default: "local",
+    choices: [
+      // fixme: placeholder copy
+      plain("all", "All windows"),
+      // fixme: placeholder copy
+      plain("local", "All but SSH windows"),
+      // fixme: placeholder copy
+      plain("off", "Off"),
+    ],
+  }),
   "window.transparent": setting({
     group: "general",
     label: "Transparent website backgrounds",
     hint: "The terminal background will show through pages without a background color",
+    schema: z.enum(["on", "off"]),
+    default: "off",
+    choices: onOff,
+  }),
+  "toolbar.extensions": setting({
+    group: "appearance",
+    label: "Show extensions in toolbar",
+    hint: "",
     schema: z.enum(["on", "off"]),
     default: "off",
     choices: onOff,

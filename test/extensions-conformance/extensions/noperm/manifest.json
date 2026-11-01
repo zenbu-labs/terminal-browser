@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "God No Permissions",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxU66CzDPbmPh84YorB+5SZyq+Du27982K5y3aOg+DLrroNLjlUECfMJbdS3mObJ0RvAq/arUfh01LC76VNS0QnT9DJdNkHtOHYpZ8hzzatfjZQTaR7RuJbWCS3XJJWYuDtGud7w+Q8o+G6E9qXkqpTCpQoozDpEZmFelK5uVtP7LkG/DNJmTWv8+v/Z4J7fJb23g+BHmUsHqNYO/ZWGbE6yZHKAsRNFTQaSJICKaIDEh9hlpqe8P0KgW1JF+3dPLmxOk1fbnfsQGDLUwZFiPSyu7i1IGwOd72wT9msShMo+wQRt/2dRm/oL5+gDdeSKqhpFbtvNnGTjrfmb5+4Z4MwIDAQAB",
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "host_permissions": [
+    "http://localhost/*"
+  ],
+  "optional_permissions": [
+    "cookies",
+    "history"
+  ]
+}

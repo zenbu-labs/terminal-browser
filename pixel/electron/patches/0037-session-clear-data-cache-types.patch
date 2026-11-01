@@ -1,0 +1,30 @@
+diff --git a/docs/api/session.md b/docs/api/session.md
+--- a/docs/api/session.md
++++ b/docs/api/session.md
+@@ -1762,9 +1762,11 @@ session is persisted on disk.  For in memory sessions this returns `null`.
+     [`BrowsingDataRemover`][browsing-data-remover] for the full list.)
+     * `backgroundFetch` - Background Fetch
+     * `cache` - Cache (includes `cachestorage` and `shadercache`)
++    * `cacheStorage` - Cache Storage only
+     * `cookies` - Cookies
+     * `downloads` - Downloads
+     * `fileSystems` - File Systems
++    * `httpCache` - HTTP cache (and `shadercache`), without Cache Storage
+     * `indexedDB` - IndexedDB
+     * `localStorage` - Local Storage
+     * `serviceWorkers` - Service Workers
+diff --git a/shell/browser/api/electron_api_session.cc b/shell/browser/api/electron_api_session.cc
+--- a/shell/browser/api/electron_api_session.cc
++++ b/shell/browser/api/electron_api_session.cc
+@@ -167,9 +167,11 @@ constexpr auto kDataTypeLookup =
+         {"backgroundFetch", BrowsingDataRemover::DATA_TYPE_BACKGROUND_FETCH},
+         {"cache", BrowsingDataRemover::DATA_TYPE_CACHE |
+                       BrowsingDataRemover::DATA_TYPE_CACHE_STORAGE},
++        {"cacheStorage", BrowsingDataRemover::DATA_TYPE_CACHE_STORAGE},
+         {"cookies", BrowsingDataRemover::DATA_TYPE_COOKIES},
+         {"downloads", BrowsingDataRemover::DATA_TYPE_DOWNLOADS},
+         {"fileSystems", BrowsingDataRemover::DATA_TYPE_FILE_SYSTEMS},
++        {"httpCache", BrowsingDataRemover::DATA_TYPE_CACHE},
+         {"indexedDB", BrowsingDataRemover::DATA_TYPE_INDEXED_DB},
+         {"localStorage", BrowsingDataRemover::DATA_TYPE_LOCAL_STORAGE},
+         {"serviceWorkers", BrowsingDataRemover::DATA_TYPE_SERVICE_WORKERS},

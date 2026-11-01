@@ -1,10 +1,15 @@
 import { clearFavicons } from "@zenbu-labs/pixel";
 import { session as electronSession } from "electron";
-import type { Session } from "electron";
+import type { ClearDataOptions, Session } from "electron";
 
-export const BROWSING_DATA_KINDS = ["siteData", "cache"] as const;
+import { browsing } from "../browsing";
+import { clearSessionData, type NativeClearDataType } from "../extensions/native";
+
+export const BROWSING_DATA_KINDS = ["history", "siteData", "cache"] as const;
 
 export type BrowsingDataKind = (typeof BROWSING_DATA_KINDS)[number];
+
+export const DEFAULT_CLEAR_KINDS: readonly BrowsingDataKind[] = ["siteData", "cache"];
 
 export function isBrowsingDataKind(value: unknown): value is BrowsingDataKind {
   return BROWSING_DATA_KINDS.includes(value as BrowsingDataKind);
@@ -15,7 +20,29 @@ export function browsingSession(partition: string | null): Session {
   return electronSession.fromPartition(partition.startsWith("persist:") ? partition : `persist:${partition}`);
 }
 
-export async function clearBrowsingData(session: Session, kinds: readonly BrowsingDataKind[]): Promise<void> {
+const SITE_DATA_TYPES: NativeClearDataType[] = [
+  "cookies",
+  "localStorage",
+  "indexedDB",
+  "serviceWorkers",
+  "fileSystems",
+  "backgroundFetch",
+  "cacheStorage",
+];
+
+export async function clearBrowsingData(session: Session, kinds: readonly BrowsingDataKind[], since = 0): Promise<void> {
+  if (kinds.includes("history")) {
+    if (since > 0) browsing().history.deleteRange(since, Number.MAX_SAFE_INTEGER);
+    else browsing().history.deleteAll();
+  }
+  if (since > 0) {
+    const dataTypes: NativeClearDataType[] = [
+      ...(kinds.includes("siteData") ? SITE_DATA_TYPES : []),
+      ...(kinds.includes("cache") ? (["httpCache"] as const) : []),
+    ];
+    if (dataTypes.length) await clearSessionData(session, { dataTypes }, since);
+    return;
+  }
   if (kinds.includes("siteData")) {
     await session.clearStorageData();
     await session.clearAuthCache();

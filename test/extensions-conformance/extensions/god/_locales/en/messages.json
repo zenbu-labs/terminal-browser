@@ -1,0 +1,5 @@
+{
+  "extName": { "message": "God Extension" },
+  "greeting": { "message": "Hello $who$", "placeholders": { "who": { "content": "$1" } } },
+  "plain": { "message": "plain text" }
+}

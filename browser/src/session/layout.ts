@@ -82,6 +82,19 @@ function splitForDevtools(
   };
 }
 
+export function clampSidePanelWidth(width: number, paneWidth: number): number {
+  return Math.round(Math.max(Math.min(paneWidth * 0.2, 240), Math.min(paneWidth * 0.6, width)));
+}
+
+function splitSidePanel(page: PageRect, width: number, gap: number): { page: PageRect; sidePanel: PageRect } {
+  const panelWidth = clampSidePanelWidth(width, page.width);
+  const pageWidth = Math.max(1, page.width - panelWidth - gap);
+  return {
+    page: { ...page, width: pageWidth },
+    sidePanel: { x: page.x + pageWidth + gap, y: page.y, width: panelWidth, height: page.height },
+  };
+}
+
 export function recordBarHeight(info: EngineInfo): number {
   return Math.round(info.basePx * 4.0);
 }
@@ -92,6 +105,7 @@ export function computeLayout(
   devtools: DevtoolsPlacement | null,
   recordBar = 0,
   bare = false,
+  sidePanelWidth: number | null = null,
 ): SessionLayout {
   const toolbarHeight = bare
     ? 0
@@ -112,11 +126,17 @@ export function computeLayout(
       height: Math.max(1, info.height - toolbarHeight - padBottom - recordBar),
     },
     devtools: null,
+    sidePanel: null,
     rem: info.basePx,
     frame: bare ? 0 : Math.max(1, Math.round(scale)),
     radius: bare ? 0 : Math.max(2, info.basePx * 0.55 - 1),
   };
   const gap = Math.max(2, Math.round(info.basePx * 0.25));
+  if (sidePanelWidth !== null && !bare) {
+    const panel = splitSidePanel(chrome.page, sidePanelWidth, gap);
+    chrome.page = panel.page;
+    chrome.sidePanel = { ...panel.sidePanel, ...snapToCssGrid(panel.sidePanel.width, panel.sidePanel.height, scale) };
+  }
   const split = splitForDevtools(chrome.page, devtools, gap);
   chrome.page = { ...split.page, ...snapToCssGrid(split.page.width, split.page.height, scale) };
   chrome.devtools = split.devtools && {

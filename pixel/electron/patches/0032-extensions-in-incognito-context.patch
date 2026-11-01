@@ -1,0 +1,32 @@
+diff --git a/shell/common/extensions/api/_api_features.json b/shell/common/extensions/api/_api_features.json
+--- a/shell/common/extensions/api/_api_features.json
++++ b/shell/common/extensions/api/_api_features.json
+@@ -33,6 +33,13 @@
+     "contexts": ["privileged_extension"],
+     "disallow_for_service_workers": true
+   },
++  "extension.inIncognitoContext": {
++    "contexts": [
++      "privileged_extension",
++      "unprivileged_extension",
++      "content_script"
++    ]
++  },
+   "extension.getURL": {
+     "contexts": ["privileged_extension", "unprivileged_extension", "content_script"],
+     "max_manifest_version": 2
+diff --git a/shell/common/extensions/api/extension.json b/shell/common/extensions/api/extension.json
+--- a/shell/common/extensions/api/extension.json
++++ b/shell/common/extensions/api/extension.json
+@@ -10,6 +10,11 @@
+       "implemented_in": "chrome/browser/extensions/api/module/module.h"
+     },
+     "properties": {
++      "inIncognitoContext": {
++        "type": "boolean",
++        "optional": true,
++        "description": "True for content scripts running inside incognito tabs, and for extension pages running inside an incognito process. The latter only applies to extensions with 'split' incognito_behavior."
++      }
+     },
+     "functions": [
+       {

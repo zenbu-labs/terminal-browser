@@ -80,6 +80,7 @@ export interface WebViewProps {
   onDownload?(progress: DownloadProgress): void;
   onPermissionRequest?(request: PermissionRequest): Promise<boolean>;
   onPermissionCheck?(check: PermissionCheck): PermissionCheckAnswer;
+  onClose?(): void;
 }
 
 export interface WebViewHandle {
@@ -298,6 +299,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
     };
     host.onOpenWindow = (details) => decideOpenWindow(propsRef.current.onOpenWindow, details);
     host.onDownload = (progress) => propsRef.current.onDownload?.(progress);
+    host.onClosed = () => propsRef.current.onClose?.();
     host.onPermission = {
       request: (request) =>
         propsRef.current.onPermissionRequest?.(request) ?? Promise.resolve(false),

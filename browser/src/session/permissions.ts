@@ -1,6 +1,7 @@
 import type { PermissionCheck, PermissionCheckAnswer, PermissionRequest } from "@zenbu-labs/pixel";
 import { setSitePermission, sitePermission } from "shared";
 
+import { extensionIdFromUrl } from "../extensions/ids";
 import type { IconName } from "../ui/icons";
 import type { PermissionDecision, PermissionPromptView } from "../ui/types";
 
@@ -15,11 +16,20 @@ const NEVER_PROMPTED = new Set(["display-capture", "geolocation", "geolocation-a
 
 const NEVER_REMEMBERED = new Set(["openExternal"]);
 
+// The manifest permission that lets an extension's frames use each one without asking.
+const EXTENSION_FRAME_GRANTED: Record<string, string> = {
+  "clipboard-read": "clipboardRead",
+  "clipboard-sanitized-write": "clipboardWrite",
+};
+
 export type MediaDevice = "camera" | "microphone";
 
 export interface PermissionHost {
   requestRender(): void;
   deviceAccess(device: MediaDevice): Promise<boolean>;
+  extensionHasPermission(id: string, permission: string): boolean;
+  // A chrome.contentSettings rule an extension set for this page; it wins over the user's own answers.
+  contentSetting?(check: PermissionCheck): string | null;
 }
 
 export class PermissionPrompts {
@@ -27,10 +37,21 @@ export class PermissionPrompts {
 
   constructor(private readonly host: PermissionHost) {}
 
+  // Like Chrome, an extension that declares clipboardRead/clipboardWrite may use the
+  // clipboard from its own frames without asking (Vimium's yy and p run in its
+  // toolbar frame inside the page).
+  private grantedToExtensionFrame(check: PermissionCheck): boolean {
+    const needed = Object.hasOwn(EXTENSION_FRAME_GRANTED, check.permission) ? EXTENSION_FRAME_GRANTED[check.permission] : null;
+    if (!needed) return false;
+    const id = extensionIdFromUrl(check.origin);
+    return id !== null && this.host.extensionHasPermission(id, needed);
+  }
+
   async request(tabId: number, request: PermissionRequest): Promise<boolean> {
     if (NEVER_PROMPTED.has(request.permission)) return false;
+    if (this.grantedToExtensionFrame(request)) return true;
     const kinds = kindsOf(request);
-    const known = this.recall(request, kinds);
+    const known = this.known(request, kinds);
     if (known === "blocked") return false;
     const allowed =
       known === "allowed" ||
@@ -49,7 +70,8 @@ export class PermissionPrompts {
 
   check(check: PermissionCheck): PermissionCheckAnswer {
     if (NEVER_PROMPTED.has(check.permission)) return false;
-    const known = this.recall(check, kindsOf(check));
+    if (this.grantedToExtensionFrame(check)) return true;
+    const known = this.known(check, kindsOf(check));
     if (known === "blocked") return false;
     if (known === "allowed") return true;
     return "prompt";
@@ -99,6 +121,14 @@ export class PermissionPrompts {
 
   private current(tabId: number): PendingPrompt | null {
     return this.pending.find((prompt) => prompt.tabId === tabId) ?? null;
+  }
+
+  private known(check: PermissionCheck, kinds: string[]): "allowed" | "blocked" | "unknown" {
+    const ruled = this.host.contentSetting?.(check) ?? null;
+    if (ruled === "allow") return "allowed";
+    if (ruled === "block") return "blocked";
+    if (ruled === "ask") return "unknown";
+    return this.recall(check, kinds);
   }
 
   private recall(check: PermissionCheck, kinds: string[]): "allowed" | "blocked" | "unknown" {
