@@ -1,0 +1,958 @@
+From 4ff5538dc11f7c6d15e1f8d1f1343034d2d06ce9 Mon Sep 17 00:00:00 2001
+From: RobPruzan <rapruzan@buffalo.edu>
+Date: Fri, 30 Oct 2026 12:16:14 -0400
+Subject: [PATCH] pixel: WebView lazy, pauseOffscreen, passWheel,
+ onContentHeight, focus/hover callbacks; Box onViewport
+
+Ported from the old pixel's inline-HTML work (4df492a, c2e0004, 1a47764), minus
+PageText, shared renderer processes and the zoom prop: the engine reports when a
+box nears its scroll area's view, pages freeze while away and load only when near,
+the wheel passes through an unfocused page, focus is taken on press only, and the
+page's content height is reported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ pixel/AGENT-DOCS.md                           |  8 +-
+ pixel/engine/crates/pixel-core/src/desc.rs    |  2 +
+ .../crates/pixel-core/src/engine/mod.rs       |  6 ++
+ .../crates/pixel-core/src/engine/scroll.rs    |  8 ++
+ .../engine/crates/pixel-core/src/tree/mod.rs  | 63 ++++++++++++++
+ .../crates/pixel-core/src/tree/tests.rs       | 61 ++++++++++++++
+ pixel/engine/crates/pixel-node/src/events.rs  |  6 ++
+ pixel/engine/crates/pixel-node/src/ops.rs     |  3 +
+ pixel/packages/pixel/src/react/index.ts       |  6 ++
+ .../pixel/src/react/reconciler-config.ts      |  5 ++
+ pixel/packages/pixel/src/registry.ts          | 11 ++-
+ .../packages/pixel/src/web/content-height.ts  | 73 +++++++++++++++++
+ pixel/packages/pixel/src/web/host.ts          | 46 ++++++++++-
+ pixel/packages/pixel/src/web/input.ts         |  6 ++
+ pixel/packages/pixel/src/web/pause.ts         | 48 +++++++++++
+ pixel/packages/pixel/src/webview.tsx          | 63 ++++++++++++--
+ pixel/packages/pixel/test/page-pause.test.js  | 82 +++++++++++++++++++
+ 17 files changed, 484 insertions(+), 13 deletions(-)
+ create mode 100644 pixel/packages/pixel/src/web/content-height.ts
+ create mode 100644 pixel/packages/pixel/src/web/pause.ts
+ create mode 100644 pixel/packages/pixel/test/page-pause.test.js
+
+diff --git a/pixel/AGENT-DOCS.md b/pixel/AGENT-DOCS.md
+index 18f419b4..4de3cc8d 100644
+--- a/pixel/AGENT-DOCS.md
++++ b/pixel/AGENT-DOCS.md
+@@ -196,7 +196,7 @@ Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/p
+ 
+ | component | props (file:line) |
+ | --- | --- |
+-| `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `modal` (while shown only this subtree takes clicks, hover, wheel, selection and keys; a click outside lands on it), `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `contentHeight`, `surface: Surface` |
++| `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `modal` (while shown only this subtree takes clicks, hover, wheel, selection and keys; a click outside lands on it), `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `onViewport(near)` with `viewportMargin` (called when the box comes within that many pixels of what its scroll area shows, and when it leaves), `contentHeight`, `surface: Surface` |
+ | `Text` | `TextProps` `:128`. children must be strings or numbers. `spans: { start, end, color, background?, bold?, italic?, underline?, strikethrough? }[]`, `onClick`, `onMouseEnter`, `onMouseLeave` |
+ | `Input` | `InputProps` `:177`. multi-line editor; with `style.wrap: false` it is single-line and its text is vertically centered when the box is taller than one line. `value`, `defaultValue`, `autoFocus` (only inputs take focus on click; clicking or selecting other content leaves focus where it is, so call `blur()` from `onClickOutside` to drop it), `onChange(text, ChangeInfo)`, `onSubmit(text, marks)`, `onCaret(CaretInfo)`, `onPasteImage`, `caretColor`, `caretShape: "bar" | "block" | "underscore"` (block and underscore are one character wide; block redraws the character under it in black or white for contrast), `selectionColor`, `spans`, `gutter: { color, activeColor }`, `activeLine`, `defaultMarks`, `renderMark(id)`, `serializeMark(id)` |
+ | `Image` | `ImageProps` `:211`. `src` path or url, `placeholder`, `error`, `onClick` |
+@@ -269,6 +269,12 @@ KeyMods        { shift: boolean; alt: boolean; ctrl: boolean; super: boolean }
+ | `devtools: boolean \| "bottom" \| "right"` | opens Chrome DevTools |
+ | `hidden` | hides without unloading |
+ | `keepFrame` | keeps the last frame while hidden |
++| `passWheel` | <!-- fixme: placeholder copy --> the wheel scrolls whatever is around the page until a click focuses it |
++| `lazy` | <!-- fixme: placeholder copy --> no renderer until the page comes within a screen of the view |
++| `pauseOffscreen` | <!-- fixme: placeholder copy --> stops painting and freezes scripts while scrolled out of view; state is kept |
++| `onContentHeight(height)` | <!-- fixme: placeholder copy --> the page's content height in pixels, whenever it changes |
++| `onFocusChange(focused)`, `onHoverChange(hovered)` | <!-- fixme: placeholder copy --> keyboard focus (taken on press, dropped on a click outside) and pointer hover |
++| `onWebContents(contents)` | <!-- fixme: placeholder copy --> called once the page exists, which with `lazy` can be later than mount |
+ | `onChange(state: WebViewState)` | navigation and page state changes |
+ | `onPointer(event)` | pointer events over the page |
+ | `onContextMenu(params)` | right click in the page, Electron `ContextMenuParams` |
+diff --git a/pixel/engine/crates/pixel-core/src/desc.rs b/pixel/engine/crates/pixel-core/src/desc.rs
+index 4b2997c9..9e4f74b2 100644
+--- a/pixel/engine/crates/pixel-core/src/desc.rs
++++ b/pixel/engine/crates/pixel-core/src/desc.rs
+@@ -14,6 +14,7 @@ pub struct Desc {
+     pub content_height: Option<f32>,
+     pub scroll_events: bool,
+     pub wheel_events: bool,
++    pub viewport_margin: Option<f32>,
+     pub children: Vec<Desc>,
+ }
+ 
+@@ -42,6 +43,7 @@ impl Desc {
+             drag_events: false,
+             selection_events: false,
+             move_events: false,
++            viewport_margin: self.viewport_margin,
+             spans: Vec::new(),
+         }
+     }
+diff --git a/pixel/engine/crates/pixel-core/src/engine/mod.rs b/pixel/engine/crates/pixel-core/src/engine/mod.rs
+index 2376dabf..e0821d56 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/mod.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/mod.rs
+@@ -133,6 +133,11 @@ pub enum EngineEvent {
+     Visible {
+         visible: bool,
+     },
++    Viewport {
++        view: usize,
++        node: NodeId,
++        near: bool,
++    },
+     Click {
+         view: usize,
+         node: NodeId,
+@@ -769,6 +774,7 @@ impl Engine {
+         if !input_pending || self.last_frame.elapsed() >= PAINT_INTERVAL_WITH_INPUT_PENDING {
+             self.frame()?;
+         }
++        self.emit_viewport_events(&mut out);
+         self.sync_pointer_shape();
+         self.drain_logs(&mut out);
+         Ok(out)
+diff --git a/pixel/engine/crates/pixel-core/src/engine/scroll.rs b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+index 5db0d2a0..b6521bc0 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/scroll.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+@@ -111,6 +111,14 @@ impl Engine {
+         }
+     }
+ 
++    pub(super) fn emit_viewport_events(&mut self, out: &mut Vec<EngineEvent>) {
++        for view in self.comp.active_views() {
++            for (node, near) in self.comp.views[view].tree.take_viewport_changes() {
++                out.push(EngineEvent::Viewport { view, node, near });
++            }
++        }
++    }
++
+     pub fn scroll_into_view(&mut self, view: usize, id: NodeId, smooth: bool) {
+         if view >= self.comp.views.len() {
+             return;
+diff --git a/pixel/engine/crates/pixel-core/src/tree/mod.rs b/pixel/engine/crates/pixel-core/src/tree/mod.rs
+index a91b3c54..909126b3 100644
+--- a/pixel/engine/crates/pixel-core/src/tree/mod.rs
++++ b/pixel/engine/crates/pixel-core/src/tree/mod.rs
+@@ -71,6 +71,14 @@ impl PxRect {
+             h: ((self.y + self.h).min(other.y + other.h) - y).max(0.0),
+         }
+     }
++    pub fn intersects(&self, other: PxRect) -> bool {
++        let cut = self.intersect(other);
++        cut.w > 0.0 && cut.h > 0.0
++    }
++
++    pub fn outset(&self, by: f32) -> PxRect {
++        PxRect { x: self.x - by, y: self.y - by, w: self.w + 2.0 * by, h: self.h + 2.0 * by }
++    }
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Default)]
+@@ -205,6 +213,7 @@ pub struct Props {
+     pub drag_events: bool,
+     pub selection_events: bool,
+     pub move_events: bool,
++    pub viewport_margin: Option<f32>,
+     pub spans: Vec<TextSpan>,
+ }
+ 
+@@ -263,6 +272,8 @@ pub(crate) struct RNode {
+     pub drag_events: bool,
+     pub selection_events: bool,
+     pub move_events: bool,
++    pub viewport_margin: Option<f32>,
++    pub near_viewport: Option<bool>,
+     pub spans: Vec<TextSpan>,
+     pub last_scroll_emit: f32,
+     pub bar: BarState,
+@@ -304,6 +315,7 @@ pub struct Tree {
+     // The topmost modal node and the slice of paint order its subtree covers. Everything outside it is inert.
+     modal: Option<(NodeId, Range<usize>)>,
+     scrollables: Vec<NodeId>,
++    viewport_watch: Vec<NodeId>,
+     focus: Option<NodeId>,
+     doc: DocSelectionState,
+     base_px: f32,
+@@ -342,6 +354,7 @@ impl Tree {
+             paint_order: Vec::new(),
+             modal: None,
+             scrollables: Vec::new(),
++            viewport_watch: Vec::new(),
+             focus: None,
+             doc: DocSelectionState::default(),
+             base_px: 16.0,
+@@ -475,6 +488,8 @@ impl Tree {
+             drag_events: props.drag_events,
+             selection_events: props.selection_events,
+             move_events: props.move_events,
++            viewport_margin: props.viewport_margin,
++            near_viewport: None,
+             spans: props.spans,
+             last_scroll_emit: 0.0,
+             bar: BarState::default(),
+@@ -507,6 +522,9 @@ impl Tree {
+         if let Some(key) = props.key {
+             self.keys.insert(key, id);
+         }
++        if props.viewport_margin.is_some() {
++            self.viewport_watch.push(id);
++        }
+         if props.input.as_ref().is_some_and(|p| p.auto_focus) {
+             self.focus = Some(id);
+         }
+@@ -621,6 +639,11 @@ impl Tree {
+         node.drag_events = props.drag_events;
+         node.selection_events = props.selection_events;
+         node.move_events = props.move_events;
++        node.viewport_margin = props.viewport_margin;
++        if props.viewport_margin.is_some() && !self.viewport_watch.contains(&id) {
++            self.viewport_watch.push(id);
++        }
++        let node = self.node_mut(id);
+         let mut place_changed = modal_changed;
+         if node.shape != props.shape {
+             node.shape = props.shape;
+@@ -868,6 +891,46 @@ impl Tree {
+         }
+     }
+ 
++    // A node is near the viewport while its rect, grown by its margin, overlaps what its scroll area shows.
++    pub(crate) fn take_viewport_changes(&mut self) -> Vec<(NodeId, bool)> {
++        let mut changes = Vec::new();
++        let mut watched = std::mem::take(&mut self.viewport_watch);
++        watched.retain(|&id| self.get(id).is_some_and(|node| node.viewport_margin.is_some()));
++        for &id in &watched {
++            let near = self.near_viewport(id);
++            let node = self.node_mut(id);
++            if node.near_viewport != Some(near) {
++                node.near_viewport = Some(near);
++                changes.push((id, near));
++            }
++        }
++        self.viewport_watch = watched;
++        changes
++    }
++
++    fn near_viewport(&self, id: NodeId) -> bool {
++        let Some(node) = self.get(id) else {
++            return false;
++        };
++        let margin = node.viewport_margin.unwrap_or(0.0);
++        let Some(rect) = self.rect(id).filter(|r| r.w > 0.0 && r.h > 0.0) else {
++            return false;
++        };
++        let mut area = self.get(self.root).map_or(PxRect::ZERO, |root| root.visible);
++        let mut current = node.parent;
++        while let Some(ancestor) = current {
++            let Some(parent) = self.get(ancestor) else {
++                break;
++            };
++            if parent.style.overflow == Overflow::Scroll {
++                area = parent.visible;
++                break;
++            }
++            current = parent.parent;
++        }
++        rect.outset(margin).intersects(area)
++    }
++
+     pub(crate) fn take_scroll_emit(&mut self, id: NodeId) -> Option<(Option<String>, f32, f32)> {
+         let node = self.get(id)?;
+         if !node.scroll_events {
+diff --git a/pixel/engine/crates/pixel-core/src/tree/tests.rs b/pixel/engine/crates/pixel-core/src/tree/tests.rs
+index ba8a475c..efa7b432 100644
+--- a/pixel/engine/crates/pixel-core/src/tree/tests.rs
++++ b/pixel/engine/crates/pixel-core/src/tree/tests.rs
+@@ -2204,3 +2204,64 @@ fn a_modal_makes_everything_outside_it_inert() {
+     assert_eq!(tree.hit_target(110.0, 10.0), Some(HitTarget::Input(field)));
+     assert!(tree.scroll_area_at(10.0, 10.0).is_none());
+ }
++
++#[test]
++fn viewport_changes_follow_scrolling_with_a_margin() {
++    let mut fonts = crate::fonts::FontRegistry::bundled();
++    let block = |i: usize| Desc {
++        key: Some(format!("b{i}")),
++        style: Style {
++            height: Dimension::Px(50.0),
++            flex_shrink: 0.0,
++            ..Style::default()
++        },
++        viewport_margin: Some(20.0),
++        ..Desc::default()
++    };
++    let mut tree = tree_of(
++        (300.0, 300.0),
++        vec![Desc {
++            key: Some("scroller".into()),
++            style: Style {
++                flex_direction: FlexDirection::Column,
++                width: Dimension::Px(100.0),
++                height: Dimension::Px(100.0),
++                flex_shrink: 0.0,
++                overflow: Overflow::Scroll,
++                ..Style::default()
++            },
++            children: (0..8).map(block).collect(),
++            ..Desc::default()
++        }],
++    );
++    let near = |tree: &mut Tree| {
++        let mut changes: Vec<(String, bool)> = tree
++            .take_viewport_changes()
++            .into_iter()
++            .map(|(id, near)| (tree.key_of(id).unwrap().to_string(), near))
++            .collect();
++        changes.sort();
++        changes
++    };
++    let named = |pairs: &[(&str, bool)]| pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect::<Vec<_>>();
++    assert_eq!(
++        near(&mut tree),
++        named(&[("b0", true), ("b1", true), ("b2", true), ("b3", false), ("b4", false), ("b5", false), ("b6", false), ("b7", false)])
++    );
++    assert!(near(&mut tree).is_empty(), "nothing moved, so nothing changes");
++
++    let scroller = tree.find("scroller").unwrap();
++    tree.scroll_state_mut(scroller).unwrap().position = 200.0;
++    tree.mark_place();
++    tree.flush_layout(&mut fonts, 16.0);
++    assert_eq!(
++        near(&mut tree),
++        named(&[("b0", false), ("b1", false), ("b2", false), ("b3", true), ("b4", true), ("b5", true), ("b6", true)])
++    );
++
++    let b4 = tree.find("b4").unwrap();
++    tree.remove(b4);
++    tree.flush_layout(&mut fonts, 16.0);
++    let after_remove = near(&mut tree);
++    assert!(after_remove.iter().all(|(key, _)| key != "b4"), "{after_remove:?}");
++}
+diff --git a/pixel/engine/crates/pixel-node/src/events.rs b/pixel/engine/crates/pixel-node/src/events.rs
+index 67595b42..2500d54d 100644
+--- a/pixel/engine/crates/pixel-node/src/events.rs
++++ b/pixel/engine/crates/pixel-node/src/events.rs
+@@ -171,6 +171,12 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
+         EngineEvent::Osc { data } => json!({ "type": "osc", "data": data }),
+         EngineEvent::FrameDone { id, error } => json!({ "type": "frameDone", "id": id, "error": error }),
+         EngineEvent::Visible { visible } => json!({ "type": "visible", "visible": *visible }),
++        EngineEvent::Viewport { view, node, near } => json!({
++            "type": "viewport",
++            "view": view,
++            "node": ids.get(*view)?.ext(*node)?,
++            "near": near,
++        }),
+         EngineEvent::Handoff { tty, socket } => json!({
+             "type": "handoff",
+             "tty": tty,
+diff --git a/pixel/engine/crates/pixel-node/src/ops.rs b/pixel/engine/crates/pixel-node/src/ops.rs
+index e6de2748..7beb053b 100644
+--- a/pixel/engine/crates/pixel-node/src/ops.rs
++++ b/pixel/engine/crates/pixel-node/src/ops.rs
+@@ -288,6 +288,8 @@ struct PropsDto {
+     drag_events: bool,
+     selection_events: bool,
+     move_events: bool,
++    #[serde(default)]
++    viewport_margin: Option<f32>,
+     spans: Vec<SpanDto>,
+ }
+ 
+@@ -768,6 +770,7 @@ impl PropsDto {
+             drag_events: self.drag_events,
+             selection_events: self.selection_events,
+             move_events: self.move_events,
++            viewport_margin: self.viewport_margin,
+             spans: self
+                 .spans
+                 .into_iter()
+diff --git a/pixel/packages/pixel/src/react/index.ts b/pixel/packages/pixel/src/react/index.ts
+index 8d3dc6c7..96ef3560 100644
+--- a/pixel/packages/pixel/src/react/index.ts
++++ b/pixel/packages/pixel/src/react/index.ts
+@@ -294,6 +294,7 @@ interface EngineEventJson {
+   precise?: boolean;
+   focused?: boolean;
+   visible?: boolean;
++  near?: boolean;
+   phase?: string;
+   kind?: string;
+   button?: string;
+@@ -469,6 +470,11 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
+         }
+         break;
+       }
++      case "viewport": {
++        const props = bridge.propsById[view]?.get(event.node!);
++        props?.onViewport?.(!!event.near);
++        break;
++      }
+       case "scroll": {
+         const props = bridge.propsById[view]?.get(event.node!);
+         props?.onScroll?.({ offset: event.offset!, max: event.max! });
+diff --git a/pixel/packages/pixel/src/react/reconciler-config.ts b/pixel/packages/pixel/src/react/reconciler-config.ts
+index 807c073c..b15fa2a1 100644
+--- a/pixel/packages/pixel/src/react/reconciler-config.ts
++++ b/pixel/packages/pixel/src/react/reconciler-config.ts
+@@ -92,6 +92,10 @@ export interface BoxProps {
+   onMouseMove?: (event: MouseMoveEvent) => void;
+   onDrag?: (event: DragEvent) => void;
+   onSelection?: (selection: ContainerSelection) => void;
++  // fixme: placeholder copy
++  /** Called with true when this box comes within `viewportMargin` pixels of what its scroll area shows, and false when it leaves. */
++  onViewport?: (near: boolean) => void;
++  viewportMargin?: number;
+   contentHeight?: number;
+   surface?: Surface;
+   children?: React.ReactNode;
+@@ -352,6 +356,7 @@ function serializeProps(
+     dragEvents: !!props.onDrag,
+     selectionEvents: !!props.onSelection,
+     moveEvents: !!props.onMouseMove,
++    viewportMargin: props.onViewport ? (props.viewportMargin ?? 0) : undefined,
+     slot: props.slot,
+     mark: props.mark,
+     surface: props.surface ? surfaceId(props.surface) : undefined,
+diff --git a/pixel/packages/pixel/src/registry.ts b/pixel/packages/pixel/src/registry.ts
+index 1b9f0a75..1f22a6c7 100644
+--- a/pixel/packages/pixel/src/registry.ts
++++ b/pixel/packages/pixel/src/registry.ts
+@@ -19,6 +19,7 @@ export interface ViewEntry {
+   // Views without a PageHost (a guest app's pixels) take these directly.
+   paste?(text: string): void;
+   setActive?(focused: boolean): void;
++  onFocusChange?(focused: boolean): void;
+ }
+ 
+ export interface RegistryHooks {
+@@ -54,7 +55,9 @@ export class ViewRegistry {
+ 
+   unregister(entry: ViewEntry) {
+     this.views.delete(entry);
+-    if (this.focused === entry) this.focused = null;
++    if (this.focused !== entry) return;
++    this.focused = null;
++    entry.onFocusChange?.(false);
+   }
+ 
+   *hosts(): Iterable<PageHost> {
+@@ -63,9 +66,12 @@ export class ViewRegistry {
+ 
+   focus(entry: ViewEntry, target: "page" | "devtools" | "popup" = "page") {
+     if (this.focused !== entry) {
+-      this.setActive(this.focused, false);
++      const previous = this.focused;
++      this.setActive(previous, false);
+       this.focused = entry;
+       if (!entry.host) entry.setActive?.(true);
++      previous?.onFocusChange?.(false);
++      entry.onFocusChange?.(true);
+     }
+     const host = entry.host;
+     if (!host) return;
+@@ -77,6 +83,7 @@ export class ViewRegistry {
+     if (this.focused !== entry) return;
+     this.setActive(entry, false);
+     this.focused = null;
++    entry.onFocusChange?.(false);
+   }
+ 
+   private setActive(entry: ViewEntry | null, active: boolean) {
+diff --git a/pixel/packages/pixel/src/web/content-height.ts b/pixel/packages/pixel/src/web/content-height.ts
+new file mode 100644
+index 00000000..3df09e80
+--- /dev/null
++++ b/pixel/packages/pixel/src/web/content-height.ts
+@@ -0,0 +1,73 @@
++const BINDING = "__pixelContentHeight";
++const WORLD = "pixel-content-height";
++
++// A page shorter than its window reports its own height; a longer one reports how far it scrolls.
++const PAGE_SCRIPT = `(() => {
++  let last = -1;
++  const send = () => {
++    const root = document.documentElement;
++    if (!root) return;
++    const height = Math.ceil(root.scrollHeight > root.clientHeight ? root.scrollHeight : root.getBoundingClientRect().height);
++    if (height === last) return;
++    last = height;
++    ${BINDING}(String(height));
++  };
++  const observer = new ResizeObserver(send);
++  const watch = () => {
++    if (document.documentElement) observer.observe(document.documentElement);
++    if (document.body) observer.observe(document.body);
++    send();
++  };
++  watch();
++  document.addEventListener("DOMContentLoaded", watch);
++  addEventListener("load", send);
++  if (document.fonts) document.fonts.addEventListener("loadingdone", send);
++})()`;
++
++export class PageHeight {
++  private started = false;
++  private starting: Promise<void> | null = null;
++  private stopped = false;
++
++  constructor(
++    private readonly contents: () => Electron.WebContents,
++    private readonly cdp: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>,
++    private readonly onHeight: (cssHeight: number) => void,
++  ) {}
++
++  private readonly onMessage = (_event: unknown, method: string, params: unknown) => {
++    if (method !== "Runtime.bindingCalled" || this.stopped) return;
++    const call = params as { name: string; payload: string };
++    if (call.name !== BINDING) return;
++    const height = Number(call.payload);
++    if (Number.isFinite(height) && height >= 0) this.onHeight(height);
++  };
++
++  // Safe to call again until it has worked once: a page that has no renderer yet can't be reached.
++  start(): Promise<void> {
++    if (this.started || this.stopped) return Promise.resolve();
++    this.starting ??= (async () => {
++      // Listen first: the script runs right away in the page already showing and reports its height once.
++      this.contents().debugger.on("message", this.onMessage);
++      try {
++        await this.cdp("Runtime.addBinding", { name: BINDING, executionContextName: WORLD });
++        await this.cdp("Page.addScriptToEvaluateOnNewDocument", { source: PAGE_SCRIPT, worldName: WORLD, runImmediately: true });
++        this.started = true;
++      } catch (error) {
++        this.contents().debugger.removeListener("message", this.onMessage);
++        throw error;
++      } finally {
++        this.starting = null;
++      }
++    })();
++    return this.starting;
++  }
++
++  stop(): void {
++    if (this.stopped) return;
++    this.stopped = true;
++    try {
++      this.contents().debugger.removeListener("message", this.onMessage);
++    } catch {}
++  }
++}
+diff --git a/pixel/packages/pixel/src/web/host.ts b/pixel/packages/pixel/src/web/host.ts
+index 188764b1..d160fd15 100644
+--- a/pixel/packages/pixel/src/web/host.ts
++++ b/pixel/packages/pixel/src/web/host.ts
+@@ -1,4 +1,5 @@
+ import { BrowserWindow, screen } from "electron";
++import { appLog } from "../react";
+ import type { EngineKeyEvent, PastedImage, PointerEvent, PointerShape, Surface, WheelEvent } from "../react";
+ import { allowClipboardRead, onDownloadFor, routeThroughProxy } from "./browser-session";
+ import type { DownloadProgress } from "./browser-session";
+@@ -7,9 +8,11 @@ import { DevtoolsWindow } from "./devtools";
+ import { FaviconCache } from "./favicon";
+ import type { DevtoolsAction } from "./devtools";
+ import { frameRate, onFrameRateChange } from "./frame-rate";
++import { PageHeight } from "./content-height";
+ import { PageInput } from "./input";
+ import { offscreenPreferences } from "./offscreen";
+ import { BitmapPresenter, presentPaint } from "./paint";
++import { PagePause } from "./pause";
+ import { PopupWindow } from "./popup";
+ import { prepareSession } from "./session";
+ import { cssSize, initialWebViewState } from "./types";
+@@ -103,6 +106,8 @@ export class PageHost {
+     this.applyFrameRate();
+   };
+   private visible = true;
++  private readonly pause: PagePause;
++  private contentHeight: PageHeight | null = null;
+   private framePinned = false;
+   private wholeSurfaceNext = true;
+   private readonly bitmaps: BitmapPresenter;
+@@ -159,6 +164,14 @@ export class PageHost {
+         return this.cdp(method, params);
+       },
+     });
++    this.pause = new PagePause({
++      contents: () => this.window.webContents,
++      cdp: async (method, params) => {
++        await this.attachCdp();
++        return this.cdp(method, params);
++      },
++      onResumed: () => this.invalidate(),
++    });
+     this.window.webContents.setFrameRate(frameRate());
+     this.window.on("closed", this.onWindowClosed);
+     this.window.webContents.on("will-navigate", (event, url) => {
+@@ -200,10 +213,14 @@ export class PageHost {
+     this.window.webContents.on(
+       "did-start-navigation",
+       (_event, _url, isInPlace, isMainFrame) => {
+-        if (isMainFrame && !isInPlace) this.updateState({ loading: true });
++        if (isMainFrame && !isInPlace) {
++          this.updateState({ loading: true });
++          void this.startContentHeight();
++        }
+       },
+     );
+     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
++    this.window.webContents.on("dom-ready", () => void this.startContentHeight());
+     this.window.webContents.on("did-navigate", (_event, url) => {
+       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
+       this.updateNavigation(this.state.loading, url);
+@@ -239,6 +256,22 @@ export class PageHost {
+     this.onState(this.state);
+   }
+ 
++  watchContentHeight(onHeight: (cssHeight: number) => void) {
++    this.contentHeight ??= new PageHeight(() => this.window.webContents, (method, params) => this.cdp(method, params), onHeight);
++    void this.startContentHeight();
++  }
++
++  // The debugger can only attach once the page has a renderer, so this is tried again as loading goes on.
++  private async startContentHeight(): Promise<void> {
++    if (!this.contentHeight) return;
++    try {
++      await this.attachCdp();
++      await this.contentHeight.start();
++    } catch (error) {
++      appLog("warn", "webview", `page height unavailable: ${String(error)}`);
++    }
++  }
++
+   get webContents(): Electron.WebContents {
+     return this.window.webContents;
+   }
+@@ -447,6 +480,11 @@ export class PageHost {
+     this.input.pointer(event);
+   }
+ 
++  pointerLeave() {
++    if (this.stopped) return;
++    this.input.leave();
++  }
++
+   wheel(event: WheelEvent) {
+     if (this.stopped) return;
+     this.input.wheel(event);
+@@ -490,6 +528,7 @@ export class PageHost {
+   }
+ 
+   private teardown() {
++    this.contentHeight?.stop();
+     for (const popup of [...this.popups]) popup.close();
+     this.devtools?.close();
+     this.stopWatchingFrameRate?.();
+@@ -517,6 +556,11 @@ export class PageHost {
+     if (visible) this.window.webContents.invalidate();
+   }
+ 
++  setPaused(paused: boolean) {
++    if (this.stopped) return;
++    this.pause.set(paused);
++  }
++
+   private contentSize(layout: SurfaceLayout) {
+     return cssSize(layout.width, layout.height, layout.scale);
+   }
+diff --git a/pixel/packages/pixel/src/web/input.ts b/pixel/packages/pixel/src/web/input.ts
+index aa7fd9f6..b4035039 100644
+--- a/pixel/packages/pixel/src/web/input.ts
++++ b/pixel/packages/pixel/src/web/input.ts
+@@ -96,6 +96,12 @@ export class PageInput {
+     this.lastSentY = y;
+   }
+ 
++  // Mid-drag the page keeps the pointer, as a browser does.
++  leave() {
++    if (this.pressed.size > 0) return;
++    this.send({ type: "mouseLeave", x: this.lastX, y: this.lastY, modifiers: [] });
++  }
++
+   wheel(event: WheelEvent) {
+     this.syncFocus();
+     if (event.mods.ctrl && event.precise) {
+diff --git a/pixel/packages/pixel/src/web/pause.ts b/pixel/packages/pixel/src/web/pause.ts
+new file mode 100644
+index 00000000..194af641
+--- /dev/null
++++ b/pixel/packages/pixel/src/web/pause.ts
+@@ -0,0 +1,48 @@
++export interface PausableContents {
++  setBackgroundThrottling(allowed: boolean): void;
++  stopPainting(): void;
++  startPainting(): void;
++}
++
++export interface PagePauseOptions {
++  contents: () => PausableContents;
++  cdp: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
++  onResumed: () => void;
++}
++
++// A paused page keeps its state but stops drawing and running its scripts until it is resumed.
++// Chromium only freezes a page that is allowed to be throttled, so throttling stays on while paused.
++export class PagePause {
++  private paused = false;
++  // Lifecycle commands go out one at a time, so a quick pause and resume can't reach the page out of order.
++  private lifecycle: Promise<unknown> = Promise.resolve();
++
++  constructor(private readonly options: PagePauseOptions) {}
++
++  get isPaused(): boolean {
++    return this.paused;
++  }
++
++  set(paused: boolean) {
++    if (this.paused === paused) return;
++    this.paused = paused;
++    const contents = this.options.contents();
++    if (paused) {
++      contents.setBackgroundThrottling(true);
++      contents.stopPainting();
++      void this.setLifecycle("frozen");
++      return;
++    }
++    contents.setBackgroundThrottling(false);
++    void this.setLifecycle("active").then(() => {
++      if (this.paused) return;
++      contents.startPainting();
++      this.options.onResumed();
++    });
++  }
++
++  private setLifecycle(state: "frozen" | "active"): Promise<unknown> {
++    this.lifecycle = this.lifecycle.then(() => this.options.cdp("Page.setWebLifecycleState", { state }).catch(() => {}));
++    return this.lifecycle;
++  }
++}
+diff --git a/pixel/packages/pixel/src/webview.tsx b/pixel/packages/pixel/src/webview.tsx
+index da652ace..1f560047 100644
+--- a/pixel/packages/pixel/src/webview.tsx
++++ b/pixel/packages/pixel/src/webview.tsx
+@@ -58,6 +58,21 @@ export interface WebViewProps {
+   devtools?: boolean | DevtoolsDock;
+   hidden?: boolean;
+   keepFrame?: boolean;
++  // fixme: placeholder copy
++  /** The wheel scrolls whatever is around the page instead, until the page is focused by a click. */
++  passWheel?: boolean;
++  // fixme: placeholder copy
++  /** Stops drawing the page and freezes its scripts while it is scrolled out of view. It picks up where it left off when it comes back. */
++  pauseOffscreen?: boolean;
++  // fixme: placeholder copy
++  /** Doesn't load the page until it scrolls within a screen of the view. */
++  lazy?: boolean;
++  onWebContents?(contents: Electron.WebContents): void;
++  // fixme: placeholder copy
++  /** The page's content height in pixels, reported whenever it changes. */
++  onContentHeight?(height: number): void;
++  onFocusChange?(focused: boolean): void;
++  onHoverChange?(hovered: boolean): void;
+   onChange?(state: WebViewState): void;
+   onPointer?(event: PointerEvent): void;
+   onContextMenu?(params: Electron.ContextMenuParams): void;
+@@ -145,6 +160,9 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+   const [fraction, setFraction] = useState(0.4);
+   const [dividerEngaged, setDividerEngaged] = useState(false);
+   const [menu, setMenu] = useState<MenuState | null>(null);
++  const [focused, setFocused] = useState(false);
++  const [wanted, setWanted] = useState(!props.lazy);
++  const [live, setLive] = useState(false);
+   const menuRef = useRef(menu);
+   menuRef.current = menu;
+ 
+@@ -169,6 +187,10 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+     if (hostRef.current?.devtools) hostRef.current.closeDevtools();
+     else setDevtoolsOpen(true);
+   };
++  entry.onFocusChange = (next: boolean) => {
++    setFocused(next);
++    propsRef.current.onFocusChange?.(next);
++  };
+   entry.handleKey = (event: EngineKeyEvent) => {
+     if (!menuRef.current || event.kind === "release") return false;
+     setMenu(null);
+@@ -215,6 +237,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+   };
+ 
+   useLayoutEffect(() => {
++    if (!wanted) return;
+     const created = {
+       page: registry.root.createSurface(),
+       popup: registry.root.createSurface(),
+@@ -284,7 +307,12 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+     host.onFrameSubmitted = () => {
+       for (const listener of frameListeners.current) listener();
+     };
++    if (initial.onContentHeight) {
++      host.watchContentHeight((cssHeight) => propsRef.current.onContentHeight?.(cssHeight * scale * stateRef.current.zoom));
++    }
+     host.setVisible(!initial.hidden);
++    initial.onWebContents?.(host.webContents);
++    setLive(true);
+     if (!initial.hidden && (initial.autoFocus ?? registry.views.size === 1)) registry.focus(entry);
+     return () => {
+       registry.unregister(entry);
+@@ -296,14 +324,14 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+       surfaces.current = null;
+     };
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, []);
++  }, [wanted]);
+ 
+   // A zero rect means an ancestor is hidden; keep the page at its last size.
+   const collapsed = rect != null && (rect.width <= 0 || rect.height <= 0);
+   useEffect(() => {
+     hostRef.current?.setVisible(!hidden && !collapsed);
+     if ((hidden || collapsed) && registry.focused === entry) registry.blur(entry);
+-  }, [hidden, collapsed]);
++  }, [hidden, collapsed, live]);
+ 
+   useEffect(() => {
+     const host = hostRef.current;
+@@ -311,7 +339,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+     const layout: SurfaceLayout = { ...page, scale };
+     debug("page resize", layout);
+     host.resize(layout, { keepFrame: keepFrame() });
+-  }, [page?.x, page?.y, page?.width, page?.height, scale, hidden]);
++  }, [page?.x, page?.y, page?.width, page?.height, scale, hidden, live]);
+ 
+   useEffect(() => {
+     const host = hostRef.current;
+@@ -521,8 +549,14 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+   }
+ 
+   return (
+-    <Box ref={boxRef} style={{ ...props.style, overflow: "hidden" }}>
+-      {page && (
++    <Box
++      ref={boxRef}
++      style={{ ...props.style, overflow: "hidden" }}
++      onClickOutside={focused ? () => registry.blur(entry) : undefined}
++      onViewport={wanted ? undefined : (near) => near && setWanted(true)}
++      viewportMargin={registry.root.info.height}
++    >
++      {page && live && (
+         <Box
+           surface={surfaces.current?.page}
+           style={{
+@@ -535,19 +569,30 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+             opaque: !props.browserWindowOptions?.transparent,
+             pointerShape: pointerShapes.page,
+           }}
++          onViewport={props.pauseOffscreen ? (near) => hostRef.current?.setPaused(!near) : undefined}
++          viewportMargin={Math.round(rem * 4)}
+           onPointer={(event: PointerEvent) => {
+             if (menuRef.current) {
+               if (event.kind === "down") setMenu(null);
+               if (event.kind !== "up") return;
+             }
+-            registry.focus(entry);
++            if (event.kind === "down") registry.focus(entry);
+             hostRef.current?.pointer(event);
+             propsRef.current.onPointer?.(event);
+           }}
+-          onWheel={(event: WheelEvent) => {
+-            registry.focus(entry);
+-            hostRef.current?.wheel(event);
++          onMouseEnter={() => propsRef.current.onHoverChange?.(true)}
++          onMouseLeave={() => {
++            hostRef.current?.pointerLeave();
++            propsRef.current.onHoverChange?.(false);
+           }}
++          onWheel={
++            props.passWheel && !focused
++              ? undefined
++              : (event: WheelEvent) => {
++                  registry.focus(entry);
++                  hostRef.current?.wheel(event);
++                }
++          }
+         />
+       )}
+       {devtoolsRect && surfaces.current && (
+diff --git a/pixel/packages/pixel/test/page-pause.test.js b/pixel/packages/pixel/test/page-pause.test.js
+new file mode 100644
+index 00000000..ccdfeeaa
+--- /dev/null
++++ b/pixel/packages/pixel/test/page-pause.test.js
+@@ -0,0 +1,82 @@
++const assert = require("node:assert/strict");
++const { test } = require("node:test");
++
++const { PagePause } = require("../dist/web/pause.js");
++
++function page() {
++  const calls = [];
++  let resumed = 0;
++  const contents = {
++    setBackgroundThrottling: (allowed) => calls.push(`throttle ${allowed}`),
++    stopPainting: () => calls.push("stop painting"),
++    startPainting: () => calls.push("start painting"),
++  };
++  const pause = new PagePause({
++    contents: () => contents,
++    cdp: async (method, params) => calls.push(`${method} ${params.state}`),
++    onResumed: () => resumed++,
++  });
++  return { pause, calls, resumed: () => resumed };
++}
++
++const settle = () => new Promise((resolve) => setImmediate(resolve));
++
++test("pausing throttles the page before freezing it, since Chromium won't freeze an unthrottled page", async () => {
++  const { pause, calls } = page();
++  pause.set(true);
++  await settle();
++  assert.deepEqual(calls, ["throttle true", "stop painting", "Page.setWebLifecycleState frozen"]);
++});
++
++test("resuming unthrottles, unfreezes, then paints again", async () => {
++  const { pause, calls, resumed } = page();
++  pause.set(true);
++  await settle();
++  calls.length = 0;
++  pause.set(false);
++  await settle();
++  assert.deepEqual(calls, ["throttle false", "Page.setWebLifecycleState active", "start painting"]);
++  assert.equal(resumed(), 1);
++});
++
++test("a page paused again before it finished resuming stays paused and doesn't paint", async () => {
++  const { pause, calls, resumed } = page();
++  pause.set(true);
++  pause.set(false);
++  pause.set(true);
++  await settle();
++  assert.equal(pause.isPaused, true);
++  assert.ok(!calls.includes("start painting"));
++  assert.equal(calls.at(-1), "Page.setWebLifecycleState frozen");
++  assert.equal(resumed(), 0);
++});
++
++test("asking for the state it is already in does nothing", async () => {
++  const { pause, calls } = page();
++  pause.set(false);
++  await settle();
++  assert.deepEqual(calls, []);
++});
++
++test("a resume can't overtake a freeze that is still waiting to be sent", async () => {
++  const sent = [];
++  let releaseFirst;
++  const firstCall = new Promise((resolve) => (releaseFirst = resolve));
++  let calls = 0;
++  const contents = { setBackgroundThrottling() {}, stopPainting() {}, startPainting() {} };
++  const pause = new PagePause({
++    contents: () => contents,
++    cdp: async (_method, params) => {
++      if (calls++ === 0) await firstCall;
++      sent.push(params.state);
++    },
++    onResumed() {},
++  });
++  pause.set(true);
++  pause.set(false);
++  await settle();
++  releaseFirst();
++  await settle();
++  await settle();
++  assert.deepEqual(sent, ["frozen", "active"]);
++});
+-- 
+2.50.1 (Apple Git-155)
+

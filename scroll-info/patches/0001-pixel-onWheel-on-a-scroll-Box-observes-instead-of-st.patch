@@ -1,0 +1,78 @@
+From a8a7feab102add88c04b0fb8f297fb11abc93e4e Mon Sep 17 00:00:00 2001
+From: RobPruzan <rapruzan@buffalo.edu>
+Date: Fri, 30 Oct 2026 09:27:37 -0400
+Subject: [PATCH] pixel: onWheel on a scroll Box observes instead of stopping
+ it scrolling
+
+Terminal wheel ticks (SGR 64/65) went only to JS when the scroll area itself had
+onWheel, so pixelcode's transcript never scrolled over SSH.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ pixel/AGENT-DOCS.md                           |  3 +++
+ .../crates/pixel-core/src/engine/pointer.rs   |  4 +++-
+ .../crates/pixel-core/src/engine/scroll.rs    | 19 +++++++------------
+ 3 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/pixel/AGENT-DOCS.md b/pixel/AGENT-DOCS.md
+index 709e5443..56cd96c3 100644
+--- a/pixel/AGENT-DOCS.md
++++ b/pixel/AGENT-DOCS.md
+@@ -218,6 +218,9 @@ PastedImage  { path, width, height, source: "clipboard" | "osc" | "file" } // :1
+ 
+ Coordinates are pixels relative to the element.
+ 
++<!-- fixme: placeholder copy -->
++`onWheel` takes the wheel: scroll areas under the Box don't move, so `onWheel={() => {}}` blocks scrolling and a canvas can pan and zoom itself. On a Box with `overflow: "scroll"`, `onWheel` only observes and the Box still scrolls; use it to react to the user scrolling (e.g. stop following new output when `deltaY < 0`).
++
+ ### Keys
+ 
+ `packages/pixel/src/react/index.ts:156`
+diff --git a/pixel/engine/crates/pixel-core/src/engine/pointer.rs b/pixel/engine/crates/pixel-core/src/engine/pointer.rs
+index 46203059..9c0a2500 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/pointer.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/pointer.rs
+@@ -473,7 +473,9 @@ impl Engine {
+             precise,
+             mods,
+         });
+-        true
++        // A scrolling node's own onWheel only observes its scrolling; any other
++        // wheel listener takes the wheel from the scroll areas under it.
++        tree.scroll_area(node).is_none()
+     }
+ 
+     fn mark_pointer(&mut self, name: &'static str, point: (f32, f32)) {
+diff --git a/pixel/engine/crates/pixel-core/src/engine/scroll.rs b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+index a42fcbee..1b90e980 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/scroll.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+@@ -239,18 +239,13 @@ impl Engine {
+             logging::info("engine", "native scroll delivering");
+         }
+         self.last_native_scroll = Some(Instant::now());
+-        if self.comp.views[view]
+-            .tree
+-            .hit_wheel(local.0, local.1)
+-            .is_some()
+-        {
+-            let mut delta_x = 0.0;
+-            let mut delta_y = 0.0;
+-            for (dx, dy) in &scrolls {
+-                delta_x -= dx;
+-                delta_y -= dy;
+-            }
+-            self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out);
++        let mut delta_x = 0.0;
++        let mut delta_y = 0.0;
++        for (dx, dy) in &scrolls {
++            delta_x -= dx;
++            delta_y -= dy;
++        }
++        if self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out) {
+             return;
+         }
+         let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) else {
+-- 
+2.50.1 (Apple Git-155)
+

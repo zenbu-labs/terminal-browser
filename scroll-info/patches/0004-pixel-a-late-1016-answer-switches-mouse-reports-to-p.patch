@@ -1,0 +1,223 @@
+From 4d343c913e055be6d5a154f83e1f015aa3b65372 Mon Sep 17 00:00:00 2001
+From: RobPruzan <rapruzan@buffalo.edu>
+Date: Fri, 30 Oct 2026 09:36:54 -0400
+Subject: [PATCH] pixel: a late 1016 answer switches mouse reports to pixels
+
+Over a slow link the DECRQM answer for 1016 can land after the 150 ms probe,
+which left the app on cell coordinates for good. A late yes (read in a later
+probe or the input stream) now turns 1016 back on, and a report past the cell
+grid is taken as pixels whatever pixel believed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../engine/crates/pixel-core/src/terminal.rs  | 95 ++++++++++++++++++-
+ 1 file changed, 90 insertions(+), 5 deletions(-)
+
+diff --git a/pixel/engine/crates/pixel-core/src/terminal.rs b/pixel/engine/crates/pixel-core/src/terminal.rs
+index 23544544..6242f07c 100644
+--- a/pixel/engine/crates/pixel-core/src/terminal.rs
++++ b/pixel/engine/crates/pixel-core/src/terminal.rs
+@@ -281,6 +281,7 @@ pub struct Terminal {
+     last_frame_size: Option<(u32, u32)>,
+     pointer_shape_written: bool,
+     mouse_pixels: bool,
++    pixel_mouse_pending: bool,
+     focused: bool,
+     cell: Option<(u32, u32)>,
+     pending: Vec<u8>,
+@@ -516,7 +517,11 @@ impl Terminal {
+             terminal.io.out().write_all(b"\x1b[>4;2m")?;
+             terminal.io.out().flush()?;
+         }
+-        terminal.mouse_pixels = !wrapper.relayed() && terminal.probe_mouse_pixels()?;
++        // Over a slow link the answer can arrive after the probe gives up; cells are
++        // used until then and a late "yes" switches to pixels (adopt_pixel_mouse).
++        let pixels = if wrapper.relayed() { Some(false) } else { terminal.probe_mouse_pixels()? };
++        terminal.mouse_pixels = pixels == Some(true);
++        terminal.pixel_mouse_pending = pixels.is_none();
+         if !terminal.mouse_pixels {
+             terminal.io.out().write_all(b"\x1b[?1016l\x1b[?1006h")?;
+             terminal.io.out().flush()?;
+@@ -551,6 +556,7 @@ impl Terminal {
+             last_frame_size: None,
+             pointer_shape_written: false,
+             mouse_pixels: false,
++            pixel_mouse_pending: false,
+             focused: true,
+             cell: None,
+             pending: Vec::new(),
+@@ -960,7 +966,16 @@ impl Terminal {
+                         self.cell = Some(cell);
+                         Event::CellSize(cell)
+                     }
++                    RawEvent::MousePixels(pixels) => {
++                        if pixels && self.pixel_mouse_pending {
++                            self.adopt_pixel_mouse()?;
++                        }
++                        continue;
++                    }
+                     RawEvent::Mouse(kind, button, mods, x, y) => {
++                        if self.herdr.is_none() {
++                            self.notice_pixel_mouse(x, y);
++                        }
+                         let (x, y) = match &self.herdr {
+                             Some(herdr) => herdr.mouse_position_px(
+                                 kind,
+@@ -1173,6 +1188,28 @@ impl Terminal {
+         }
+     }
+ 
++    fn adopt_pixel_mouse(&mut self) -> io::Result<()> {
++        self.pixel_mouse_pending = false;
++        self.mouse_pixels = true;
++        self.io.out().write_all(b"\x1b[?1016h")?;
++        self.io.out().flush()
++    }
++
++    // A cell report can't point past the grid, so one that does is in pixels
++    // (e.g. sent before the terminal saw 1016 go off).
++    fn notice_pixel_mouse(&mut self, x: u32, y: u32) {
++        if self.mouse_pixels {
++            return;
++        }
++        if let Ok(ws) = self.size()
++            && ws.cols > 0
++            && ws.rows > 0
++            && (x > ws.cols || y > ws.rows)
++        {
++            self.mouse_pixels = true;
++        }
++    }
++
+     fn mouse_position_px(&self, x: u32, y: u32) -> (u32, u32) {
+         if self.mouse_pixels {
+             (x.saturating_sub(1), y.saturating_sub(1))
+@@ -1293,10 +1330,10 @@ impl Terminal {
+         Ok(self.read_report(150, parse_kitty_keyboard)?.unwrap_or(false))
+     }
+ 
+-    fn probe_mouse_pixels(&mut self) -> io::Result<bool> {
++    fn probe_mouse_pixels(&mut self) -> io::Result<Option<bool>> {
+         self.io.out().write_all(b"\x1b[?1016$p")?;
+         self.io.out().flush()?;
+-        Ok(self.read_report(150, parse_decrqm_1016)?.unwrap_or(false))
++        self.read_report(150, parse_decrqm_1016)
+     }
+ 
+     fn probe_clipboard_data(&mut self) -> io::Result<bool> {
+@@ -1371,6 +1408,9 @@ impl Terminal {
+                 return Ok(None);
+             }
+             buf.extend_from_slice(&chunk[..n]);
++            if self.pixel_mouse_pending && parse_decrqm_1016(&buf) == Some(true) {
++                self.adopt_pixel_mouse()?;
++            }
+             if let Some(value) = parse(&buf) {
+                 return Ok(Some(value));
+             }
+@@ -1755,6 +1795,7 @@ enum RawEvent {
+     Clip(ClipPacket),
+     Color(ColorSlot, [u8; 4]),
+     ColorSchemeChanged,
++    MousePixels(bool),
+ }
+ 
+ #[derive(Debug, PartialEq, Eq)]
+@@ -2096,6 +2137,9 @@ fn parse_csi(buf: &[u8]) -> Option<(RawEvent, usize)> {
+             (None, Some(cell)) => RawEvent::CellSize(cell),
+             (None, None) => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
+         },
++        b'y' if params.starts_with(b"?1016;") => {
++            RawEvent::MousePixels(parse_decrqm_1016(&buf[..end]) == Some(true))
++        }
+         // `CSI ? 997 ; 1 n` — the terminal's palette changed under us.
+         b'n' if params.starts_with(b"?997") => RawEvent::ColorSchemeChanged,
+         _ => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
+@@ -2665,6 +2709,18 @@ mod tests {
+         assert_eq!(kinds, [U, U, U, D, D]);
+     }
+ 
++    #[test]
++    fn a_late_1016_mode_report_is_read_from_the_input_stream() {
++        assert_eq!(
++            parse_event(b"\x1b[?1016;1$yx"),
++            Some((RawEvent::MousePixels(true), 11))
++        );
++        assert_eq!(
++            parse_event(b"\x1b[?1016;0$y"),
++            Some((RawEvent::MousePixels(false), 11))
++        );
++    }
++
+     #[test]
+     fn terminal_reply_strings_never_leak_as_keystrokes() {
+         // xterm.js < May 2026 replies OK to every transmission despite q=2.
+@@ -2967,7 +3023,7 @@ mod tty_tests {
+             (None, Wrapper::Tmux),
+         ] {
+             let (master, _slave, path) = open_pty();
+-            let _terminal = fake_terminal_answering_1016(&master, reply);
++            let _terminal = fake_terminal_answering_1016(&master, reply, Duration::ZERO);
+             let mut term = open(&path, wrapper);
+             term.cell = Some((8, 16));
+             term.io.out().write_all(b"\x1b[5n").unwrap();
+@@ -2986,6 +3042,26 @@ mod tty_tests {
+         }
+     }
+ 
++    #[test]
++    fn a_1016_answer_that_arrives_late_still_switches_to_pixels() {
++        let (master, _slave, path) = open_pty();
++        let _terminal =
++            fake_terminal_answering_1016(&master, Some(b"\x1b[?1016;1$y"), Duration::from_millis(400));
++        let mut term = open(&path, Wrapper::None);
++        term.cell = Some((8, 16));
++        assert!(!term.reports_pixel_mouse(), "no answer yet: cells");
++        let _ = term.poll_event(Some(Duration::from_millis(600))).unwrap();
++        assert!(term.reports_pixel_mouse(), "the late answer was read from the input stream");
++        term.io.out().write_all(b"\x1b[5n").unwrap();
++        term.io.out().flush().unwrap();
++        let event = term.poll_event(Some(Duration::from_millis(500))).unwrap();
++        assert!(term.reports_pixel_mouse());
++        assert!(
++            matches!(event, Some(Event::Mouse(Mouse { x: 484, y: 328, .. }))),
++            "{event:?}"
++        );
++    }
++
+     fn open_pty() -> (std::fs::File, std::fs::File, String) {
+         let mut master: libc::c_int = 0;
+         let mut slave: libc::c_int = 0;
+@@ -3015,12 +3091,13 @@ mod tty_tests {
+     }
+ 
+     fn fake_terminal(master: &std::fs::File) -> std::thread::JoinHandle<()> {
+-        fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"))
++        fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"), Duration::ZERO)
+     }
+ 
+     fn fake_terminal_answering_1016(
+         master: &std::fs::File,
+         mode_1016: Option<&'static [u8]>,
++        mode_1016_delay: Duration,
+     ) -> std::thread::JoinHandle<()> {
+         let mut master = master.try_clone().unwrap();
+         std::thread::spawn(move || {
+@@ -3037,6 +3114,14 @@ mod tty_tests {
+                     None
+                 } else if seen.ends_with(b"\x1b[?u") {
+                     Some(b"\x1b[?0u".to_vec())
++                } else if seen.ends_with(b"\x1b[?1016$p") && !mode_1016_delay.is_zero() {
++                    let mut late = master.try_clone().unwrap();
++                    let reply = mode_1016.unwrap_or_default();
++                    std::thread::spawn(move || {
++                        std::thread::sleep(mode_1016_delay);
++                        late.write_all(reply).unwrap();
++                    });
++                    None
+                 } else if seen.ends_with(b"\x1b[?1016$p") {
+                     mode_1016.map(<[u8]>::to_vec)
+                 } else if seen.ends_with(b"\x1b[?5522$p") {
+-- 
+2.50.1 (Apple Git-155)
+

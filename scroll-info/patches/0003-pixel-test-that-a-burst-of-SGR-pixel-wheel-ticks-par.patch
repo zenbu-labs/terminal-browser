@@ -1,0 +1,44 @@
+From 40ea1a57f85c2d63ef76427c662b60f0ca7609b4 Mon Sep 17 00:00:00 2001
+From: RobPruzan <rapruzan@buffalo.edu>
+Date: Fri, 30 Oct 2026 09:29:46 -0400
+Subject: [PATCH] pixel: test that a burst of SGR-pixel wheel ticks parses from
+ one read
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../engine/crates/pixel-core/src/terminal.rs  | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/pixel/engine/crates/pixel-core/src/terminal.rs b/pixel/engine/crates/pixel-core/src/terminal.rs
+index d65d0a3a..23544544 100644
+--- a/pixel/engine/crates/pixel-core/src/terminal.rs
++++ b/pixel/engine/crates/pixel-core/src/terminal.rs
+@@ -2646,6 +2646,25 @@ mod tests {
+         assert_eq!(parse_event(b"\x1bOA"), Some((key(Key::Up), 3)));
+     }
+ 
++    #[test]
++    fn parses_a_burst_of_sgr_pixel_wheel_ticks_from_one_read() {
++        let mut buf = b"\x1b[<64;575;692M".repeat(3);
++        buf.extend_from_slice(&b"\x1b[<65;575;692M".repeat(2));
++        let mut rest = &buf[..];
++        let mut kinds = Vec::new();
++        while let Some((event, used)) = parse_event(rest) {
++            let RawEvent::Mouse(kind, _, mods, x, y) = event else {
++                panic!("not a mouse event: {event:?}");
++            };
++            assert_eq!((mods, x, y), (Mods::default(), 575, 692));
++            kinds.push(kind);
++            rest = &rest[used..];
++        }
++        assert!(rest.is_empty());
++        use MouseKind::{ScrollDown as D, ScrollUp as U};
++        assert_eq!(kinds, [U, U, U, D, D]);
++    }
++
+     #[test]
+     fn terminal_reply_strings_never_leak_as_keystrokes() {
+         // xterm.js < May 2026 replies OK to every transmission despite q=2.
+-- 
+2.50.1 (Apple Git-155)
+

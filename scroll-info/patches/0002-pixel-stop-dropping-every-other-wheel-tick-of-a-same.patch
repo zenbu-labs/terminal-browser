@@ -1,0 +1,126 @@
+From aa035b0d38643860c2f1c2cf08c21e01256382e4 Mon Sep 17 00:00:00 2001
+From: RobPruzan <rapruzan@buffalo.edu>
+Date: Fri, 30 Oct 2026 09:36:48 -0400
+Subject: [PATCH] pixel: stop dropping every other wheel tick of a same-spot
+ burst
+
+The 2 ms "kitty echo" filter was a misread: kitty, Ghostty and the iOS terminal
+send one tick per line of travel, so same-spot bursts are real distance and the
+filter halved fast scrolls (the original pixel removed it in bf7fc3e).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../crates/pixel-core/src/engine/mod.rs       |  9 -------
+ .../crates/pixel-core/src/engine/pointer.rs   | 24 +------------------
+ .../crates/pixel-core/src/engine/scroll.rs    |  2 +-
+ 3 files changed, 2 insertions(+), 33 deletions(-)
+
+diff --git a/pixel/engine/crates/pixel-core/src/engine/mod.rs b/pixel/engine/crates/pixel-core/src/engine/mod.rs
+index db992d3c..7d4ff5cf 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/mod.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/mod.rs
+@@ -322,14 +322,10 @@ pub struct Engine {
+     term_focused: bool,
+     pub native: Option<NativeScroll>,
+     pub use_native: bool,
+-    pixel_mouse: bool,
+     last_native_scroll: Option<Instant>,
+     pairing: NativePairing,
+     hover_oracle: HoverOracle,
+     pub profile: &'static dyn ScrollProfile,
+-    pub(super) last_wheel_tick:
+-        Option<(Instant, crate::terminal::MouseKind, u32, u32, crate::terminal::Mods)>,
+-    pub(super) wheel_echo_consumed: bool,
+     default_menu: bool,
+     menu: MenuController,
+     inspect_mode: bool,
+@@ -411,7 +407,6 @@ impl Engine {
+             NativeScroll::spawn(term.waker().ok())
+         };
+         let use_native = native.is_some();
+-        let pixel_mouse = term.reports_pixel_mouse();
+         logging::info(
+             "engine",
+             format!(
+@@ -445,13 +440,10 @@ impl Engine {
+             term_focused: true,
+             native,
+             use_native,
+-            pixel_mouse,
+             last_native_scroll: None,
+             pairing: NativePairing::new(),
+             hover_oracle: HoverOracle::new(),
+             profile: &DEFAULT_PROFILE,
+-            last_wheel_tick: None,
+-            wheel_echo_consumed: false,
+             default_menu: false,
+             menu: MenuController::default(),
+             inspect_mode: false,
+@@ -949,7 +941,6 @@ impl Engine {
+             NativeScroll::spawn(self.term.waker().ok())
+         };
+         self.use_native = self.native.is_some();
+-        self.pixel_mouse = self.term.reports_pixel_mouse();
+         let colors = self.term.query_colors()?;
+         let mut out = Vec::new();
+         self.apply_colors(colors, &mut out);
+diff --git a/pixel/engine/crates/pixel-core/src/engine/pointer.rs b/pixel/engine/crates/pixel-core/src/engine/pointer.rs
+index 9c0a2500..f705a814 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/pointer.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/pointer.rs
+@@ -6,8 +6,6 @@ use crate::menu::MenuClick;
+ use crate::terminal::{Mods, Mouse, MouseButton, MouseKind};
+ use crate::tree::{HitTarget, NodeId};
+ 
+-const WHEEL_ECHO_WINDOW: std::time::Duration = std::time::Duration::from_millis(2);
+-
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(super) enum DragTarget {
+     Input(NodeId),
+@@ -36,29 +34,9 @@ impl Engine {
+                 | MouseKind::ScrollLeft
+                 | MouseKind::ScrollRight
+         );
+-        // this is a weird case that I observed where inside kitty 2 scroll events
+-        // were being emitted per scroll tick. This is very suspicious and makes me
+-        // suspicious that something else was the casue of this, but this is a temporary
+-        // work around for now
+-        if scrolling {
+-            let echo = !self.wheel_echo_consumed
+-                && self.last_wheel_tick.is_some_and(|(at, kind, x, y, mods)| {
+-                    kind == mouse.kind
+-                        && x == mouse.x
+-                        && y == mouse.y
+-                        && mods == mouse.mods
+-                        && now.duration_since(at) < WHEEL_ECHO_WINDOW
+-                });
+-            if echo {
+-                self.wheel_echo_consumed = true;
+-                return Ok(());
+-            }
+-            self.wheel_echo_consumed = false;
+-            self.last_wheel_tick = Some((now, mouse.kind, mouse.x, mouse.y, mouse.mods));
+-        }
+         if self.use_native && self.native.is_some() {
+             self.ingest_native();
+-            let located = self.pixel_mouse.then_some(point);
++            let located = self.term.reports_pixel_mouse().then_some(point);
+             if scrolling && mouse.mods == Mods::default() {
+                 if self
+                     .pairing
+diff --git a/pixel/engine/crates/pixel-core/src/engine/scroll.rs b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+index 1b90e980..5db0d2a0 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/scroll.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+@@ -190,7 +190,7 @@ impl Engine {
+         let (pane, pad) = self.pane_extent();
+         self.pairing
+             .ingest(events, scale, now, &mut self.hover_oracle, pane, pad);
+-        let wants_cursor = self.pixel_mouse && self.hover_oracle.wants_cursor(now);
++        let wants_cursor = self.term.reports_pixel_mouse() && self.hover_oracle.wants_cursor(now);
+         if let Some(native) = &mut self.native {
+             native.request_positions(wants_cursor);
+         }
+-- 
+2.50.1 (Apple Git-155)
+

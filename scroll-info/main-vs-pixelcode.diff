@@ -1,0 +1,1398 @@
+diff --git a/pixel/engine/crates/pixel-core/src/engine/mod.rs b/pixel/engine/crates/pixel-core/src/engine/mod.rs
+index dbea6217..e0821d56 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/mod.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/mod.rs
+@@ -105,6 +105,24 @@ impl ChangeSource {
+     }
+ }
+ 
++// What a left click that didn't drag landed on: an input, something clickable or draggable, or plain content.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum TapTarget {
++    Input,
++    Control,
++    Content,
++}
++
++impl TapTarget {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            TapTarget::Input => "input",
++            TapTarget::Control => "control",
++            TapTarget::Content => "content",
++        }
++    }
++}
++
+ #[derive(Debug, Clone, PartialEq)]
+ pub enum EngineEvent {
+     HostClosed,
+@@ -115,6 +133,11 @@ pub enum EngineEvent {
+     Visible {
+         visible: bool,
+     },
++    Viewport {
++        view: usize,
++        node: NodeId,
++        near: bool,
++    },
+     Click {
+         view: usize,
+         node: NodeId,
+@@ -135,6 +158,12 @@ pub enum EngineEvent {
+         x: f32,
+         y: f32,
+     },
++    Tap {
++        view: usize,
++        x: f32,
++        y: f32,
++        target: TapTarget,
++    },
+     Change {
+         view: usize,
+         node: NodeId,
+@@ -177,6 +206,9 @@ pub enum EngineEvent {
+         colors: TerminalColors,
+     },
+     Devtools,
++    Osc {
++        data: String,
++    },
+     Inspect {
+         view: usize,
+         node: NodeId,
+@@ -266,6 +298,10 @@ pub enum EngineEvent {
+     },
+     Log(logging::LogEntry),
+     Profile(ProfileData),
++    FrameDone {
++        id: u64,
++        error: Option<String>,
++    },
+ }
+ 
+ #[derive(Debug, Clone, Copy, Default)]
+@@ -298,14 +334,10 @@ pub struct Engine {
+     term_focused: bool,
+     pub native: Option<NativeScroll>,
+     pub use_native: bool,
+-    pixel_mouse: bool,
+     last_native_scroll: Option<Instant>,
+     pairing: NativePairing,
+     hover_oracle: HoverOracle,
+     pub profile: &'static dyn ScrollProfile,
+-    pub(super) last_wheel_tick:
+-        Option<(Instant, crate::terminal::MouseKind, u32, u32, crate::terminal::Mods)>,
+-    pub(super) wheel_echo_consumed: bool,
+     default_menu: bool,
+     menu: MenuController,
+     inspect_mode: bool,
+@@ -318,6 +350,7 @@ pub struct Engine {
+     log_cursor: u64,
+     drag: Option<(usize, DragTarget)>,
+     pending_click: Option<(usize, NodeId)>,
++    pending_tap: Option<(usize, (f32, f32), TapTarget)>,
+     pointer_capture: Option<(usize, NodeId)>,
+     key_passthrough: bool,
+     last_selection: Option<(
+@@ -349,6 +382,7 @@ pub struct Engine {
+     last_frame: Instant,
+     last_frame_bytes: usize,
+     frame_deferred: bool,
++    frame_waits: Vec<(u64, Option<std::path::PathBuf>)>,
+     max_fps: f32,
+     frame_due: Option<Instant>,
+     pub stats: FrameStats,
+@@ -386,7 +420,6 @@ impl Engine {
+             NativeScroll::spawn(term.waker().ok())
+         };
+         let use_native = native.is_some();
+-        let pixel_mouse = term.reports_pixel_mouse();
+         logging::info(
+             "engine",
+             format!(
+@@ -420,13 +453,10 @@ impl Engine {
+             term_focused: true,
+             native,
+             use_native,
+-            pixel_mouse,
+             last_native_scroll: None,
+             pairing: NativePairing::new(),
+             hover_oracle: HoverOracle::new(),
+             profile: &DEFAULT_PROFILE,
+-            last_wheel_tick: None,
+-            wheel_echo_consumed: false,
+             default_menu: false,
+             menu: MenuController::default(),
+             inspect_mode: false,
+@@ -439,6 +469,7 @@ impl Engine {
+             log_cursor: 0,
+             drag: None,
+             pending_click: None,
++            pending_tap: None,
+             pointer_capture: None,
+             key_passthrough: false,
+             last_selection: None,
+@@ -464,6 +495,7 @@ impl Engine {
+             last_frame: Instant::now(),
+             last_frame_bytes: 0,
+             frame_deferred: false,
++            frame_waits: Vec::new(),
+             max_fps,
+             frame_due: None,
+             stats: FrameStats::default(),
+@@ -626,6 +658,18 @@ impl Engine {
+         self.focus_view = view;
+     }
+ 
++    // Like the DOM's element.blur(), only takes focus away from the node if it has it.
++    pub fn blur(&mut self, view: usize, id: NodeId) {
++        if self.focused() == Some((view, id)) {
++            self.set_focus(view, None);
++        }
++    }
++
++    // An input left focused under a modal keeps its focus but gets no keys or pastes until the modal closes.
++    fn live_focus(&self) -> Option<(usize, NodeId)> {
++        self.focused().filter(|&(view, id)| !self.comp.views[view].tree.inert(id))
++    }
++
+     fn focused(&self) -> Option<(usize, NodeId)> {
+         self.comp.views[self.focus_view]
+             .tree
+@@ -645,7 +689,8 @@ impl Engine {
+             Some(due.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)))
+         } else if self.animating() || self.frame_deferred {
+             Some(Duration::from_millis(6))
+-        } else if !out_empty {
++        } else if !out_empty || !self.pending.is_empty() {
++            // A frame can finish a wait (`after_frame`), and that answer shouldn't sit until the next input.
+             Some(Duration::ZERO)
+         } else {
+             wait
+@@ -729,6 +774,7 @@ impl Engine {
+         if !input_pending || self.last_frame.elapsed() >= PAINT_INTERVAL_WITH_INPUT_PENDING {
+             self.frame()?;
+         }
++        self.emit_viewport_events(&mut out);
+         self.sync_pointer_shape();
+         self.drain_logs(&mut out);
+         Ok(out)
+@@ -911,7 +957,6 @@ impl Engine {
+             NativeScroll::spawn(self.term.waker().ok())
+         };
+         self.use_native = self.native.is_some();
+-        self.pixel_mouse = self.term.reports_pixel_mouse();
+         let colors = self.term.query_colors()?;
+         let mut out = Vec::new();
+         self.apply_colors(colors, &mut out);
+@@ -946,7 +991,7 @@ impl Engine {
+                 crate::profiler::mark("paste", self.active_view as u32, || {
+                     format!("paste ({} chars)", text.chars().count())
+                 });
+-                if let Some((view, focus)) = self.focused() {
++                if let Some((view, focus)) = self.live_focus() {
+                     if let Some(image) = crate::clipboard_image::image_path_from_paste(&text) {
+                         self.push_paste_image(view, focus, image, out);
+                     } else {
+@@ -1027,6 +1072,7 @@ impl Engine {
+             Event::Colors(colors) => self.apply_colors(colors, out),
+             Event::Devtools => out.push(EngineEvent::Devtools),
+             Event::Visible(visible) => out.push(EngineEvent::Visible { visible }),
++            Event::Osc(data) => out.push(EngineEvent::Osc { data }),
+         }
+         self.emit_selection_change(out);
+         Ok(())
+@@ -1038,6 +1084,12 @@ impl Engine {
+         }
+     }
+ 
++    pub fn write_terminal(&mut self, data: &str) {
++        if let Err(error) = self.term.write_raw(data) {
++            logging::warn("engine", format!("terminal write failed: {error}"));
++        }
++    }
++
+     pub fn set_title(&mut self, text: &str) {
+         if let Err(error) = self.term.set_title(text) {
+             logging::warn("engine", format!("title write failed: {error}"));
+diff --git a/pixel/engine/crates/pixel-core/src/engine/pointer.rs b/pixel/engine/crates/pixel-core/src/engine/pointer.rs
+index a438dba6..f705a814 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/pointer.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/pointer.rs
+@@ -1,13 +1,11 @@
+ use std::io;
+ use std::time::Instant;
+ 
+-use super::{DragPhase, Engine, EngineEvent};
++use super::{DragPhase, Engine, EngineEvent, TapTarget};
+ use crate::menu::MenuClick;
+ use crate::terminal::{Mods, Mouse, MouseButton, MouseKind};
+ use crate::tree::{HitTarget, NodeId};
+ 
+-const WHEEL_ECHO_WINDOW: std::time::Duration = std::time::Duration::from_millis(2);
+-
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(super) enum DragTarget {
+     Input(NodeId),
+@@ -36,29 +34,9 @@ impl Engine {
+                 | MouseKind::ScrollLeft
+                 | MouseKind::ScrollRight
+         );
+-        // this is a weird case that I observed where inside kitty 2 scroll events
+-        // were being emitted per scroll tick. This is very suspicious and makes me
+-        // suspicious that something else was the casue of this, but this is a temporary
+-        // work around for now
+-        if scrolling {
+-            let echo = !self.wheel_echo_consumed
+-                && self.last_wheel_tick.is_some_and(|(at, kind, x, y, mods)| {
+-                    kind == mouse.kind
+-                        && x == mouse.x
+-                        && y == mouse.y
+-                        && mods == mouse.mods
+-                        && now.duration_since(at) < WHEEL_ECHO_WINDOW
+-                });
+-            if echo {
+-                self.wheel_echo_consumed = true;
+-                return Ok(());
+-            }
+-            self.wheel_echo_consumed = false;
+-            self.last_wheel_tick = Some((now, mouse.kind, mouse.x, mouse.y, mouse.mods));
+-        }
+         if self.use_native && self.native.is_some() {
+             self.ingest_native();
+-            let located = self.pixel_mouse.then_some(point);
++            let located = self.term.reports_pixel_mouse().then_some(point);
+             if scrolling && mouse.mods == Mods::default() {
+                 if self
+                     .pairing
+@@ -83,6 +61,7 @@ impl Engine {
+         match mouse.kind {
+             MouseKind::Down if mouse.button == MouseButton::Left => {
+                 self.pending_click = None;
++                self.pending_tap = None;
+                 self.mark_pointer("click", point);
+                 if self.handle_menu_click(point, out)? {
+                     return Ok(());
+@@ -135,6 +114,7 @@ impl Engine {
+                         !covered
+                     });
+                 if let Some(id) = drag_node {
++                    self.pending_tap = Some((view, point, TapTarget::Control));
+                     self.drag = Some((view, DragTarget::Node(id)));
+                     out.push(EngineEvent::Drag {
+                         view,
+@@ -147,7 +127,14 @@ impl Engine {
+                     });
+                     return Ok(());
+                 }
+-                let node = match self.comp.views[view].tree.hit_target(local.0, local.1) {
++                let hit = self.comp.views[view].tree.hit_target(local.0, local.1);
++                let target = match hit {
++                    Some(HitTarget::Input(_)) => TapTarget::Input,
++                    Some(HitTarget::Click(_)) => TapTarget::Control,
++                    _ => TapTarget::Content,
++                };
++                self.pending_tap = Some((view, point, target));
++                let node = match hit {
+                     Some(HitTarget::Input(id)) => {
+                         self.clear_doc_selections(None);
+                         self.set_focus(view, Some(id));
+@@ -172,6 +159,7 @@ impl Engine {
+             }
+             MouseKind::Down if mouse.button == MouseButton::Right => {
+                 self.pending_click = None;
++                self.pending_tap = None;
+                 self.mark_pointer("right-click", point);
+                 self.close_menu();
+                 if self.comp.on_divider(point.0) {
+@@ -218,7 +206,19 @@ impl Engine {
+                     self.bar_hover = bar_hover;
+                     self.comp.views[view].tree.mark_paint();
+                 }
+-                self.track_hover(view, local);
++                let hover = self.comp.views[view]
++                    .tree
++                    .hover_at(local.0, local.1)
++                    .map(|id| (view, id));
++                if hover != self.hover {
++                    if let Some((old, _)) = self.hover {
++                        self.comp.views[old].tree.mark_paint();
++                    }
++                    if let Some((new, _)) = hover {
++                        self.comp.views[new].tree.mark_paint();
++                    }
++                    self.hover = hover;
++                }
+                 self.update_hover_target(view, local, out);
+                 if let Some(id) = self.comp.views[view].tree.hit_move(local.0, local.1) {
+                     out.push(EngineEvent::MouseMove {
+@@ -291,6 +291,19 @@ impl Engine {
+                         });
+                     }
+                 }
++                if mouse.button == MouseButton::Left
++                    && let Some((view, start, target)) = self.pending_tap.take()
++                    && (point.0 - start.0).abs() <= self.cell.0 as f32
++                    && (point.1 - start.1).abs() <= self.cell.1 as f32 / 2.0
++                {
++                    let local = self.comp.to_local(view, point);
++                    out.push(EngineEvent::Tap {
++                        view,
++                        x: local.0,
++                        y: local.1,
++                        target,
++                    });
++                }
+                 if let Some((view, target)) = self.drag.take() {
+                     match target {
+                         DragTarget::Input(id) => {
+@@ -438,7 +451,9 @@ impl Engine {
+             precise,
+             mods,
+         });
+-        true
++        // A scrolling node's own onWheel only observes its scrolling; any other
++        // wheel listener takes the wheel from the scroll areas under it.
++        tree.scroll_area(node).is_none()
+     }
+ 
+     fn mark_pointer(&mut self, name: &'static str, point: (f32, f32)) {
+@@ -531,21 +546,4 @@ impl Engine {
+         }
+         Ok(true)
+     }
+-
+-    pub(super) fn track_hover(&mut self, view: usize, local: (f32, f32)) {
+-        let hover = self.comp.views[view]
+-            .tree
+-            .hover_at(local.0, local.1)
+-            .map(|id| (view, id));
+-        if hover == self.hover {
+-            return;
+-        }
+-        if let Some((old, _)) = self.hover {
+-            self.comp.views[old].tree.mark_paint();
+-        }
+-        if let Some((new, _)) = hover {
+-            self.comp.views[new].tree.mark_paint();
+-        }
+-        self.hover = hover;
+-    }
+ }
+diff --git a/pixel/engine/crates/pixel-core/src/engine/scroll.rs b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+index b2a2a95b..b6521bc0 100644
+--- a/pixel/engine/crates/pixel-core/src/engine/scroll.rs
++++ b/pixel/engine/crates/pixel-core/src/engine/scroll.rs
+@@ -23,7 +23,8 @@ impl Engine {
+     pub(super) fn bar_at(&self, view: usize, point: (f32, f32)) -> Option<NodeId> {
+         let tree = &self.comp.views[view].tree;
+         tree.scroll_nodes().into_iter().rev().find(|&id| {
+-            tree.bar_opacity(id) > 0.1
++            !tree.inert(id)
++                && tree.bar_opacity(id) > 0.1
+                 && tree
+                     .scrollbar_rects(id)
+                     .is_some_and(|r| r.zone.contains(point.0, point.1))
+@@ -110,6 +111,14 @@ impl Engine {
+         }
+     }
+ 
++    pub(super) fn emit_viewport_events(&mut self, out: &mut Vec<EngineEvent>) {
++        for view in self.comp.active_views() {
++            for (node, near) in self.comp.views[view].tree.take_viewport_changes() {
++                out.push(EngineEvent::Viewport { view, node, near });
++            }
++        }
++    }
++
+     pub fn scroll_into_view(&mut self, view: usize, id: NodeId, smooth: bool) {
+         if view >= self.comp.views.len() {
+             return;
+@@ -189,7 +198,7 @@ impl Engine {
+         let (pane, pad) = self.pane_extent();
+         self.pairing
+             .ingest(events, scale, now, &mut self.hover_oracle, pane, pad);
+-        let wants_cursor = self.pixel_mouse && self.hover_oracle.wants_cursor(now);
++        let wants_cursor = self.term.reports_pixel_mouse() && self.hover_oracle.wants_cursor(now);
+         if let Some(native) = &mut self.native {
+             native.request_positions(wants_cursor);
+         }
+@@ -238,18 +247,13 @@ impl Engine {
+             logging::info("engine", "native scroll delivering");
+         }
+         self.last_native_scroll = Some(Instant::now());
+-        if self.comp.views[view]
+-            .tree
+-            .hit_wheel(local.0, local.1)
+-            .is_some()
+-        {
+-            let mut delta_x = 0.0;
+-            let mut delta_y = 0.0;
+-            for (dx, dy) in &scrolls {
+-                delta_x -= dx;
+-                delta_y -= dy;
+-            }
+-            self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out);
++        let mut delta_x = 0.0;
++        let mut delta_y = 0.0;
++        for (dx, dy) in &scrolls {
++            delta_x -= dx;
++            delta_y -= dy;
++        }
++        if self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out) {
+             return;
+         }
+         let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) else {
+diff --git a/pixel/engine/crates/pixel-core/src/terminal.rs b/pixel/engine/crates/pixel-core/src/terminal.rs
+index 7670827a..ea3a9bbf 100644
+--- a/pixel/engine/crates/pixel-core/src/terminal.rs
++++ b/pixel/engine/crates/pixel-core/src/terminal.rs
+@@ -13,6 +13,7 @@ mod present;
+ use payload::Payloads;
+ 
+ use present::{Identity, Presenter};
++pub(crate) use present::straight_pixels;
+ 
+ #[derive(Debug, Clone, PartialEq)]
+ pub enum Event {
+@@ -39,6 +40,8 @@ pub enum Event {
+     ColorSchemeChanged,
+     Colors(TerminalColors),
+     Devtools,
++    // An OSC the terminal sent that pixel doesn't handle itself, without `ESC ]` and the terminator.
++    Osc(String),
+ }
+ 
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -281,6 +284,7 @@ pub struct Terminal {
+     last_frame_size: Option<(u32, u32)>,
+     pointer_shape_written: bool,
+     mouse_pixels: bool,
++    pixel_mouse_pending: bool,
+     focused: bool,
+     cell: Option<(u32, u32)>,
+     pending: Vec<u8>,
+@@ -516,7 +520,11 @@ impl Terminal {
+             terminal.io.out().write_all(b"\x1b[>4;2m")?;
+             terminal.io.out().flush()?;
+         }
+-        terminal.mouse_pixels = !wrapper.relayed() && terminal.probe_mouse_pixels()?;
++        // Over a slow link the answer can arrive after the probe gives up; cells are
++        // used until then and a late "yes" switches to pixels (adopt_pixel_mouse).
++        let pixels = if wrapper.relayed() { Some(false) } else { terminal.probe_mouse_pixels()? };
++        terminal.mouse_pixels = pixels == Some(true);
++        terminal.pixel_mouse_pending = pixels.is_none();
+         if !terminal.mouse_pixels {
+             terminal.io.out().write_all(b"\x1b[?1016l\x1b[?1006h")?;
+             terminal.io.out().flush()?;
+@@ -551,6 +559,7 @@ impl Terminal {
+             last_frame_size: None,
+             pointer_shape_written: false,
+             mouse_pixels: false,
++            pixel_mouse_pending: false,
+             focused: true,
+             cell: None,
+             pending: Vec::new(),
+@@ -960,7 +969,16 @@ impl Terminal {
+                         self.cell = Some(cell);
+                         Event::CellSize(cell)
+                     }
++                    RawEvent::MousePixels(pixels) => {
++                        if pixels && self.pixel_mouse_pending {
++                            self.adopt_pixel_mouse()?;
++                        }
++                        continue;
++                    }
+                     RawEvent::Mouse(kind, button, mods, x, y) => {
++                        if self.herdr.is_none() {
++                            self.notice_pixel_mouse(x, y);
++                        }
+                         let (x, y) = match &self.herdr {
+                             Some(herdr) => herdr.mouse_position_px(
+                                 kind,
+@@ -989,6 +1007,7 @@ impl Terminal {
+                         Some(colors) => Event::Colors(colors),
+                         None => continue,
+                     },
++                    RawEvent::Osc(body) => Event::Osc(body),
+                 }));
+             }
+             let escape_deadline = self.lone_escape_deadline();
+@@ -1173,6 +1192,28 @@ impl Terminal {
+         }
+     }
+ 
++    fn adopt_pixel_mouse(&mut self) -> io::Result<()> {
++        self.pixel_mouse_pending = false;
++        self.mouse_pixels = true;
++        self.io.out().write_all(b"\x1b[?1016h")?;
++        self.io.out().flush()
++    }
++
++    // A cell report can't point past the grid, so one that does is in pixels
++    // (e.g. sent before the terminal saw 1016 go off).
++    fn notice_pixel_mouse(&mut self, x: u32, y: u32) {
++        if self.mouse_pixels {
++            return;
++        }
++        if let Ok(ws) = self.size()
++            && ws.cols > 0
++            && ws.rows > 0
++            && (x > ws.cols || y > ws.rows)
++        {
++            self.mouse_pixels = true;
++        }
++    }
++
+     fn mouse_position_px(&self, x: u32, y: u32) -> (u32, u32) {
+         if self.mouse_pixels {
+             (x.saturating_sub(1), y.saturating_sub(1))
+@@ -1293,10 +1334,10 @@ impl Terminal {
+         Ok(self.read_report(150, parse_kitty_keyboard)?.unwrap_or(false))
+     }
+ 
+-    fn probe_mouse_pixels(&mut self) -> io::Result<bool> {
++    fn probe_mouse_pixels(&mut self) -> io::Result<Option<bool>> {
+         self.io.out().write_all(b"\x1b[?1016$p")?;
+         self.io.out().flush()?;
+-        Ok(self.read_report(150, parse_decrqm_1016)?.unwrap_or(false))
++        self.read_report(150, parse_decrqm_1016)
+     }
+ 
+     fn probe_clipboard_data(&mut self) -> io::Result<bool> {
+@@ -1371,6 +1412,9 @@ impl Terminal {
+                 return Ok(None);
+             }
+             buf.extend_from_slice(&chunk[..n]);
++            if self.pixel_mouse_pending && parse_decrqm_1016(&buf) == Some(true) {
++                self.adopt_pixel_mouse()?;
++            }
+             if let Some(value) = parse(&buf) {
+                 return Ok(Some(value));
+             }
+@@ -1415,6 +1459,15 @@ impl Terminal {
+         self.io.out().flush()
+     }
+ 
++    // Hosted panes share someone else's terminal, so raw bytes are dropped there.
++    pub fn write_raw(&mut self, data: &str) -> io::Result<()> {
++        if self.hosted.is_some() {
++            return Ok(());
++        }
++        self.io.out().write_all(data.as_bytes())?;
++        self.io.out().flush()
++    }
++
+     pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+         if self.hosted.is_some() {
+             return self.host_send(crate::hosted::clipboard(text));
+@@ -1746,6 +1799,8 @@ enum RawEvent {
+     Clip(ClipPacket),
+     Color(ColorSlot, [u8; 4]),
+     ColorSchemeChanged,
++    MousePixels(bool),
++    Osc(String),
+ }
+ 
+ #[derive(Debug, PartialEq, Eq)]
+@@ -1835,7 +1890,10 @@ fn parse_event_kitty(buf: &[u8], kitty_active: bool) -> Option<(RawEvent, usize)
+                 Some(text) => (RawEvent::Paste(text), end),
+                 None => match parse_osc_color_reply(&buf[..end]) {
+                     Some((slot, rgba)) => (RawEvent::Color(slot, rgba), end),
+-                    None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
++                    None => match osc_body(&buf[..end]) {
++                        Some(body) => (RawEvent::Osc(body), end),
++                        None => (RawEvent::Key(KeyEvent::plain(Key::Unknown)), end),
++                    },
+                 },
+             })
+         }
+@@ -2087,6 +2145,9 @@ fn parse_csi(buf: &[u8]) -> Option<(RawEvent, usize)> {
+             (None, Some(cell)) => RawEvent::CellSize(cell),
+             (None, None) => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
+         },
++        b'y' if params.starts_with(b"?1016;") => {
++            RawEvent::MousePixels(parse_decrqm_1016(&buf[..end]) == Some(true))
++        }
+         // `CSI ? 997 ; 1 n` — the terminal's palette changed under us.
+         b'n' if params.starts_with(b"?997") => RawEvent::ColorSchemeChanged,
+         _ => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
+@@ -2245,6 +2306,18 @@ fn associated_text(params: &[u8]) -> Option<String> {
+     (!text.is_empty()).then_some(text)
+ }
+ 
++fn osc_body(seq: &[u8]) -> Option<String> {
++    let body = seq.strip_prefix(b"\x1b]")?;
++    let body = body
++        .strip_suffix(b"\x07")
++        .or_else(|| body.strip_suffix(b"\x1b\\"))?;
++    // Clipboard traffic, including a terminal echoing our own query, stays inside pixel.
++    if body.starts_with(b"52;") {
++        return None;
++    }
++    String::from_utf8(body.to_vec()).ok()
++}
++
+ fn consume_string_sequence(buf: &[u8]) -> Option<usize> {
+     let mut i = 2;
+     loop {
+@@ -2637,6 +2710,37 @@ mod tests {
+         assert_eq!(parse_event(b"\x1bOA"), Some((key(Key::Up), 3)));
+     }
+ 
++    #[test]
++    fn parses_a_burst_of_sgr_pixel_wheel_ticks_from_one_read() {
++        let mut buf = b"\x1b[<64;575;692M".repeat(3);
++        buf.extend_from_slice(&b"\x1b[<65;575;692M".repeat(2));
++        let mut rest = &buf[..];
++        let mut kinds = Vec::new();
++        while let Some((event, used)) = parse_event(rest) {
++            let RawEvent::Mouse(kind, _, mods, x, y) = event else {
++                panic!("not a mouse event: {event:?}");
++            };
++            assert_eq!((mods, x, y), (Mods::default(), 575, 692));
++            kinds.push(kind);
++            rest = &rest[used..];
++        }
++        assert!(rest.is_empty());
++        use MouseKind::{ScrollDown as D, ScrollUp as U};
++        assert_eq!(kinds, [U, U, U, D, D]);
++    }
++
++    #[test]
++    fn a_late_1016_mode_report_is_read_from_the_input_stream() {
++        assert_eq!(
++            parse_event(b"\x1b[?1016;1$yx"),
++            Some((RawEvent::MousePixels(true), 11))
++        );
++        assert_eq!(
++            parse_event(b"\x1b[?1016;0$y"),
++            Some((RawEvent::MousePixels(false), 11))
++        );
++    }
++
+     #[test]
+     fn terminal_reply_strings_never_leak_as_keystrokes() {
+         // xterm.js < May 2026 replies OK to every transmission despite q=2.
+@@ -2656,6 +2760,19 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn unhandled_osc_replies_reach_the_app() {
++        assert_eq!(
++            parse_event(b"\x1b]7717;keyboard=1;accessory=1\x07x"),
++            Some((RawEvent::Osc("7717;keyboard=1;accessory=1".into()), 30))
++        );
++        assert_eq!(
++            parse_event(b"\x1b]7717;keyboard=1\x1b\\"),
++            Some((RawEvent::Osc("7717;keyboard=1".into()), 19))
++        );
++        assert_eq!(parse_event(b"\x1b]7717;keyb"), None, "reply mid-arrival");
++    }
++
+     #[test]
+     fn reads_color_replies_for_every_slot_and_leaves_the_next_keystroke_alone() {
+         assert_eq!(
+@@ -2939,7 +3056,7 @@ mod tty_tests {
+             (None, Wrapper::Tmux),
+         ] {
+             let (master, _slave, path) = open_pty();
+-            let _terminal = fake_terminal_answering_1016(&master, reply);
++            let _terminal = fake_terminal_answering_1016(&master, reply, Duration::ZERO);
+             let mut term = open(&path, wrapper);
+             term.cell = Some((8, 16));
+             term.io.out().write_all(b"\x1b[5n").unwrap();
+@@ -2958,6 +3075,26 @@ mod tty_tests {
+         }
+     }
+ 
++    #[test]
++    fn a_1016_answer_that_arrives_late_still_switches_to_pixels() {
++        let (master, _slave, path) = open_pty();
++        let _terminal =
++            fake_terminal_answering_1016(&master, Some(b"\x1b[?1016;1$y"), Duration::from_millis(400));
++        let mut term = open(&path, Wrapper::None);
++        term.cell = Some((8, 16));
++        assert!(!term.reports_pixel_mouse(), "no answer yet: cells");
++        let _ = term.poll_event(Some(Duration::from_millis(600))).unwrap();
++        assert!(term.reports_pixel_mouse(), "the late answer was read from the input stream");
++        term.io.out().write_all(b"\x1b[5n").unwrap();
++        term.io.out().flush().unwrap();
++        let event = term.poll_event(Some(Duration::from_millis(500))).unwrap();
++        assert!(term.reports_pixel_mouse());
++        assert!(
++            matches!(event, Some(Event::Mouse(Mouse { x: 484, y: 328, .. }))),
++            "{event:?}"
++        );
++    }
++
+     fn open_pty() -> (std::fs::File, std::fs::File, String) {
+         let mut master: libc::c_int = 0;
+         let mut slave: libc::c_int = 0;
+@@ -2987,12 +3124,13 @@ mod tty_tests {
+     }
+ 
+     fn fake_terminal(master: &std::fs::File) -> std::thread::JoinHandle<()> {
+-        fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"))
++        fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"), Duration::ZERO)
+     }
+ 
+     fn fake_terminal_answering_1016(
+         master: &std::fs::File,
+         mode_1016: Option<&'static [u8]>,
++        mode_1016_delay: Duration,
+     ) -> std::thread::JoinHandle<()> {
+         let mut master = master.try_clone().unwrap();
+         std::thread::spawn(move || {
+@@ -3009,6 +3147,14 @@ mod tty_tests {
+                     None
+                 } else if seen.ends_with(b"\x1b[?u") {
+                     Some(b"\x1b[?0u".to_vec())
++                } else if seen.ends_with(b"\x1b[?1016$p") && !mode_1016_delay.is_zero() {
++                    let mut late = master.try_clone().unwrap();
++                    let reply = mode_1016.unwrap_or_default();
++                    std::thread::spawn(move || {
++                        std::thread::sleep(mode_1016_delay);
++                        late.write_all(reply).unwrap();
++                    });
++                    None
+                 } else if seen.ends_with(b"\x1b[?1016$p") {
+                     mode_1016.map(<[u8]>::to_vec)
+                 } else if seen.ends_with(b"\x1b[?5522$p") {
+diff --git a/pixel/engine/crates/pixel-core/src/tree/mod.rs b/pixel/engine/crates/pixel-core/src/tree/mod.rs
+index 4aa2d092..909126b3 100644
+--- a/pixel/engine/crates/pixel-core/src/tree/mod.rs
++++ b/pixel/engine/crates/pixel-core/src/tree/mod.rs
+@@ -1,6 +1,7 @@
+ mod layout;
+ 
+ use std::collections::{HashMap, HashSet};
++use std::ops::Range;
+ use std::time::Instant;
+ 
+ use taffy::TaffyTree;
+@@ -70,6 +71,14 @@ impl PxRect {
+             h: ((self.y + self.h).min(other.y + other.h) - y).max(0.0),
+         }
+     }
++    pub fn intersects(&self, other: PxRect) -> bool {
++        let cut = self.intersect(other);
++        cut.w > 0.0 && cut.h > 0.0
++    }
++
++    pub fn outset(&self, by: f32) -> PxRect {
++        PxRect { x: self.x - by, y: self.y - by, w: self.w + 2.0 * by, h: self.h + 2.0 * by }
++    }
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Default)]
+@@ -200,9 +209,11 @@ pub struct Props {
+     pub pointer_events: bool,
+     pub hover_events: bool,
+     pub outside_click_events: bool,
++    pub modal: bool,
+     pub drag_events: bool,
+     pub selection_events: bool,
+     pub move_events: bool,
++    pub viewport_margin: Option<f32>,
+     pub spans: Vec<TextSpan>,
+ }
+ 
+@@ -257,9 +268,12 @@ pub(crate) struct RNode {
+     pub pointer_events: bool,
+     pub hover_events: bool,
+     pub outside_click_events: bool,
++    pub modal: bool,
+     pub drag_events: bool,
+     pub selection_events: bool,
+     pub move_events: bool,
++    pub viewport_margin: Option<f32>,
++    pub near_viewport: Option<bool>,
+     pub spans: Vec<TextSpan>,
+     pub last_scroll_emit: f32,
+     pub bar: BarState,
+@@ -298,7 +312,10 @@ pub struct Tree {
+     image_slot_parents: Vec<NodeId>,
+     mark_parents: Vec<NodeId>,
+     paint_order: Vec<NodeId>,
++    // The topmost modal node and the slice of paint order its subtree covers. Everything outside it is inert.
++    modal: Option<(NodeId, Range<usize>)>,
+     scrollables: Vec<NodeId>,
++    viewport_watch: Vec<NodeId>,
+     focus: Option<NodeId>,
+     doc: DocSelectionState,
+     base_px: f32,
+@@ -335,7 +352,9 @@ impl Tree {
+             image_slot_parents: Vec::new(),
+             mark_parents: Vec::new(),
+             paint_order: Vec::new(),
++            modal: None,
+             scrollables: Vec::new(),
++            viewport_watch: Vec::new(),
+             focus: None,
+             doc: DocSelectionState::default(),
+             base_px: 16.0,
+@@ -465,9 +484,12 @@ impl Tree {
+             pointer_events: props.pointer_events,
+             hover_events: props.hover_events,
+             outside_click_events: props.outside_click_events,
++            modal: props.modal,
+             drag_events: props.drag_events,
+             selection_events: props.selection_events,
+             move_events: props.move_events,
++            viewport_margin: props.viewport_margin,
++            near_viewport: None,
+             spans: props.spans,
+             last_scroll_emit: 0.0,
+             bar: BarState::default(),
+@@ -500,6 +522,9 @@ impl Tree {
+         if let Some(key) = props.key {
+             self.keys.insert(key, id);
+         }
++        if props.viewport_margin.is_some() {
++            self.viewport_watch.push(id);
++        }
+         if props.input.as_ref().is_some_and(|p| p.auto_focus) {
+             self.focus = Some(id);
+         }
+@@ -609,10 +634,17 @@ impl Tree {
+         node.pointer_events = props.pointer_events;
+         node.hover_events = props.hover_events;
+         node.outside_click_events = props.outside_click_events;
++        let modal_changed = node.modal != props.modal;
++        node.modal = props.modal;
+         node.drag_events = props.drag_events;
+         node.selection_events = props.selection_events;
+         node.move_events = props.move_events;
+-        let mut place_changed = false;
++        node.viewport_margin = props.viewport_margin;
++        if props.viewport_margin.is_some() && !self.viewport_watch.contains(&id) {
++            self.viewport_watch.push(id);
++        }
++        let node = self.node_mut(id);
++        let mut place_changed = modal_changed;
+         if node.shape != props.shape {
+             node.shape = props.shape;
+             changed = true;
+@@ -859,6 +891,46 @@ impl Tree {
+         }
+     }
+ 
++    // A node is near the viewport while its rect, grown by its margin, overlaps what its scroll area shows.
++    pub(crate) fn take_viewport_changes(&mut self) -> Vec<(NodeId, bool)> {
++        let mut changes = Vec::new();
++        let mut watched = std::mem::take(&mut self.viewport_watch);
++        watched.retain(|&id| self.get(id).is_some_and(|node| node.viewport_margin.is_some()));
++        for &id in &watched {
++            let near = self.near_viewport(id);
++            let node = self.node_mut(id);
++            if node.near_viewport != Some(near) {
++                node.near_viewport = Some(near);
++                changes.push((id, near));
++            }
++        }
++        self.viewport_watch = watched;
++        changes
++    }
++
++    fn near_viewport(&self, id: NodeId) -> bool {
++        let Some(node) = self.get(id) else {
++            return false;
++        };
++        let margin = node.viewport_margin.unwrap_or(0.0);
++        let Some(rect) = self.rect(id).filter(|r| r.w > 0.0 && r.h > 0.0) else {
++            return false;
++        };
++        let mut area = self.get(self.root).map_or(PxRect::ZERO, |root| root.visible);
++        let mut current = node.parent;
++        while let Some(ancestor) = current {
++            let Some(parent) = self.get(ancestor) else {
++                break;
++            };
++            if parent.style.overflow == Overflow::Scroll {
++                area = parent.visible;
++                break;
++            }
++            current = parent.parent;
++        }
++        rect.outset(margin).intersects(area)
++    }
++
+     pub(crate) fn take_scroll_emit(&mut self, id: NodeId) -> Option<(Option<String>, f32, f32)> {
+         let node = self.get(id)?;
+         if !node.scroll_events {
+@@ -1178,6 +1250,7 @@ impl Tree {
+ 
+     fn place(&mut self, fonts: &[crate::fonts::Font]) {
+         self.paint_order.clear();
++        self.modal = None;
+         self.scrollables.clear();
+         let layout = self
+             .taffy
+@@ -1246,7 +1319,8 @@ impl Tree {
+             }
+             self.scrollables.push(id);
+         }
+-        self.node_mut(id).order = self.paint_order.len() as u32;
++        let start = self.paint_order.len();
++        self.node_mut(id).order = start as u32;
+         self.paint_order.push(id);
+ 
+         let node = self.node(id);
+@@ -1297,6 +1371,27 @@ impl Tree {
+                 (None, _) => self.place_node(child, child_origin, child_clip, fonts),
+             }
+         }
++        if self.node(id).modal && self.modal.as_ref().is_none_or(|(_, range)| start > range.start) {
++            self.modal = Some((id, start..self.paint_order.len()));
++        }
++    }
++
++    pub fn modal_root(&self) -> Option<NodeId> {
++        self.modal.as_ref().map(|(id, _)| *id)
++    }
++
++    // The nodes that can take input: all of them, or only the topmost modal and what it contains.
++    fn live_order(&self) -> &[NodeId] {
++        match &self.modal {
++            Some((_, range)) => &self.paint_order[range.clone()],
++            None => &self.paint_order,
++        }
++    }
++
++    pub fn inert(&self, id: NodeId) -> bool {
++        self.modal.as_ref().is_some_and(|(_, range)| {
++            self.get(id).is_none_or(|node| !range.contains(&(node.order as usize)))
++        })
+     }
+ 
+     fn mark_child_origin(
+@@ -1345,7 +1440,7 @@ impl Tree {
+     }
+ 
+     pub fn hit_wheel(&self, x: f32, y: f32) -> Option<NodeId> {
+-        self.paint_order.iter().rev().copied().find(|&id| {
++        self.live_order().iter().rev().copied().find(|&id| {
+             self.get(id)
+                 .is_some_and(|node| node.wheel_events && node.visible.contains(x, y))
+         })
+@@ -1353,7 +1448,7 @@ impl Tree {
+ 
+     // we may want to be more principled with event propagation than this
+     pub fn hit_pointer(&self, x: f32, y: f32) -> Option<NodeId> {
+-        for &id in self.paint_order.iter().rev() {
++        for &id in self.live_order().iter().rev() {
+             let Some(node) = self.get(id) else {
+                 continue;
+             };
+@@ -1371,7 +1466,7 @@ impl Tree {
+     }
+ 
+     pub fn hit_drag(&self, x: f32, y: f32) -> Option<NodeId> {
+-        self.paint_order.iter().rev().copied().find(|&id| {
++        self.live_order().iter().rev().copied().find(|&id| {
+             self.get(id)
+                 .is_some_and(|node| node.drag_events && node.visible.contains(x, y))
+         })
+@@ -1382,14 +1477,14 @@ impl Tree {
+     }
+ 
+     pub fn hit_move(&self, x: f32, y: f32) -> Option<NodeId> {
+-        self.paint_order.iter().rev().copied().find(|&id| {
++        self.live_order().iter().rev().copied().find(|&id| {
+             self.get(id)
+                 .is_some_and(|node| node.move_events && node.visible.contains(x, y))
+         })
+     }
+ 
+     pub fn hit_hover(&self, x: f32, y: f32) -> Option<NodeId> {
+-        self.paint_order.iter().rev().copied().find(|&id| {
++        self.live_order().iter().rev().copied().find(|&id| {
+             self.get(id)
+                 .is_some_and(|node| node.hover_events && node.visible.contains(x, y))
+         })
+@@ -1412,14 +1507,14 @@ impl Tree {
+     }
+ 
+     pub fn hit_any(&self, x: f32, y: f32) -> Option<NodeId> {
+-        self.paint_order.iter().rev().copied().find(|&id| {
++        self.live_order().iter().rev().copied().find(|&id| {
+             self.get(id)
+                 .is_some_and(|node| node.visible.w > 0.0 && node.visible.contains(x, y))
+         })
+     }
+ 
+     pub fn pointer_shape_at(&self, x: f32, y: f32) -> &str {
+-        let mut current = self.hit_any(x, y);
++        let mut current = self.hit_any(x, y).filter(|&id| !self.inert(id));
+         let mut over_text = false;
+         while let Some(id) = current {
+             let Some(node) = self.get(id) else {
+@@ -1443,14 +1538,14 @@ impl Tree {
+     }
+ 
+     pub fn hit_click(&self, x: f32, y: f32) -> Option<NodeId> {
+-        self.paint_order.iter().rev().copied().find(|&id| {
++        self.live_order().iter().rev().copied().find(|&id| {
+             self.get(id)
+                 .is_some_and(|node| node.clickable && node.visible.contains(x, y))
+         })
+     }
+ 
+     pub fn outside_click_targets(&self, x: f32, y: f32) -> Vec<NodeId> {
+-        self.paint_order
++        self.live_order()
+             .iter()
+             .copied()
+             .filter(|&id| {
+@@ -1461,7 +1556,7 @@ impl Tree {
+     }
+ 
+     pub fn hover_at(&self, x: f32, y: f32) -> Option<NodeId> {
+-        self.paint_order.iter().rev().copied().find(|&id| {
++        self.live_order().iter().rev().copied().find(|&id| {
+             self.get(id).is_some_and(|node| {
+                 (node.style.hover_background.is_some() || node.style.hover_color.is_some())
+                     && node.visible.contains(x, y)
+@@ -1470,7 +1565,7 @@ impl Tree {
+     }
+ 
+     pub fn hit_target(&self, x: f32, y: f32) -> Option<HitTarget> {
+-        for &id in self.paint_order.iter().rev() {
++        for &id in self.live_order().iter().rev() {
+             let Some(node) = self.get(id) else {
+                 continue;
+             };
+@@ -1492,11 +1587,14 @@ impl Tree {
+                 return Some(HitTarget::Input(input));
+             }
+         }
+-        None
++        // A click outside the modal lands on the modal itself, like a click on a dialog's backdrop.
++        self.modal_root()
++            .filter(|&id| self.get(id).is_some_and(|node| node.clickable))
++            .map(HitTarget::Click)
+     }
+ 
+     pub fn surface_at(&self, x: f32, y: f32) -> bool {
+-        self.paint_order.iter().rev().any(|&id| {
++        self.live_order().iter().rev().any(|&id| {
+             self.get(id)
+                 .is_some_and(|node| node.surface.is_some() && node.visible.contains(x, y))
+         })
+@@ -1555,7 +1653,7 @@ impl Tree {
+             .iter()
+             .rev()
+             .copied()
+-            .find(|&id| self.get(id).is_some_and(|node| node.visible.contains(x, y)))
++            .find(|&id| !self.inert(id) && self.get(id).is_some_and(|node| node.visible.contains(x, y)))
+             .and_then(|id| self.scroll_area(id))
+     }
+ 
+@@ -1846,7 +1944,7 @@ impl DocLayout for Tree {
+     }
+ 
+     fn paint_order(&self) -> &[NodeId] {
+-        &self.paint_order
++        self.live_order()
+     }
+ 
+     fn is_text_leaf(&self, id: NodeId) -> bool {
+@@ -1874,12 +1972,16 @@ impl DocLayout for Tree {
+     }
+ 
+     fn unified_ancestor(&self, id: NodeId) -> Option<NodeId> {
++        let modal = self.modal_root();
++        let mut inside_modal = false;
+         let mut current = Some(id);
+         while let Some(cur) = current {
+             let node = self.get(cur)?;
+             if node.style.selection_mode == SelectionMode::Unified {
+-                return Some(cur);
++                // Bands stay inside the modal rather than spreading over what it covers.
++                return Some(if inside_modal { modal? } else { cur });
+             }
++            inside_modal |= modal == Some(cur);
+             current = node.parent;
+         }
+         None
+@@ -1898,7 +2000,7 @@ impl DocLayout for Tree {
+     }
+ 
+     fn scope_at(&self, point: (f32, f32)) -> Option<NodeId> {
+-        self.paint_order
++        self.live_order()
+             .iter()
+             .rev()
+             .copied()
+diff --git a/pixel/packages/pixel/src/web/input.ts b/pixel/packages/pixel/src/web/input.ts
+index 3db48af9..b4035039 100644
+--- a/pixel/packages/pixel/src/web/input.ts
++++ b/pixel/packages/pixel/src/web/input.ts
+@@ -96,6 +96,12 @@ export class PageInput {
+     this.lastSentY = y;
+   }
+ 
++  // Mid-drag the page keeps the pointer, as a browser does.
++  leave() {
++    if (this.pressed.size > 0) return;
++    this.send({ type: "mouseLeave", x: this.lastX, y: this.lastY, modifiers: [] });
++  }
++
+   wheel(event: WheelEvent) {
+     this.syncFocus();
+     if (event.mods.ctrl && event.precise) {
+@@ -187,7 +193,9 @@ export class PageInput {
+     }
+     this.syncFocus();
+     if (!keyCode) {
+-      if (event.text) void this.dispatchText(event.text).catch(() => { });
++      if (event.text) {
++        this.target.contents().insertText(event.text);
++      }
+       return;
+     }
+     const modifiers = this.modifiers(event.mods);
+@@ -203,13 +211,9 @@ export class PageInput {
+   }
+ 
+   paste(text: string) {
+-    void this.pasteText(text).catch(() => { });
+-  }
+-
+-  private async pasteText(text: string) {
+-    if ((await clipboard.readText()) !== text) await clipboard.writeText(text);
++    clipboard.writeText(text);
+     if (process.platform === "darwin") {
+-      await this.dispatchPaste();
++      void this.dispatchPaste().catch(() => { });
+       return;
+     }
+     this.syncFocus();
+@@ -283,11 +287,6 @@ export class PageInput {
+     }
+   }
+ 
+-  private async dispatchText(text: string) {
+-    await this.focusGate;
+-    await this.target.cdp("Input.insertText", { text });
+-  }
+-
+   private async dispatchPaste() {
+     const base = {
+       key: "v",
+diff --git a/pixel/packages/pixel/src/webview.tsx b/pixel/packages/pixel/src/webview.tsx
+index 9d4e4c5c..1f560047 100644
+--- a/pixel/packages/pixel/src/webview.tsx
++++ b/pixel/packages/pixel/src/webview.tsx
+@@ -36,30 +36,15 @@ import type {
+ import { RootContext, handleEntries, useRegistryColors } from "./registry";
+ import type { ViewEntry } from "./registry";
+ import { makeTheme } from "./theme";
+-import type {
+-  DownloadProgress,
+-  PermissionCheck,
+-  PermissionCheckAnswer,
+-  PermissionRequest,
+-} from "./web/browser-session";
++import type { DownloadProgress } from "./web/browser-session";
+ import { PageHost, decideOpenWindow } from "./web/host";
+ import type { BrowserWindowOptions, OpenWindowDecision, OpenWindowPolicy } from "./web/host";
+ import { persistentPartition } from "./web/browser-session";
+ import { initialWebViewState, snapToCssGrid } from "./web/types";
+-import type { DevtoolsDock, MediaCapture, SurfaceLayout, WebViewState } from "./web/types";
++import type { DevtoolsDock, SurfaceLayout, WebViewState } from "./web/types";
+ import type { ZoomDirection } from "./web/zoom";
+ 
+-export type {
+-  BrowserWindowOptions,
+-  DownloadProgress,
+-  OpenWindowDecision,
+-  OpenWindowPolicy,
+-  PermissionCheck,
+-  PermissionCheckAnswer,
+-  PermissionRequest,
+-  MediaCapture,
+-  WebViewState,
+-};
++export type { BrowserWindowOptions, DownloadProgress, OpenWindowDecision, OpenWindowPolicy, WebViewState };
+ 
+ export interface WebViewProps {
+   src: string;
+@@ -73,13 +58,26 @@ export interface WebViewProps {
+   devtools?: boolean | DevtoolsDock;
+   hidden?: boolean;
+   keepFrame?: boolean;
++  // fixme: placeholder copy
++  /** The wheel scrolls whatever is around the page instead, until the page is focused by a click. */
++  passWheel?: boolean;
++  // fixme: placeholder copy
++  /** Stops drawing the page and freezes its scripts while it is scrolled out of view. It picks up where it left off when it comes back. */
++  pauseOffscreen?: boolean;
++  // fixme: placeholder copy
++  /** Doesn't load the page until it scrolls within a screen of the view. */
++  lazy?: boolean;
++  onWebContents?(contents: Electron.WebContents): void;
++  // fixme: placeholder copy
++  /** The page's content height in pixels, reported whenever it changes. */
++  onContentHeight?(height: number): void;
++  onFocusChange?(focused: boolean): void;
++  onHoverChange?(hovered: boolean): void;
+   onChange?(state: WebViewState): void;
+   onPointer?(event: PointerEvent): void;
+   onContextMenu?(params: Electron.ContextMenuParams): void;
+   onOpenWindow?: OpenWindowPolicy;
+   onDownload?(progress: DownloadProgress): void;
+-  onPermissionRequest?(request: PermissionRequest): Promise<boolean>;
+-  onPermissionCheck?(check: PermissionCheck): PermissionCheckAnswer;
+ }
+ 
+ export interface WebViewHandle {
+@@ -93,7 +91,6 @@ export interface WebViewHandle {
+   forward(): void;
+   reload(): void;
+   zoom(direction: ZoomDirection): number;
+-  setAudioMuted(muted: boolean): void;
+   find(text: string): void;
+   findNext(forward: boolean): void;
+   stopFind(): void;
+@@ -163,6 +160,9 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+   const [fraction, setFraction] = useState(0.4);
+   const [dividerEngaged, setDividerEngaged] = useState(false);
+   const [menu, setMenu] = useState<MenuState | null>(null);
++  const [focused, setFocused] = useState(false);
++  const [wanted, setWanted] = useState(!props.lazy);
++  const [live, setLive] = useState(false);
+   const menuRef = useRef(menu);
+   menuRef.current = menu;
+ 
+@@ -187,6 +187,10 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+     if (hostRef.current?.devtools) hostRef.current.closeDevtools();
+     else setDevtoolsOpen(true);
+   };
++  entry.onFocusChange = (next: boolean) => {
++    setFocused(next);
++    propsRef.current.onFocusChange?.(next);
++  };
+   entry.handleKey = (event: EngineKeyEvent) => {
+     if (!menuRef.current || event.kind === "release") return false;
+     setMenu(null);
+@@ -233,6 +237,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+   };
+ 
+   useLayoutEffect(() => {
++    if (!wanted) return;
+     const created = {
+       page: registry.root.createSurface(),
+       popup: registry.root.createSurface(),
+@@ -298,16 +303,16 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+     };
+     host.onOpenWindow = (details) => decideOpenWindow(propsRef.current.onOpenWindow, details);
+     host.onDownload = (progress) => propsRef.current.onDownload?.(progress);
+-    host.onPermission = {
+-      request: (request) =>
+-        propsRef.current.onPermissionRequest?.(request) ?? Promise.resolve(false),
+-      check: (check) => propsRef.current.onPermissionCheck?.(check) ?? false,
+-    };
+     host.onQuit = () => registry.quit(entry);
+     host.onFrameSubmitted = () => {
+       for (const listener of frameListeners.current) listener();
+     };
++    if (initial.onContentHeight) {
++      host.watchContentHeight((cssHeight) => propsRef.current.onContentHeight?.(cssHeight * scale * stateRef.current.zoom));
++    }
+     host.setVisible(!initial.hidden);
++    initial.onWebContents?.(host.webContents);
++    setLive(true);
+     if (!initial.hidden && (initial.autoFocus ?? registry.views.size === 1)) registry.focus(entry);
+     return () => {
+       registry.unregister(entry);
+@@ -319,14 +324,14 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+       surfaces.current = null;
+     };
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, []);
++  }, [wanted]);
+ 
+   // A zero rect means an ancestor is hidden; keep the page at its last size.
+   const collapsed = rect != null && (rect.width <= 0 || rect.height <= 0);
+   useEffect(() => {
+     hostRef.current?.setVisible(!hidden && !collapsed);
+     if ((hidden || collapsed) && registry.focused === entry) registry.blur(entry);
+-  }, [hidden, collapsed]);
++  }, [hidden, collapsed, live]);
+ 
+   useEffect(() => {
+     const host = hostRef.current;
+@@ -334,7 +339,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+     const layout: SurfaceLayout = { ...page, scale };
+     debug("page resize", layout);
+     host.resize(layout, { keepFrame: keepFrame() });
+-  }, [page?.x, page?.y, page?.width, page?.height, scale, hidden]);
++  }, [page?.x, page?.y, page?.width, page?.height, scale, hidden, live]);
+ 
+   useEffect(() => {
+     const host = hostRef.current;
+@@ -500,7 +505,6 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+         forward: () => host().forward(),
+         reload: () => host().reload(),
+         zoom: (direction) => host().zoom(direction),
+-        setAudioMuted: (muted) => host().setAudioMuted(muted),
+         find: (text) => host().find(text),
+         findNext: (forward) => host().findNext(forward),
+         stopFind: () => host().stopFind(),
+@@ -545,8 +549,14 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+   }
+ 
+   return (
+-    <Box ref={boxRef} style={{ ...props.style, overflow: "hidden" }}>
+-      {page && (
++    <Box
++      ref={boxRef}
++      style={{ ...props.style, overflow: "hidden" }}
++      onClickOutside={focused ? () => registry.blur(entry) : undefined}
++      onViewport={wanted ? undefined : (near) => near && setWanted(true)}
++      viewportMargin={registry.root.info.height}
++    >
++      {page && live && (
+         <Box
+           surface={surfaces.current?.page}
+           style={{
+@@ -559,19 +569,30 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
+             opaque: !props.browserWindowOptions?.transparent,
+             pointerShape: pointerShapes.page,
+           }}
++          onViewport={props.pauseOffscreen ? (near) => hostRef.current?.setPaused(!near) : undefined}
++          viewportMargin={Math.round(rem * 4)}
+           onPointer={(event: PointerEvent) => {
+             if (menuRef.current) {
+               if (event.kind === "down") setMenu(null);
+               if (event.kind !== "up") return;
+             }
+-            registry.focus(entry);
++            if (event.kind === "down") registry.focus(entry);
+             hostRef.current?.pointer(event);
+             propsRef.current.onPointer?.(event);
+           }}
+-          onWheel={(event: WheelEvent) => {
+-            registry.focus(entry);
+-            hostRef.current?.wheel(event);
++          onMouseEnter={() => propsRef.current.onHoverChange?.(true)}
++          onMouseLeave={() => {
++            hostRef.current?.pointerLeave();
++            propsRef.current.onHoverChange?.(false);
+           }}
++          onWheel={
++            props.passWheel && !focused
++              ? undefined
++              : (event: WheelEvent) => {
++                  registry.focus(entry);
++                  hostRef.current?.wheel(event);
++                }
++          }
+         />
+       )}
+       {devtoolsRect && surfaces.current && (
