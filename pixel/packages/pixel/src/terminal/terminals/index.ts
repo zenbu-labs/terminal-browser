@@ -3,6 +3,7 @@ import { cmux } from "./cmux";
 import { ghostty } from "./ghostty";
 import { herdr } from "./herdr";
 import { kitty } from "./kitty";
+import { rex } from "./rex";
 import { supacode } from "./supacode";
 import { tmux } from "./tmux";
 import { tty7 } from "./tty7";
@@ -16,6 +17,7 @@ export const TERMINALS: Detect[] = [
   herdr,
   tmux,
   tty7,
+  rex,
   wezterm,
   kitty,
   cmux,
