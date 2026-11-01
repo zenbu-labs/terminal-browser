@@ -68,7 +68,7 @@ import type {
   ToastView,
   ReleaseView,
 } from "../ui/types";
-import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor } from "../url";
+import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor, urlHost } from "../url";
 import type { SearchUrl } from "../url";
 import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
@@ -172,6 +172,7 @@ const CLEAR_DATA_LABEL = "Clear browsing data";
 interface ClearDataState {
   checked: Set<BrowsingDataKind>;
   clearing: boolean;
+  origin: string | null;
 }
 
 class Session {
@@ -539,6 +540,16 @@ class Session {
     return false;
   }
 
+  private pageOrigin(): string | null {
+    const url = this.tabs.activeState?.url ?? "";
+    if (!/^https?:\/\//i.test(url)) return null;
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  }
+
   private render() {
     if (!this.root || !this.layout) return;
     this.root.render(
@@ -578,6 +589,7 @@ class Session {
             ? {
               checked: BROWSING_DATA_KINDS.filter((kind) => this.clearData!.checked.has(kind)),
               clearing: this.clearData.clearing,
+              site: this.clearData.origin ? urlHost(this.clearData.origin) : null,
             }
             : null
         }
@@ -1201,10 +1213,10 @@ class Session {
     this.render();
   }
 
-  private openClearData() {
+  private openClearData(origin: string | null = null) {
     if (this.clearData || this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
     this.closePageMenu();
-    this.clearData = { checked: new Set(BROWSING_DATA_KINDS), clearing: false };
+    this.clearData = { checked: new Set(BROWSING_DATA_KINDS), clearing: false, origin };
     this.enterOverlay(["enter"]);
     this.render();
   }
@@ -1223,7 +1235,7 @@ class Session {
     this.render();
     let failure: unknown = null;
     try {
-      await this.clearBrowsingData([...dialog.checked]);
+      await this.clearBrowsingData([...dialog.checked], dialog.origin);
     } catch (error) {
       failure = error;
     }
@@ -1233,7 +1245,8 @@ class Session {
       this.showToast("Could not clear browsing data", "failed", failure instanceof Error ? failure.message : String(failure));
       return;
     }
-    this.showToast("Browsing data cleared", "done", undefined, {
+    const site = dialog.origin ? urlHost(dialog.origin) : null;
+    this.showToast(site ? `Data cleared for ${site}` : "Browsing data cleared", "done", undefined, {
       label: "Reload page",
       run: () => {
         this.actions.toastDismiss();
@@ -1242,8 +1255,8 @@ class Session {
     });
   }
 
-  private clearBrowsingData(kinds: BrowsingDataKind[]): Promise<void> {
-    return clearBrowsingData(browsingSession(this.partition), kinds);
+  private clearBrowsingData(kinds: BrowsingDataKind[], origin?: string | null): Promise<void> {
+    return clearBrowsingData(browsingSession(this.partition), kinds, origin ?? undefined);
   }
 
   private closePageMenu() {
@@ -1274,6 +1287,9 @@ class Session {
         return;
       case "clear-data":
         this.openClearData();
+        return;
+      case "clear-site-data":
+        this.openClearData(this.pageOrigin());
         return;
       case "grab":
         void this.toggleGrab();
@@ -1399,8 +1415,19 @@ class Session {
   }
 
   private toolbarMenuItems(): PageMenuItem[] {
+    const origin = this.pageOrigin();
     return [
       ...this.toolMenuItems(),
+      ...(origin
+        ? [
+          {
+            id: "clear-site-data",
+            label: `Clear data for ${urlHost(origin)}`,
+            enabled: true,
+            shortcut: "",
+          },
+        ]
+        : []),
       {
         id: "clear-data",
         label: CLEAR_DATA_LABEL,
@@ -1585,6 +1612,7 @@ class Session {
 
   private paletteActions(): PaletteAction[] {
     const devtoolsOpen = this.tabs.active?.devtools ?? false;
+    const clearOrigin = this.pageOrigin();
     const command = (id: CommandId): PaletteAction => ({
       id,
       label: this.paletteLabel(id),
@@ -1598,6 +1626,16 @@ class Session {
       command("record.toggle"),
       command("grab.toggle"),
       command("devtools.toggle"),
+      ...(clearOrigin
+        ? [
+          {
+            id: "clear-site-data",
+            label: `Clear data for ${urlHost(clearOrigin)}`,
+            shortcut: "",
+            run: () => this.openClearData(clearOrigin),
+          },
+        ]
+        : []),
       { id: "clear-data", label: CLEAR_DATA_LABEL, shortcut: "", run: () => this.openClearData() },
       ...(DEV_BUILD
         ? [
