@@ -1,8 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
 import { ClipboardItem, clipboard } from "electron";
 import type { NativeImage, Rectangle, WebContents } from "electron";
 import type { WebViewHandle } from "@zenbu-labs/pixel";
+import { createPrivateFile, ensureOwnedDir } from "shared";
 import { stampedName } from "../record/paths";
 import type { GrabRegion } from "./grab";
 import type { Screenshot } from "./target";
@@ -81,13 +81,16 @@ async function captureRegion(view: WebViewHandle, region: GrabRegion): Promise<N
 }
 
 function saveScreenshot(png: Buffer, pageUrl: string): string {
-  fs.mkdirSync(OUTPUT_ROOT, { recursive: true });
+  ensureOwnedDir(OUTPUT_ROOT);
   const base = path.join(OUTPUT_ROOT, stampedName(pageUrl));
   for (let i = 0; ; i++) {
     const file = i === 0 ? `${base}.png` : `${base}-${i + 1}.png`;
-    if (fs.existsSync(file)) continue;
-    fs.writeFileSync(file, png);
-    return file;
+    try {
+      createPrivateFile(file, png);
+      return file;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   }
 }
 

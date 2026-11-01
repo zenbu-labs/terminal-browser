@@ -1,13 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { promisify } from "node:util";
 
 import { protocol } from "electron";
+import type { Session } from "electron";
 
+import { directoryListingHtml } from "@zenbu-labs/pixel";
+
+import { mimeForFile } from "../browsing/mime";
+import { guardLocalLoads } from "./local-loads";
 import { MARKDOWN_CSP, renderMarkdown } from "./markdown";
-import { renderStartPage } from "./start";
+import { routeInternalPage } from "./routes";
 import type { Theme } from "../ui/theme";
-import { DOC_SCHEME } from "../url";
+import { DOC_SCHEME, documentUrl } from "../url";
+import { LocalFileAccess, RefusedFileError, localPath, watchLocalDocuments } from "./local-files";
+import { forEverySession } from "./sessions";
 
 
 
@@ -56,42 +64,109 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 
+// Web content can't fetch these pages: no fetch/CORS privileges, and the
+// handler refuses requests that web content (rather than the browser) started.
 export function registerScheme() {
   protocol.registerSchemesAsPrivileged([
-    { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+    { scheme: SCHEME, privileges: { standard: true, secure: true } },
     { scheme: DOC_SCHEME, privileges: { standard: true, secure: true, stream: true } },
   ]);
 }
 
+function startedByWebContent(request: Request): boolean {
+  const initiator = (request as { initiatorOrigin?: string }).initiatorOrigin;
+  return initiator !== undefined && !initiator.startsWith(`${SCHEME}://`);
+}
+
+// The browser, our own pages and markdown documents may load local files. Web
+// content may not, whatever its origin; requests from the opaque origin that
+// sandboxed local pages share with sandboxed web frames are vetted per frame.
+function startedByBrowserOrLocalPage(request: Request): boolean {
+  const initiator = (request as { initiatorOrigin?: string }).initiatorOrigin;
+  return initiator === undefined || initiator.startsWith(`${SCHEME}://`) || initiator.startsWith(`${DOC_SCHEME}://`);
+}
+
 export function servePages(context: () => PageContext) {
-  protocol.handle(SCHEME, async (request) => {
-    const url = new URL(request.url);
-    if (url.host === "start") return renderStartPage(url, context());
-    return new Response("", { status: 404 });
+  const access = new WeakMap<Session, LocalFileAccess>();
+  forEverySession((session) => {
+    access.set(session, new LocalFileAccess(session));
+    guardLocalLoads(session);
+    session.protocol.handle(SCHEME, async (request) => {
+      if (startedByWebContent(request)) return new Response("", { status: 403 });
+      return routeInternalPage(new URL(request.url), context());
+    });
+    session.protocol.handle(DOC_SCHEME, async (request) => {
+      const files = access.get(session)!;
+      const grant = files.redeem(request);
+      if (!grant && !startedByBrowserOrLocalPage(request)) return new Response("", { status: 403 });
+      const file = localPath(request.url);
+      if (!grant?.page && isDirectory(file)) return listDirectory(file);
+      let fd: number;
+      try {
+        fd = files.open(file, grant);
+      } catch (error) {
+        return new Response("", { status: error instanceof RefusedFileError ? 403 : 404 });
+      }
+      return serveDocument(fd, file, request.headers.get("range"), context().theme);
+    });
   });
-  protocol.handle(DOC_SCHEME, async (request) => {
-    const url = new URL(request.url);
-    return serveDocument(decodeURIComponent(url.pathname), request.headers.get("range"), context().theme);
-  });
+  watchLocalDocuments((session) => access.get(session));
 }
 
 const DOC_CSP =
   "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-src https: http: data:; object-src 'none'";
 
-async function serveDocument(file: string, range: string | null, theme: Theme | null): Promise<Response> {
+const readFile = promisify(fs.readFile);
+
+function isDirectory(file: string): boolean {
   try {
-    const stat = await fs.promises.stat(file);
-    if (!stat.isFile()) return new Response("", { status: 404 });
+    return fs.statSync(file).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function listDirectory(directory: string): Response {
+  let markup: string;
+  try {
+    markup = directoryListingHtml(directory, documentUrl);
+  } catch {
+    return new Response("", { status: 404 });
+  }
+  return new Response(markup, {
+    headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": `${DOC_CSP}; script-src 'none'`, "cache-control": "no-store" },
+  });
+}
+
+// Chromium's file:// loader shows a file of a type it doesn't know as text, unless its first bytes look binary.
+function looksBinary(fd: number): boolean {
+  const head = Buffer.alloc(512);
+  const read = fs.readSync(fd, head, 0, head.length, 0);
+  return head.subarray(0, read).some((byte) => byte < 0x09 || byte === 0x0b || (byte > 0x0d && byte < 0x20 && byte !== 0x1b));
+}
+
+function contentType(fd: number, file: string, extension: string): string {
+  const known = CONTENT_TYPES[extension] ?? mimeForFile(file);
+  if (known) return known;
+  return looksBinary(fd) ? "application/octet-stream" : "text/plain; charset=utf-8";
+}
+
+async function serveDocument(fd: number, file: string, range: string | null, theme: Theme | null): Promise<Response> {
+  let streaming = false;
+  try {
+    const stat = fs.fstatSync(fd);
     const extension = path.extname(file).toLowerCase();
     if (extension === ".md" || extension === ".markdown") {
-      const source = await fs.promises.readFile(file, "utf8");
+      const source = await readFile(fd, "utf8");
       return new Response(await renderMarkdown(source, path.basename(file), theme), {
         headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": MARKDOWN_CSP },
       });
     }
     const headers: Record<string, string> = {
       "content-security-policy": DOC_CSP,
-      "content-type": CONTENT_TYPES[extension] ?? "application/octet-stream",
+      "content-type": contentType(fd, file, extension),
+      "x-content-type-options": "nosniff",
+      "cache-control": "no-store",
       "accept-ranges": "bytes",
     };
     const bytes = range ? byteRange(range, stat.size) : null;
@@ -101,10 +176,14 @@ async function serveDocument(file: string, range: string | null, theme: Theme | 
     const [start, end] = bytes ?? [0, stat.size - 1];
     if (bytes) headers["content-range"] = `bytes ${start}-${end}/${stat.size}`;
     headers["content-length"] = String(Math.max(0, end - start + 1));
-    const body = stat.size === 0 ? null : (Readable.toWeb(fs.createReadStream(file, { start, end })) as ReadableStream);
+    if (stat.size === 0) return new Response(null, { status: bytes ? 206 : 200, headers });
+    const body = Readable.toWeb(fs.createReadStream(file, { fd, start, end })) as ReadableStream;
+    streaming = true;
     return new Response(body, { status: bytes ? 206 : 200, headers });
   } catch {
     return new Response("", { status: 404 });
+  } finally {
+    if (!streaming) fs.closeSync(fd);
   }
 }
 
@@ -143,6 +222,8 @@ export function pageColors(theme: Theme | null) {
     accent: css(theme?.accent, "#6ea8ff"),
     hairline: css(theme?.hairline, "rgba(255,255,255,0.12)"),
     field: css(theme?.field, "rgba(255,255,255,0.06)"),
+    hover: css(theme?.hover, "rgba(255,255,255,0.12)"),
+    surface: css(theme?.overlay, "#1e1e1e"),
     red: css(theme?.red, "#f2777a"),
     green: css(theme?.green, "#99cc99"),
     yellow: css(theme?.yellow, "#ffcc66"),

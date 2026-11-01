@@ -57,7 +57,7 @@ export class PopupWindow {
     });
     const contents = window.webContents;
     contents.on("page-title-updated", (_event, title) => this.update({ title }));
-    contents.on("did-navigate", (_event, url) => this.update({ url }));
+    contents.on("did-navigate", (_event, url) => this.update({ url, title: "" }));
     contents.on("did-navigate-in-page", (_event, url, mainFrame) => {
       if (mainFrame) this.update({ url });
     });

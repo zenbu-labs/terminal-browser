@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { z } from "zod";
 
+import { ensureConfigDir, writeConfigFile } from "../paths";
+
 import { COMMAND_IDS, isCommandId } from "./commands";
 import type { CommandId } from "./commands";
 import { jsonText } from "./json";
@@ -160,7 +162,7 @@ export class ConfigStore {
     // No single source is reliable on macOS: directory watches (FSEvents) can stop delivering
     // on a long-running machine, file watches (kqueue) go stale when an editor replaces the file.
     const dirWatchers = [...new Set(names.map((name) => path.dirname(this.files[name])))].map((dir) => {
-      fs.mkdirSync(dir, { recursive: true });
+      ensureConfigDir(dir);
       return fs.watch(dir, (_event, filename) => {
         for (const name of names) {
           if (path.dirname(this.files[name]) !== dir) continue;
@@ -218,8 +220,7 @@ export class ConfigStore {
     if (value === undefined) delete next[key];
     else next[key] = value;
     const text = `${JSON.stringify(next, null, 2)}\n`;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, text);
+    writeConfigFile(file, text);
     this.written.set(file, digest(text));
   }
 }

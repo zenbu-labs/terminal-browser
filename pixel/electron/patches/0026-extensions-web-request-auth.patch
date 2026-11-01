@@ -1,0 +1,116 @@
+diff --git a/shell/browser/electron_browser_client.cc b/shell/browser/electron_browser_client.cc
+--- a/shell/browser/electron_browser_client.cc
++++ b/shell/browser/electron_browser_client.cc
+@@ -2030,6 +2030,92 @@ bool ElectronBrowserClient::IsFullscreenAllowedForUnfocusedWebContents(
+       ->IsGuest();
+ }
+ 
++#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++namespace {
++
++// Lets extensions answer an auth challenge through
++// webRequest.onAuthRequired before the app's "login" event, as Chrome does.
++class ExtensionAuthLoginDelegate : public content::LoginDelegate {
++ public:
++  ExtensionAuthLoginDelegate(
++      const net::AuthChallengeInfo& auth_info,
++      content::WebContents* web_contents,
++      bool is_request_for_primary_main_frame,
++      bool is_request_for_navigation,
++      const GURL& url,
++      scoped_refptr<net::HttpResponseHeaders> response_headers,
++      bool first_auth_attempt,
++      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
++      : auth_info_(auth_info),
++        had_web_contents_(web_contents != nullptr),
++        is_request_for_primary_main_frame_(is_request_for_primary_main_frame),
++        is_request_for_navigation_(is_request_for_navigation),
++        url_(url),
++        response_headers_(std::move(response_headers)),
++        first_auth_attempt_(first_auth_attempt),
++        auth_required_callback_(std::move(auth_required_callback)) {
++    if (web_contents)
++      web_contents_ = web_contents->GetWeakPtr();
++  }
++
++  ~ExtensionAuthLoginDelegate() override = default;
++
++  void Start(content::BrowserContext* browser_context,
++             const content::GlobalRequestID& request_id) {
++    auto* web_request_api =
++        extensions::BrowserContextKeyedAPIFactory<
++            extensions::WebRequestAPI>::Get(browser_context);
++    if (web_request_api &&
++        web_request_api->MaybeProxyAuthRequest(
++            browser_context, auth_info_, response_headers_, request_id,
++            is_request_for_navigation_,
++            base::BindOnce(&ExtensionAuthLoginDelegate::OnExtensionResponse,
++                           weak_factory_.GetWeakPtr()),
++            /*web_view_guest=*/nullptr)) {
++      return;
++    }
++    AskApp();
++  }
++
++ private:
++  void OnExtensionResponse(
++      const std::optional<net::AuthCredentials>& credentials,
++      bool should_cancel) {
++    if (credentials || should_cancel) {
++      std::move(auth_required_callback_).Run(credentials);
++      return;
++    }
++    AskApp();
++  }
++
++  void AskApp() {
++    if (had_web_contents_ && !web_contents_) {
++      std::move(auth_required_callback_).Run(std::nullopt);
++      return;
++    }
++    login_handler_ = std::make_unique<LoginHandler>(
++        auth_info_, web_contents_.get(), is_request_for_primary_main_frame_,
++        is_request_for_navigation_, base::kNullProcessId, url_,
++        response_headers_, first_auth_attempt_,
++        std::move(auth_required_callback_));
++  }
++
++  const net::AuthChallengeInfo auth_info_;
++  base::WeakPtr<content::WebContents> web_contents_;
++  const bool had_web_contents_;
++  const bool is_request_for_primary_main_frame_;
++  const bool is_request_for_navigation_;
++  const GURL url_;
++  const scoped_refptr<net::HttpResponseHeaders> response_headers_;
++  const bool first_auth_attempt_;
++  content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback_;
++  std::unique_ptr<LoginHandler> login_handler_;
++  base::WeakPtrFactory<ExtensionAuthLoginDelegate> weak_factory_{this};
++};
++
++}  // namespace
++#endif  // BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++
+ std::unique_ptr<content::LoginDelegate>
+ ElectronBrowserClient::CreateLoginDelegate(
+     const net::AuthChallengeInfo& auth_info,
+@@ -2043,10 +2129,19 @@ ElectronBrowserClient::CreateLoginDelegate(
+     bool first_auth_attempt,
+     content::GuestPageHolder* guest_page_holder,
+     content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
++#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++  auto delegate = std::make_unique<ExtensionAuthLoginDelegate>(
++      auth_info, web_contents, is_request_for_primary_main_frame,
++      is_request_for_navigation, url, response_headers, first_auth_attempt,
++      std::move(auth_required_callback));
++  delegate->Start(browser_context, request_id);
++  return delegate;
++#else
+   return std::make_unique<LoginHandler>(
+       auth_info, web_contents, is_request_for_primary_main_frame,
+       is_request_for_navigation, base::kNullProcessId, url, response_headers,
+       first_auth_attempt, std::move(auth_required_callback));
++#endif
+ }
+ 
+ std::vector<std::unique_ptr<blink::URLLoaderThrottle>>

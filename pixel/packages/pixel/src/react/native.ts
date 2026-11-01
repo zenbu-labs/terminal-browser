@@ -182,6 +182,16 @@ const binding = loadBinding() as {
     width: number,
     height: number,
   ): Promise<Buffer>;
+  socketPeerUid(fd: number): number;
+  renameBeneath(root: string, from: string, to: string): void;
+  openBeneath(dirFd: number, relative: string, ownerLinked?: boolean): number;
+  openDirectoryAt(dirFd: number, name: string, create: boolean): number;
+  readLinkAt(dirFd: number, name: string): SymbolicLink | null;
+  aclGrantsOthers(fd: number, uid: number): "read" | "write" | null;
+  clearAcl(fd: number): void;
+  groupIsPrivateTo(gid: number, uid: number): boolean;
+  quarantineFile(path: string, source: string, referrer: string, agent: string): void;
+  quarantined(path: string): boolean | null;
 };
 
 export function createNativeEngine(
@@ -233,6 +243,77 @@ export function captureFilmstrip(
   height: number,
 ): Promise<Buffer> {
   return binding.captureFilmstrip(dir, frames, tileWidth, width, height);
+}
+
+export function socketPeerUid(fd: number): number {
+  return binding.socketPeerUid(fd);
+}
+
+// Renames `from` to `to` (both relative to `root`, "/"-separated) without
+// following a symlink in any directory below `root`; `from` must be a regular file.
+export function renameBeneath(root: string, from: string, to: string): void {
+  binding.renameBeneath(root, from, to);
+}
+
+// Native errors start with the errno name; copy it onto `code` like Node's fs errors.
+function withErrnoCode<T>(call: () => T): T {
+  try {
+    return call();
+  } catch (error) {
+    const code = /^(E[A-Z]+):/.exec((error as Error).message)?.[1];
+    if (code) (error as NodeJS.ErrnoException).code = code;
+    throw error;
+  }
+}
+
+// Opens the regular file at `relative` ("/"-separated) below the directory
+// `dirFd` without following a symlink at any step, and returns its descriptor.
+// With `ownerLinked`, a file with more than one hard link is refused with EPERM
+// unless nobody but its owner could have linked it into its folder.
+export function openBeneath(dirFd: number, relative: string, ownerLinked = false): number {
+  return withErrnoCode(() => binding.openBeneath(dirFd, relative, ownerLinked));
+}
+
+// Opens (and with `create`, first makes, mode 0700) the directory `name` inside
+// `dirFd`, refusing a symlink with ELOOP.
+export function openDirectoryAt(dirFd: number, name: string, create: boolean): number {
+  return withErrnoCode(() => binding.openDirectoryAt(dirFd, name, create));
+}
+
+export interface SymbolicLink {
+  target: string;
+  owner: number;
+}
+
+// The symlink `name` inside `dirFd`, or null if it isn't one.
+export function readLinkAt(dirFd: number, name: string): SymbolicLink | null {
+  return withErrnoCode(() => binding.readLinkAt(dirFd, name));
+}
+
+// What an ACL on `fd` lets users other than `uid` and root do beyond its mode
+// bits: "write" covers adding, removing or changing entries, contents or access.
+export function aclGrantsOthers(fd: number, uid: number): "read" | "write" | null {
+  return withErrnoCode(() => binding.aclGrantsOthers(fd, uid));
+}
+
+// Removes every ACL entry from `fd`, inherited and inheritable ones included.
+export function clearAcl(fd: number): void {
+  withErrnoCode(() => binding.clearAcl(fd));
+}
+
+export function groupIsPrivateTo(gid: number, uid: number): boolean {
+  return binding.groupIsPrivateTo(gid, uid);
+}
+
+// Marks a downloaded file with where it came from, like a browser does: the
+// quarantine flag on macOS, origin attributes on Linux. Throws if that fails.
+export function quarantineFile(path: string, source: string, referrer: string, agent: string): void {
+  binding.quarantineFile(path, source, referrer, agent);
+}
+
+// Whether macOS has the file quarantined; null on systems without quarantine.
+export function quarantined(path: string): boolean | null {
+  return binding.quarantined(path);
 }
 
 export function parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[] {

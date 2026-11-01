@@ -40,6 +40,7 @@ cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
 
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
 "$ROOT/scripts/bundle.sh" "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
+node "$ROOT/browser/scripts/bundle-preloads.mjs" "$STAGE/browser/dist"
 
 cp "$ROOT/scripts/apparmor.sh" "$STAGE/scripts/apparmor.sh"
 
@@ -94,15 +95,9 @@ else
   FUSE_TARGET="$STAGE/electron/pixel"
 fi
 
-TOOLS="$OUT/tools"
-mkdir -p "$TOOLS"
-[ -f "$TOOLS/package.json" ] || echo '{"private":true}' > "$TOOLS/package.json"
-(cd "$TOOLS" && npm install --no-audit --no-fund --silent @electron/fuses@2.1.3)
-FUSES="$TOOLS/node_modules/.bin/electron-fuses"
-[ -x "$FUSES" ] || { echo "release.sh: @electron/fuses did not install" >&2; exit 1; }
-NO_COLOR=1 "$FUSES" write --app "$FUSE_TARGET" EnableCookieEncryption=on
-NO_COLOR=1 "$FUSES" read --app "$FUSE_TARGET" | sed $'s/\x1b\[[0-9;]*m//g' | tee "$OUT/fuses.txt"
+node "$ROOT/scripts/fuses.mjs" write "$FUSE_TARGET" | tee "$OUT/fuses.txt"
 grep -q "EnableCookieEncryption is Enabled" "$OUT/fuses.txt"
+grep -q "GrantFileProtocolExtraPrivileges is Disabled" "$OUT/fuses.txt"
 grep -q "RunAsNode is Enabled" "$OUT/fuses.txt"
 
 cat > "$STAGE/bin/terminal-browser" <<EOF

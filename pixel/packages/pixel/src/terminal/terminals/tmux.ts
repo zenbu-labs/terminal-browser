@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-import { adjacentPane, paneById, shellQuote } from "../shared";
+import { adjacentPane, paneById } from "../shared";
 import type { PaneRect } from "../shared";
 import type { Detect, Pane, PaneDetails } from "../terminal";
 
@@ -111,7 +111,7 @@ export const tmux: Detect = (env, run) => {
         ...length,
         "-t",
         from.id,
-        shellQuote(command),
+        ...command,
       ]);
     },
   };

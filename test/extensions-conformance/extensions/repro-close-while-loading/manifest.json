@@ -1,0 +1,6 @@
+{
+  "manifest_version": 3,
+  "name": "Repro: close a popup window while it loads",
+  "version": "1.0",
+  "background": { "service_worker": "sw.js" }
+}

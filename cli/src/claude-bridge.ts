@@ -11,6 +11,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { callerTty } from "@zenbu-labs/pixel/terminal";
+import { appendPrivateFile, ensureOwnedDir, openPrivateLog } from "shared";
 
 import { installedVersion } from "./upgrade";
 
@@ -56,8 +57,8 @@ async function launch(argv: string[]): Promise<never> {
   const cellOverride = flag(argv, "--cell") ?? process.env.CC_BROWSER_CELL ?? "";
   const token = crypto.randomBytes(24).toString("hex");
   const socket = path.join(os.tmpdir(), `cc-browser-${process.pid}-${Date.now().toString(36)}.sock`);
-  fs.mkdirSync(LOG_DIR, { recursive: true });
-  const logFd = fs.openSync(LOG_FILE, "a");
+  ensureOwnedDir(LOG_DIR);
+  const logFd = openPrivateLog(LOG_FILE);
   const [self, ...selfArgs] = selfCommand();
   const child = spawn(
     self,
@@ -87,7 +88,7 @@ async function launch(argv: string[]): Promise<never> {
   child.stdout!.destroy();
   child.unref();
   const launched = { port, pid: child.pid, tty, terminalBrowser: installedVersion() ?? "dev", token };
-  fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} launch ${JSON.stringify({ ...launched, token: undefined })}\n`);
+  appendPrivateFile(LOG_FILE, `${new Date().toISOString()} launch ${JSON.stringify({ ...launched, token: undefined })}\n`);
   report(launched);
 }
 

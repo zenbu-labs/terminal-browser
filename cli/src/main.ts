@@ -7,11 +7,16 @@ import readline from "node:readline";
 
 import {
   DAEMON_SOCKET,
+  LAUNCH_ENV,
   LOGS_DIR,
   TERMINAL_SOCKET_ENV,
   appId,
-  ensureDataDir,
+  ensurePrivateDir,
+  ensurePrivateState,
   instanceKey,
+  isLaunchToken,
+  openPrivateLog,
+  paneLaunchCommand,
   listApps,
   registerApp,
   socketTerminal,
@@ -42,6 +47,7 @@ import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 import { claudeBridgeCommand } from "./claude-bridge";
 import { configCommand } from "./config";
+import { extensionsCommand } from "./extensions";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
 const CAPABILITIES = ["embedding", "image-frames"] as const;
@@ -100,7 +106,7 @@ function electronBinary(): string {
   return path.join(path.dirname(library), "electron", "dist", ...ELECTRON_DEV_BIN);
 }
 
-function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
+function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string; stderrLog: string } {
   const browserDir = browserDirectory();
   let electron: string;
   try {
@@ -127,21 +133,12 @@ function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string 
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     argv = [...argv, "--ozone-platform=headless", "--screen-info={8192x8192}"];
   }
-  ensureDataDir();
-  const logDir = LOGS_DIR;
-  fs.mkdirSync(logDir, { recursive: true });
-  const quoted = [electron, main, ...argv]
-    .map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`)
-    .join(" ");
-  const line = `exec ${quoted} 2>>'${logDir.replaceAll("'", `'\\''`)}/stderr.log'`;
-  return { command: ["/bin/sh", "-c", line], cwd: browserDir };
+  ensurePrivateState();
+  return { command: [electron, main, ...argv], cwd: browserDir, stderrLog: path.join(LOGS_DIR, "stderr.log") };
 }
 
-function clientLaunchCommand(argv: string[]): string[] {
-  const runner = DIST_ROOT
-    ? [path.join(DIST_ROOT, "bin", "terminal-browser")]
-    : [process.execPath, path.resolve(__dirname, "main.js")];
-  return [...runner, "open", ...argv];
+function clientRunner(): string[] {
+  return DIST_ROOT ? [path.join(DIST_ROOT, "bin", "terminal-browser")] : [process.execPath, path.resolve(__dirname, "main.js")];
 }
 
 function ownTtyPath(): string | null {
@@ -179,16 +176,19 @@ function connectDaemon(): Promise<net.Socket> {
 }
 
 function spawnDaemon() {
-  const { command, cwd } = browserLaunchCommand(["--daemon"]);
+  const { command, cwd, stderrLog } = browserLaunchCommand(["--daemon"]);
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
   );
   env.NODE_ENV ??= "production";
-  const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });
+  const stderr = openPrivateLog(stderrLog);
+  const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: ["ignore", "ignore", stderr], env });
+  fs.closeSync(stderr);
   child.unref();
 }
 
 async function daemonSocket(): Promise<net.Socket> {
+  ensurePrivateDir(path.dirname(DAEMON_SOCKET));
   try {
     return await connectDaemon();
   } catch {}
@@ -211,6 +211,35 @@ interface DaemonReply {
   event?: string;
   code?: number;
   sessions?: number;
+  token?: string;
+  argv?: string[];
+}
+
+async function askDaemon(message: Record<string, unknown>): Promise<DaemonReply> {
+  const socket = await daemonSocket();
+  try {
+    return await new Promise<DaemonReply>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("daemon did not answer")), 5000);
+      nextReply(socket, (reply) => {
+        clearTimeout(timer);
+        resolve(reply);
+      });
+      socket.once("close", () => {
+        clearTimeout(timer);
+        reject(new Error("daemon closed the connection"));
+      });
+      socket.write(`${JSON.stringify(message)}\n`);
+    });
+  } finally {
+    socket.destroy();
+  }
+}
+
+async function claimLaunch(token: string): Promise<string[]> {
+  const reply = await askDaemon({ cmd: "claim-launch", token }).catch(() => null);
+  // fixme: placeholder copy
+  if (!reply?.ok || !reply.argv) fail("this pane's browser launch expired or was already used");
+  return reply.argv;
 }
 
 function nextReply(socket: net.Socket, onLine: (reply: DaemonReply) => void): void {
@@ -422,10 +451,13 @@ async function launchInSplit(
   const from = await terminal.getCurrentPane?.({ tty: ownTtyPath() ?? callerTty().path, cwd: process.cwd() });
   if (!from) fail(`could not work out which ${terminal.name} pane you are in`);
   const before = new Set((await instances()).map(recordKey));
+  const stashed = await askDaemon({ cmd: "stash-launch", argv }).catch(() => null);
+  // fixme: placeholder copy
+  if (!stashed?.ok || !isLaunchToken(stashed.token)) fail("could not hand the new pane its arguments (is the daemon running?)");
   await terminal.split!({
     from,
     direction,
-    command: clientLaunchCommand(argv),
+    command: paneLaunchCommand(process.env, clientRunner(), stashed.token),
     size: size ?? null,
     tty: ownTtyPath() ?? callerTty().path,
   });
@@ -488,12 +520,14 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
 }
 
 const BROWSING_DATA_NAMES: Record<string, string> = {
+  // fixme: placeholder copy
+  history: "browsing history",
   siteData: "cookies and site data",
   cache: "cached images and files",
 };
 
 function clearSummary(kinds: string[]): string {
-  const shown = kinds.length > 0 ? kinds : Object.keys(BROWSING_DATA_NAMES);
+  const shown = kinds.length > 0 ? kinds : ["siteData", "cache"];
   const what = shown.map((kind) => BROWSING_DATA_NAMES[kind]).join(", and ");
   return `This clears ${what}${shown.length > 1 ? "," : ""} for every site in every terminal-browser window${shown.includes("siteData") ? ", signing you out" : ""}.`;
 }
@@ -512,6 +546,7 @@ async function clearBrowsingDataCommand(args: string[]): Promise<number> {
   const key = takeFlag(args, "--browser");
   const confirmed = takeBoolFlag(args, "--yes") || takeBoolFlag(args, "-y");
   const kinds = [
+    ...(takeBoolFlag(args, "--history") ? ["history"] : []),
     ...(takeBoolFlag(args, "--cookies") ? ["siteData"] : []),
     ...(takeBoolFlag(args, "--cache") ? ["cache"] : []),
   ];
@@ -648,6 +683,8 @@ async function tryAdopt(args: string[], direction: Direction | null): Promise<bo
 
 async function openCommand(args: string[]) {
   requirePaneAccess();
+  const launch = process.env[LAUNCH_ENV];
+  if (launch && args.length === 0) args = await claimLaunch(launch);
   const owned = process.env.PIXEL_TTY ?? ownTtyPath();
   if (process.env.PIXEL_EMBED || (owned && findOwner(owned))) {
     rejectUnknownFlags(args);
@@ -759,12 +796,12 @@ function appsCommand(args: string[]): number {
   return 0;
 }
 
-function helpCommand(topic: string | undefined): number {
+function helpCommand(topic: string | undefined, subcommand: string | undefined): number {
   if (!topic) {
     process.stdout.write(rootHelp());
     return 0;
   }
-  const help = commandHelp(topic);
+  const help = commandHelp(topic, subcommand);
   if (!help) fail(`no help for ${topic} (try ${helpTopics().join(", ")})`);
   process.stdout.write(help);
   return 0;
@@ -784,9 +821,9 @@ async function main(): Promise<number> {
     process.stdout.write(`${JSON.stringify({ capabilities: CAPABILITIES })}\n`);
     return 0;
   }
-  if (command === "help") return helpCommand(args[0]);
+  if (command === "help") return helpCommand(args[0], args[1]);
   if (asksForHelp(args)) {
-    process.stdout.write(commandHelp(command) ?? rootHelp());
+    process.stdout.write(commandHelp(command, args[0]) ?? rootHelp());
     return 0;
   }
   if (command !== "setup") ensureSetup();
@@ -804,6 +841,7 @@ async function main(): Promise<number> {
   if (command === "setup") return setupCommand(electronBinary());
   if (command === "upgrade") return upgradeCommand();
   if (command === "config") return configCommand(args);
+  if (command === "extensions") return extensionsCommand(args);
   if (command === "claude-bridge") return claudeBridgeCommand(args);
   if (command === "shutdown") return shutdownDaemon();
   if (command === "register-app") return registerAppCommand(args);

@@ -26,8 +26,10 @@ async function confirmClose(version: string, open: InstanceRecord[]): Promise<bo
 }
 
 function runInstaller(url: string): Promise<number> {
-  const child = spawn("bash", ["-c", `curl -fsSL '${url}' | bash`], { stdio: "inherit" });
+  const download = spawn("curl", ["-fsSL", "--", url], { stdio: ["ignore", "pipe", "inherit"] });
+  const child = spawn("bash", [], { stdio: [download.stdout, "inherit", "inherit"] });
   return new Promise((resolve, reject) => {
+    download.on("error", reject);
     child.on("error", reject);
     child.on("exit", (code) => resolve(code ?? 1));
   });

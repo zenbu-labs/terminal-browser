@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "God Peer",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8op0rb0EG4ImyXI8dEuO2/Y3KCFV7cq6Jl+JSC8woDuDtqbBOWebk3CKBCEC2iU+Hjbka9qFNtO61pKgNYuU7g4MHtm3q3Zl9RvXHPVWrISK72Bxskgabu1PJ+GR7QKBlMcCXTuyyTlWi74RDZsW1T7eUDNYzj1ldqSQOv+Golyk25EqQgEXdM1gmekTWeugHDldtgeOTBLBnUtvp2Jq1i5yxoXrxd+T8z7QSHAMQJXnAq27TkIuQkgs2Mt6WadUxqBuZHoGkbnyBSuwKhP9GzrmdCfjpoJSGO0lU+mwRM9a5NGKLK/9HOxHFZY4IZ7wWemCyb2BAa544g7dMvbVHwIDAQAB",
+  "background": {
+    "service_worker": "sw.js"
+  }
+}

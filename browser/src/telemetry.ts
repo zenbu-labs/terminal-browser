@@ -1,9 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 
 import {
   LOGS_DIR,
   anonymousId,
+  appendPrivateFile,
+  ensureOwnedDir,
   installedChannel,
   lastActiveDay,
   lastLaunchDay,
@@ -135,7 +136,7 @@ export class Telemetry {
 
 function logSent(json: string) {
   try {
-    fs.mkdirSync(LOGS_DIR, { recursive: true });
-    fs.appendFileSync(TELEMETRY_LOG_FILE, `${json}\n`);
+    ensureOwnedDir(LOGS_DIR);
+    appendPrivateFile(TELEMETRY_LOG_FILE, `${json}\n`);
   } catch {}
 }

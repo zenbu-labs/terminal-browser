@@ -4,6 +4,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
+import { reclaimPrivateDir } from "./private-dir";
+
 
 
 export const PROTOCOL = 1;
@@ -116,8 +118,8 @@ function handoffMarker(tty: string, env: NodeJS.ProcessEnv = process.env): strin
 
 export function markHandoff(tty: string, env: NodeJS.ProcessEnv = process.env): void {
   try {
-    fs.mkdirSync(instancesDir(env), { recursive: true });
-    fs.writeFileSync(handoffMarker(tty, env), String(Date.now()));
+    reclaimPrivateDir(instancesDir(env));
+    fs.writeFileSync(handoffMarker(tty, env), String(Date.now()), { mode: 0o600 });
   } catch {}
 }
 
@@ -166,7 +168,7 @@ export class InstanceRecord {
   constructor(record: Instance, env: NodeJS.ProcessEnv = process.env) {
     this.record = record;
     this.file = path.join(instancesDir(env), `${instanceKey(record.tty)}.json`);
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    reclaimPrivateDir(path.dirname(this.file));
     this.write();
   }
 
@@ -183,7 +185,8 @@ export class InstanceRecord {
   private write() {
     const tmp = `${this.file}.${process.pid}.tmp`;
     try {
-      fs.writeFileSync(tmp, `${JSON.stringify(this.record)}\n`);
+      fs.rmSync(tmp, { force: true });
+      fs.writeFileSync(tmp, `${JSON.stringify(this.record)}\n`, { mode: 0o600, flag: "wx" });
       fs.renameSync(tmp, this.file);
     } catch {
       fs.rmSync(tmp, { force: true });

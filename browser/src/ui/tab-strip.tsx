@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Box, Image, Text } from "@zenbu-labs/pixel";
+import { Box, Image, Text, useRect } from "@zenbu-labs/pixel";
+import type { NodeHandle } from "@zenbu-labs/pixel";
 import type { Rgba } from "@zenbu-labs/pixel";
 import { displayUrl } from "../url";
 import { Icon } from "./icons";
@@ -169,6 +170,7 @@ export function TabStrip({
   actions,
   rem,
   width,
+  centerX,
   url,
   theme,
 }: {
@@ -176,9 +178,12 @@ export function TabStrip({
   actions: ChromeActions;
   rem: number;
   width: number;
+  centerX: number;
   url: string;
   theme: Theme;
 }) {
+  const region = useRef<NodeHandle | null>(null);
+  const regionRect = useRect(region);
   const [hovered, setHovered] = useState<number | null>(null);
   const activeLabel = displayUrl(url);
   const pointerIn = useRef(false);
@@ -239,6 +244,12 @@ export function TabStrip({
     (tab) => (tab.active ? activeWidth : inactiveWidths.get(tab.id) ?? minInactive),
     pointerIn,
   );
+  // Centred on the whole toolbar, not just the room between the button groups;
+  // it only moves off centre when that would push it into a button.
+  const groupWidth = entries.reduce((total, entry) => total + entry.width + (entry.ghost ? Math.min(gap, entry.width) : gap), 0);
+  const lead = regionRect
+    ? Math.round(Math.max(0, Math.min(centerX - groupWidth / 2 - regionRect.x, regionRect.width - groupWidth)))
+    : null;
   return (
     <Box
       style={{
@@ -250,12 +261,14 @@ export function TabStrip({
       }}
     >
       <Box
+        ref={region}
         style={{
           flexGrow: 1,
           flexBasis: 0,
           height: "100%",
           alignItems: "center",
-          justifyContent: "center",
+          justifyContent: lead === null ? "center" : "start",
+          padding: lead === null ? undefined : { left: lead },
           overflow: "hidden",
         }}
         onMouseEnter={() => {

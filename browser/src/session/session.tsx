@@ -6,7 +6,6 @@ import { app, clipboard, screen, shell, systemPreferences } from "electron";
 import { createRoot, initialWebViewState } from "@zenbu-labs/pixel";
 import type {
   DevtoolsDock,
-  DownloadProgress,
   EngineKeyEvent,
   Root,
   WebViewHandle,
@@ -22,6 +21,7 @@ import {
   installedChannel,
   installedVersion,
   lastUrl,
+  LAUNCH_ENV,
   listApps,
   listStep,
   maxFps,
@@ -38,6 +38,7 @@ import {
 } from "shared";
 import type {
   CommandId,
+  DownloadRecord,
   InstanceRow,
   RegisteredApp,
 } from "shared";
@@ -72,11 +73,19 @@ import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor } from "../url";
 import type { SearchUrl } from "../url";
 import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
+import { isInternalUrl } from "../pages/internal";
+import { overriddenNewTab } from "../pages/navigation";
+import { frameOpener, linkOpenRoute, windowOpenRoute } from "../pages/window-open";
+import type { Opener, WindowOpenRoute } from "../pages/window-open";
+import { browsing } from "../browsing";
+import { watchExternalLaunchInput } from "../browsing/external-launch-input";
+import { escapeExternalUrl, permitExternalLaunch } from "../browsing/external-protocol";
+import { canonicalOrigin } from "../canonical-url";
 import { makeTheme } from "../ui/theme";
-import { BROWSING_DATA_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
+import { BROWSING_DATA_KINDS, DEFAULT_CLEAR_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
 import type { BrowsingDataKind } from "./browsing-data";
 import { fuzzyScore } from "./fuzzy";
-import { PermissionPrompts } from "./permissions";
+import { PROMPT_ARMING_MS, PermissionPrompts } from "./permissions";
 import type { MediaDevice } from "./permissions";
 import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight } from "./layout";
 
@@ -86,7 +95,13 @@ import type { DevtoolsPlacement, SurfaceLayout } from "./layout";
 import { SettingsManager } from "./settings";
 import { Telemetry } from "../telemetry";
 import { fetchSuggestions } from "./suggest";
+import { searchSuggestionProvider } from "../extensions/api/settings";
+import { AddressKeyword } from "./address-keyword";
+import { launchPane } from "./pane-launch";
 import { TabManager } from "./tabs";
+import { EXTENSIONS_PAGE, PaneExtensions } from "./extensions";
+import { popupBlocked } from "../extensions/api/content-settings";
+import type { ExtensionActions } from "../ui/extension-types";
 
 function displayHz(): number {
   try {
@@ -168,6 +183,7 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
 }
 
 const CLEAR_DATA_LABEL = "Clear browsing data";
+const EXTENSIONS_LABEL = "Extensions";
 
 interface ClearDataState {
   checked: Set<BrowsingDataKind>;
@@ -212,6 +228,7 @@ class Session {
     terminal: () => this.terminal?.name ?? null,
   });
   private readonly tabs: TabManager;
+  private extensions: PaneExtensions | null = null;
   private readonly fallbackState: WebViewState;
 
   private root: Root | null = null;
@@ -235,26 +252,48 @@ class Session {
         pageX: number;
         pageY: number;
         linkURL: string;
+        linkOpener: Opener | null;
         selectionText: string;
+        params: Electron.ContextMenuParams;
       }
     | { kind: "toolbar" }
+    | { kind: "action"; x: number; y: number; extensionId: string }
     | null = null;
+  private sidePanelCssWidth = 360;
+  // The keyboard-highlighted row path in the open page menu (outer index first).
+  private pageMenuKeys: { menu: object | null; path: number[] } = { menu: null, path: [] };
+
+  private get pageMenuCursor(): number[] {
+    return this.pageMenuKeys.menu === this.pageMenu ? this.pageMenuKeys.path : [];
+  }
 
   private clearData: ClearDataState | null = null;
   private findOpen = false;
   private urlEditOpen = false;
+  private urlText = "";
+  private readonly keyword = new AddressKeyword(
+    () => this.extensions?.service.omnibox ?? null,
+    () => {
+      this.refreshAddressCapture();
+      this.render();
+    },
+  );
   private palette: { query: string; index: number } | null = null;
   private newTab: NewTabState | null = null;
   private zoomHud: number | null = null;
   private zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   private download: DownloadView | null = null;
   private downloadTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly downloadWatchers: (() => void)[] = [];
+  private dangerShownAt = 0;
   private toast: ToastView | null = null;
   private profiling = false;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly permissions = new PermissionPrompts({
     requestRender: () => this.render(),
     deviceAccess: (device) => this.deviceAccess(device),
+    extensionHasPermission: (id, permission) => this.extensions?.service.get(id)?.hasApiPermission(permission) ?? false,
+    contentSetting: (check) => (this.partition ? null : (this.extensions?.service.contentSettings.permissionRule(check) ?? null)),
   });
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();
@@ -295,6 +334,7 @@ class Session {
       {
         onActivated: () => {
           this.pageMenu = null;
+          this.extensions?.tabActivated();
           this.reconcileRecord();
           this.recalculateLayout();
           this.render();
@@ -303,6 +343,7 @@ class Session {
         },
         onPageMenu: (params) => this.openPageMenu(params),
         onTabOpened: (opener, url) => this.records.get(opener.id)?.linkOpened(url),
+        onOpenExternal: (opener, route) => this.openExternal(opener, route),
         tabSwitchAllowed: () => !this.activeRecord()?.reviewing,
         onTabsChanged: () => {
           this.registry?.update();
@@ -336,9 +377,11 @@ class Session {
   }
 
   private lastZoom = 1;
+  private terminalFocused = true;
 
   async start(): Promise<void> {
     if (process.platform === "darwin") app.dock?.hide();
+    watchExternalLaunchInput();
     this.checkForUpdate();
     this.telemetry.launched();
     await this.loadDevtoolsSettings();
@@ -353,9 +396,12 @@ class Session {
         // really?
         this.recalculateLayout();
         this.render();
+        this.extensions?.boundsChanged();
       },
       onColors: () => this.render(),
       onFocus: (focused) => {
+        this.terminalFocused = focused;
+        this.extensions?.focusChanged(focused);
         if (focused) this.telemetry.used();
       },
       onVisible: (visible) => {
@@ -370,7 +416,25 @@ class Session {
     this.applyRenderSettings();
     this.settings.watch();
     this.recalculateLayout();
-    this.tabs.create(this.fallbackState.url);
+    this.watchDownloads();
+    this.extensions = new PaneExtensions({
+      tabs: this.tabs,
+      focused: () => this.terminalFocused,
+      size: () => ({ width: this.layout?.page.width ?? 0, height: this.layout?.page.height ?? 0 }),
+      resolveUrl: (url) => (url ? normalizeUrl(url, this.ctx.cwd, this.searchUrl()) : (overriddenNewTab() ?? this.defaultUrl)),
+      closeTab: (id) => this.closeOrShutdown(id),
+      activate: () => this.tabs.active?.ref.current?.focus(),
+      blurPage: () => this.blurToOverlay(),
+      openPage: (url) => this.openExtensionPage(url),
+      toast: (message) => this.showToast(message, "done"),
+      requestRender: () => this.render(),
+      layoutChanged: () => this.recalculateLayout(),
+      windowToken: this.ctx.env[LAUNCH_ENV] ?? null,
+      openPane: (request) => this.openExtensionPane(request),
+      focusPane: () => this.focusOwnPane(),
+      closePane: () => this.shutdown(),
+    });
+    this.tabs.create(this.fallbackState.url, true, { byBrowser: !this.extensions.service.openedByExtension(this.extensions.window) });
     this.registry = new Registry({
       key: this.ctx.key,
       tty: this.ctx.tty ?? null,
@@ -386,7 +450,7 @@ class Session {
       parentTty: flagValue(this.argv, "--parent-tty"),
       state: () => this.tabs.activeState ?? this.fallbackState,
       openTab: (url, cwd) =>
-        this.tabs.create(url ? normalizeUrl(url, cwd, this.searchUrl()) : this.defaultUrl).id,
+        this.tabs.create(url ? normalizeUrl(url, cwd, this.searchUrl()) : this.defaultUrl, true, { byBrowser: true }).id,
       activateTab: (id) => {
         if (!this.tabs.has(id) || this.activeRecord()?.reviewing) return false;
         this.tabs.activate(id);
@@ -408,6 +472,25 @@ class Session {
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
     this.render();
+  }
+
+  private async openExtensionPane(request: { url: string | null; token: string; focused: boolean }): Promise<boolean> {
+    const from = this.terminal?.split ? await this.findOwnPane() : null;
+    if (!this.terminal?.split || !from) return false;
+    const argv = [...(request.url ? [request.url] : []), "--split-dir=right"];
+    if (this.ctx.tty) argv.push(`--parent-tty=${this.ctx.tty}`);
+    const opened = await launchPane({ terminal: this.terminal, from, env: this.ctx.env, argv, token: request.token, tty: this.ctx.tty ?? null });
+    if (!opened) return false;
+    if (!request.focused) await this.terminal.focusPane?.(from.id).catch(() => {});
+    return true;
+  }
+
+  private async focusOwnPane() {
+    const pane = this.terminal?.focusPane ? await this.findOwnPane() : null;
+    if (!pane || !this.terminal?.focusPane) return;
+    await this.terminal.focusPane(pane.id).catch(() => {});
+    this.terminalFocused = true;
+    this.extensions?.focusChanged(true);
   }
 
   private findOwnPane(): Promise<Pane | null> {
@@ -451,6 +534,9 @@ class Session {
     this.registry?.dispose();
     this.registry = null;
     this.settings.dispose();
+    for (const stop of this.downloadWatchers.splice(0)) stop();
+    this.extensions?.dispose();
+    this.extensions = null;
     this.tabs.stopAll();
     if (this.root) this.root.stop(code);
     else this.ctx.onClose(code);
@@ -462,6 +548,7 @@ class Session {
 
   private launchApp(app: RegisteredApp) {
     const env = { ...this.ctx.env };
+    delete env[LAUNCH_ENV];
     if (this.registry) env.TERMINAL_BROWSER_INTEROP_TARGET = this.registry.socketPath;
     const tty = this.ctx.tty ?? process.env.PIXEL_TTY;
     if (tty) env.PIXEL_TTY = tty;
@@ -492,6 +579,7 @@ class Session {
       preload: this.browserPreload,
       clipboardRead: this.sessionFlags.clipboardRead,
       transparent: tab.transparent || this.sessionFlags.transparent || this.settings.get("window.transparent") === "on",
+      initiator: tab.initiator,
     }));
   }
 
@@ -502,15 +590,48 @@ class Session {
 
   private readonly tabActions: TabActions = {
     state: (id, state) => this.tabs.stateChanged(id, state),
-    openWindow: (id, details) => this.tabs.openWindow(id, details),
+    openWindow: (id, details, opener) => (this.popupBlocked(opener, details) ? "deny" : this.tabs.openWindow(id, details, opener)),
     contextMenu: (id, params) => this.tabs.contextMenu(id, params),
-    download: (progress) => this.showDownload(progress),
     pointer: (id, event) => {
       if (id === this.tabs.active?.id) this.activeRecord()?.pointerSample(event);
+      if (event.kind === "down") this.extensions?.pagePointer();
     },
     permissionRequest: (id, request) => this.permissions.request(id, request),
     permissionCheck: (check) => this.permissions.check(check),
+    // the page went away on its own (window.close(), or closed over CDP); the last tab is replaced instead
+    closed: (id) => {
+      if (this.tabs.has(id)) this.closeTab(id);
+    },
   };
+
+  private popupBlocked(opener: Electron.WebContents, details: Electron.HandlerDetails): boolean {
+    return !!this.extensions && popupBlocked(this.extensions.service, opener, details);
+  }
+
+  // Like Chrome's external protocol dialog: the user is asked before a page hands a URL to another app.
+  private openExternal(tab: Tab, route: WindowOpenRoute) {
+    let contents: Electron.WebContents | undefined;
+    try {
+      contents = tab.ref.current?.webContents;
+    } catch {
+      contents = undefined;
+    }
+    const cancel = new AbortController();
+    const leave = () => cancel.abort();
+    contents?.once("did-navigate", leave);
+    const request = {
+      permission: "openExternal",
+      origin: route.initiator ?? "",
+      embedder: canonicalOrigin(tab.state.url) ?? "",
+      mediaTypes: [],
+      externalURL: route.url,
+      signal: cancel.signal,
+    };
+    void this.permissions.request(tab.id, request).then((allowed) => {
+      contents?.off("did-navigate", leave);
+      if (allowed) void shell.openExternal(escapeExternalUrl(route.url));
+    });
+  }
 
   private closeTab(id: number) {
     this.permissions.closed(id);
@@ -551,10 +672,11 @@ class Session {
         tabs={this.tabs.view()}
         newTab={
           this.newTab
-            ? { suggestions: this.newTabRows(), index: this.newTab.index }
+            ? { suggestions: this.newTabRows(), index: this.newTab.index, query: this.newTab.query }
             : null
         }
-        urlEdit={this.urlEditOpen}
+        urlEdit={this.urlEditOpen ? this.urlText : null}
+        keyword={this.keyword.view()}
         zoomHud={this.zoomHud}
         download={this.download}
         toast={this.toast}
@@ -589,6 +711,7 @@ class Session {
         devtools={this.devtoolsView()}
         profiling={this.profiling}
         grabActive={this.activeGrab()?.active ?? false}
+        extensions={this.extensions?.view(this.surfaceLayout?.scale ?? 1, this.settings.get("toolbar.extensions") === "on") ?? null}
       />,
     );
   }
@@ -609,6 +732,15 @@ class Session {
       const tab = this.tabs.active;
       if (tab) this.permissions.decide(tab.id, decision);
     },
+    // Like a prompt, Keep only counts once the warning has been up for a moment,
+    // so a page can't slip it under a click that was already on its way.
+    downloadKeep: () => {
+      if (!this.download?.dangerous || Date.now() - this.dangerShownAt < PROMPT_ARMING_MS) return;
+      browsing().downloads.accept(this.download.id);
+    },
+    downloadDiscard: () => {
+      if (this.download) browsing().downloads.discard(this.download.id);
+    },
     toastDismiss: () => {
       this.toast = null;
       if (this.toastTimer) clearTimeout(this.toastTimer);
@@ -626,9 +758,25 @@ class Session {
     clearDataCancel: () => this.closeClearData(),
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
+      if (this.keyword.active) {
+        this.keyword.enter(0, "currentTab");
+        this.closeUrlEdit();
+        return;
+      }
       this.closeUrlEdit();
-      if (text.trim()) this.tabs.activeHandle?.loadURL(this.resolveInput(text));
+      if (text.trim()) this.tabs.navigate(this.tabs.active, this.resolveInput(text), { typed: true });
     },
+    urlInput: (text) => {
+      this.urlText = this.keyword.type(text);
+      this.refreshAddressCapture();
+      this.render();
+    },
+    keywordPick: (index) => {
+      this.keyword.enter(index, this.newTab ? "newForegroundTab" : "currentTab");
+      if (this.newTab) this.closeNewTabModal();
+      else this.closeUrlEdit();
+    },
+    keywordRemove: (index) => this.keyword.remove(index),
     findChange: (text) => this.tabs.activeHandle?.find(text),
     findNext: (forward) => this.tabs.activeHandle?.findNext(forward),
     findClose: () => this.closeFind(),
@@ -649,7 +797,7 @@ class Session {
     newTabQuery: (text) => this.newTabQuery(text),
     newTabSubmit: (text) => {
       this.closeNewTabModal();
-      if (text.trim()) this.tabs.create(this.resolveInput(text));
+      if (text.trim()) this.tabs.create(this.resolveInput(text), true, { byBrowser: true, typed: true });
     },
     newTabPick: (index) => this.pickNewTab(index),
     newTabCancel: () => this.closeNewTabModal(),
@@ -689,8 +837,73 @@ class Session {
     pageMenuClose: () => this.closePageMenu(),
     pageMenuZoom: (direction) => this.applyZoom(direction),
     settings: this.settings.actions,
+    extensions: this.extensionActions(),
     record: this.recordActions(),
   };
+
+  private extensionActions(): ExtensionActions {
+    const pane = () => this.extensions;
+    return {
+      click: (id) => pane()?.clickAction(id),
+      contextMenu: (id, x, y) => {
+        pane()?.toggleMenu(false);
+        pane()?.closeActionPopup();
+        this.pageMenu = { kind: "action", x, y, extensionId: id };
+        this.render();
+      },
+      setPinned: (id, pinned) => pane()?.setPinned(id, pinned),
+      toggleMenu: () => pane()?.toggleMenu(),
+      menuHover: (index) => pane()?.hoverMenu(index),
+      openManager: () => pane()?.openManager(),
+      popupMounted: (contents) => pane()?.popupMounted(contents),
+      popupClose: () => pane()?.closeActionPopup(),
+      popupWindowMounted: (windowId, contents) => pane()?.popupWindowMounted(windowId, contents),
+      popupWindowClose: (windowId) => pane()?.closePopupWindow(windowId),
+      popupWindowFocus: (windowId) => pane()?.focusPopupWindow(windowId),
+      sidePanelMounted: (key, view) => pane()?.sidePanelMounted(key, view),
+      sidePanelClose: () => pane()?.closeSidePanel(),
+      sidePanelDividerDrag: (event) => {
+        const panel = this.layout?.sidePanel;
+        const scale = this.root?.displayScale;
+        if (!panel || !scale) return;
+        this.sidePanelCssWidth = (panel.x + panel.width - event.x) / scale;
+        const now = Date.now();
+        if (event.phase === "move" && now - this.dividerRenderAt < 50) return;
+        this.dividerRenderAt = now;
+        this.recalculateLayout();
+        if (event.phase === "end" && this.layout?.sidePanel) {
+          this.sidePanelCssWidth = Math.round(this.layout.sidePanel.width / scale);
+          this.saveDevtoolsSettings();
+        }
+        this.render();
+      },
+      answerPrompt: (accepted) => pane()?.answerPrompt(accepted),
+      promptFullyShown: (key, shown) => pane()?.promptFullyShown(key, shown),
+      openWindow: (details, opener) => {
+        if (this.popupBlocked(opener, details)) return "deny";
+        const route = windowOpenRoute(opener, details);
+        if (!route) return "deny";
+        if (route.external) {
+          if (this.tabs.active) this.openExternal(this.tabs.active, route);
+          return "deny";
+        }
+        pane()?.closeActionPopup();
+        this.tabs.create(route.url, details.disposition !== "background-tab", { byBrowser: route.byBrowser, initiator: route.initiator });
+        return "deny";
+      },
+    };
+  }
+
+  private openExtensionPage(url: string) {
+    const base = url.startsWith(EXTENSIONS_PAGE) ? EXTENSIONS_PAGE : url;
+    const existing = this.tabs.all().find((tab) => tab.state.url.startsWith(base));
+    if (!existing) {
+      this.tabs.create(url, true, { byBrowser: true });
+      return;
+    }
+    this.tabs.activate(existing.id);
+    if (existing.state.url !== url) this.tabs.navigate(existing, url);
+  }
 
   private openSettings() {
     if (this.palette || this.newTab || this.urlEditOpen || this.clearData) return;
@@ -837,6 +1050,7 @@ class Session {
       return true;
     }
     if (this.pageMenu) {
+      if (this.pageMenuKey(event)) return true;
       this.closePageMenu();
       if (event.key === "escape") return true;
     }
@@ -862,6 +1076,7 @@ class Session {
       } else if (event.key === "enter") this.runPalette();
       return true;
     }
+    if ((this.newTab || this.urlEditOpen) && this.keywordKey(event)) return true;
     if (this.newTab) {
       const session = this.newTab;
       const step = listStep(event);
@@ -889,6 +1104,7 @@ class Session {
       if (event.key === "escape") this.closeUrlEdit();
       return true;
     }
+    if (this.extensions?.handleKey(event)) return true;
     const prompted = this.tabs.active;
     if (event.key === "escape" && prompted && this.permissions.hasPending(prompted.id)) {
       this.permissions.decide(prompted.id, "dismiss");
@@ -907,6 +1123,8 @@ class Session {
       this.runCommand(command);
       return true;
     }
+    const extensions = this.extensions;
+    if (extensions && !this.findOpen && extensions.service.commands.handleKey(extensions.window, event)) return true;
     return false;
   }
 
@@ -1015,26 +1233,53 @@ class Session {
     this.render();
   }
 
-  private showDownload(progress: DownloadProgress) {
+  // Downloads started in this pane's tabs show in the corner; a dangerous one
+  // stays until the user keeps or discards it.
+  private watchDownloads() {
+    const { downloads } = browsing();
+    const shown = (record: DownloadRecord) => {
+      const contentsId = downloads.startedIn(record.id);
+      if (contentsId !== null && this.tabs.byContentsId(contentsId)) this.showDownload(record);
+    };
+    this.downloadWatchers.push(
+      downloads.created.add(shown),
+      downloads.changed.add(shown),
+      downloads.erased.add((id) => {
+        if (this.download?.id === id) this.hideDownload();
+      }),
+    );
+  }
+
+  private showDownload(record: DownloadRecord) {
+    if (!record.filename) return;
     const percent =
-      progress.total > 0 ? Math.round((progress.received / progress.total) * 100) : null;
+      record.totalBytes > 0 ? Math.round((record.receivedBytes / record.totalBytes) * 100) : null;
+    const state =
+      record.state === "complete" ? "done" : record.state === "interrupted" ? "failed" : "progressing";
+    const dangerous = record.state === "in_progress" && record.danger === "file";
+    const name = path.basename(record.filename);
+    const current = this.download;
     if (
-      this.download?.state === progress.state &&
-      this.download.name === progress.name &&
-      this.download.percent === percent
+      current?.id === record.id &&
+      current.state === state &&
+      current.name === name &&
+      current.percent === percent &&
+      current.dangerous === dangerous
     ) {
       return;
     }
-    this.download = { name: progress.name, percent, state: progress.state };
+    if (dangerous && !(current?.id === record.id && current.dangerous)) this.dangerShownAt = Date.now();
+    this.download = { id: record.id, name, percent, state, dangerous };
     if (this.downloadTimer) clearTimeout(this.downloadTimer);
     this.downloadTimer =
-      progress.state === "progressing"
-        ? null
-        : setTimeout(() => {
-          this.download = null;
-          this.downloadTimer = null;
-          this.render();
-        }, 4000);
+      state === "progressing" ? null : setTimeout(() => this.hideDownload(), 4000);
+    this.render();
+  }
+
+  private hideDownload() {
+    if (this.downloadTimer) clearTimeout(this.downloadTimer);
+    this.download = null;
+    this.downloadTimer = null;
     this.render();
   }
 
@@ -1169,6 +1414,7 @@ class Session {
       if (!row) return;
       this.devtoolsDockSide = row.devtoolsDock;
       this.devtoolsFraction = clampDevtoolsFraction(row.devtoolsFraction);
+      this.sidePanelCssWidth = row.sidePanelWidth;
     } catch { }
   }
 
@@ -1177,6 +1423,7 @@ class Session {
       id: 1,
       devtoolsDock: this.devtoolsDockSide,
       devtoolsFraction: this.devtoolsFraction,
+      sidePanelWidth: this.sidePanelCssWidth,
     };
     void store()
       .db.insert(settingsTable)
@@ -1196,7 +1443,9 @@ class Session {
       pageX: params.x,
       pageY: params.y,
       linkURL: params.linkURL,
+      linkOpener: frameOpener(params.frame),
       selectionText: params.selectionText.trim(),
+      params,
     };
     this.render();
   }
@@ -1204,7 +1453,7 @@ class Session {
   private openClearData() {
     if (this.clearData || this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
     this.closePageMenu();
-    this.clearData = { checked: new Set(BROWSING_DATA_KINDS), clearing: false };
+    this.clearData = { checked: new Set(DEFAULT_CLEAR_KINDS), clearing: false };
     this.enterOverlay(["enter"]);
     this.render();
   }
@@ -1268,9 +1517,15 @@ class Session {
     const tab = this.tabs.active;
     const handle = tab?.ref.current;
     if (!menu || !tab || !handle) return;
+    const extensionParams = menu.kind === "page" ? menu.params : null;
+    const extensionId = menu.kind === "action" ? menu.extensionId : undefined;
+    if (this.extensions?.runMenuItem(id, extensionParams, extensionId)) return;
     switch (id) {
       case "settings":
         this.openSettings();
+        return;
+      case "extensions":
+        this.extensions?.openManager();
         return;
       case "clear-data":
         this.openClearData();
@@ -1307,7 +1562,8 @@ class Session {
         this.root?.setClipboard(menu.linkURL);
         return;
       case "open-link-tab":
-        this.tabs.create(menu.linkURL);
+        permitExternalLaunch();
+        this.tabs.openLink(tab.id, menu.linkOpener, menu.linkURL);
         return;
     }
   }
@@ -1402,6 +1658,13 @@ class Session {
     return [
       ...this.toolMenuItems(),
       {
+        id: "extensions",
+        label: EXTENSIONS_LABEL,
+        enabled: true,
+        shortcut: "",
+        children: this.extensions?.toolbarMenuItems(),
+      },
+      {
         id: "clear-data",
         label: CLEAR_DATA_LABEL,
         enabled: true,
@@ -1416,7 +1679,55 @@ class Session {
     ];
   }
 
+  // Arrow keys, enter and escape inside the open page menu and its submenus.
+  private pageMenuKey(event: EngineKeyEvent): boolean {
+    const menu = this.pageMenuContent();
+    if (!menu || !this.pageMenu) return false;
+    const path = [...this.pageMenuCursor];
+    const levels: PageMenuItem[][] = [menu.items];
+    for (const index of path.slice(0, -1)) levels.push(levels[levels.length - 1][index]?.children ?? []);
+    const rows = levels[levels.length - 1];
+    const selectable = (index: number) => !!rows[index] && !rows[index].separator && rows[index].enabled;
+    const current = path.length > 0 ? rows[path[path.length - 1]] : undefined;
+    const step = listStep(event);
+    const enterChild = (item: PageMenuItem | undefined) => {
+      const first = item?.children?.findIndex((child) => !child.separator && child.enabled) ?? -1;
+      if (first < 0) return false;
+      path.push(first);
+      return true;
+    };
+    if (step) {
+      if (path.length === 0) path.push(-1);
+      let at = path[path.length - 1];
+      for (let tries = 0; tries < rows.length; tries++) {
+        at = (at + step + rows.length) % rows.length;
+        if (selectable(at)) break;
+      }
+      path[path.length - 1] = at;
+    } else if (event.key === "right") {
+      if (!enterChild(current)) return true;
+    } else if (event.key === "left" || (event.key === "escape" && path.length > 1)) {
+      if (path.length > 1) path.pop();
+    } else if (event.key === "enter") {
+      if (!current) return true;
+      if (!enterChild(current)) {
+        this.runPageMenu(current.id);
+        return true;
+      }
+    } else {
+      return false;
+    }
+    this.pageMenuKeys = { menu: this.pageMenu, path };
+    this.render();
+    return true;
+  }
+
   private pageMenuView(): PageMenuView | null {
+    const menu = this.pageMenuContent();
+    return menu && { ...menu, cursor: this.pageMenuCursor };
+  }
+
+  private pageMenuContent(): Omit<PageMenuView, "cursor"> | null {
     if (!this.pageMenu || !this.layout) return null;
     if (this.pageMenu.kind === "toolbar") {
       return {
@@ -1426,6 +1737,10 @@ class Session {
         items: this.toolbarMenuItems(),
       };
     }
+    if (this.pageMenu.kind === "action") {
+      return { x: this.pageMenu.x, y: this.pageMenu.y, items: this.extensions?.actionMenuItems(this.pageMenu.extensionId) ?? [] };
+    }
+    const extensionItems = this.extensions?.pageMenuItems(this.pageMenu.params) ?? [];
     const items: PageMenuItem[] = [
       ...(this.pageMenu.selectionText
         ? [
@@ -1439,19 +1754,49 @@ class Session {
         : []),
       ...(this.pageMenu.linkURL
         ? [
-            { id: "open-link-tab", label: "Open link in new tab", enabled: true, shortcut: "" },
+            { id: "open-link-tab", label: "Open link in new tab", enabled: linkOpenRoute(this.pageMenu.linkOpener, this.pageMenu.linkURL) !== null, shortcut: "" },
             { id: "copy-link", label: "Copy link address", enabled: true, shortcut: "" },
           ]
         : []),
       this.grabMenuItem(),
+      ...(extensionItems.length > 0
+        ? [
+            { id: "extensions-start", label: "", enabled: false, shortcut: "", separator: true },
+            ...extensionItems,
+            { id: "extensions-end", label: "", enabled: false, shortcut: "", separator: true },
+          ]
+        : []),
       ...this.toolMenuItems(),
     ];
     return { x: this.pageMenu.x, y: this.pageMenu.y, items };
   }
 
+  private keywordKey(event: EngineKeyEvent): boolean {
+    const result = this.keyword.key(event, this.newTab ? "newForegroundTab" : "currentTab");
+    if (!result) return false;
+    if (result.done) {
+      if (this.newTab) this.closeNewTabModal();
+      else this.closeUrlEdit();
+      return true;
+    }
+    if (this.newTab) this.newTab.query = result.text;
+    else this.urlText = result.text;
+    this.refreshAddressCapture();
+    this.render();
+    return true;
+  }
+
+  private refreshAddressCapture() {
+    if (!this.newTab && !this.urlEditOpen) return;
+    const base = this.newTab ? ["enter", "up", "down"] : [];
+    this.root?.setKeyCapture([...new Set([...base, ...this.keyword.captureKeys()])]);
+  }
+
   private openUrlEdit() {
     if (this.urlEditOpen) return;
     this.urlEditOpen = true;
+    const url = this.tabs.activeState?.url ?? "";
+    this.urlText = url === "about:blank" ? "" : url;
     this.blurToOverlay();
     this.render();
   }
@@ -1459,12 +1804,19 @@ class Session {
   private closeUrlEdit() {
     if (!this.urlEditOpen) return;
     this.urlEditOpen = false;
+    this.keyword.cancel();
+    this.root?.setKeyCapture(this.findOpen ? ["enter"] : []);
     this.refocusPage();
     this.render();
   }
 
   private openNewTabModal() {
     if (this.newTab) return;
+    const override = overriddenNewTab();
+    if (override) {
+      this.tabs.create(override);
+      return;
+    }
     this.newTab = {
       query: "",
       suggestions: [],
@@ -1506,6 +1858,7 @@ class Session {
 
   private closeNewTabModal() {
     if (!this.newTab) return;
+    this.keyword.cancel();
     if (this.newTab.timer) clearTimeout(this.newTab.timer);
     this.newTab = null;
     this.root?.setKeyCapture(this.findOpen ? ["enter"] : []);
@@ -1516,12 +1869,20 @@ class Session {
   private newTabQuery(text: string) {
     const session = this.newTab;
     if (!session) return;
-    session.query = text;
+    session.query = this.keyword.type(text);
     session.index = -1;
+    this.refreshAddressCapture();
+    if (this.keyword.active) {
+      session.seq++;
+      session.suggestions = [];
+      session.appMatches = [];
+      this.render();
+      return;
+    }
     session.appMatches = matchApps(session.apps, text);
     if (session.timer) clearTimeout(session.timer);
     session.timer = null;
-    if (!text.trim() || this.settings.get("search.suggestions") === SUGGESTIONS_OFF) {
+    if (!text.trim() || searchSuggestionProvider(this.settings.get("search.suggestions")) === SUGGESTIONS_OFF) {
       session.seq++;
       session.suggestions = [];
       this.render();
@@ -1535,7 +1896,7 @@ class Session {
     const session = this.newTab;
     if (!session) return;
     const seq = ++session.seq;
-    fetchSuggestions(this.settings.get("search.suggestions"), query)
+    fetchSuggestions(searchSuggestionProvider(this.settings.get("search.suggestions")), query)
       .then((suggestions) => {
         if (this.newTab !== session || session.seq !== seq) return;
         session.suggestions = suggestions;
@@ -1599,6 +1960,7 @@ class Session {
       command("grab.toggle"),
       command("devtools.toggle"),
       { id: "clear-data", label: CLEAR_DATA_LABEL, shortcut: "", run: () => this.openClearData() },
+      { id: "extensions", label: EXTENSIONS_LABEL, shortcut: "", run: () => this.extensions?.openManager() },
       ...(DEV_BUILD
         ? [
           {
@@ -1699,6 +2061,7 @@ class Session {
       reviewing ? null : placement,
       reviewing ? recordBarHeight(info) : 0,
       this.ctx.env.TERMINAL_BROWSER_NO_CHROME === "1",
+      this.extensions?.sidePanel && !reviewing ? this.sidePanelCssWidth * this.root.displayScale : null,
     );
     this.layout = result.chrome;
     this.surfaceLayout = result.surface;
@@ -1721,7 +2084,7 @@ class Session {
   }
 
   showsStartPage(): boolean {
-    return (this.tabs.activeState?.url ?? "").startsWith(START_URL);
+    return isInternalUrl(this.tabs.activeState?.url ?? "");
   }
 
   private initialUrl(): string {

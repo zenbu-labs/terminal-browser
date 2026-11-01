@@ -1,0 +1,90 @@
+diff --git a/docs/api/session.md b/docs/api/session.md
+--- a/docs/api/session.md
++++ b/docs/api/session.md
+@@ -1775,6 +1775,7 @@ session is persisted on disk.  For in memory sessions this returns `null`.
+   * `originMatchingMode` String (optional) - The behavior for matching data to origins.
+     * `third-parties-included` (default) - Storage is matched on origin in first-party contexts and top-level-site in third-party contexts.
+     * `origin-in-all-contexts` - Storage is matched on origin only in all contexts.
++  * `since` Double (optional) - Only clear data created or modified at or after this time, in milliseconds since the UNIX epoch. Defaults to all time.
+ 
+ Returns `Promise<void>` - resolves when all data has been cleared.
+ 
+diff --git a/shell/browser/api/electron_api_session.cc b/shell/browser/api/electron_api_session.cc
+--- a/shell/browser/api/electron_api_session.cc
++++ b/shell/browser/api/electron_api_session.cc
+@@ -212,8 +212,9 @@ class ClearDataTask : public gin_helper::CleanedUpAtExit {
+       BrowsingDataRemover::DataType data_type_mask,
+       std::vector<url::Origin> origins,
+       BrowsingDataFilterBuilder::Mode filter_mode,
+-      BrowsingDataFilterBuilder::OriginMatchingMode origin_matching_mode) {
+-    auto* task = new ClearDataTask(std::move(promise));
++      BrowsingDataFilterBuilder::OriginMatchingMode origin_matching_mode,
++      base::Time delete_begin) {
++    auto* task = new ClearDataTask(std::move(promise), delete_begin);
+ 
+     // This method counts as an operation. This is important so we can call
+     // `OnOperationFinished` at the end of this method as a fallback if all the
+@@ -272,9 +273,10 @@ class ClearDataTask : public gin_helper::CleanedUpAtExit {
+     }
+ 
+     void Start(BrowsingDataRemover* remover,
++               base::Time delete_begin,
+                BrowsingDataRemover::DataType data_type_mask,
+                std::unique_ptr<BrowsingDataFilterBuilder> filter_builder) {
+-      remover->RemoveWithFilterAndReply(base::Time::Min(), base::Time::Max(),
++      remover->RemoveWithFilterAndReply(delete_begin, base::Time::Max(),
+                                         data_type_mask, kClearOriginTypeAll,
+                                         std::move(filter_builder), this);
+     }
+@@ -291,8 +293,8 @@ class ClearDataTask : public gin_helper::CleanedUpAtExit {
+         observation_{this};
+   };
+ 
+-  explicit ClearDataTask(gin_helper::Promise<void> promise)
+-      : promise_(std::move(promise)) {}
++  ClearDataTask(gin_helper::Promise<void> promise, base::Time delete_begin)
++      : promise_(std::move(promise)), delete_begin_(delete_begin) {}
+ 
+   static void StartOperation(
+       ClearDataTask* task,
+@@ -304,7 +306,8 @@ class ClearDataTask : public gin_helper::CleanedUpAtExit {
+ 
+     auto& operation = task->operations_.emplace_back(
+         std::make_unique<ClearDataOperation>(task, remover));
+-    operation->Start(remover, data_type_mask, std::move(filter_builder));
++    operation->Start(remover, task->delete_begin_, data_type_mask,
++                     std::move(filter_builder));
+   }
+ 
+   void OnOperationFinished(
+@@ -361,6 +364,7 @@ class ClearDataTask : public gin_helper::CleanedUpAtExit {
+   int operations_running_ = 0;
+   BrowsingDataRemover::DataType failed_data_types_ = 0ULL;
+   gin_helper::Promise<void> promise_;
++  const base::Time delete_begin_;
+   std::vector<std::unique_ptr<ClearDataOperation>> operations_;
+ };
+ 
+@@ -1498,8 +1502,12 @@ v8::Local<v8::Value> Session::ClearData(gin::Arguments* const args) {
+       BrowsingDataFilterBuilder::OriginMatchingMode::kThirdPartiesIncluded;
+   BrowsingDataFilterBuilder::Mode filter_mode =
+       BrowsingDataFilterBuilder::Mode::kPreserve;
++  base::Time delete_begin = base::Time::Min();
+ 
+   if (gin_helper::Dictionary options; args->GetNext(&options)) {
++    if (double since; options.Get("since", &since))
++      delete_begin = base::Time::FromMillisecondsSinceUnixEpoch(since);
++
+     if (std::vector<std::string> data_types;
+         options.Get("dataTypes", &data_types)) {
+       data_type_mask = GetDataTypeMask(data_types);
+@@ -1565,7 +1573,8 @@ v8::Local<v8::Value> Session::ClearData(gin::Arguments* const args) {
+ 
+   BrowsingDataRemover* remover = browser_context_->GetBrowsingDataRemover();
+   ClearDataTask::Run(remover, std::move(promise), data_type_mask,
+-                     std::move(origins), filter_mode, origin_matching_mode);
++                     std::move(origins), filter_mode, origin_matching_mode,
++                     delete_begin);
+ 
+   return promise_handle;
+ }

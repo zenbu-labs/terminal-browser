@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "God History",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAylTH2Tatbi9NVvPJe7MLrrR0DB/pJ/85sdJJK4GH+yegvunqXbqLVf8bYK4ijxMWCU531ImLugPE1AyKyMvSYVXmSPr1BrxCZlCm+4DvYrz502BS0tLXMPXeKBZJpanFXoWtwUq8dbmxDKp1+feBI/TziEVD2OjAm6RNm0bonpspCZU6xMiUqrMLRYcQcKM2mHYC0c0nPuv6mazrftP+bdHJR8zysXlynEyFxTtwV437ca/axHP6RTGscrJye9/aDadXfwUnEFE2gqVVXOmFghiOyMhtJLOiOfdByGDJPOnaICnMCGIfNcxFQuQZzFbMWdI0Cdw9ZUYe2Z8AUNPT4QIDAQAB",
+  "chrome_url_overrides": {
+    "history": "page.html"
+  }
+}

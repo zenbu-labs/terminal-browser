@@ -1,0 +1,54 @@
+diff --git a/patches/chromium/.patches b/patches/chromium/.patches
+--- a/patches/chromium/.patches
++++ b/patches/chromium/.patches
+@@ -238,3 +238,4 @@ cherry-pick-b5559b26c2f3.patch
+ cherry-pick-194c74ee5e48.patch
+ cherry-pick-564bdde2ce69.patch
+ cherry-pick-5a8114db13d5.patch
++fix_keep_single-request_navigation_factories_across_resets.patch
+diff --git a/patches/chromium/fix_keep_single-request_navigation_factories_across_resets.patch b/patches/chromium/fix_keep_single-request_navigation_factories_across_resets.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/chromium/fix_keep_single-request_navigation_factories_across_resets.patch
+@@ -0,0 +1,26 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: pixel <pixel@zenbu.dev>
++Date: Sat, 31 Oct 2026 10:05:20 -0400
++Subject: fix: keep single-request navigation factories across URLLoaderFactory
++ resets
++
++An extension that gains webRequest or declarativeNetRequest access resets the network context's URLLoaderFactories. A navigation whose request was still travelling through an embedder proxy lost it and never committed.
++---
++ content/browser/loader/navigation_url_loader_impl.cc | 4 ++++
++ 1 file changed, 4 insertions(+)
++
++diff --git a/content/browser/loader/navigation_url_loader_impl.cc b/content/browser/loader/navigation_url_loader_impl.cc
++index 6bdc776bdb347..0ac65291692a3 100644
++--- a/content/browser/loader/navigation_url_loader_impl.cc
+++++ b/content/browser/loader/navigation_url_loader_impl.cc
++@@ -2537,6 +2537,10 @@ NavigationURLLoaderImpl::CreateURLLoaderFactoryWithHeaderClient(
++   params->process_id = network::OriginatingProcessId::browser();
++   params->is_trusted = true;
++   params->is_orb_enabled = false;
+++  // Each of these factories carries one request and already has the
+++  // embedder's current proxies. A reset would only drop that request while it
+++  // is still on its way through a proxy, leaving the load hanging.
+++  params->ignore_factory_reset = true;
++   params->network_restrictions_id = network_restrictions_id;
++   params->disable_web_security =
++       base::CommandLine::ForCurrentProcess()->HasSwitch(
+diff --git a/shell/browser/net/proxying_url_loader_factory.cc b/shell/browser/net/proxying_url_loader_factory.cc
+--- a/shell/browser/net/proxying_url_loader_factory.cc
++++ b/shell/browser/net/proxying_url_loader_factory.cc
+@@ -556,6 +556,11 @@ void ProxyingURLLoaderFactory::InProgressRequest::ContinueToStartRequest(
+         network_service_request_id_, options, request_,
+         proxied_client_receiver_.BindNewPipeAndPassRemote(),
+         traffic_annotation_);
++    // The network service drops requests that are still queued when their
++    // factory is reset, without completing them. Fail them instead of hanging.
++    proxied_client_receiver_.set_disconnect_handler(base::BindOnce(
++        &InProgressRequest::OnRequestError, weak_factory_.GetWeakPtr(),
++        network::URLLoaderCompletionStatus(net::ERR_FAILED)));
+   }
+ 
+   // From here the lifecycle of this request is driven by subsequent events on

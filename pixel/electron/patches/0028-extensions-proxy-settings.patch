@@ -1,0 +1,536 @@
+diff --git a/BUILD.gn b/BUILD.gn
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -856,6 +856,7 @@ source_set("electron_lib") {
+       "//components/zoom",
+       "//extensions/browser",
+       "//extensions/browser/api:api_provider",
++      "//extensions/browser/api/proxy",
+       "//extensions/browser/mime_handler",
+       "//extensions/browser/updater",
+       "//extensions/common",
+diff --git a/filenames.gni b/filenames.gni
+--- a/filenames.gni
++++ b/filenames.gni
+@@ -808,6 +808,8 @@ filenames = {
+     "shell/browser/extensions/api/extension_action/extension_action_api.h",
+     "shell/browser/extensions/api/management/electron_management_api_delegate.cc",
+     "shell/browser/extensions/api/management/electron_management_api_delegate.h",
++    "shell/browser/extensions/api/preference/preference_api.cc",
++    "shell/browser/extensions/api/preference/preference_api.h",
+     "shell/browser/extensions/api/resources_private/resources_private_api.cc",
+     "shell/browser/extensions/api/resources_private/resources_private_api.h",
+     "shell/browser/extensions/api/runtime/electron_runtime_api_delegate.cc",
+diff --git a/shell/browser/extensions/api/preference/preference_api.cc b/shell/browser/extensions/api/preference/preference_api.cc
+new file mode 100644
+--- /dev/null
++++ b/shell/browser/extensions/api/preference/preference_api.cc
+@@ -0,0 +1,356 @@
++// Copyright (c) 2026 Anthropic PBC
++// Use of this source code is governed by the MIT license that can be
++// found in the LICENSE file.
++
++#include "shell/browser/extensions/api/preference/preference_api.h"
++
++#include <optional>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/strings/strcat.h"
++#include "base/time/time.h"
++#include "base/values.h"
++#include "components/prefs/pref_service.h"
++#include "components/proxy_config/proxy_config_pref_names.h"
++#include "extensions/browser/api/proxy/proxy_pref_transformer.h"
++#include "extensions/browser/event_router_factory.h"
++#include "extensions/browser/extension_pref_value_map.h"
++#include "extensions/browser/extension_pref_value_map_factory.h"
++#include "extensions/browser/extension_prefs.h"
++#include "extensions/browser/extension_prefs_factory.h"
++#include "extensions/browser/extension_prefs_helper.h"
++#include "extensions/browser/extension_prefs_helper_factory.h"
++#include "extensions/browser/extension_registry_factory.h"
++#include "extensions/browser/pref_names.h"
++#include "extensions/browser/pref_transformer_interface.h"
++#include "extensions/common/api/types.h"
++#include "extensions/common/constants.h"
++#include "extensions/common/error_utils.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/permissions/permissions_data.h"
++
++namespace extensions {
++
++namespace {
++
++using ChromeSettingScope = api::types::ChromeSettingScope;
++
++constexpr char kPermissionErrorMessage[] =
++    "You do not have permission to access the preference '*'. "
++    "Be sure to declare in your manifest what permissions you need.";
++constexpr char kConversionErrorMessage[] =
++    "Internal error: Stored value for preference '*' cannot be converted "
++    "properly.";
++
++constexpr char kNotControllable[] = "not_controllable";
++constexpr char kControlledByOtherExtensions[] =
++    "controlled_by_other_extensions";
++constexpr char kControllableByThisExtension[] =
++    "controllable_by_this_extension";
++constexpr char kControlledByThisExtension[] = "controlled_by_this_extension";
++
++struct PrefMapping {
++  const char* extension_pref;
++  const char* browser_pref;
++  mojom::APIPermissionID permission;
++};
++
++// The subset of Chrome's PrefMapping whose preferences Electron applies.
++constexpr PrefMapping kMappings[] = {
++    {"proxy", proxy_config::prefs::kProxy, mojom::APIPermissionID::kProxy},
++};
++
++const PrefMapping* FindByExtensionPref(const std::string& extension_pref) {
++  for (const auto& mapping : kMappings) {
++    if (extension_pref == mapping.extension_pref)
++      return &mapping;
++  }
++  return nullptr;
++}
++
++const PrefMapping* FindByBrowserPref(const std::string& browser_pref) {
++  for (const auto& mapping : kMappings) {
++    if (browser_pref == mapping.browser_pref)
++      return &mapping;
++  }
++  return nullptr;
++}
++
++PrefTransformerInterface* GetTransformer(const PrefMapping& mapping) {
++  static base::NoDestructor<ProxyPrefTransformer> proxy_transformer;
++  return proxy_transformer.get();
++}
++
++std::string OnChangeEventName(const PrefMapping& mapping) {
++  return base::StrCat({"types.ChromeSetting.", mapping.extension_pref,
++                       ".onChange"});
++}
++
++PrefService* GetPrefs(content::BrowserContext* context) {
++  return ExtensionPrefs::Get(context)->pref_service();
++}
++
++const char* GetLevelOfControl(content::BrowserContext* context,
++                              const ExtensionId& extension_id,
++                              const std::string& browser_pref) {
++  const PrefService::Preference* pref =
++      GetPrefs(context)->FindPreference(browser_pref);
++  if (!pref->IsExtensionModifiable())
++    return kNotControllable;
++  auto* helper = ExtensionPrefsHelper::Get(context);
++  if (helper->DoesExtensionControlPref(extension_id, browser_pref, nullptr))
++    return kControlledByThisExtension;
++  if (helper->CanExtensionControlPref(extension_id, browser_pref, false))
++    return kControllableByThisExtension;
++  return kControlledByOtherExtensions;
++}
++
++// Validates the (name, details) arguments every ChromeSetting function gets.
++bool ParseArgs(const base::ListValue& args,
++               const PrefMapping** mapping,
++               const base::DictValue** details) {
++  if (args.size() < 2 || !args[0].is_string() || !args[1].is_dict())
++    return false;
++  *mapping = FindByExtensionPref(args[0].GetString());
++  *details = &args[1].GetDict();
++  return *mapping != nullptr;
++}
++
++bool ParseScope(const base::DictValue& details, ChromeSettingScope* scope) {
++  *scope = ChromeSettingScope::kRegular;
++  const std::string* scope_str = details.FindString("scope");
++  if (!scope_str)
++    return true;
++  *scope = api::types::ParseChromeSettingScope(*scope_str);
++  return *scope != ChromeSettingScope::kNone;
++}
++
++bool IsIncognitoScope(ChromeSettingScope scope) {
++  return scope == ChromeSettingScope::kIncognitoPersistent ||
++         scope == ChromeSettingScope::kIncognitoSessionOnly;
++}
++
++}  // namespace
++
++ElectronPreferenceAPI::ElectronPreferenceAPI(content::BrowserContext* context)
++    : browser_context_(context) {
++  auto* event_router = EventRouter::Get(context);
++  for (const auto& mapping : kMappings)
++    event_router->RegisterObserver(this, OnChangeEventName(mapping));
++  auto* registry = ExtensionRegistry::Get(context);
++  registry_observation_.Observe(registry);
++  for (const auto& extension : registry->enabled_extensions())
++    OnExtensionLoaded(context, extension.get());
++}
++
++ElectronPreferenceAPI::~ElectronPreferenceAPI() = default;
++
++// static
++BrowserContextKeyedAPIFactory<ElectronPreferenceAPI>*
++ElectronPreferenceAPI::GetFactoryInstance() {
++  static base::NoDestructor<BrowserContextKeyedAPIFactory<ElectronPreferenceAPI>>
++      instance;
++  return instance.get();
++}
++
++void ElectronPreferenceAPI::Shutdown() {
++  EventRouter::Get(browser_context_)->UnregisterObserver(this);
++  registry_observation_.Reset();
++  registrar_.reset();
++}
++
++void ElectronPreferenceAPI::OnListenerAdded(const EventListenerInfo& details) {
++  if (registrar_)
++    return;
++  registrar_ = std::make_unique<PrefChangeRegistrar>();
++  registrar_->Init(GetPrefs(browser_context_));
++  for (const auto& mapping : kMappings) {
++    registrar_->Add(mapping.browser_pref,
++                    base::BindRepeating(&ElectronPreferenceAPI::OnPrefChanged,
++                                        base::Unretained(this),
++                                        std::string(mapping.browser_pref)));
++  }
++}
++
++// Electron loads extensions without installing them into ExtensionPrefs, so
++// the settings an extension controls are registered here instead, and the
++// persisted ones come back when it loads again.
++void ElectronPreferenceAPI::OnExtensionLoaded(
++    content::BrowserContext* browser_context,
++    const Extension* extension) {
++  auto* value_map = ExtensionPrefValueMapFactory::GetForBrowserContext(
++      browser_context_);
++  value_map->SetExtensionState(extension->id(), /*is_enabled=*/true);
++  value_map->RegisterExtension(extension->id(), base::Time::Now(),
++                               /*is_enabled=*/true,
++                               /*is_incognito_enabled=*/false);
++  const base::DictValue* persisted =
++      ExtensionPrefs::Get(browser_context_)
++          ->ReadPrefAsDict(extension->id(), pref_names::kPrefPreferences);
++  if (!persisted)
++    return;
++  for (const auto& mapping : kMappings) {
++    if (const base::Value* value =
++            persisted->Find(mapping.browser_pref)) {
++      value_map->SetExtensionPref(extension->id(), mapping.browser_pref,
++                                  ChromeSettingScope::kRegular, value->Clone());
++    }
++  }
++}
++
++void ElectronPreferenceAPI::OnExtensionUnloaded(
++    content::BrowserContext* browser_context,
++    const Extension* extension,
++    UnloadedExtensionReason reason) {
++  ExtensionPrefValueMapFactory::GetForBrowserContext(browser_context_)
++      ->SetExtensionState(extension->id(), /*is_enabled=*/false);
++}
++
++void ElectronPreferenceAPI::OnExtensionUninstalled(
++    content::BrowserContext* browser_context,
++    const Extension* extension,
++    UninstallReason reason) {
++  auto* helper = ExtensionPrefsHelper::Get(browser_context_);
++  for (const auto& mapping : kMappings) {
++    helper->RemoveExtensionControlledPref(
++        extension->id(), mapping.browser_pref, ChromeSettingScope::kRegular);
++  }
++  ExtensionPrefValueMapFactory::GetForBrowserContext(browser_context_)
++      ->UnregisterExtension(extension->id());
++}
++
++void ElectronPreferenceAPI::OnPrefChanged(const std::string& browser_pref) {
++  const PrefMapping* mapping = FindByBrowserPref(browser_pref);
++  auto* event_router = EventRouter::Get(browser_context_);
++  const std::string event_name = OnChangeEventName(*mapping);
++  if (!event_router->HasEventListener(event_name))
++    return;
++
++  const PrefService::Preference* pref =
++      GetPrefs(browser_context_)->FindPreference(browser_pref);
++  std::optional<base::Value> value =
++      GetTransformer(*mapping)->BrowserToExtensionPref(*pref->GetValue(),
++                                                       false);
++  if (!value) {
++    LOG(ERROR) << ErrorUtils::FormatErrorMessage(kConversionErrorMessage,
++                                                 browser_pref);
++    return;
++  }
++
++  for (const auto& extension :
++       ExtensionRegistry::Get(browser_context_)->enabled_extensions()) {
++    if (!event_router->ExtensionHasEventListener(extension->id(),
++                                                 event_name) ||
++        !extension->permissions_data()->HasAPIPermission(
++            mapping->permission)) {
++      continue;
++    }
++    base::DictValue details;
++    details.Set("value", value->Clone());
++    details.Set("levelOfControl",
++                GetLevelOfControl(browser_context_, extension->id(),
++                                  browser_pref));
++    base::ListValue args;
++    args.Append(std::move(details));
++    event_router->DispatchEventToExtension(
++        extension->id(),
++        std::make_unique<Event>(events::TYPES_CHROME_SETTING_ON_CHANGE,
++                                event_name, std::move(args)));
++  }
++}
++
++template <>
++void BrowserContextKeyedAPIFactory<
++    ElectronPreferenceAPI>::DeclareFactoryDependencies() {
++  DependsOn(EventRouterFactory::GetInstance());
++  DependsOn(ExtensionPrefsFactory::GetInstance());
++  DependsOn(ExtensionPrefsHelperFactory::GetInstance());
++  DependsOn(ExtensionPrefValueMapFactory::GetInstance());
++  DependsOn(ExtensionRegistryFactory::GetInstance());
++}
++
++ExtensionFunction::ResponseAction ElectronGetPreferenceFunction::Run() {
++  const PrefMapping* mapping = nullptr;
++  const base::DictValue* details = nullptr;
++  EXTENSION_FUNCTION_VALIDATE(ParseArgs(args(), &mapping, &details));
++
++  if (details->FindBool("incognito").value_or(false) &&
++      !include_incognito_information()) {
++    return RespondNow(Error(extension_misc::kIncognitoErrorMessage));
++  }
++  if (!extension()->permissions_data()->HasAPIPermission(mapping->permission))
++    return RespondNow(Error(kPermissionErrorMessage, mapping->extension_pref));
++
++  const PrefService::Preference* pref =
++      GetPrefs(browser_context())->FindPreference(mapping->browser_pref);
++  std::optional<base::Value> value =
++      GetTransformer(*mapping)->BrowserToExtensionPref(*pref->GetValue(),
++                                                       false);
++  if (!value) {
++    return RespondNow(
++        Error(kConversionErrorMessage, std::string(mapping->browser_pref)));
++  }
++
++  base::DictValue result;
++  result.Set("value", std::move(*value));
++  result.Set("levelOfControl",
++             GetLevelOfControl(browser_context(), extension_id(),
++                               mapping->browser_pref));
++  return RespondNow(WithArguments(std::move(result)));
++}
++
++ExtensionFunction::ResponseAction ElectronSetPreferenceFunction::Run() {
++  const PrefMapping* mapping = nullptr;
++  const base::DictValue* details = nullptr;
++  EXTENSION_FUNCTION_VALIDATE(ParseArgs(args(), &mapping, &details));
++  const base::Value* value = details->Find("value");
++  EXTENSION_FUNCTION_VALIDATE(value);
++  ChromeSettingScope scope;
++  EXTENSION_FUNCTION_VALIDATE(ParseScope(*details, &scope));
++
++  if (IsIncognitoScope(scope) && !include_incognito_information())
++    return RespondNow(Error(extension_misc::kIncognitoErrorMessage));
++  if (!extension()->permissions_data()->HasAPIPermission(mapping->permission))
++    return RespondNow(Error(kPermissionErrorMessage, mapping->extension_pref));
++
++  PrefTransformerInterface* transformer = GetTransformer(*mapping);
++  std::string error;
++  bool bad_message = false;
++  std::optional<base::Value> browser_value =
++      transformer->ExtensionToBrowserPref(*value, error, bad_message);
++  if (!browser_value) {
++    EXTENSION_FUNCTION_VALIDATE(!bad_message);
++    return RespondNow(Error(std::move(error)));
++  }
++  const PrefService::Preference* pref =
++      GetPrefs(browser_context())->FindPreference(mapping->browser_pref);
++  EXTENSION_FUNCTION_VALIDATE(browser_value->type() == pref->GetType());
++  EXTENSION_FUNCTION_VALIDATE(
++      transformer->BrowserToExtensionPref(*browser_value, false));
++
++  ExtensionPrefsHelper::Get(browser_context())
++      ->SetExtensionControlledPref(extension_id(), mapping->browser_pref,
++                                   scope, std::move(*browser_value));
++  return RespondNow(NoArguments());
++}
++
++ExtensionFunction::ResponseAction ElectronClearPreferenceFunction::Run() {
++  const PrefMapping* mapping = nullptr;
++  const base::DictValue* details = nullptr;
++  EXTENSION_FUNCTION_VALIDATE(ParseArgs(args(), &mapping, &details));
++  ChromeSettingScope scope;
++  EXTENSION_FUNCTION_VALIDATE(ParseScope(*details, &scope));
++
++  if (!extension()->permissions_data()->HasAPIPermission(mapping->permission))
++    return RespondNow(Error(kPermissionErrorMessage, mapping->extension_pref));
++
++  ExtensionPrefsHelper::Get(browser_context())
++      ->RemoveExtensionControlledPref(extension_id(), mapping->browser_pref,
++                                      scope);
++  return RespondNow(NoArguments());
++}
++
++}  // namespace extensions
+diff --git a/shell/browser/extensions/api/preference/preference_api.h b/shell/browser/extensions/api/preference/preference_api.h
+new file mode 100644
+--- /dev/null
++++ b/shell/browser/extensions/api/preference/preference_api.h
+@@ -0,0 +1,106 @@
++// Copyright (c) 2026 Anthropic PBC
++// Use of this source code is governed by the MIT license that can be
++// found in the LICENSE file.
++
++#ifndef ELECTRON_SHELL_BROWSER_EXTENSIONS_API_PREFERENCE_PREFERENCE_API_H_
++#define ELECTRON_SHELL_BROWSER_EXTENSIONS_API_PREFERENCE_PREFERENCE_API_H_
++
++#include <memory>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "extensions/browser/browser_context_keyed_api_factory.h"
++#include "extensions/browser/event_router.h"
++#include "extensions/browser/extension_function.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_registry_observer.h"
++
++namespace extensions {
++
++// The browser side of the ChromeSetting type (chrome.proxy.settings): lets
++// extensions control browser preferences through the extension preference
++// store, and tells them when a setting changes.
++class ElectronPreferenceAPI : public BrowserContextKeyedAPI,
++                      public EventRouter::Observer,
++                      public ExtensionRegistryObserver {
++ public:
++  explicit ElectronPreferenceAPI(content::BrowserContext* context);
++  ElectronPreferenceAPI(const ElectronPreferenceAPI&) = delete;
++  ElectronPreferenceAPI& operator=(const ElectronPreferenceAPI&) = delete;
++  ~ElectronPreferenceAPI() override;
++
++  static BrowserContextKeyedAPIFactory<ElectronPreferenceAPI>* GetFactoryInstance();
++
++  // KeyedService:
++  void Shutdown() override;
++
++  // EventRouter::Observer:
++  void OnListenerAdded(const EventListenerInfo& details) override;
++
++  // ExtensionRegistryObserver:
++  void OnExtensionLoaded(content::BrowserContext* browser_context,
++                         const Extension* extension) override;
++  void OnExtensionUnloaded(content::BrowserContext* browser_context,
++                           const Extension* extension,
++                           UnloadedExtensionReason reason) override;
++  void OnExtensionUninstalled(content::BrowserContext* browser_context,
++                              const Extension* extension,
++                              UninstallReason reason) override;
++
++ private:
++  friend class BrowserContextKeyedAPIFactory<ElectronPreferenceAPI>;
++
++  void OnPrefChanged(const std::string& browser_pref);
++
++  // BrowserContextKeyedAPI:
++  static const char* service_name() { return "ElectronPreferenceAPI"; }
++  static const bool kServiceIsNULLWhileTesting = true;
++
++  raw_ptr<content::BrowserContext> browser_context_;
++  std::unique_ptr<PrefChangeRegistrar> registrar_;
++  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
++      registry_observation_{this};
++};
++
++template <>
++void BrowserContextKeyedAPIFactory<ElectronPreferenceAPI>::DeclareFactoryDependencies();
++
++class ElectronGetPreferenceFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("types.ChromeSetting.get", TYPES_CHROMESETTING_GET)
++
++ protected:
++  ~ElectronGetPreferenceFunction() override = default;
++
++  // ExtensionFunction:
++  ResponseAction Run() override;
++};
++
++class ElectronSetPreferenceFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("types.ChromeSetting.set", TYPES_CHROMESETTING_SET)
++
++ protected:
++  ~ElectronSetPreferenceFunction() override = default;
++
++  // ExtensionFunction:
++  ResponseAction Run() override;
++};
++
++class ElectronClearPreferenceFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("types.ChromeSetting.clear",
++                             TYPES_CHROMESETTING_CLEAR)
++
++ protected:
++  ~ElectronClearPreferenceFunction() override = default;
++
++  // ExtensionFunction:
++  ResponseAction Run() override;
++};
++
++}  // namespace extensions
++
++#endif  // ELECTRON_SHELL_BROWSER_EXTENSIONS_API_PREFERENCE_PREFERENCE_API_H_
+diff --git a/shell/browser/extensions/electron_browser_context_keyed_service_factories.cc b/shell/browser/extensions/electron_browser_context_keyed_service_factories.cc
+--- a/shell/browser/extensions/electron_browser_context_keyed_service_factories.cc
++++ b/shell/browser/extensions/electron_browser_context_keyed_service_factories.cc
+@@ -5,6 +5,7 @@
+ #include "shell/browser/extensions/electron_browser_context_keyed_service_factories.h"
+ 
+ #include "extensions/browser/updater/update_service_factory.h"
++#include "shell/browser/extensions/api/preference/preference_api.h"
+ #include "shell/browser/extensions/electron_extension_system_factory.h"
+ 
+ namespace extensions::electron {
+@@ -15,6 +16,7 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
+   UpdateServiceFactory::GetInstance();
+ 
+   ElectronExtensionSystemFactory::GetInstance();
++  ElectronPreferenceAPI::GetFactoryInstance();
+ }
+ 
+ }  // namespace extensions::electron
+diff --git a/shell/browser/extensions/electron_extensions_browser_api_provider.cc b/shell/browser/extensions/electron_extensions_browser_api_provider.cc
+--- a/shell/browser/extensions/electron_extensions_browser_api_provider.cc
++++ b/shell/browser/extensions/electron_extensions_browser_api_provider.cc
+@@ -13,6 +13,7 @@
+ #include "extensions/browser/extension_function_registry.h"
+ #include "shell/browser/extensions/api/extension_action/extension_action_api.h"
+ #include "shell/browser/extensions/api/generated_api_registration.h"
++#include "shell/browser/extensions/api/preference/preference_api.h"
+ #include "shell/browser/extensions/api/tabs/tabs_api.h"
+ 
+ namespace extensions {
+@@ -81,6 +82,10 @@ void ElectronExtensionsBrowserAPIProvider::RegisterExtensionFunctions(
+   // Generated APIs from Electron.
+   api::ElectronGeneratedFunctionRegistry::RegisterAll(registry);
+ 
++  registry->RegisterFunction<ElectronGetPreferenceFunction>();
++  registry->RegisterFunction<ElectronSetPreferenceFunction>();
++  registry->RegisterFunction<ElectronClearPreferenceFunction>();
++
+   // This provider is added after CoreExtensionsBrowserAPIProvider, so this
+   // replaces the core registrations.
+   OverrideUnsupportedFunctions(registry);

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { ensureOwnedDir, writePrivateFile } from "shared";
+
 import { enableTerminalImages } from "./editors";
 import { apparmorSetup } from "./sandbox";
 import { installedVersion } from "./upgrade";
@@ -109,8 +111,8 @@ export function linkSkills(): SkillLinks {
     const target = fs.readlinkSync(link);
     if (target.startsWith(root + path.sep) || !fs.existsSync(target)) fs.rmSync(link, { force: true });
   }
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(receiptFile(), [...wrote].sort().join("\n") + (wrote.size > 0 ? "\n" : ""));
+  ensureOwnedDir(stateDir());
+  writePrivateFile(receiptFile(), [...wrote].sort().join("\n") + (wrote.size > 0 ? "\n" : ""));
   return result;
 }
 
@@ -146,8 +148,8 @@ function skillsDeclined(): boolean {
 }
 
 function rememberSkillChoice(install: boolean): void {
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(skillChoiceFile(), install ? "yes\n" : "no\n");
+  ensureOwnedDir(stateDir());
+  writePrivateFile(skillChoiceFile(), install ? "yes\n" : "no\n");
 }
 
 function askOnTerminal(prompt: string): string | null {
@@ -196,8 +198,8 @@ function marker(): { file: string; want: string } | null {
 export function markSetupDone(): void {
   const state = marker();
   if (!state) return;
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(state.file, `${state.want}\n`);
+  ensureOwnedDir(stateDir());
+  writePrivateFile(state.file, `${state.want}\n`);
 }
 
 export function ensureSetup(): void {

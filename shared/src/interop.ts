@@ -4,6 +4,10 @@ import path from "node:path";
 
 import { z } from "zod";
 
+import { reclaimPrivateDir } from "@zenbu-labs/pixel/private-dir";
+
+import { writePrivateFile } from "./private-files";
+
 const HOME = os.homedir();
 
 function interopRoot(kind: "state" | "share"): string {
@@ -44,8 +48,8 @@ function instanceFile(key: string): string {
 
 export function advertiseInstance(key: string, record: InteropInstance): void {
   try {
-    fs.mkdirSync(INTEROP_INSTANCES_DIR, { recursive: true });
-    fs.writeFileSync(instanceFile(key), `${JSON.stringify(record)}\n`);
+    reclaimPrivateDir(INTEROP_INSTANCES_DIR);
+    writePrivateFile(instanceFile(key), `${JSON.stringify(record)}\n`);
   } catch {}
 }
 
@@ -115,8 +119,8 @@ export function appId(value: string): string {
 }
 
 export function registerApp(app: Omit<RegisteredApp, "version" | "registeredAt">): void {
-  fs.mkdirSync(INTEROP_APPS_DIR, { recursive: true });
-  fs.writeFileSync(
+  reclaimPrivateDir(INTEROP_APPS_DIR);
+  writePrivateFile(
     appFile(app.id),
     `${JSON.stringify({ version: APP_MANIFEST_VERSION, registeredAt: Date.now(), ...app }, null, 2)}\n`,
   );

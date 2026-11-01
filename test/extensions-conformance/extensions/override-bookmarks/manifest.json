@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "God Bookmarks",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArt1gaovYZGDl1hfzecOiGl5d7PkDrDwLnPTE9e+TaU5sfthDyFydwJDVU6RSxpVBW90GDEQQhoR9HIt9e4TKkhojiRR/niOYWv2a0FdoE0sY4+jBpa+rki3BkA19ucPDHJuHox72qrFE6RA7wIjKRTZKJIWRIPUKCsSjtlLKJ5lKgu5r98VTM0v5iGDsgP5c2Yn9W1C2vY+sTWcIXuJ8P8FmvEb4og0QKdNO+PX4BDyASTfGohD8HVojjTE9HJythP9a3m23jTCpPzXKK+BqtG+4WHC2+CVskQh8i2G3cb4w2CfC67i3XnKRzBIH0dawxSu00oGnAm5vajBuJe5tdwIDAQAB",
+  "chrome_url_overrides": {
+    "bookmarks": "page.html"
+  }
+}

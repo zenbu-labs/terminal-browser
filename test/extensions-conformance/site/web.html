@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>God web page</title>
+<h1>externally_connectable checks</h1>
+<script>
+const GOD = "hgiikgalddcijbhlkbmbemmpbohkocaj";
+const PEER = "lcklaejdobalopdokfonmbaebpondmhh";
+const results = [];
+const check = async (id, fn) => {
+  try {
+    results.push({ id, ok: true, sig: String((await fn()) ?? "ok"), note: "" });
+  } catch (error) {
+    results.push({ id, ok: false, sig: "throws: " + error.message, note: error.message });
+  }
+};
+(async () => {
+  await check("web.chrome.runtime-exposed", () => typeof chrome?.runtime?.sendMessage + "/" + typeof chrome?.runtime?.connect + "/id=" + typeof chrome?.runtime?.id);
+  await check("web.runtime.sendMessage", async () => {
+    const r = await chrome.runtime.sendMessage(GOD, { kind: "from-web" });
+    if (r?.god !== "external-reply") throw new Error("bad reply " + JSON.stringify(r));
+    return "origin=" + (r.sender.origin === location.origin) + " url=" + (r.sender.url === location.href) + " tab=" + typeof r.sender.tab + " keys=" + Object.keys(r.sender).sort().join(",");
+  });
+  await check("web.runtime.sendMessage#callback", () => new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(GOD, { kind: "from-web-cb" }, (r) => (r ? resolve("callback reply") : reject(new Error(chrome.runtime.lastError?.message))));
+  }));
+  await check("web.runtime.connect", () => new Promise((resolve, reject) => {
+    const port = chrome.runtime.connect(GOD, { name: "web-port" });
+    port.onMessage.addListener((m) => (m.god === "external-port-reply" ? resolve("port reply") : reject(new Error(JSON.stringify(m)))));
+    port.onDisconnect.addListener(() => reject(new Error("disconnected " + chrome.runtime.lastError?.message)));
+    port.postMessage({ hi: "web" });
+    setTimeout(() => reject(new Error("no reply")), 4000);
+  }));
+  await check("web.runtime.sendMessage#not-connectable", async () => {
+    try {
+      await chrome.runtime.sendMessage(PEER, { kind: "from-web" });
+    } catch (error) {
+      return "rejects: " + error.message;
+    }
+    throw new Error("peer accepted a message from a web page");
+  });
+  await check("web.main-world-content-script", () => document.documentElement.dataset.godMain);
+  window.GOD_WEB_RESULTS = results;
+})();
+</script>

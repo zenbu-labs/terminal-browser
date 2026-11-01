@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { AGENT_SOCKETS_DIR } from "shared";
+import { AGENT_SOCKETS_DIR, ensurePrivateDir } from "shared";
 import type { Terminal } from "@zenbu-labs/pixel/terminal";
 
 import { control } from "./control";
@@ -59,7 +59,7 @@ function sessionName(browser: Browser): string {
 }
 
 function childEnv(): NodeJS.ProcessEnv {
-  fs.mkdirSync(AGENT_SOCKETS_DIR, { recursive: true });
+  ensurePrivateDir(AGENT_SOCKETS_DIR);
   return { ...process.env, AGENT_BROWSER_SOCKET_DIR: AGENT_SOCKETS_DIR };
 }
 
@@ -114,6 +114,10 @@ function matchTab(
   agentView: AgentTab[],
   tab: TabTarget,
 ): AgentTab {
+  // Extension background pages and popups are page targets too, but never one of our tabs.
+  if (!tab.url.startsWith("chrome-extension://")) {
+    agentView = agentView.filter((entry) => !entry.url.startsWith("chrome-extension://"));
+  }
   if (agentView.length === 0) throw new Error("agent-browser sees no tabs on this browser");
   const sameUrl = agentView.filter((entry) => entry.url === tab.url);
   if (sameUrl.length === 1) return sameUrl[0];
