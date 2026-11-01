@@ -13,7 +13,11 @@ interface PatchedExtensions {
   setRuntimePermissions(extensionId: string, granted: NativePermissions): Promise<void>;
   getActivePermissions(extensionId: string): NativePermissions | null;
   setUserScriptsAllowed(extensionId: string, allowed: boolean): boolean;
+  setViewType(contents: WebContents, viewType: NativeViewType): boolean;
 }
+
+// Popups and side panels aren't tabs: Chromium gives their requests tabId -1 and their messages no sender.tab.
+export type NativeViewType = "tab" | "popup" | "sidePanel";
 
 function patched(session: Session): PatchedExtensions {
   return session.extensions as unknown as PatchedExtensions;
@@ -39,6 +43,11 @@ export function nativeActivePermissions(session: Session, extensionId: string): 
 
 export function setNativeUserScriptsAllowed(session: Session, extensionId: string, allowed: boolean): boolean {
   return patched(session).setUserScriptsAllowed(extensionId, allowed);
+}
+
+export function setNativeViewType(session: Session, contents: WebContents, viewType: NativeViewType): boolean {
+  if (contents.isDestroyed()) return false;
+  return patched(session).setViewType(contents, viewType);
 }
 
 // Added to WebFrameMain by pixel's Electron patches: the id Chromium gives the frame's current document,

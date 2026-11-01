@@ -29,7 +29,7 @@ import { Importer } from "./import";
 import { Installer } from "./install";
 import { MenuStore } from "./menus";
 import { LoadedExtension } from "./loaded";
-import { grantNativeActiveTab, revokeNativeActiveTab, setNativeUserScriptsAllowed } from "./native";
+import { grantNativeActiveTab, revokeNativeActiveTab, setNativeUserScriptsAllowed, setNativeViewType } from "./native";
 import { asManifest } from "./manifest";
 import { Router } from "./router";
 import { SenderTabs } from "./sender-tabs";
@@ -341,6 +341,7 @@ export class ExtensionService {
 
   registerSurface(contents: WebContents, window: ExtensionWindow, kind: SurfaceKind, extensionId: string) {
     this.surfaces.set(contents.id, { window, kind, extensionId });
+    setNativeViewType(this.session, contents, kind === "side-panel" ? "sidePanel" : "popup");
     contents.once("destroyed", () => {
       if (this.surfaces.get(contents.id)?.window === window) this.surfaces.delete(contents.id);
     });
