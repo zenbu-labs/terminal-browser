@@ -184,6 +184,11 @@ export class PageHost {
     screen.on("display-metrics-changed", this.onDisplayChange);
     this.window.webContents.on("paint", (event, dirtyRect, image) => {
       const shmFrame = event.softwareFrame;
+      if (!this.alive()) {
+        event.texture?.release();
+        shmFrame?.release();
+        return;
+      }
       const size = event.texture
         ? {
             width: event.texture.textureInfo.codedSize.width,
@@ -574,14 +579,21 @@ export class PageHost {
   }
 
   private async loadFavicon(urls: string[]) {
+    if (!this.alive()) return;
     const seq = ++this.faviconSeq;
     const file = await this.favicons.resolve(urls, this.window.webContents.session).catch(() => null);
     if (file && seq === this.faviconSeq && !this.stopped) this.updateState({ favicon: file });
   }
 
-  private updateNavigation(loading: boolean, url = this.window.webContents.getURL()) {
+  // The page keeps emitting events while it is being destroyed, after its window is gone.
+  private alive(): boolean {
+    return !this.stopped && !this.window.isDestroyed() && !this.window.webContents.isDestroyed();
+  }
+
+  private updateNavigation(loading: boolean, url?: string) {
+    if (!this.alive()) return;
     this.updateState({
-      url,
+      url: url ?? this.window.webContents.getURL(),
       loading,
       canGoBack: this.window.webContents.navigationHistory.canGoBack(),
       canGoForward: this.window.webContents.navigationHistory.canGoForward(),
@@ -590,6 +602,7 @@ export class PageHost {
   }
 
   private updateState(update: Partial<WebViewState>) {
+    if (this.stopped) return;
     this.state = { ...this.state, ...update };
     this.onState(this.state);
   }

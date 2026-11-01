@@ -178,9 +178,6 @@ export function Chrome({
       {record && layout.toolbarHeight === 0 && (
         <RecordCornerButton view={record} actions={actions} layout={layout} theme={theme} />
       )}
-      {pageMenu && (
-        <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
-      )}
       {findOpen && (
         <FindBar state={state} actions={actions} layout={layout} theme={theme} />
       )}
@@ -237,6 +234,9 @@ export function Chrome({
       )}
       {extensions?.menuOpen && (
         <ExtensionsMenu view={extensions} anchor={puzzleAnchor} layout={layout} theme={theme} actions={actions.extensions} />
+      )}
+      {pageMenu && (
+        <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
       )}
       {newTab && <NewTabCard view={newTab} actions={actions} layout={layout} theme={theme} />}
       {urlEdit && <UrlCard state={state} actions={actions} layout={layout} theme={theme} />}
