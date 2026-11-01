@@ -865,6 +865,7 @@ impl Engine {
         if window == self.comp.window && cell == self.cell {
             return Ok(());
         }
+        self.term.retry_frame_transport(false)?;
         let estimate = ws.cell_size();
         logging::info(
             "engine",
