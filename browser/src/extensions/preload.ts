@@ -69,10 +69,11 @@ const bridge: BridgeShape = {
 
 // Offscreen documents run without context isolation, and like in Chrome they
 // only get the chrome.runtime that Chromium already provides.
-if (process.contextIsolated) {
+const isWorker = process.type === "service-worker";
+if (process.contextIsolated && (isWorker || globalThis.location?.protocol === "chrome-extension:")) {
   contextBridge.executeInMainWorld({
     func: installChromeApis,
-    args: [bridge, process.type === "service-worker", API_SPEC, API_SCHEMAS],
+    args: [bridge, isWorker, API_SPEC, API_SCHEMAS],
   });
 }
 
