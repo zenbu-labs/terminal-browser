@@ -39,6 +39,7 @@ pub(crate) enum Presenter {
 pub(crate) enum Identity {
     Ghostty { version: (u32, u32, u32) },
     Kitty { version: (u32, u32, u32) },
+    Rex,
     Unknown,
 }
 
@@ -52,7 +53,7 @@ impl Identity {
     fn takes_patches(self) -> bool {
         match self {
             Identity::Ghostty { version } => version >= (1, 2, 0),
-            Identity::Kitty { .. } => true,
+            Identity::Kitty { .. } | Identity::Rex => true,
             Identity::Unknown => false,
         }
     }
@@ -163,6 +164,7 @@ pub(super) fn parse_xtversion(buf: &[u8]) -> Option<Identity> {
     Some(match name.as_str() {
         "ghostty" => Identity::Ghostty { version },
         "kitty" => Identity::Kitty { version },
+        "rex" => Identity::Rex,
         _ => Identity::Unknown,
     })
 }
@@ -294,7 +296,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn xtversion_replies_identify_ghostty_and_kitty() {
+    fn xtversion_replies_identify_ghostty_kitty_and_rex() {
         assert_eq!(
             parse_xtversion(b"noise\x1bP>|ghostty 1.3.1\x1b\\"),
             Some(Identity::Ghostty { version: (1, 3, 1) })
@@ -302,6 +304,10 @@ mod tests {
         assert_eq!(
             parse_xtversion(b"\x1bP>|kitty(0.48.1)\x1b\\"),
             Some(Identity::Kitty { version: (0, 48, 1) })
+        );
+        assert_eq!(
+            parse_xtversion(b"\x1bP>|rex 0.0.1793377904-ge6592f\x1b\\"),
+            Some(Identity::Rex)
         );
         assert_eq!(
             parse_xtversion(b"\x1bP>|WezTerm 20240203\x1b\\"),
@@ -320,6 +326,7 @@ mod tests {
         assert_eq!(local(None, FrameTransport::Shared, kitty), Presenter::Patched);
         assert_eq!(local(None, FrameTransport::File, old_ghostty), Presenter::Full);
         assert_eq!(local(None, FrameTransport::File, Identity::Unknown), Presenter::Full);
+        assert_eq!(local(None, FrameTransport::File, Identity::Rex), Presenter::Patched);
         assert_eq!(local(None, FrameTransport::Inline, ghostty), Presenter::Full);
         assert_eq!(local(Some("full"), FrameTransport::File, ghostty), Presenter::Full);
         assert_eq!(local(Some(" patched "), FrameTransport::File, Identity::Unknown), Presenter::Patched);
