@@ -2,22 +2,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { ensureOwnedDir } from "@zenbu-labs/pixel/private-dir";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 
 import { migrate } from "./migrate";
 import { migrations } from "./migrations.gen";
-import { DB_FILE, ensureDataDir } from "./paths";
+import { DB_FILE, ensureDataDir, tightenDatabaseFiles } from "./paths";
+import { ensurePrivateFile } from "./private-files";
 import * as schema from "./schema";
 
 export type Store = ReturnType<typeof openStore>;
 
 export function openStore(file: string = DB_FILE) {
   if (file === DB_FILE) ensureDataDir();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  else if (!fs.existsSync(path.dirname(file))) ensureOwnedDir(path.dirname(file));
+  // SQLite gives the -wal and -shm files it creates the database file's permissions.
+  ensurePrivateFile(file);
+  tightenDatabaseFiles(file);
   const sqlite = new DatabaseSync(file);
   sqlite.exec("PRAGMA journal_mode = WAL");
   sqlite.exec("PRAGMA busy_timeout = 5000");
-  migrate(sqlite, migrations);
+  migrate(sqlite, migrations, file);
   const db = drizzle(
     async (sql, params, method) => {
       const stmt = sqlite.prepare(sql);

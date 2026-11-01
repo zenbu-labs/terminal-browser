@@ -1,0 +1,195 @@
+diff --git a/patches/devtools_frontend/.patches b/patches/devtools_frontend/.patches
+--- a/patches/devtools_frontend/.patches
++++ b/patches/devtools_frontend/.patches
+@@ -1,2 +1,3 @@
+ chore_expose_ui_to_allow_electron_to_set_dock_side.patch
+ live_metrics_handle_empty_inp_entries.patch
++feat_let_the_embedder_forbid_schemes_to_devtools_extensions.patch
+diff --git a/patches/devtools_frontend/feat_let_the_embedder_forbid_schemes_to_devtools_extensions.patch b/patches/devtools_frontend/feat_let_the_embedder_forbid_schemes_to_devtools_extensions.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/devtools_frontend/feat_let_the_embedder_forbid_schemes_to_devtools_extensions.patch
+@@ -0,0 +1,72 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: RobPruzan <rapruzan@buffalo.edu>
++Date: Mon, 2 Nov 2026 19:57:06 -0500
++Subject: feat: let the embedder forbid schemes to DevTools extensions
++
++Electron apps register their own standard schemes for their UI (for example with protocol.registerSchemesAsPrivileged). DevTools extensions must not reach those pages, just as they may not reach chrome:// pages, so the embedder can name more schemes for the extension server to refuse.
++
++diff --git a/front_end/devtools_compatibility.js b/front_end/devtools_compatibility.js
++index 78f85604e8394f30860d1aca7d107115ac45de35..f2f429b8f61d457c7d76ede255220d78ab91a681 100644
++--- a/front_end/devtools_compatibility.js
+++++ b/front_end/devtools_compatibility.js
++@@ -39,6 +39,11 @@
++      */
++     _originsForbiddenForExtensions = [];
++ 
+++    /**
+++     * @type {string[]}
+++     */
+++    _schemesForbiddenForExtensions = [];
+++
++     /**
++      * @type {ExtensionDescriptor[]}
++      */
++@@ -148,6 +153,20 @@
++       return this._originsForbiddenForExtensions;
++     }
++ 
+++    /**
+++     * @param {string[]} forbiddenSchemes
+++     */
+++    setSchemesForbiddenForExtensions(forbiddenSchemes) {
+++      this._schemesForbiddenForExtensions = forbiddenSchemes;
+++    }
+++
+++    /**
+++     * @returns {string[]}
+++     */
+++    getSchemesForbiddenForExtensions() {
+++      return this._schemesForbiddenForExtensions;
+++    }
+++
++     /**
++      * @param {string} url
++      */
++diff --git a/front_end/panels/common/ExtensionServer.ts b/front_end/panels/common/ExtensionServer.ts
++index 8088151049cbc1ffdd7ed821bca44ee94e3e6a51..e404f95014e2d1712a9eab99b0b4b3ea4f047605 100644
++--- a/front_end/panels/common/ExtensionServer.ts
+++++ b/front_end/panels/common/ExtensionServer.ts
++@@ -38,7 +38,11 @@ const kForbiddenSchemes = [
++ 
++ declare global {
++   interface Window {
++-    DevToolsAPI?: {getInspectedTabId?(): string|undefined, getOriginsForbiddenForExtensions?(): string[]};
+++    DevToolsAPI?: {
+++      getInspectedTabId?(): string|undefined,
+++      getOriginsForbiddenForExtensions?(): string[],
+++      getSchemesForbiddenForExtensions?(): string[],
+++    };
++   }
++ }
++ 
++@@ -1745,6 +1749,10 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
++       return false;
++     }
++ 
+++    if ((window.DevToolsAPI?.getSchemesForbiddenForExtensions?.() || []).includes(parsedURL.protocol)) {
+++      return false;
+++    }
+++
++     if ((window.DevToolsAPI?.getOriginsForbiddenForExtensions?.() || []).includes(parsedURL.origin)) {
++       return false;
++     }
+diff --git a/shell/browser/ui/inspectable_web_contents.cc b/shell/browser/ui/inspectable_web_contents.cc
+--- a/shell/browser/ui/inspectable_web_contents.cc
++++ b/shell/browser/ui/inspectable_web_contents.cc
+@@ -84,7 +84,9 @@
+ #include "extensions/browser/extension_registry.h"
+ #include "extensions/common/manifest_handlers/chrome_url_overrides_handler.h"
+ #include "extensions/common/manifest_handlers/devtools_page_handler.h"
++#include "extensions/common/manifest.h"
+ #include "extensions/common/permissions/permissions_data.h"
++#include "shell/common/extensions/electron_extensions_client.h"
+ #endif
+ 
+ namespace electron {
+@@ -673,7 +675,10 @@ void InspectableWebContents::AddDevToolsExtensionsToClient() {
+     return;
+ 
+   base::ListValue results;
++  base::ListValue forbidden_origins;
+   for (auto& extension : registry->enabled_extensions()) {
++    if (extensions::Manifest::IsComponentLocation(extension->location()))
++      forbidden_origins.Append(extension->origin().Serialize());
+     auto devtools_page_url =
+         extensions::chrome_manifest_urls::GetDevToolsPage(extension.get());
+     if (devtools_page_url.is_empty())
+@@ -698,6 +703,14 @@ void InspectableWebContents::AddDevToolsExtensionsToClient() {
+     results.Append(std::move(extension_info));
+   }
+ 
++  base::ListValue forbidden_schemes;
++  for (const std::string& scheme : GetAppSchemesRestrictedForExtensions())
++    forbidden_schemes.Append(scheme + ":");
++
++  CallClientFunction("DevToolsAPI", "setSchemesForbiddenForExtensions",
++                     base::Value(std::move(forbidden_schemes)));
++  CallClientFunction("DevToolsAPI", "setOriginsForbiddenForExtensions",
++                     base::Value(std::move(forbidden_origins)));
+   CallClientFunction("DevToolsAPI", "addExtensions",
+                      base::Value(std::move(results)));
+ }
+diff --git a/shell/common/extensions/electron_extensions_client.cc b/shell/common/extensions/electron_extensions_client.cc
+--- a/shell/common/extensions/electron_extensions_client.cc
++++ b/shell/common/extensions/electron_extensions_client.cc
+@@ -68,25 +68,15 @@ class ElectronPermissionMessageProvider
+   }
+ };
+ 
+-// The app's own standard schemes (protocol.registerSchemesAsPrivileged) that
+-// don't allow extensions hold the app's UI, which extensions may not script,
+-// just as they may not script chrome:// pages in Chrome.
+ class ElectronPermissionsPolicyDelegate
+     : public extensions::PermissionsData::PolicyDelegate {
+  public:
+   bool IsRestrictedUrl(const GURL& document_url, std::string* error) override {
+     if (!document_url.IsStandard() ||
+-        URLPattern::IsValidSchemeForExtensions(
+-            document_url.GetScheme())) {
++        !std::ranges::contains(electron::GetAppSchemesRestrictedForExtensions(),
++                               document_url.GetScheme())) {
+       return false;
+     }
+-    const std::vector<std::string> app_schemes = base::SplitString(
+-        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-            switches::kStandardSchemes),
+-        ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+-    if (std::ranges::find(app_schemes, document_url.GetScheme()) ==
+-        app_schemes.end())
+-      return false;
+     if (error)
+       *error = extensions::manifest_errors::kCannotAccessChromeUrl;
+     return true;
+@@ -95,6 +85,17 @@ class ElectronPermissionsPolicyDelegate
+ 
+ }  // namespace
+ 
++std::vector<std::string> GetAppSchemesRestrictedForExtensions() {
++  std::vector<std::string> schemes = base::SplitString(
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          switches::kStandardSchemes),
++      ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++  std::erase_if(schemes, [](const std::string& scheme) {
++    return URLPattern::IsValidSchemeForExtensions(scheme);
++  });
++  return schemes;
++}
++
+ ElectronExtensionsClient::ElectronExtensionsClient()
+     : webstore_base_url_(extension_urls::kChromeWebstoreBaseURL),
+       new_webstore_base_url_(extension_urls::kNewChromeWebstoreBaseURL),
+diff --git a/shell/common/extensions/electron_extensions_client.h b/shell/common/extensions/electron_extensions_client.h
+--- a/shell/common/extensions/electron_extensions_client.h
++++ b/shell/common/extensions/electron_extensions_client.h
+@@ -6,6 +6,7 @@
+ #define ELECTRON_SHELL_COMMON_EXTENSIONS_ELECTRON_EXTENSIONS_CLIENT_H_
+ 
+ #include <string>
++#include <vector>
+ 
+ #include "extensions/common/extensions_client.h"
+ #include "url/gurl.h"
+@@ -20,6 +21,11 @@ class URLPatternSet;
+ 
+ namespace electron {
+ 
++// The app's own standard schemes (protocol.registerSchemesAsPrivileged) that
++// don't allow extensions. They hold the app's UI, which extensions may not
++// script, just as they may not script chrome:// pages in Chrome.
++std::vector<std::string> GetAppSchemesRestrictedForExtensions();
++
+ // The app_shell implementation of ExtensionsClient.
+ class ElectronExtensionsClient : public extensions::ExtensionsClient {
+  public:

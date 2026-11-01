@@ -5,10 +5,18 @@ import path from "node:path";
 import { app } from "electron";
 
 // why is this defined in pixel store?
-import { DAEMON_SOCKET } from "shared";
+import { DAEMON_SOCKET, ensurePrivateDir, isLaunchToken } from "shared";
 import { createSession } from "./session/session";
+import { claimLaunch, hasPendingLaunches, stashLaunch } from "./session/pane-launch";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
+import { installPages } from "./pages/install";
+import { startExtensions } from "./extensions";
+import { extensionCommand } from "./extensions/remote";
+import type { ExtensionCommand } from "./extensions/remote";
+import { listenPrivately, privateServer } from "@zenbu-labs/pixel/private-socket";
+import { chromeUserAgent } from "./user-agent";
+import { startBrowsing } from "./browsing";
 
 // what
 const IDLE_EXIT_MS = 15_000;
@@ -38,24 +46,38 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     app.exit(3);
     return;
   }
-  fs.mkdirSync(path.dirname(DAEMON_SOCKET), { recursive: true });
-  fs.rmSync(DAEMON_SOCKET, { force: true });
+  try {
+    ensurePrivateDir(path.dirname(DAEMON_SOCKET));
+  } catch (error) {
+    process.stderr.write(`terminal-browser: ${error instanceof Error ? error.message : String(error)}\n`);
+    app.exit(1);
+    return;
+  }
 
   const build = buildStamp();
+  app.userAgentFallback = chromeUserAgent();
+  // The daemon decides when to exit; a pane whose only page closed itself gets a new page.
+  app.on("window-all-closed", () => {});
+  startBrowsing();
+  const extensions = startExtensions();
   const sessions = new Map<string, SessionHandle>();
-  servePages(() => {
+  const pageContext = () => {
     const all = [...sessions.values()];
     const shown = all.filter((open) => open.showsStartPage());
     const chosen = shown[shown.length - 1] ?? all[all.length - 1];
     return chosen?.pageContext() ?? { cwd: process.cwd(), theme: null };
-  });
+  };
+  servePages(pageContext);
+  installPages(extensions, pageContext);
   let seq = 0;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const scheduleIdleExit = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (sessions.size === 0) app.exit(0);
+      if (sessions.size > 0) return;
+      if (hasPendingLaunches()) scheduleIdleExit();
+      else app.exit(0);
     }, IDLE_EXIT_MS);
   };
   scheduleIdleExit();
@@ -72,7 +94,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   process.on("SIGINT", () => stopEverything(130));
   process.on("SIGTERM", () => stopEverything(143));
 
-  const server = net.createServer((connection) => {
+  const server = privateServer((connection) => {
     let key: string | null = null;
     let session: SessionHandle | null = null;
     const reply = (value: unknown) => {
@@ -137,6 +159,19 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
           session?.nudgeResize();
         } else if (message.cmd === "close") {
           session?.close();
+        } else if (message.cmd === "extensions") {
+          void extensionCommand(message as unknown as ExtensionCommand).then(
+            (data) => reply({ ok: true, data }),
+            (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+          );
+        } else if (message.cmd === "stash-launch") {
+          const { argv } = message as unknown as { argv?: unknown };
+          if (!Array.isArray(argv) || !argv.every((arg) => typeof arg === "string")) reply({ ok: false, error: "bad argv" });
+          else reply({ ok: true, token: stashLaunch(argv) });
+        } else if (message.cmd === "claim-launch") {
+          const { token } = message as unknown as { token?: unknown };
+          const argv = isLaunchToken(token) ? claimLaunch(token) : null;
+          reply(argv ? { ok: true, argv } : { ok: false, error: "unknown launch" });
         } else if (message.cmd === "shutdown") {
           reply({ ok: true, sessions: sessions.size });
           connection.end();
@@ -158,7 +193,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
     process.stderr.write(`terminal-browser daemon socket error: ${error}\n`);
     app.exit(1);
   });
-  server.listen(DAEMON_SOCKET);
+  listenPrivately(server, DAEMON_SOCKET);
 }
 
 function socketAlive(): Promise<boolean> {

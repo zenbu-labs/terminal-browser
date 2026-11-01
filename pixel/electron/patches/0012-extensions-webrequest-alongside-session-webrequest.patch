@@ -1,0 +1,32 @@
+diff --git a/shell/browser/electron_browser_client.cc b/shell/browser/electron_browser_client.cc
+--- a/shell/browser/electron_browser_client.cc
++++ b/shell/browser/electron_browser_client.cc
+@@ -1573,7 +1573,9 @@ void ElectronBrowserClient::WillCreateURLLoaderFactory(
+   // no frame and are not routed through extensions.
+   const bool is_browser_process_request =
+       type == URLLoaderFactoryType::kNavigation && !frame_host;
+-  if (!web_request->HasListener() && !is_browser_process_request) {
++  // Extensions see requests first, then session.webRequest listeners and
++  // intercepted protocols still get them through Electron's proxy below.
++  if (!is_browser_process_request) {
+     auto* web_request_api = extensions::BrowserContextKeyedAPIFactory<
+         extensions::WebRequestAPI>::Get(browser_context);
+ 
+@@ -1586,8 +1588,6 @@ void ElectronBrowserClient::WillCreateURLLoaderFactory(
+ 
+     if (bypass_redirect_checks)
+       *bypass_redirect_checks = used_proxy_for_web_request;
+-    if (used_proxy_for_web_request)
+-      return;
+   }
+ #endif
+ 
+@@ -1625,7 +1625,7 @@ void ElectronBrowserClient::WillCreateURLLoaderFactory(
+ 
+   mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
+       header_client_receiver;
+-  if (header_client)
++  if (header_client && !header_client->is_valid())
+     header_client_receiver = header_client->InitWithNewPipeAndPassReceiver();
+ 
+   auto* protocol_registry =

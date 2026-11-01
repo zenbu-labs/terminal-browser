@@ -1,0 +1,34 @@
+{
+ "unsupported": {
+  "desktopCapture": "not supported: no desktop picker in a terminal",
+  "gcm": "intentionally absent: needs Google's push service",
+  "instanceID": "needs Google's instance ID servers",
+  "processes": "dev channel only in Chrome",
+  "publicSuffix": "Chrome 153+, newer than Electron 44's Chromium",
+  "readingList": "intentionally absent: no reading list UI",
+  "surface:page|runtime.onEnabled": "newer than Electron 44's Chromium",
+  "surface:page|tabs.createSplit": "split views are newer than Electron 44's Chromium; terminal-browser has no split views",
+  "surface:page|tabs.unsplit": "split views are newer than Electron 44's Chromium; terminal-browser has no split views",
+  "surface:sw|runtime.onEnabled": "newer than Electron 44's Chromium",
+  "surface:sw|tabs.createSplit": "split views are newer than Electron 44's Chromium; terminal-browser has no split views",
+  "surface:sw|tabs.unsplit": "split views are newer than Electron 44's Chromium; terminal-browser has no split views",
+  "sw|tabs.createSplit": "split views are newer than Electron 44's Chromium; terminal-browser has no split views",
+  "sw|tabs.onDetached+onAttached": "tabs can't move between terminal panes",
+  "sw|tabs.unsplit": "split views are newer than Electron 44's Chromium; terminal-browser has no split views",
+  "sw|windows.create#tabId": "tabs can't move between terminal panes",
+  "sw|windows.update#bounds+onBoundsChanged": "the terminal owns pane size and position",
+  "sw|windows.update#state": "the terminal owns pane size and state",
+  "tabCapture": "not supported: no tab capture streams",
+  "tabGroups": "stubbed: terminal-browser has no tab groups",
+  "webAuthenticationProxy": "not implemented: no remote desktop WebAuthn proxying"
+ },
+ "knownDiffers": {
+  "sw|bookmarks.getTree": "approved copy, pending Rob",
+  "sw|management.getPermissionWarningsByManifest": "approved copy, pending Rob",
+  "sw|privacy.services.passwordSavingEnabled": "terminal-browser has no password manager, so it reports saving as off and not controllable",
+  "sw|privacy.websites.thirdPartyCookiesAllowed": "third-party cookies are always allowed; blocking them needs a native cookie-manager API, so the setting is not controllable"
+ },
+ "notRun": {
+  "^instanceID\\.(getID|getCreationTime)$": "needs the internet: Chrome asks Google's GCM servers for the ID, and runs are offline"
+ }
+}

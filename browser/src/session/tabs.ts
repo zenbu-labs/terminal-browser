@@ -3,7 +3,15 @@ import type { RefObject } from "react";
 import { initialWebViewState } from "@zenbu-labs/pixel";
 import type { OpenWindowDecision, WebViewHandle, WebViewState } from "@zenbu-labs/pixel";
 
+import { canonicalUrl } from "../canonical-url";
 import type { TabRow } from "../ui/types";
+import { isInternalUrl } from "../pages/internal";
+import { permitExternalLaunch } from "../browsing/external-protocol";
+import { navigateTyped, openedFromAddressBar } from "../browsing/typed";
+import { refuseDownloadOf } from "../pages/local-navigation";
+import { navigateAsBrowser, openedAsBrowserTab } from "../pages/opened-by";
+import { linkOpenRoute, windowOpenRoute } from "../pages/window-open";
+import type { Opener, WindowOpenRoute } from "../pages/window-open";
 import { DOC_SCHEME, displayUrl, isMarkdownDocument } from "../url";
 
 export interface Tab {
@@ -11,10 +19,26 @@ export interface Tab {
   readonly url: string;
   readonly ref: RefObject<WebViewHandle>;
   readonly transparent: boolean;
+  readonly byBrowser: boolean;
+  readonly initiator: string | null;
   state: WebViewState;
   targetId: string | null;
   agentControlAt: number | null;
   devtools: boolean;
+  contentsId: number | null;
+  openerId: number | null;
+  lastAccessed: number;
+  pinned: boolean;
+}
+
+export interface TabObserver {
+  created(tab: Tab): void;
+  ready(tab: Tab): void;
+  updated(tab: Tab, previous: WebViewState): void;
+  activated(tab: Tab, previous: Tab | null): void;
+  moved(tab: Tab, from: number, to: number): void;
+  pinned(tab: Tab): void;
+  removed(tab: Tab): void;
 }
 
 export interface TabTarget {
@@ -33,6 +57,8 @@ export interface TabHost {
   onPageMenu(params: Electron.ContextMenuParams): void;
   onTabsChanged(): void;
   onTabOpened(opener: Tab, url: string): void;
+  // a page asked to open a URL that belongs to another app
+  onOpenExternal(opener: Tab, route: WindowOpenRoute): void;
   tabSwitchAllowed(): boolean;
   requestRender(): void;
 }
@@ -46,6 +72,10 @@ export class TabManager {
   private activeId = 0;
   private seq = 1;
   private agentSweep: ReturnType<typeof setInterval> | null = null;
+  private readonly waiting = new Map<Tab, (() => void)[]>();
+  private readonly typed = new WeakSet<Tab>();
+  private readonly withoutDownload = new WeakSet<Tab>();
+  observer: TabObserver | null = null;
 
   constructor(
     private readonly host: TabHost,
@@ -72,7 +102,18 @@ export class TabManager {
     return this.tabs;
   }
 
-  create(url: string, activate = true): Tab {
+  create(
+    url: string,
+    activate = true,
+    options: {
+      index?: number;
+      openerId?: number | null;
+      byBrowser?: boolean;
+      typed?: boolean;
+      initiator?: string | null;
+      mayDownload?: boolean;
+    } = {},
+  ): Tab {
     const first = this.seq === 1;
     const tab: Tab = {
       id: this.seq++,
@@ -83,15 +124,32 @@ export class TabManager {
       // recreate it to apply transparency. The most clever implementation simply rebuilds browser state when this
       // happens, but it's a little complex and this case is much less often than initially spawning on .md for our users
       transparent: first && isMarkdownDocument(url),
+      byBrowser: options.byBrowser ?? false,
+      initiator: options.initiator ?? null,
       state: initialWebViewState(url),
       targetId: null,
       agentControlAt: null,
       devtools: false,
+      contentsId: null,
+      openerId: options.openerId ?? null,
+      lastAccessed: Date.now(),
+      pinned: false,
     };
-    this.tabs.push(tab);
+    if (options.mayDownload === false) this.withoutDownload.add(tab);
+    if (options.typed) {
+      this.typed.add(tab);
+      permitExternalLaunch();
+    }
+    const index = options.index ?? this.tabs.length;
+    this.tabs.splice(Math.max(this.pinnedCount(), Math.min(index, this.tabs.length)), 0, tab);
+    this.observer?.created(tab);
     if (activate) this.activate(tab.id);
     this.host.onTabsChanged();
     this.host.requestRender();
+    // The page exists once the render above has run, well before its first navigation commits.
+    setImmediate(() => {
+      if (this.tabs.includes(tab)) this.noticeContents(tab);
+    });
     return tab;
   }
 
@@ -103,26 +161,129 @@ export class TabManager {
     const tab = this.get(id);
     if (!tab) return;
     const urlChanged = state.url !== tab.state.url;
+    const previous = tab.state;
     tab.state = state;
+    this.noticeContents(tab);
+    if (tab.contentsId !== null) this.observer?.updated(tab, previous);
     if (!tab.targetId) void this.resolveTargetId(tab);
     if (tab.id === this.activeId) this.host.onActiveState(state, urlChanged);
     this.host.requestRender();
   }
 
-  openWindow(id: number, details: Electron.HandlerDetails): OpenWindowDecision {
+  noticeContents(tab: Tab) {
+    if (tab.contentsId !== null) return;
+    let contents: Electron.WebContents | undefined;
+    try {
+      contents = tab.ref.current?.webContents;
+    } catch {
+      return;
+    }
+    if (!contents) return;
+    tab.contentsId = contents.id;
+    if (tab.byBrowser) openedAsBrowserTab(contents);
+    if (this.withoutDownload.has(tab)) refuseDownloadOf(contents, tab.url);
+    if (this.typed.has(tab)) openedFromAddressBar(contents);
+    this.observer?.ready(tab);
+    for (const resolve of this.waiting.get(tab) ?? []) resolve();
+    this.waiting.delete(tab);
+  }
+
+  whenReady(tab: Tab): Promise<void> {
+    this.noticeContents(tab);
+    if (tab.contentsId !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      const list = this.waiting.get(tab) ?? [];
+      list.push(resolve);
+      this.waiting.set(tab, list);
+    });
+  }
+
+  // Loads `url` in `tab` for the browser itself, e.g. a URL the user typed.
+  navigate(tab: Tab | null, url: string, options: { typed?: boolean } = {}) {
+    const handle = tab?.ref.current;
+    if (!handle) return;
+    let contents: Electron.WebContents | undefined;
+    try {
+      contents = handle.webContents;
+    } catch {
+      return;
+    }
+    if (options.typed) permitExternalLaunch();
+    const load = () => handle.loadURL(url);
+    navigateAsBrowser(contents, options.typed ? () => navigateTyped(contents, load) : load);
+  }
+
+  byContentsId(contentsId: number): Tab | null {
+    return this.tabs.find((tab) => tab.contentsId === contentsId) ?? null;
+  }
+
+  private pinnedCount(): number {
+    return this.tabs.filter((tab) => tab.pinned).length;
+  }
+
+  // Like Chrome, pinned tabs always come first.
+  move(id: number, index: number) {
+    const from = this.tabs.findIndex((tab) => tab.id === id);
+    if (from < 0) return;
+    const [tab] = this.tabs.splice(from, 1);
+    const pinned = this.pinnedCount();
+    const wanted = index < 0 ? this.tabs.length : index;
+    const to = tab.pinned ? Math.max(0, Math.min(wanted, pinned)) : Math.max(pinned, Math.min(wanted, this.tabs.length));
+    this.tabs.splice(to, 0, tab);
+    if (from !== to) this.observer?.moved(tab, from, to);
+    this.host.onTabsChanged();
+    this.host.requestRender();
+  }
+
+  setPinned(id: number, pinned: boolean) {
+    const tab = this.get(id);
+    if (!tab || tab.pinned === pinned) return;
+    tab.pinned = pinned;
+    this.observer?.pinned(tab);
+    this.move(id, this.tabs.filter((other) => other.pinned && other !== tab).length);
+  }
+
+  openWindow(id: number, details: Electron.HandlerDetails, opener: Electron.WebContents): OpenWindowDecision {
     const tab = this.get(id);
     if (!tab) return "deny";
+    const route = windowOpenRoute(opener, details);
+    if (!route) return "deny";
+    if (route.external) {
+      this.host.onOpenExternal(tab, route);
+      return "deny";
+    }
     const wantsTab = details.disposition === "foreground-tab" || details.disposition === "background-tab";
     if (!wantsTab) {
       // a page-opened window (window.open with features) is a readable
       // same-origin child; never allow one onto a local file preview, or the
       // opener could read another local file's DOM through it
-      if (details.url.startsWith(`${DOC_SCHEME}://`)) return "deny";
+      if (canonicalUrl(details.url)?.scheme === DOC_SCHEME) return "deny";
+      if (isInternalUrl(details.url) && !route.byBrowser) return "deny";
       return "popup";
     }
-    this.create(details.url, details.disposition === "foreground-tab");
-    this.host.onTabOpened(tab, details.url);
+    this.openRoute(tab, route, details.disposition === "foreground-tab");
     return "deny";
+  }
+
+  // The page menu's "Open link in new tab", for a link in the frame `opener` describes.
+  openLink(id: number, opener: Opener | null, url: string): boolean {
+    const tab = this.get(id);
+    const route = linkOpenRoute(opener, url);
+    if (!tab || !route) return false;
+    if (route.external) this.host.onOpenExternal(tab, route);
+    else this.openRoute(tab, route, true);
+    return true;
+  }
+
+  private openRoute(opener: Tab, route: WindowOpenRoute, activate: boolean) {
+    this.create(route.url, activate, {
+      index: this.tabs.indexOf(opener) + 1,
+      openerId: opener.id,
+      byBrowser: route.byBrowser,
+      initiator: route.initiator,
+      mayDownload: route.mayDownload,
+    });
+    this.host.onTabOpened(opener, route.url);
   }
 
   contextMenu(id: number, params: Electron.ContextMenuParams) {
@@ -160,7 +321,10 @@ export class TabManager {
   activate(id: number) {
     const tab = this.get(id);
     if (!tab || (id !== this.activeId && !this.host.tabSwitchAllowed())) return;
+    const previous = this.active;
     this.activeId = id;
+    tab.lastAccessed = Date.now();
+    if (previous !== tab) this.observer?.activated(tab, previous);
     tab.ref.current?.focus();
     this.host.onActivated();
     this.host.requestRender();
@@ -169,11 +333,13 @@ export class TabManager {
   close(id: number) {
     const at = this.tabs.findIndex((t) => t.id === id);
     if (at < 0) return;
-    this.tabs.splice(at, 1);
+    const [closing] = this.tabs.splice(at, 1);
+    this.waiting.delete(closing);
+    this.observer?.removed(closing);
     if (this.activeId === id) {
       const fallback = this.tabs[Math.min(at, this.tabs.length - 1)];
       if (fallback) this.activate(fallback.id);
-      else this.create(this.fallbackUrl);
+      else this.create(this.fallbackUrl, true, { byBrowser: true });
     }
     this.host.onTabsChanged();
     this.host.requestRender();

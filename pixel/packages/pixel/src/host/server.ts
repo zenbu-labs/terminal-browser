@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { debug } from "../debug";
+import { socketPeerUid } from "../react/native";
 import type { EngineKeyEvent, TerminalColors } from "../react";
+import { listenPrivately, privateServer, type PeerUidReader } from "./private-socket";
 export interface GuestFrame {
   path: string;
   width: number;
@@ -173,13 +175,12 @@ export class OwnerServer {
   constructor(
     readonly socketPath: string,
     private readonly cell: () => { width: number; height: number },
+    readPeerUid: PeerUidReader = socketPeerUid,
   ) {
     this.frameDir = frameDirectory();
-    fs.rmSync(socketPath, { force: true });
-    fs.mkdirSync(path.dirname(socketPath), { recursive: true });
-    this.server = net.createServer((connection) => this.serve(connection));
+    this.server = privateServer((connection) => this.serve(connection), readPeerUid);
     this.server.on("error", (error) => debug("owner server error", error.message));
-    this.server.listen(socketPath);
+    listenPrivately(this.server, socketPath);
   }
 
   stop() {

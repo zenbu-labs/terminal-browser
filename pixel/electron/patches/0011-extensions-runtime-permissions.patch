@@ -1,0 +1,175 @@
+diff --git a/shell/browser/api/electron_api_extensions.cc b/shell/browser/api/electron_api_extensions.cc
+--- a/shell/browser/api/electron_api_extensions.cc
++++ b/shell/browser/api/electron_api_extensions.cc
+@@ -4,10 +4,19 @@
+ 
+ #include "shell/browser/api/electron_api_extensions.h"
+ 
++#include "base/barrier_closure.h"
+ #include "chrome/browser/browser_process.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_util.h"
+ #include "extensions/browser/permissions/active_tab_permission_granter.h"
++#include "extensions/browser/permissions/permissions_updater.h"
++#include "extensions/common/manifest_handlers/permissions_parser.h"
++#include "extensions/common/permissions/permission_set.h"
++#include "extensions/common/permissions/permissions_data.h"
++#include "extensions/common/permissions/permissions_info.h"
++#include "extensions/common/url_pattern.h"
++#include "extensions/common/url_pattern_set.h"
+ #include "gin/data_object_builder.h"
+ #include "gin/object_template_builder.h"
+ #include "shell/browser/api/electron_api_web_contents.h"
+@@ -167,6 +176,116 @@ void Extensions::RevokeActiveTab(const std::string& extension_id,
+     granter->ClearActiveExtensionAndNotify(extension_id);
+ }
+ 
++v8::Local<v8::Promise> Extensions::SetRuntimePermissions(
++    v8::Isolate* isolate,
++    const std::string& extension_id,
++    gin_helper::Dictionary granted) {
++  gin_helper::Promise<void> promise(isolate);
++  v8::Local<v8::Promise> handle = promise.GetHandle();
++
++  const extensions::Extension* extension =
++      extensions::ExtensionRegistry::Get(browser_context())
++          ->enabled_extensions()
++          .GetByID(extension_id);
++  if (!extension) {
++    promise.RejectWithErrorMessage("No enabled extension with id " +
++                                   extension_id);
++    return handle;
++  }
++
++  std::vector<std::string> api_names;
++  std::vector<std::string> origins;
++  granted.Get("permissions", &api_names);
++  granted.Get("origins", &origins);
++
++  const extensions::PermissionSet& optional =
++      extensions::PermissionsParser::GetOptionalPermissions(extension);
++
++  extensions::APIPermissionSet apis;
++  for (const std::string& name : api_names) {
++    const extensions::APIPermissionInfo* info =
++        extensions::PermissionsInfo::GetInstance()->GetByName(name);
++    if (info && optional.HasAPIPermission(info->id()))
++      apis.insert(info->id());
++  }
++
++  // Mirrors how chrome.permissions.request parses origins: only patterns
++  // inside the manifest's optional hosts can be granted.
++  const bool allow_file_access =
++      extensions::util::AllowFileAccess(extension_id, browser_context());
++  extensions::URLPatternSet hosts;
++  for (const std::string& origin : origins) {
++    URLPattern pattern(extensions::Extension::kValidHostPermissionSchemes);
++    if (pattern.Parse(origin) != URLPattern::ParseResult::kSuccess)
++      continue;
++    if (!allow_file_access) {
++      if (pattern.scheme() == url::kFileScheme)
++        continue;
++      pattern.SetValidSchemes(pattern.valid_schemes() &
++                              ~URLPattern::SCHEME_FILE);
++    }
++    if (optional.explicit_hosts().ContainsPattern(pattern))
++      hosts.AddPattern(pattern);
++  }
++
++  const extensions::PermissionSet wanted(
++      std::move(apis), extensions::ManifestPermissionSet(), std::move(hosts),
++      extensions::URLPatternSet());
++  const extensions::PermissionSet& active =
++      extension->permissions_data()->active_permissions();
++  std::unique_ptr<const extensions::PermissionSet> to_add =
++      extensions::PermissionSet::CreateDifference(wanted, active);
++  std::unique_ptr<const extensions::PermissionSet> to_remove =
++      extensions::PermissionSet::CreateIntersection(
++          *extensions::PermissionSet::CreateDifference(
++              *extensions::PermissionSet::CreateDifference(
++                  active,
++                  extensions::PermissionsParser::GetRequiredPermissions(
++                      extension)),
++              wanted),
++          optional);
++
++  base::RepeatingClosure done = base::BarrierClosure(
++      2, base::BindOnce(
++             [](gin_helper::Promise<void> promise) { promise.Resolve(); },
++             std::move(promise)));
++  extensions::PermissionsUpdater updater(browser_context());
++  if (to_add->IsEmpty())
++    done.Run();
++  else
++    updater.GrantOptionalPermissions(*extension, *to_add, done);
++  if (to_remove->IsEmpty())
++    done.Run();
++  else
++    updater.RevokeOptionalPermissions(
++        *extension, *to_remove,
++        extensions::PermissionsUpdater::RemoveType::kSoft, done);
++  return handle;
++}
++
++v8::Local<v8::Value> Extensions::GetActivePermissions(
++    v8::Isolate* isolate,
++    const std::string& extension_id) {
++  const extensions::Extension* extension =
++      extensions::ExtensionRegistry::Get(browser_context())
++          ->GetInstalledExtension(extension_id);
++  if (!extension)
++    return v8::Null(isolate);
++
++  const extensions::PermissionSet& active =
++      extension->permissions_data()->active_permissions();
++  std::vector<std::string> api_names;
++  for (const extensions::APIPermission* permission : active.apis())
++    api_names.push_back(permission->name());
++  std::vector<std::string> origins;
++  for (const URLPattern& pattern : active.explicit_hosts())
++    origins.push_back(pattern.GetAsString());
++  return gin::DataObjectBuilder(isolate)
++      .Set("permissions", api_names)
++      .Set("origins", origins)
++      .Build();
++}
++
+ void Extensions::OnExtensionLoaded(content::BrowserContext* browser_context,
+                                    const extensions::Extension* extension) {
+   Emit("extension-loaded", extension);
+@@ -194,7 +313,9 @@ gin::ObjectTemplateBuilder Extensions::GetObjectTemplateBuilder(
+       .SetMethod("getExtension", &Extensions::GetExtension)
+       .SetMethod("getAllExtensions", &Extensions::GetAllExtensions)
+       .SetMethod("grantActiveTab", &Extensions::GrantActiveTab)
+-      .SetMethod("revokeActiveTab", &Extensions::RevokeActiveTab);
++      .SetMethod("revokeActiveTab", &Extensions::RevokeActiveTab)
++      .SetMethod("setRuntimePermissions", &Extensions::SetRuntimePermissions)
++      .SetMethod("getActivePermissions", &Extensions::GetActivePermissions);
+ }
+ 
+ const gin::WrapperInfo* Extensions::wrapper_info() const {
+diff --git a/shell/browser/api/electron_api_extensions.h b/shell/browser/api/electron_api_extensions.h
+--- a/shell/browser/api/electron_api_extensions.h
++++ b/shell/browser/api/electron_api_extensions.h
+@@ -9,6 +9,7 @@
+ #include "extensions/browser/extension_registry_observer.h"
+ #include "gin/wrappable.h"
+ #include "shell/browser/event_emitter_mixin.h"
++#include "shell/common/gin_helper/dictionary.h"
+ 
+ namespace content {
+ class WebContents;
+@@ -50,6 +51,12 @@ class Extensions final : public gin::Wrappable<Extensions>,
+                       content::WebContents* web_contents);
+   void RevokeActiveTab(const std::string& extension_id,
+                        content::WebContents* web_contents);
++  v8::Local<v8::Promise> SetRuntimePermissions(
++      v8::Isolate* isolate,
++      const std::string& extension_id,
++      gin_helper::Dictionary granted);
++  v8::Local<v8::Value> GetActivePermissions(v8::Isolate* isolate,
++                                            const std::string& extension_id);
+ 
+   // extensions::ExtensionRegistryObserver:
+   void OnExtensionLoaded(content::BrowserContext* browser_context,

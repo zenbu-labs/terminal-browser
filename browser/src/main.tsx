@@ -1,11 +1,10 @@
-import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
 import { app, screen } from "electron";
 
 import { runDaemon } from "./daemon";
-import { ConfigStore, LOGS_DIR, SETTINGS_FILE, SHORTCUTS_FILE, ensureDataDir, installedVersion } from "shared";
+import { ConfigStore, LOGS_DIR, SETTINGS_FILE, SHORTCUTS_FILE, ensurePrivateFile, ensurePrivateState, installedVersion } from "shared";
 import { Telemetry } from "./telemetry";
 import type { CrashSource } from "./telemetry";
 import { appLog } from "@zenbu-labs/pixel";
@@ -20,14 +19,24 @@ app.commandLine.appendSwitch("disable-features", "FedCm");
 if (process.env.TERMINAL_BROWSER_DISABLE_GPU === "1") {
   app.commandLine.appendSwitch("disable-gpu");
 }
-try {
-  ensureDataDir();
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
-} catch {}
+function startOrExit(start: () => void) {
+  try {
+    start();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+}
+
+const CHROMIUM_LOG = path.join(LOGS_DIR, "chromium.log");
+startOrExit(() => {
+  ensurePrivateState();
+  ensurePrivateFile(CHROMIUM_LOG);
+});
 app.commandLine.appendSwitch("enable-logging", "file");
-app.commandLine.appendSwitch("log-file", path.join(LOGS_DIR, "chromium.log"));
+app.commandLine.appendSwitch("log-file", CHROMIUM_LOG);
 app.setName("terminal-browser");
-claimProfile();
+startOrExit(claimProfile);
 registerScheme();
 
 const CRASH_REPORT_EXIT_DEADLINE_MS = 2000;

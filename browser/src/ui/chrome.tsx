@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { Box, DevTools, Text, WebView } from "@zenbu-labs/pixel";
-import type { EngineInfo, Rgba, Surface } from "@zenbu-labs/pixel";
+import type { EngineInfo, NodeHandle, Rgba, Surface } from "@zenbu-labs/pixel";
 import type { WebViewState } from "@zenbu-labs/pixel";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
 import { ClearDataDialog } from "./clear-data-dialog";
+import { ExtensionsMenu } from "./extension-menu";
+import { SidePanels } from "./extension-panel";
+import { ActionPopups, PopupWindows } from "./extension-popup";
+import { ExtensionPrompt } from "./extension-prompt";
+import { ExtensionToolbar, ToolbarTooltip, toolbarActions } from "./extension-toolbar";
+import type { TooltipView } from "./extension-toolbar";
+import type { ExtensionsView } from "./extension-types";
 import { PageContextMenu } from "./context-menu";
 import { MarkupCanvas } from "./markup-canvas";
 import { NewTabCard, PaletteCard, UrlCard } from "./modals";
@@ -27,6 +35,7 @@ import type {
   ChromeLayout,
   ClearDataView,
   DownloadView,
+  KeywordView,
   NewTabView,
   DevtoolsView,
   PageMenuView,
@@ -49,6 +58,7 @@ export function Chrome({
   tabs,
   newTab,
   urlEdit,
+  keyword,
   zoomHud,
   download,
   toast,
@@ -64,6 +74,7 @@ export function Chrome({
   devtools,
   profiling,
   grabActive,
+  extensions,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -73,7 +84,8 @@ export function Chrome({
   palette: PaletteView | null;
   tabs: TabRow[];
   newTab: NewTabView | null;
-  urlEdit: boolean;
+  urlEdit: string | null;
+  keyword: KeywordView | null;
   zoomHud: number | null;
   download: DownloadView | null;
   toast: ToastView | null;
@@ -89,8 +101,12 @@ export function Chrome({
   devtools: DevtoolsView | null;
   profiling: boolean;
   grabActive: boolean;
+  extensions: ExtensionsView | null;
 }) {
   const theme = useMemo(() => makeTheme(colors), [colors]);
+  const popupAnchor = useRef<NodeHandle | null>(null);
+  const puzzleAnchor = useRef<NodeHandle | null>(null);
+  const [tooltip, setTooltip] = useState<TooltipView | null>(null);
   const progress = useProgress(state.loading);
   const agentActive = tabs.some((tab) => tab.active && tab.agentControlled);
   const glowPulse = usePulse(agentActive);
@@ -118,6 +134,8 @@ export function Chrome({
             record={record}
             profiling={profiling}
             grabActive={grabActive}
+            extensions={extensions}
+            extensionAnchors={{ popup: popupAnchor, puzzle: puzzleAnchor, onTooltip: setTooltip }}
           />
         ))}
       <BrowserTabContents
@@ -139,6 +157,15 @@ export function Chrome({
           dividerEngaged={dividerEngaged}
         />
       )}
+      {extensions && extensions.sidePanels.length > 0 && (
+        <SidePanels
+          showing={extensions.sidePanel}
+          panels={extensions.sidePanels}
+          layout={layout}
+          theme={theme}
+          actions={actions.extensions}
+        />
+      )}
       {record?.canvas && recordSurface && (
         <MarkupCanvas
           view={record.canvas}
@@ -154,9 +181,6 @@ export function Chrome({
       {record && layout.toolbarHeight === 0 && (
         <RecordCornerButton view={record} actions={actions} layout={layout} theme={theme} />
       )}
-      {pageMenu && (
-        <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
-      )}
       {findOpen && (
         <FindBar state={state} actions={actions} layout={layout} theme={theme} />
       )}
@@ -166,7 +190,7 @@ export function Chrome({
       {zoomHud != null && (
         <ZoomHud factor={zoomHud} layout={layout} theme={theme} findOpen={findOpen} />
       )}
-      {download && <DownloadHud download={download} layout={layout} theme={theme} />}
+      {download && <DownloadHud download={download} actions={actions} layout={layout} theme={theme} />}
       {toast && <Toast toast={toast} actions={actions} layout={layout} theme={theme} />}
       {progress != null && (
         <Box
@@ -192,13 +216,49 @@ export function Chrome({
           />
         </Box>
       )}
-      {newTab && <NewTabCard view={newTab} actions={actions} layout={layout} theme={theme} />}
-      {urlEdit && <UrlCard state={state} actions={actions} layout={layout} theme={theme} />}
+      {extensions && extensions.popupWindows.length > 0 && (
+        <PopupWindows
+          windows={extensions.popupWindows}
+          scale={extensions.scale}
+          layout={layout}
+          theme={theme}
+          actions={actions.extensions}
+        />
+      )}
+      {extensions && (
+        <ActionPopups
+          popup={extensions.popup}
+          anchor={popupAnchor}
+          scale={extensions.scale}
+          layout={layout}
+          theme={theme}
+          actions={actions.extensions}
+        />
+      )}
+      {extensions?.menuOpen && (
+        <ExtensionsMenu view={extensions} anchor={puzzleAnchor} layout={layout} theme={theme} actions={actions.extensions} />
+      )}
+      {pageMenu && (
+        <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
+      )}
+      {newTab && <NewTabCard view={newTab} keyword={keyword} actions={actions} layout={layout} theme={theme} />}
+      {urlEdit !== null && <UrlCard text={urlEdit} keyword={keyword} actions={actions} layout={layout} theme={theme} />}
       {palette && <PaletteCard view={palette} actions={actions} layout={layout} theme={theme} />}
       {settings && (
         <SettingsCard view={settings} actions={actions.settings} layout={layout} theme={theme} />
       )}
       {clearData && <ClearDataDialog view={clearData} actions={actions} layout={layout} theme={theme} />}
+      {extensions?.prompt && (
+        <ExtensionPrompt
+          key={extensions.prompt.key}
+          prompt={extensions.prompt}
+          layout={layout}
+          theme={theme}
+          onAnswer={actions.extensions.answerPrompt}
+          onFullyShown={actions.extensions.promptFullyShown}
+        />
+      )}
+      {tooltip && <ToolbarTooltip tip={tooltip} rem={layout.rem} maxWidth={layout.width} theme={theme} />}
     </Box>
   );
 }
@@ -280,6 +340,8 @@ function Toolbar({
   record,
   profiling,
   grabActive,
+  extensions,
+  extensionAnchors,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -289,11 +351,17 @@ function Toolbar({
   record: RecordView | null;
   profiling: boolean;
   grabActive: boolean;
+  extensions: ExtensionsView | null;
+  extensionAnchors: {
+    popup: RefObject<NodeHandle | null>;
+    puzzle: RefObject<NodeHandle | null>;
+    onTooltip(tip: TooltipView | null): void;
+  };
 }) {
   const rem = layout.rem;
   const stopIcon = useStopIcon(state.loading);
   const nav = state.canGoBack || state.canGoForward;
-  const stripWidth =
+  const fullStripWidth =
     layout.width -
     rem * 0.8 -
     rem * 3.3 -
@@ -301,6 +369,8 @@ function Toolbar({
     (nav ? rem * 3.5 : 0) -
     (record ? rem * 7.25 : 0) -
     (profiling ? rem * 6.5 : 0);
+  const extensionSlots = toolbarActions(extensions, rem, fullStripWidth - rem * 12);
+  const stripWidth = fullStripWidth - extensionSlots.width;
   return (
     <Box
       style={{
@@ -341,9 +411,22 @@ function Toolbar({
         actions={actions}
         rem={rem}
         width={stripWidth}
+        centerX={layout.width / 2}
         url={state.url}
         theme={theme}
       />
+      {extensions?.onToolbar && extensions.actions.length > 0 && (
+        <ExtensionToolbar
+          view={extensions}
+          shown={extensionSlots.shown}
+          actions={actions.extensions}
+          anchor={extensionAnchors.popup}
+          puzzle={extensionAnchors.puzzle}
+          onTooltip={extensionAnchors.onTooltip}
+          rem={rem}
+          theme={theme}
+        />
+      )}
       <ToolbarButton
         icon="select"
         iconSize={rem * 0.95}
@@ -353,7 +436,14 @@ function Toolbar({
         theme={theme}
         onClick={actions.grab}
       />
-      <ToolbarButton icon="more" enabled rem={rem} theme={theme} onClick={actions.tabMenu} />
+      <ToolbarButton
+        icon="more"
+        enabled
+        rem={rem}
+        theme={theme}
+        nodeRef={extensions && !extensions.onToolbar ? extensionAnchors.popup : undefined}
+        onClick={actions.tabMenu}
+      />
       {record && <RecordToolbarPill view={record} actions={actions} rem={rem} theme={theme} />}
       {profiling && <ProfilingPill actions={actions} rem={rem} theme={theme} />}
     </Box>
@@ -543,6 +633,7 @@ function BrowserTabContents({
           preload={tab.preload ?? undefined}
           clipboardRead={tab.clipboardRead}
           browserWindowOptions={tab.transparent ? TRANSPARENT_WINDOW : undefined}
+          initiatorOrigin={tab.initiator ?? undefined}
           style={{
             position: "absolute",
             inset: { top: layout.page.y, left: layout.page.x },
@@ -552,12 +643,12 @@ function BrowserTabContents({
             background: theme.bg,
           }}
           onChange={(state) => tabActions.state(tab.id, state)}
-          onOpenWindow={(details) => tabActions.openWindow(tab.id, details)}
+          onOpenWindow={(details, opener) => tabActions.openWindow(tab.id, details, opener)}
           onContextMenu={(params) => tabActions.contextMenu(tab.id, params)}
-          onDownload={(progress) => tabActions.download(progress)}
           onPointer={(event) => tabActions.pointer(tab.id, event)}
           onPermissionRequest={(request) => tabActions.permissionRequest(tab.id, request)}
           onPermissionCheck={(check) => tabActions.permissionCheck(check)}
+          onClose={() => tabActions.closed(tab.id)}
         />
       ))}
     </>
@@ -666,6 +757,7 @@ function ToolbarButton({
   active = false,
   rem,
   theme,
+  nodeRef,
   onClick,
 }: {
   icon: IconName;
@@ -674,11 +766,13 @@ function ToolbarButton({
   active?: boolean;
   rem: number;
   theme: Theme;
+  nodeRef?: RefObject<NodeHandle | null>;
   onClick(): void;
 }) {
   const color = !enabled ? theme.disabled : active ? GRAB_ACTIVE : theme.muted;
   return (
     <Box
+      ref={nodeRef as RefObject<NodeHandle> | undefined}
       style={{
         width: rem * 1.5,
         height: rem * 1.5,

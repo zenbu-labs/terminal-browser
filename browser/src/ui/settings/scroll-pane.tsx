@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { Box } from "@zenbu-labs/pixel";
 import type { NodeHandle, Style } from "@zenbu-labs/pixel";
 
@@ -11,11 +11,13 @@ export function ScrollPane({
   style,
   rem,
   resetKey,
+  paneRef,
   children,
 }: {
   style: Style;
   rem: number;
   resetKey: number;
+  paneRef?: RefObject<NodeHandle | null>;
   children: ReactNode;
 }) {
   const box = useRef<NodeHandle | null>(null);
@@ -28,7 +30,10 @@ export function ScrollPane({
   }, [resetKey]);
   return (
     <Box
-      ref={box}
+      ref={(node: NodeHandle | null) => {
+        box.current = node;
+        if (paneRef) (paneRef as { current: NodeHandle | null }).current = node;
+      }}
       style={{ ...style, overflow: "scroll" }}
       onScroll={(event) => {
         max.current = event.max;

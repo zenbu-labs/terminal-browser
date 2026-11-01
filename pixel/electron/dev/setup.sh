@@ -56,6 +56,16 @@ else
   done
 fi
 
+# the sync above applied electron's own chromium patches before our series was on the branch, so
+# apply the ones the series adds to patches/chromium/.patches
+for name in $(git -C "$SRC" show "$TAG:patches/chromium/.patches" | grep -vxFf - "$SRC/patches/chromium/.patches"); do
+  if git -C "$ROOT/src" apply --reverse --check "electron/patches/chromium/$name" 2>/dev/null; then
+    continue
+  fi
+  echo "applying chromium/$name"
+  git -C "$ROOT/src" apply "electron/patches/chromium/$name"
+done
+
 # gn derives the version from .git/packed-refs, which a history-less clone never writes
 git -C "$SRC" pack-refs --all
 

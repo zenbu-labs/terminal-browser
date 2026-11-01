@@ -15,8 +15,9 @@ import type { InstanceRow } from "shared";
 
 import type { WebViewState } from "@zenbu-labs/pixel";
 import { INSTANCES_DIR } from "shared";
-import { BROWSING_DATA_KINDS, isBrowsingDataKind } from "./session/browsing-data";
+import { BROWSING_DATA_KINDS, DEFAULT_CLEAR_KINDS, isBrowsingDataKind } from "./session/browsing-data";
 import type { BrowsingDataKind } from "./session/browsing-data";
+import { listenPrivately, privateServer } from "@zenbu-labs/pixel/private-socket";
 
 export interface Where {
   terminal: string | null;
@@ -64,11 +65,9 @@ export class Registry {
     this.host = host;
     this.tty = host.tty ?? callerTty().path;
     this.socketPath = path.join(INSTANCES_DIR, `${host.key}.sock`);
-    fs.mkdirSync(INSTANCES_DIR, { recursive: true });
-    fs.rmSync(this.socketPath, { force: true });
-    this.server = net.createServer((connection) => this.serve(connection));
+    this.server = privateServer((connection) => this.serve(connection));
     this.server.on("error", () => {});
-    this.server.listen(this.socketPath);
+    listenPrivately(this.server, this.socketPath);
     this.write();
     this.advertise();
   }
@@ -194,7 +193,7 @@ export class Registry {
         return { ...this.record(), tabs: await this.host.targets() };
       }
       case "clear-browsing-data": {
-        const kinds = request.kinds ?? BROWSING_DATA_KINDS;
+        const kinds = request.kinds ?? DEFAULT_CLEAR_KINDS;
         if (!Array.isArray(kinds) || kinds.length === 0 || !kinds.every(isBrowsingDataKind)) {
           throw new Error(`clear-browsing-data kinds must be some of: ${BROWSING_DATA_KINDS.join(", ")}`);
         }

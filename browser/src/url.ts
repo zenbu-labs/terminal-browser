@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // local files are served through this scheme so markdown can be rendered and
 // html previews can be sandboxed
@@ -9,6 +9,23 @@ export const DOC_SCHEME = "terminal-browser-file";
 
 export function documentUrl(file: string): string {
   return `${DOC_SCHEME}://file${file.split(path.sep).map(encodeURIComponent).join("/")}`;
+}
+
+// The local document a file:// url shows, or null for a file on another host.
+export function documentUrlForFile(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "file:") return null;
+    return `${documentUrl(fileURLToPath(parsed))}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+// The file:// url Chrome would show for a local document.
+export function fileUrlForDocument(url: string): string {
+  const prefix = `${DOC_SCHEME}://file`;
+  return url.startsWith(prefix) ? `file://${url.slice(prefix.length)}` : url;
 }
 
 function localFile(input: string, cwd?: string): string | null {
@@ -40,20 +57,17 @@ export function searchOrUrl(text: string, cwd: string | undefined, search: Searc
 }
 
 export function normalizeUrl(value: string, cwd: string | undefined, search: SearchUrl): string {
-  const input = value.trim();
+  const input = value.trim().replace(/^chrome:\/\//i, "terminal-browser://");
   if (!input) return "about:blank";
   if (HAS_AUTHORITY.test(input) || SCHEMES_WITHOUT_HOST.test(input)) {
     try {
       const url = new URL(input);
-      if (url.protocol === "file:" && MARKDOWN.test(url.pathname)) {
-        return `${documentUrl(fileURLToPath(url))}${url.search}${url.hash}`;
-      }
+      if (url.protocol === "file:") return documentUrlForFile(url.href) ?? url.toString();
       return url.toString();
     } catch {}
   }
   const file = localFile(input, cwd);
-  if (file && MARKDOWN.test(file)) return documentUrl(file);
-  if (file) return pathToFileURL(file).toString();
+  if (file) return documentUrl(file);
   if (/^[\w.-]+(?::\d+)?(?:\/.*)?$/.test(input)) {
     const host = input.split(/[:/]/)[0].toLowerCase();
     const scheme = host === "localhost" || host === "127.0.0.1" ? "http" : "https";

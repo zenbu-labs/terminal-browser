@@ -87,16 +87,84 @@ function FindButton({
   );
 }
 
-export function DownloadHud({
-  download,
+// fixme: placeholder copy
+const DANGEROUS_DOWNLOAD = "can harm your computer";
+// fixme: placeholder copy
+const KEEP_DOWNLOAD = "Keep";
+// fixme: placeholder copy
+const DISCARD_DOWNLOAD = "Discard";
+
+function HudButton({
+  label,
+  danger,
+  onClick,
   layout,
   theme,
 }: {
-  download: DownloadView;
+  label: string;
+  danger: boolean;
+  onClick(): void;
   layout: ChromeLayout;
   theme: Theme;
 }) {
   const rem = layout.rem;
+  return (
+    <Box
+      style={{
+        height: rem * 1.4,
+        alignItems: "center",
+        padding: { left: rem * 0.6, right: rem * 0.6 },
+        cornerRadius: rem * 0.3,
+        background: mix(theme.overlay, theme.fg, 0.1),
+        hoverBackground: mix(theme.overlay, theme.fg, 0.2),
+        flexShrink: 0,
+      }}
+      onClick={onClick}
+    >
+      <Text style={{ fontSize: rem * 0.85, color: danger ? theme.red : theme.fg, wrap: false, selectable: false }}>
+        {label}
+      </Text>
+    </Box>
+  );
+}
+
+export function DownloadHud({
+  download,
+  actions,
+  layout,
+  theme,
+}: {
+  download: DownloadView;
+  actions: ChromeActions;
+  layout: ChromeLayout;
+  theme: Theme;
+}) {
+  const rem = layout.rem;
+  if (download.dangerous) {
+    return (
+      <Box
+        style={{
+          position: "absolute",
+          inset: { bottom: rem * 0.6, left: rem * 0.75 },
+          height: rem * 2,
+          alignItems: "center",
+          gap: rem * 0.5,
+          padding: { left: rem * 0.8, right: rem * 0.3 },
+          background: mix(theme.overlay, theme.red, 0.18),
+          cornerRadius: rem * 0.5,
+          border: { width: 1, color: mix(theme.overlay, theme.red, 0.5) },
+        }}
+      >
+        <Icon icon="alert" size={rem * 0.95} color={theme.red} />
+        <Text style={{ fontSize: rem * 0.9, wrap: false, selectable: false }}>{download.name}</Text>
+        <Text style={{ color: theme.muted, fontSize: rem * 0.8, wrap: false, selectable: false }}>
+          {DANGEROUS_DOWNLOAD}
+        </Text>
+        <HudButton label={DISCARD_DOWNLOAD} danger={false} onClick={actions.downloadDiscard} layout={layout} theme={theme} />
+        <HudButton label={KEEP_DOWNLOAD} danger onClick={actions.downloadKeep} layout={layout} theme={theme} />
+      </Box>
+    );
+  }
   const status =
     download.state === "done"
       ? "saved"
