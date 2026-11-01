@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 
-import { webContents } from "electron";
+import { ipcMain, webContents } from "electron";
 import type { WebContents, WebFrameMain } from "electron";
 
 import type { LoadedExtension } from "../loaded";
 import { frameDocumentId } from "../native";
+import { VIEW_INFO_CHANNEL } from "../protocol";
+import type { ViewInfo } from "../protocol";
 import type { ExtensionService } from "../service";
 import { frameIdOf } from "./web-navigation";
 
@@ -112,6 +114,20 @@ export function installContexts(service: ExtensionService) {
     if (!contextId) workers.set(worker.versionId, (contextId = crypto.randomUUID()));
     return { contextType: "BACKGROUND", contextId, tabId: UNKNOWN_ID, windowId: UNKNOWN_ID, frameId: -1, incognito: false };
   };
+
+  const VIEW_TYPES: Record<ContextType, ViewInfo["type"]> = {
+    TAB: "tab",
+    POPUP: "popup",
+    SIDE_PANEL: "side_panel",
+    OFFSCREEN_DOCUMENT: "offscreen",
+    BACKGROUND: null,
+  };
+  ipcMain.on(VIEW_INFO_CHANNEL, (event) => {
+    const caller = service.router.callerForFrame(event.sender, event.senderFrame);
+    const place = caller ? placement(event.sender) : null;
+    const info: ViewInfo | null = place ? { type: VIEW_TYPES[place.type], windowId: place.windowId, tabId: place.tabId } : null;
+    event.returnValue = info;
+  });
 
   service.router.handle("runtime.getContexts", (caller, filter) => {
     if (typeof filter !== "object" || filter === null || Array.isArray(filter)) {

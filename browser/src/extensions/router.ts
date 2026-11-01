@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { app, ipcMain, webContents as allWebContents } from "electron";
 import type { IpcMainInvokeEvent, IpcMainServiceWorkerInvokeEvent, ServiceWorkerMain, Session, WebContents, WebFrameMain } from "electron";
 
 import type { LoadedExtension } from "./loaded";
@@ -17,10 +17,29 @@ export interface HandlerOptions {
 
 export class ApiError extends Error {}
 
-// Extension pages only run code after the user opened them, so their calls
-// count as user gestures; service workers need a recent click on the extension.
+// Chrome's transient user activation also lasts five seconds.
+const USER_ACTIVATION_MS = 5_000;
+const ACTIVATING_INPUT = new Set(["mouseDown", "mouseUp", "rawKeyDown", "keyDown", "touchEnd", "gestureTap"]);
+const lastInput = new WeakMap<WebContents, number>();
+const watched = new WeakSet<WebContents>();
+
+function watchInput(contents: WebContents) {
+  if (watched.has(contents)) return;
+  watched.add(contents);
+  contents.on("input-event", (_event, input) => {
+    if (ACTIVATING_INPUT.has(input.type)) lastInput.set(contents, Date.now());
+  });
+}
+
+export function hadRecentInput(contents: WebContents): boolean {
+  return Date.now() - (lastInput.get(contents) ?? 0) <= USER_ACTIVATION_MS;
+}
+
+// A page acts for the user when the user just clicked or typed in it. A
+// service worker has no input of its own, so it needs a recent click on the
+// extension (its action, menu item or shortcut).
 export function hasUserGesture(caller: Caller): boolean {
-  return caller.kind === "frame" || caller.extension.hadRecentUserGesture();
+  return caller.kind === "frame" ? hadRecentInput(caller.contents) : caller.extension.hadRecentUserGesture();
 }
 
 // Every privileged call is answered here. The calling extension is always
@@ -38,6 +57,8 @@ export class Router {
     for (const method of API_METHODS) {
       ipcMain.handle(channelFor(method), (event, ...args) => this.fromFrame(method, event, args));
     }
+    for (const contents of allWebContents.getAllWebContents()) watchInput(contents);
+    app.on("web-contents-created", (_event, contents) => watchInput(contents));
   }
 
   handle(method: string, run: Handler, options: HandlerOptions = {}) {

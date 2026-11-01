@@ -1,3 +1,4 @@
+import { app, webContents as allWebContents } from "electron";
 import type { ServiceWorkerMain } from "electron";
 import type { Caller } from "./router";
 import type { ExtensionService } from "./service";
@@ -6,9 +7,17 @@ type Subscriber =
   | { extensionId: string; kind: "worker"; worker: ServiceWorkerMain }
   | { extensionId: string; kind: "frame"; processId: number; routingId: number };
 
-// Electron fills `sender.tab` itself with windowId 0, index 0 and active false.
-// Extension contexts keep this per-tab copy of what chrome.tabs.query would
-// return them, so the preload can hand listeners the real tab.
+export interface SenderTabsSnapshot {
+  tabs: chrome.tabs.Tab[];
+  // Web contents that are not tabs (action popups, side panels, offscreen
+  // documents), whose messages Chrome sends without tab, frameId or document.
+  notTabs: number[];
+}
+
+// Electron fills `sender.tab` itself with windowId 0, index 0 and active false,
+// and for every web contents, tab or not. Extension contexts keep this copy of
+// what chrome.tabs.query would return them, so the preload can hand listeners
+// the real tab, or none.
 export class SenderTabs {
   private readonly subscribers = new Map<string, Subscriber>();
   private pending = false;
@@ -17,6 +26,11 @@ export class SenderTabs {
     service.router.handle("runtime.watchSenderTabs", (caller) => this.watch(caller));
     service.onUnload((id) => {
       for (const [key, subscriber] of this.subscribers) if (subscriber.extensionId === id) this.subscribers.delete(key);
+    });
+    app.on("web-contents-created", (_event, contents) => {
+      if (contents.getType() !== "remote") return;
+      this.changed();
+      contents.once("destroyed", () => this.changed());
     });
   }
 
@@ -43,21 +57,29 @@ export class SenderTabs {
     return this.snapshot(extensionId);
   }
 
-  private snapshot(extensionId: string): chrome.tabs.Tab[] {
+  private notTabs(): number[] {
+    const remote = allWebContents
+      .getAllWebContents()
+      .filter((contents) => !contents.isDestroyed() && contents.getType() === "remote")
+      .map((contents) => contents.id);
+    return [...this.service.surfaceContentsIds(), ...remote].filter((id) => !this.service.tabRef(id));
+  }
+
+  private snapshot(extensionId: string): SenderTabsSnapshot {
     const extension = this.service.get(extensionId);
-    if (!extension) return [];
-    return this.service.allTabs().map((ref) => this.service.tabInfo(extension, ref));
+    if (!extension) return { tabs: [], notTabs: [] };
+    return { tabs: this.service.allTabs().map((ref) => this.service.tabInfo(extension, ref)), notTabs: this.notTabs() };
   }
 
   private push() {
-    const snapshots = new Map<string, chrome.tabs.Tab[]>();
+    const snapshots = new Map<string, SenderTabsSnapshot>();
     for (const [key, subscriber] of this.subscribers) {
-      let tabs = snapshots.get(subscriber.extensionId);
-      if (!tabs) snapshots.set(subscriber.extensionId, (tabs = this.snapshot(subscriber.extensionId)));
+      let snapshot = snapshots.get(subscriber.extensionId);
+      if (!snapshot) snapshots.set(subscriber.extensionId, (snapshot = this.snapshot(subscriber.extensionId)));
       if (subscriber.kind === "worker") {
         if (subscriber.worker.isDestroyed()) this.subscribers.delete(key);
-        else this.service.events.sendToWorker(subscriber.worker, "runtime.senderTabs", [tabs]);
-      } else if (!this.service.events.sendToFrame(subscriber, "runtime.senderTabs", [tabs])) {
+        else this.service.events.sendToWorker(subscriber.worker, "runtime.senderTabs", [snapshot]);
+      } else if (!this.service.events.sendToFrame(subscriber, "runtime.senderTabs", [snapshot])) {
         this.subscribers.delete(key);
       }
     }

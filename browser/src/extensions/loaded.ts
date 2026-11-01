@@ -7,6 +7,11 @@ import { setNativeRuntimePermissions } from "./native";
 
 const USER_GESTURE_MS = 5_000;
 
+// Chrome lets extensions the user loaded unpacked read file:// URLs from the start.
+export function allowsFileAccess(record: ExtensionRecord): boolean {
+  return record.source === "unpacked";
+}
+
 export class LoadedExtension {
   readonly id: string;
   readonly path: string;
@@ -31,6 +36,10 @@ export class LoadedExtension {
 
   get name(): string {
     return this.manifest.name;
+  }
+
+  get allowsFileAccess(): boolean {
+    return allowsFileAccess(this.record);
   }
 
   get baseUrl(): string {

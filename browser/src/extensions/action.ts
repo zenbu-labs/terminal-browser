@@ -196,9 +196,11 @@ export class ActionStore {
   setPinned(id: string, pinned: boolean) {
     const extension = this.service.get(id);
     if (!extension) return;
+    const was = extension.record.pinned;
     const record = updateExtension(id, { pinned });
     if (record) extension.record = record;
     this.service.changed();
+    if (was !== pinned) this.service.dispatch(id, "action.onUserSettingsChanged", [{ isOnToolbar: pinned }]);
   }
 
   // The user clicked the toolbar icon (or pressed the action's shortcut).

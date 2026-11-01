@@ -150,11 +150,42 @@ export interface RequestedPermissions {
   hosts: string[];
 }
 
+// Permissions Chrome on macOS drops from a user-installed extension
+// (_permission_features.json: ChromeOS only, or only for policy installs).
+const UNAVAILABLE_PERMISSIONS = new Set([
+  "audio",
+  "certificateProvider",
+  "documentScan",
+  "enterprise.deviceAttributes",
+  "enterprise.hardwarePlatform",
+  "enterprise.kioskInput",
+  "enterprise.login",
+  "enterprise.networkingAttributes",
+  "enterprise.platformKeys",
+  "fileBrowserHandler",
+  "fileSystemProvider",
+  "login",
+  "loginScreenStorage",
+  "loginScreenUi",
+  "loginState",
+  "platformKeys",
+  "printing",
+  "printingMetrics",
+  "vpnProvider",
+  "wallpaper",
+]);
+const MV2_ONLY_PERMISSIONS = new Set(["webRequestBlocking"]);
+
+function availableApi(manifest: Manifest, permission: string): boolean {
+  if (isHostPattern(permission) || UNAVAILABLE_PERMISSIONS.has(permission)) return false;
+  return manifest.manifest_version < 3 || !MV2_ONLY_PERMISSIONS.has(permission);
+}
+
 export function requiredPermissions(manifest: Manifest): RequestedPermissions {
   const raw = manifest.permissions ?? [];
   const hosts = manifest.manifest_version >= 3 ? [...(manifest.host_permissions ?? [])] : raw.filter(isHostPattern);
   return {
-    api: raw.filter((p) => !isHostPattern(p)),
+    api: raw.filter((p) => availableApi(manifest, p)),
     hosts: [...new Set(hosts)],
   };
 }
@@ -163,7 +194,7 @@ export function optionalPermissions(manifest: Manifest): RequestedPermissions {
   const raw = manifest.optional_permissions ?? [];
   const hosts =
     manifest.manifest_version >= 3 ? [...(manifest.optional_host_permissions ?? [])] : raw.filter(isHostPattern);
-  return { api: raw.filter((p) => !isHostPattern(p)), hosts };
+  return { api: raw.filter((p) => availableApi(manifest, p)), hosts };
 }
 
 // Chrome's own wording for install prompts (chrome/app/generated_resources.grd).

@@ -26,7 +26,7 @@ export function installRuntime(service: ExtensionService) {
 
   router.handle("runtime.requestUpdateCheck", () => ({ status: "no_update" }));
 
-  router.handle("extension.isAllowedFileSchemeAccess", () => false);
+  router.handle("extension.isAllowedFileSchemeAccess", (caller) => caller.extension.allowsFileAccess);
   router.handle("extension.isAllowedIncognitoAccess", () => false);
   router.handle("extension.setUpdateUrlData", () => undefined);
 

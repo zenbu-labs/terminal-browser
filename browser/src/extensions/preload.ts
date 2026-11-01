@@ -9,12 +9,16 @@ import {
   API_METHODS,
   API_SPEC,
   EVENT_CHANNEL,
+  GRANTED_CHANNEL,
   LISTEN_CHANNEL,
   READY_CHANNEL,
   UNLISTEN_CHANNEL,
+  VIEW_INFO_CHANNEL,
   channelFor,
 } from "./protocol";
-import type { ApiSpec } from "./protocol";
+import type { ApiSpec, ViewInfo } from "./protocol";
+import { API_SCHEMAS } from "./api-schemas";
+import type { ApiSchemas, ArgSpec } from "./validate";
 
 type Listener = (name: string, args: unknown[], matched: number[] | undefined) => void;
 
@@ -24,6 +28,8 @@ interface BridgeShape {
   unlisten(event: string, key?: number): void;
   onEvent(listener: Listener): void;
   ready(): void;
+  viewInfo(): ViewInfo | null;
+  grantedPermissions(): string[] | null;
 }
 
 const ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
@@ -49,6 +55,16 @@ const bridge: BridgeShape = {
   ready() {
     ipcRenderer.send(READY_CHANNEL);
   },
+  viewInfo() {
+    return (ipcRenderer.sendSync(VIEW_INFO_CHANNEL) as ViewInfo | null) ?? null;
+  },
+  grantedPermissions() {
+    try {
+      return (ipcRenderer.sendSync(GRANTED_CHANNEL) as string[] | null) ?? null;
+    } catch {
+      return null;
+    }
+  },
 };
 
 // Offscreen documents run without context isolation, and like in Chrome they
@@ -56,13 +72,13 @@ const bridge: BridgeShape = {
 if (process.contextIsolated) {
   contextBridge.executeInMainWorld({
     func: installChromeApis,
-    args: [bridge, process.type === "service-worker", API_SPEC],
+    args: [bridge, process.type === "service-worker", API_SPEC, API_SCHEMAS],
   });
 }
 
 // Serialized into the page's own JavaScript world, so it can't use anything
 // from the surrounding module.
-function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec): boolean {
+export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec, schemas: ApiSchemas): boolean {
   type Fn = (...args: unknown[]) => unknown;
   if (globalThis.location?.protocol !== "chrome-extension:") return false;
   const g = globalThis as unknown as { chrome: Record<string, Record<string, unknown>> };
@@ -72,10 +88,9 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
   setTimeout(() => bridge.ready(), 0);
   const manifest = (chrome.runtime.getManifest as () => Record<string, unknown>)();
   const id = chrome.runtime.id as string;
-  const declared = new Set<string>([
-    ...((manifest.permissions as string[] | undefined) ?? []),
-    ...((manifest.optional_permissions as string[] | undefined) ?? []),
-  ]);
+  // Like Chrome, a namespace only exists while its permission is granted, so
+  // optional permissions show up after permissions.request and go after remove.
+  const granted = new Set<string>(bridge.grantedPermissions() ?? ((manifest.permissions as string[] | undefined) ?? []));
 
   // Chromium deletes chrome.runtime.lastError after each of its own failed
   // calls, so ours only exists while one of our callbacks runs, like Chrome's.
@@ -104,8 +119,172 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
     return bridge.invoke(method, args);
   }
 
-  function method(name: string): Fn {
+  // Chrome checks each call against the API's schema before sending it and
+  // throws right away (extensions/renderer/bindings/api_signature.cc and
+  // argument_spec.cc), with these exact messages.
+  type Spec = ArgSpec;
+  const valueType = (value: unknown): string => {
+    if (value === null) return "null";
+    if (value === undefined) return "undefined";
+    if (typeof value === "number") {
+      const int32 = Number.isInteger(value) && value >= -2147483648 && value <= 2147483647 && !Object.is(value, -0);
+      return int32 ? "integer" : "number";
+    }
+    if (typeof value === "boolean") return "boolean";
+    if (typeof value === "string") return "string";
+    if (Array.isArray(value)) return "array";
+    if (typeof value === "function") return "function";
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return "binary";
+    if (typeof value === "object") return "object";
+    return "other";
+  };
+  const typeName = (spec: Spec): string => {
+    if (spec.$ref) return spec.$ref;
+    if (spec.choices) return `[${spec.choices.map(typeName).join("|")}]`;
+    if (spec.type === "object") return spec.isInstanceOf ?? "object";
+    return spec.type ?? "any";
+  };
+  const referenced = (spec: Spec): Spec => (spec.$ref ? (schemas.types[spec.$ref] ?? { type: "any" }) : spec);
+  const correctType = (spec: Spec, value: unknown): boolean => {
+    if (spec.$ref) return correctType(referenced(spec), value);
+    if (spec.choices) return spec.choices.some((choice) => correctType(choice, value));
+    switch (spec.type) {
+      case "integer":
+        return valueType(value) === "integer" || value === 0;
+      case "number":
+        return typeof value === "number";
+      case "boolean":
+        return typeof value === "boolean";
+      case "string":
+        return typeof value === "string";
+      case "object":
+        return typeof value === "object" && value !== null && !Array.isArray(value);
+      case "array":
+        return Array.isArray(value);
+      case "binary":
+        return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+      case "function":
+        return typeof value === "function";
+      default:
+        return true;
+    }
+  };
+  const bounds = (spec: Spec, value: number): string | null => {
+    if (spec.minimum !== undefined && value < spec.minimum) return `Value must be at least ${spec.minimum}.`;
+    if (spec.maximum !== undefined && value > spec.maximum) return `Value must be at most ${spec.maximum}.`;
+    return null;
+  };
+  const instanceOf = (value: object, name: string): boolean => {
+    for (let at: object | null = value; at !== null && typeof at === "object"; at = Object.getPrototypeOf(at)) {
+      if ((at as { constructor?: { name?: string } }).constructor?.name === name) return true;
+    }
+    return false;
+  };
+  // Chrome's error for `value`, or null when it fits `spec`.
+  const check = (spec: Spec, value: unknown): string | null => {
+    if (!correctType(spec, value)) return `Invalid type: expected ${typeName(spec)}, found ${valueType(value)}.`;
+    if (spec.$ref) return check(referenced(spec), value);
+    if (spec.choices) return spec.choices.some((choice) => check(choice, value) === null) ? null : "Value did not match any choice.";
+    switch (spec.type) {
+      case "integer":
+        return bounds(spec, value as number);
+      case "number":
+        return Number.isFinite(value) ? bounds(spec, value as number) : "Value must not be NaN or Infinity.";
+      case "string": {
+        const text = value as string;
+        if (spec.minLength !== undefined && text.length < spec.minLength) {
+          return `String must have at least ${spec.minLength} characters; found ${text.length}.`;
+        }
+        if (spec.maxLength !== undefined && text.length > spec.maxLength) {
+          return `String must have at most ${spec.maxLength} characters; found ${text.length}.`;
+        }
+        if (spec.enum && !spec.enum.includes(text)) return `Value must be one of ${[...spec.enum].sort().join(", ")}.`;
+        return null;
+      }
+      case "array": {
+        const list = value as unknown[];
+        const min = spec.minItems ?? spec.minLength;
+        const max = spec.maxItems ?? spec.maxLength;
+        if (min !== undefined && list.length < min) return `Array must have at least ${min} items; found ${list.length}.`;
+        if (max !== undefined && list.length > max) return `Array must have at most ${max} items; found ${list.length}.`;
+        for (let i = 0; i < list.length; i++) {
+          const error = check(spec.items ?? { type: "any" }, list[i]);
+          if (error) return `Error at index ${i}: ${error}`;
+        }
+        return null;
+      }
+      case "object": {
+        const object = value as Record<string, unknown>;
+        const seen = new Set<string>();
+        for (const key of Object.keys(object)) {
+          let property = spec.properties && Object.hasOwn(spec.properties, key) ? spec.properties[key] : undefined;
+          let lenient = false;
+          if (property) {
+            seen.add(key);
+          } else if (spec.additionalProperties) {
+            property = { ...spec.additionalProperties, optional: true };
+            lenient = property.type === "any";
+          } else if (spec.ignoreAdditionalProperties) {
+            continue;
+          } else {
+            return `Unexpected property: '${key}'.`;
+          }
+          const item = object[key];
+          if (item === undefined || item === null) {
+            if (!property.optional) return `Missing required property '${key}'.`;
+            continue;
+          }
+          const error = check(property, item);
+          if (error && !lenient) return `Error at property '${key}': ${error}`;
+        }
+        for (const key of Object.keys(spec.properties ?? {}).sort()) {
+          if (!spec.properties![key].optional && !seen.has(key)) return `Missing required property '${key}'.`;
+        }
+        if (spec.isInstanceOf && !instanceOf(object, spec.isInstanceOf)) return `Value must be an instance of ${spec.isInstanceOf}.`;
+        return null;
+      }
+      default:
+        return null;
+    }
+  };
+  function validate(name: string, args: unknown[]) {
+    const params = schemas.functions[name];
+    if (!params) return;
+    const fail = (error: string): never => {
+      const signature = params.map((p) => `${p.optional ? "optional " : ""}${typeName(p)} ${p.name}`).join(", ");
+      throw new TypeError(`Error in invocation of ${name}(${signature}): ${error}`);
+    };
+    if (args.length > params.length) fail("No matching signature.");
+    // The argument each parameter got, or -1 when it was left out.
+    const argumentFor: number[] = [];
+    // Optional parameters may be left out anywhere, so try every way the
+    // arguments could line up with the parameters by type.
+    const match = (a: number, p: number): boolean => {
+      if (args.length - a > params.length - p) return false;
+      if (p === params.length) return true;
+      if (a < args.length) {
+        const value = args[a];
+        const omitted = params[p].optional === true && (value === null || value === undefined);
+        if (omitted || correctType(params[p], value)) {
+          argumentFor[p] = omitted ? -1 : a;
+          if (match(a + 1, p + 1)) return true;
+        }
+      }
+      if (!params[p].optional) return false;
+      argumentFor[p] = -1;
+      return match(a, p + 1);
+    };
+    if (!match(0, 0)) fail("No matching signature.");
+    params.forEach((param, p) => {
+      if (argumentFor[p] < 0) return;
+      const error = check(param, args[argumentFor[p]]);
+      if (error) fail(`Error at parameter '${param.name}': ${error}`);
+    });
+  }
+
+  function method(name: string, validated = true): Fn {
     return function (this: unknown, ...args: unknown[]) {
+      if (validated) validate(name, args);
       const callback = typeof args[args.length - 1] === "function" ? (args.pop() as Fn) : null;
       while (args.length > 0 && args[args.length - 1] === undefined) args.pop();
       const result = call(name, args);
@@ -125,8 +304,9 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
 
   class LocalEvent {
     constructor(protected readonly listeners: Set<Fn> = new Set()) {}
+    // Like Chrome, anything but a function is silently ignored.
     addListener(listener: Fn) {
-      if (typeof listener !== "function") throw new TypeError("listener must be a function");
+      if (typeof listener !== "function") return;
       this.listeners.add(listener);
     }
     removeListener(listener: Fn) {
@@ -164,9 +344,8 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
       return this.listeners.size - this.keys.size;
     }
     addListener(listener: Fn, filter?: unknown) {
-      if (filter !== undefined && filter !== null && !this.filterable) {
-        throw new Error("This event does not support filters");
-      }
+      if (typeof listener !== "function") return;
+      if (filter !== undefined && !this.filterable) throw new TypeError("This event does not support filters");
       if (this.listeners.has(listener)) return;
       super.addListener(listener);
       if (filter !== undefined && filter !== null) {
@@ -190,19 +369,28 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
   }
 
   const localHandlers = new Map<string, (args: unknown[]) => void>();
+  // Like Chrome's argument massagers: hand listeners extra arguments and act on what they return.
+  const massagers = new Map<string, (args: unknown[], dispatch: (args: unknown[]) => unknown[]) => void>();
 
   bridge.onEvent((name, args, matched) => {
     localHandlers.get(name)?.(args);
     const keys = filterKeys.get(name);
-    for (const listener of [...(events.get(name) ?? [])]) {
-      const key = keys?.get(listener);
-      if (matched && key !== undefined && !matched.includes(key)) continue;
-      try {
-        listener(...args);
-      } catch (error) {
-        console.error(error);
+    const dispatch = (listenerArgs: unknown[]) => {
+      const results: unknown[] = [];
+      for (const listener of [...(events.get(name) ?? [])]) {
+        const key = keys?.get(listener);
+        if (matched && key !== undefined && !matched.includes(key)) continue;
+        try {
+          results.push(listener(...listenerArgs));
+        } catch (error) {
+          console.error(error);
+        }
       }
-    }
+      return results;
+    };
+    const massager = massagers.get(name);
+    if (massager) massager(args, dispatch);
+    else dispatch(args);
   });
 
   function namespace(
@@ -231,7 +419,25 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
     return api;
   }
 
-  const has = (permission: string) => declared.has(permission);
+  const has = (permission: string) => granted.has(permission);
+  const gatedApis: { name: string; allowed: () => boolean; install: () => void }[] = [];
+  const installedApis = new Set<string>();
+  const gated = (name: string, allowed: () => boolean, install: () => void) => gatedApis.push({ name, allowed, install });
+  const browserNamespace = (globalThis as unknown as { browser?: Record<string, unknown> }).browser;
+  const applyGrants = () => {
+    for (const { name, allowed, install } of gatedApis) {
+      if (allowed()) {
+        if (installedApis.has(name)) continue;
+        install();
+        installedApis.add(name);
+      } else if (installedApis.delete(name)) {
+        for (const key of name === "contextMenus" ? ["contextMenus", "menus"] : [name]) {
+          delete chrome[key];
+          if (browserNamespace && browserNamespace !== (chrome as unknown)) delete browserNamespace[key];
+        }
+      }
+    }
+  };
 
   namespace("tabs", {
     methods: spec.tabs.methods,
@@ -257,9 +463,10 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
     },
   });
 
-  const setIcon = method("action.setIcon");
+  const setIcon = method("action.setIcon", false);
   const iconOverride = {
     setIcon(details: { imageData?: unknown; path?: unknown; tabId?: number }, callback?: Fn) {
+      validate("action.setIcon", [...arguments]);
       const encode = (image: unknown) => {
         const data = image as { width: number; height: number; data: Uint8ClampedArray };
         return { width: data.width, height: data.height, data: new Uint8Array(data.data.buffer.slice(0)) };
@@ -282,7 +489,7 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
       return setIcon({ ...details, imageData, path }, ...(callback ? [callback] : []));
     },
   };
-  if (manifest.action || manifest.manifest_version === 3) {
+  if (manifest.action) {
     namespace("action", { methods: spec.action.methods, events: spec.action.events, extra: iconOverride });
   }
   if (manifest.browser_action) {
@@ -302,11 +509,11 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
     pageAction.hide = method("action.disable");
   }
 
-  if (has("contextMenus") || has("menus")) {
+  gated("contextMenus", () => has("contextMenus") || has("menus"), () => {
     const clickHandlers = new Map<string | number, Fn>();
     let nextMenuId = 1;
-    const create = method("contextMenus.create");
-    const update = method("contextMenus.update");
+    const create = method("contextMenus.create", false);
+    const update = method("contextMenus.update", false);
     const remember = (itemId: string | number, onclick: unknown) => {
       if (typeof onclick !== "function") return;
       if (clickHandlers.size === 0) bridge.listen("contextMenus.onclick");
@@ -336,6 +543,7 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
       },
       extra: {
         create(properties: Record<string, unknown>, callback?: Fn) {
+          validate("contextMenus.create", [...arguments]);
           const { onclick, ...rest } = properties;
           const generated = rest.id === undefined ? nextMenuId++ : undefined;
           const itemId = (rest.id as string | undefined) ?? (generated as number);
@@ -345,6 +553,7 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
           return itemId;
         },
         update(itemId: string | number, properties: Record<string, unknown>, callback?: Fn) {
+          validate("contextMenus.update", [...arguments]);
           const { onclick, ...rest } = properties;
           remember(itemId, onclick);
           return update(itemId, rest, ...(callback ? [callback] : []));
@@ -356,7 +565,7 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
       clickHandlers.get(info.menuItemId)?.(...args);
     });
     if (has("menus")) chrome.menus = menus;
-  }
+  });
 
   if (manifest.commands)
     namespace("commands", {
@@ -369,7 +578,7 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
     events: spec.permissions.events,
   });
 
-  if (has("cookies")) {
+  gated("cookies", () => has("cookies"), () => {
     namespace("cookies", {
       methods: spec.cookies.methods,
       events: spec.cookies.events,
@@ -384,17 +593,17 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
         },
       },
     });
-  }
+  });
 
-  if (has("webNavigation")) {
+  gated("webNavigation", () => has("webNavigation"), () => {
     namespace("webNavigation", {
       methods: spec.webNavigation.methods,
       events: spec.webNavigation.events,
       filterable: true,
     });
-  }
+  });
 
-  if (has("notifications")) {
+  gated("notifications", () => has("notifications"), () => {
     namespace("notifications", {
       methods: spec.notifications.methods,
       events: spec.notifications.events,
@@ -403,14 +612,14 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
         PermissionLevel: { GRANTED: "granted", DENIED: "denied" },
       },
     });
-  }
+  });
 
-  if (has("sidePanel")) {
+  gated("sidePanel", () => has("sidePanel"), () => {
     namespace("sidePanel", {
       methods: spec.sidePanel.methods,
       events: spec.sidePanel.events,
     });
-  }
+  });
 
   // Without the permission Chrome only exposes the calls about the extension itself.
   namespace(
@@ -420,40 +629,80 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
       : { methods: ["getSelf", "uninstallSelf", "getPermissionWarningsByManifest"] },
   );
 
-  if (has("history")) {
+  gated("history", () => has("history"), () => {
     namespace("history", {
       methods: spec.history.methods,
       events: spec.history.events,
     });
-  }
+  });
 
-  if (has("downloads")) {
+  gated("downloads", () => has("downloads"), () => {
     namespace("downloads", {
       methods: spec.downloads.methods,
       events: spec.downloads.events,
     });
-  }
+    // Chrome's downloads_custom_bindings.js: a listener answers through suggest(),
+    // later if it returned true, otherwise right after it returns.
+    massagers.set("downloads.onDeterminingFilename", (args, dispatch) => {
+      const downloadItem = args[0] as { id: number };
+      const downloadId = downloadItem.id;
+      let suggestable = true;
+      const isValidResult = (result: unknown) => {
+        if (result === undefined) return false;
+        const value = result as { filename?: unknown; conflictAction?: unknown };
+        if (typeof result !== "object" || result === null) {
+          console.error(
+            `Error: Invocation of form suggest(${typeof result}) doesn't match definition suggest({filename: string, conflictAction: string})`,
+          );
+          return false;
+        }
+        if (typeof value.filename !== "string" || value.filename.length === 0) {
+          console.error('Error: "filename" parameter to suggest() must be a non-empty string');
+          return false;
+        }
+        if (![undefined, "uniquify", "overwrite", "prompt"].includes(value.conflictAction as string | undefined)) {
+          console.error('Error: "conflictAction" parameter to suggest() must be one of undefined, "uniquify", "overwrite", "prompt"');
+          return false;
+        }
+        return true;
+      };
+      const suggest = (result?: unknown) => {
+        if (!suggestable) {
+          console.error("suggestCallback may not be called more than once.");
+          return;
+        }
+        suggestable = false;
+        const value = result as { filename: string; conflictAction?: string };
+        const sent = isValidResult(result) ? [downloadId, value.filename, value.conflictAction || ""] : [downloadId, "", ""];
+        call("downloadsInternal.determineFilename", sent).catch((error: Error) =>
+          console.error(`Unchecked runtime.lastError: ${error.message}`),
+        );
+      };
+      const results = dispatch([downloadItem, suggest]);
+      if (suggestable && results[0] !== true) suggest();
+    });
+  });
 
-  if (has("bookmarks")) {
+  gated("bookmarks", () => has("bookmarks"), () => {
     namespace("bookmarks", {
       methods: spec.bookmarks.methods,
       events: spec.bookmarks.events,
-      constants: { MAX_WRITE_OPERATIONS_PER_HOUR: 1000000, MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE: 1000000 },
+      constants: { ROOT_NODE_ID: "0", MAX_WRITE_OPERATIONS_PER_HOUR: 1000000, MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE: 1000000 },
     });
-  }
+  });
 
-  if (has("sessions")) {
+  gated("sessions", () => has("sessions"), () => {
     namespace("sessions", {
       methods: spec.sessions.methods,
       events: spec.sessions.events,
       constants: { MAX_SESSION_RESULTS: 25 },
     });
-  }
+  });
 
-  if (has("search")) namespace("search", { methods: spec.search.methods });
-  if (has("topSites")) namespace("topSites", { methods: spec.topSites.methods });
+  gated("search", () => has("search"), () => void namespace("search", { methods: spec.search.methods }));
+  gated("topSites", () => has("topSites"), () => void namespace("topSites", { methods: spec.topSites.methods }));
 
-  if (has("identity")) {
+  gated("identity", () => has("identity"), () => {
     namespace("identity", {
       methods: spec.identity.methods,
       events: spec.identity.events,
@@ -463,23 +712,23 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
         },
       },
     });
-  }
+  });
 
-  if (has("browsingData")) {
+  gated("browsingData", () => has("browsingData"), () => {
     namespace("browsingData", {
       methods: spec.browsingData.methods,
     });
-  }
+  });
 
-  if (has("debugger")) {
+  gated("debugger", () => has("debugger"), () => {
     namespace("debugger", {
       methods: spec.debugger.methods,
       events: spec.debugger.events,
       constants: { DetachReason: { TARGET_CLOSED: "target_closed", CANCELED_BY_USER: "canceled_by_user" } },
     });
-  }
+  });
 
-  if (has("tabGroups")) {
+  gated("tabGroups", () => has("tabGroups"), () => {
     namespace("tabGroups", {
       methods: spec.tabGroups.methods,
       events: spec.tabGroups.events,
@@ -498,9 +747,48 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
         },
       },
     });
-  }
+  });
 
-  namespace("extension", { methods: spec.extension.methods });
+  const extensionApi = namespace("extension", {
+    methods: ["isAllowedFileSchemeAccess", "isAllowedIncognitoAccess"],
+    constants: { ViewType: { TAB: "tab", POPUP: "popup" } },
+    extra: {
+      setUpdateUrlData(data: unknown) {
+        validate("extension.setUpdateUrlData", [...arguments]);
+        void call("extension.setUpdateUrlData", [data]).catch(() => {});
+      },
+    },
+  });
+  if (!isWorker) {
+    // Only this page and the extension frames inside it are reachable from
+    // here; Chrome also returns the extension's other pages in this process.
+    extensionApi.getViews = (fetchProperties?: { type?: string; windowId?: number; tabId?: number }) => {
+      const wanted = fetchProperties ?? {};
+      const view = bridge.viewInfo();
+      if (!view) return [];
+      const windowId = wanted.windowId === -2 ? view.windowId : wanted.windowId ?? -1;
+      if (wanted.type !== undefined && wanted.type !== view.type) return [];
+      if (windowId !== -1 && windowId !== view.windowId) return [];
+      if ((wanted.tabId ?? -1) !== -1 && wanted.tabId !== view.tabId) return [];
+      const ours = (target: Window) => {
+        try {
+          return target.location.origin === location.origin;
+        } catch {
+          return false;
+        }
+      };
+      const views: Window[] = [];
+      const visit = (target: Window) => {
+        if (!ours(target)) return;
+        views.push(target);
+        for (let i = 0; i < target.frames.length; i++) visit(target.frames[i]);
+      };
+      let root: Window = window;
+      while (root.parent !== root && ours(root.parent)) root = root.parent;
+      visit(root);
+      return views;
+    };
+  }
 
   // Electron rejects every managed storage read; Chrome without admin policies answers with nothing set
   const managed = (chrome.storage as Record<string, unknown> | undefined)?.managed as Record<string, unknown> | undefined;
@@ -512,8 +800,18 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
         queueMicrotask(() => callback(value));
         return undefined;
       };
+    const readOnly = function (...args: unknown[]) {
+      const error = new Error("This is a read-only store.");
+      const callback = typeof args[args.length - 1] === "function" ? (args.pop() as Fn) : null;
+      if (!callback) return Promise.reject(error);
+      queueMicrotask(() => withLastError(error, () => callback()));
+      return undefined;
+    };
     managed.get = answer({});
     managed.getBytesInUse = answer(0);
+    managed.set = readOnly;
+    managed.remove = readOnly;
+    managed.clear = readOnly;
   }
 
   const runtime = chrome.runtime;
@@ -527,15 +825,24 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
 
   // Electron's sender.tab always says windowId 0, index 0, inactive; the main process keeps a correct copy here
   const senderTabs = new Map<number, Record<string, unknown>>();
+  const notTabs = new Set<number>();
   let watchingSenderTabs = false;
-  const storeSenderTabs = (tabs: unknown) => {
+  const storeSenderTabs = (snapshot: unknown) => {
+    const { tabs, notTabs: others } = snapshot as { tabs: Record<string, unknown>[]; notTabs: number[] };
     senderTabs.clear();
-    for (const tab of tabs as Record<string, unknown>[]) senderTabs.set(tab.id as number, tab);
+    for (const tab of tabs) senderTabs.set(tab.id as number, tab);
+    notTabs.clear();
+    for (const id of others) notTabs.add(id);
   };
-  localHandlers.set("runtime.senderTabs", ([tabs]) => storeSenderTabs(tabs));
+  localHandlers.set("runtime.senderTabs", ([snapshot]) => storeSenderTabs(snapshot));
   const fixSender = (sender: Record<string, unknown> | undefined) => {
     const tab = sender?.tab as Record<string, unknown> | undefined;
     if (!tab) return;
+    // Chrome only describes the tab, frame and document of senders that are tabs.
+    if (notTabs.has(tab.id as number)) {
+      for (const key of ["tab", "frameId", "documentId", "documentLifecycle"]) delete sender![key];
+      return;
+    }
     const known = senderTabs.get(tab.id as number);
     sender!.tab = known ? { ...known, url: tab.url ?? known.url, title: tab.title ?? known.title } : { ...tab, windowId: -2, groupId: -1 };
   };
@@ -616,14 +923,23 @@ function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: ApiSpec
   }
 
   // Chromium also exposes the same APIs as `browser`, a separate object
-  const browserNamespace = (globalThis as unknown as { browser?: Record<string, unknown> }).browser;
-  if (browserNamespace && browserNamespace !== (chrome as unknown)) {
+  const mirrorBrowser = () => {
+    if (!browserNamespace || browserNamespace === (chrome as unknown)) return;
     for (const key of Object.keys(chrome)) {
       try {
         Object.defineProperty(browserNamespace, key, { configurable: true, enumerable: true, writable: true, value: chrome[key] });
       } catch {}
     }
-  }
+  };
+  applyGrants();
+  mirrorBrowser();
+  localHandlers.set("runtime.permissionsChanged", ([apis]) => {
+    granted.clear();
+    for (const permission of apis as string[]) granted.add(permission);
+    applyGrants();
+    mirrorBrowser();
+  });
+  bridge.listen("runtime.permissionsChanged");
 
   if (isWorker) return true;
   try {

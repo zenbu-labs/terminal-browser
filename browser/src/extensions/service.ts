@@ -28,7 +28,7 @@ import { CommandStore } from "./commands";
 import { Importer } from "./import";
 import { Installer } from "./install";
 import { MenuStore } from "./menus";
-import { LoadedExtension } from "./loaded";
+import { LoadedExtension, allowsFileAccess } from "./loaded";
 import { grantNativeActiveTab, revokeNativeActiveTab, setNativeUserScriptsAllowed, setNativeViewType } from "./native";
 import { asManifest } from "./manifest";
 import { Router } from "./router";
@@ -183,7 +183,7 @@ export class ExtensionService {
     let electronExtension: Electron.Extension;
     try {
       readManifestFile(record.path);
-      electronExtension = await this.session.extensions.loadExtension(record.path, { allowFileAccess: false });
+      electronExtension = await this.session.extensions.loadExtension(record.path, { allowFileAccess: allowsFileAccess(record) });
     } catch (error) {
       this.loadErrors.set(record.id, error instanceof Error ? error.message : String(error));
       throw error;
@@ -356,6 +356,7 @@ export class ExtensionService {
   registerSurface(contents: WebContents, window: ExtensionWindow, kind: SurfaceKind, extensionId: string) {
     this.surfaces.set(contents.id, { window, kind, extensionId });
     setNativeViewType(this.session, contents, kind === "side-panel" ? "sidePanel" : "popup");
+    this.senderTabs.changed();
     contents.once("destroyed", () => {
       if (this.surfaces.get(contents.id)?.window === window) this.surfaces.delete(contents.id);
     });
@@ -363,6 +364,10 @@ export class ExtensionService {
 
   surface(contentsId: number): Surface | null {
     return this.surfaces.get(contentsId) ?? null;
+  }
+
+  surfaceContentsIds(): number[] {
+    return [...this.surfaces.keys()];
   }
 
   reservePopupWindowId(): number {

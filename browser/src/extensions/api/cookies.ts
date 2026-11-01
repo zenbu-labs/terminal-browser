@@ -140,13 +140,21 @@ export function installCookies(service: ExtensionService) {
       checkHost(caller.extension, url);
       checkStore(details.storeId);
       const name = details.name ?? "";
-      const set: CookiesSetDetails = { url: url.href, name, value: details.value ?? "" };
+      // Electron's cookie store can't hold partitioned cookies yet; storing it
+      // unpartitioned would share it across every site, so it fails instead.
+      if (details.partitionKey?.topLevelSite) throw new Error(`Failed to parse or set cookie named "${name}".`);
+      // Unlike Electron's defaults, Chrome leaves sameSite unspecified and secure off.
+      const set: CookiesSetDetails = {
+        url: url.href,
+        name,
+        value: details.value ?? "",
+        secure: details.secure ?? false,
+        sameSite: (details.sameSite ?? "unspecified") as CookiesSetDetails["sameSite"],
+      };
       if (details.domain !== undefined) set.domain = details.domain;
       if (details.path !== undefined) set.path = details.path;
-      if (details.secure !== undefined) set.secure = details.secure;
       if (details.httpOnly !== undefined) set.httpOnly = details.httpOnly;
       if (details.expirationDate !== undefined) set.expirationDate = details.expirationDate;
-      if (details.sameSite !== undefined) set.sameSite = details.sameSite as CookiesSetDetails["sameSite"];
       try {
         await cookies.set(set);
       } catch {
@@ -170,7 +178,7 @@ export function installCookies(service: ExtensionService) {
       checkHost(caller.extension, url);
       checkStore(details.storeId);
       const name = String(details.name ?? "");
-      await cookies.remove(url.href, name);
+      if (!details.partitionKey?.topLevelSite) await cookies.remove(url.href, name);
       const result: Record<string, unknown> = { url: url.href, name, storeId: STORE_ID };
       if (details.partitionKey) result.partitionKey = details.partitionKey;
       return result;

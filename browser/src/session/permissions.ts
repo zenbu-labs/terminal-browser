@@ -16,14 +16,18 @@ const NEVER_PROMPTED = new Set(["display-capture", "geolocation", "geolocation-a
 
 const NEVER_REMEMBERED = new Set(["openExternal"]);
 
-const EXTENSION_FRAME_GRANTED = new Set(["clipboard-read", "clipboard-sanitized-write"]);
+// The manifest permission that lets an extension's frames use each one without asking.
+const EXTENSION_FRAME_GRANTED: Record<string, string> = {
+  "clipboard-read": "clipboardRead",
+  "clipboard-sanitized-write": "clipboardWrite",
+};
 
 export type MediaDevice = "camera" | "microphone";
 
 export interface PermissionHost {
   requestRender(): void;
   deviceAccess(device: MediaDevice): Promise<boolean>;
-  extensionInstalled(id: string): boolean;
+  extensionHasPermission(id: string, permission: string): boolean;
 }
 
 export class PermissionPrompts {
@@ -31,12 +35,14 @@ export class PermissionPrompts {
 
   constructor(private readonly host: PermissionHost) {}
 
-  // Like Chrome, an installed extension's own frames may use the clipboard without asking
-  // (Vimium's yy and p run in its toolbar frame inside the page).
+  // Like Chrome, an extension that declares clipboardRead/clipboardWrite may use the
+  // clipboard from its own frames without asking (Vimium's yy and p run in its
+  // toolbar frame inside the page).
   private grantedToExtensionFrame(check: PermissionCheck): boolean {
-    if (!EXTENSION_FRAME_GRANTED.has(check.permission)) return false;
+    const needed = Object.hasOwn(EXTENSION_FRAME_GRANTED, check.permission) ? EXTENSION_FRAME_GRANTED[check.permission] : null;
+    if (!needed) return false;
     const id = extensionIdFromUrl(check.origin);
-    return id !== null && this.host.extensionInstalled(id);
+    return id !== null && this.host.extensionHasPermission(id, needed);
   }
 
   async request(tabId: number, request: PermissionRequest): Promise<boolean> {

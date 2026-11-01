@@ -271,7 +271,7 @@ class Session {
   private readonly permissions = new PermissionPrompts({
     requestRender: () => this.render(),
     deviceAccess: (device) => this.deviceAccess(device),
-    extensionInstalled: (id) => this.extensions?.service.get(id) != null,
+    extensionHasPermission: (id, permission) => this.extensions?.service.get(id)?.hasApiPermission(permission) ?? false,
   });
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();

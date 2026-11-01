@@ -1,9 +1,14 @@
+import { ipcMain } from "electron";
+import type { IpcMainServiceWorkerEvent } from "electron";
+
 import { updateExtension } from "shared";
 
 import { extensionIcon } from "../action";
 import type { LoadedExtension } from "../loaded";
 import { optionalPermissions, parseMatchPattern, permissionWarnings, requiredPermissions } from "../manifest";
 import type { MatchPattern } from "../manifest";
+import { isRecognizedPermission } from "../permission-names";
+import { GRANTED_CHANNEL } from "../protocol";
 import { hasUserGesture } from "../router";
 import type { Caller } from "../router";
 import type { ExtensionService } from "../service";
@@ -63,6 +68,8 @@ export function installPermissions(service: ExtensionService) {
     const request = (value ?? {}) as Permissions;
     const permissions = request.permissions ?? [];
     const origins = request.origins ?? [];
+    const unknown = permissions.find((permission) => !permission.includes("|") && !isRecognizedPermission(permission));
+    if (unknown !== undefined) throw new Error(`'${unknown}' is not a recognized permission.`);
     return { permissions, origins, patterns: parseOrigins(origins) };
   };
 
@@ -71,7 +78,23 @@ export function installPermissions(service: ExtensionService) {
     if (record) extension.record = record;
     await extension.refreshPermissions();
     service.changed();
+    service.dispatch(extension.id, "runtime.permissionsChanged", [extension.apis]);
   };
+
+  // The preload asks synchronously which APIs to expose before the
+  // extension's own scripts run.
+  const granted = (caller: Caller | null) => (caller ? caller.extension.apis : null);
+  ipcMain.on(GRANTED_CHANNEL, (event) => {
+    event.returnValue = granted(router.callerForFrame(event.sender, event.senderFrame));
+  });
+  // A worker's synchronous messages only reach ServiceWorkerMain.ipc once the
+  // main process created that object, which can be after the worker asked;
+  // Electron emits them on the session first.
+  service.session.on("-ipc-message-sync" as never, ((event: IpcMainServiceWorkerEvent, channel: string) => {
+    if (event.type !== "service-worker" || channel !== GRANTED_CHANNEL) return;
+    const worker = service.session.serviceWorkers.getWorkerFromVersionID(event.versionId);
+    event.returnValue = granted(worker ? router.callerForWorker(worker) : null);
+  }) as never);
 
   router.handle("permissions.getAll", (caller) => {
     const extension = caller.extension;
@@ -154,7 +177,7 @@ export function installPermissions(service: ExtensionService) {
       if (!ref) throw new Error(`No document with ID '${documentId}'.`);
     } else {
       ref = service.tabRef(tabId!);
-      if (!ref) throw new Error(`No tab with ID '${tabId}'.`);
+      if (!ref) throw new Error(`No tab with id: ${tabId}.`);
     }
     if (pattern !== undefined && !parseMatchPattern(pattern)) {
       throw new Error(

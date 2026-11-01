@@ -45,9 +45,26 @@ const SINGLE: Record<string, DataType> = {
   removeIndexedDB: "indexedDB",
   removeLocalStorage: "localStorage",
   removePasswords: "passwords",
+  removePluginData: "pluginData",
   removeServiceWorkers: "serviceWorkers",
   removeWebSQL: "webSQL",
 };
+
+// What browsingData.settings reports, like Chrome (which no longer lists appcache or webSQL).
+const SETTINGS_TYPES: DataType[] = [
+  "cache",
+  "cacheStorage",
+  "cookies",
+  "downloads",
+  "fileSystems",
+  "formData",
+  "history",
+  "indexedDB",
+  "localStorage",
+  "passwords",
+  "pluginData",
+  "serviceWorkers",
+];
 
 export function installBrowsingData(service: ExtensionService) {
   const { router } = service;
@@ -56,6 +73,7 @@ export function installBrowsingData(service: ExtensionService) {
   const remove = async (raw: unknown, dataToRemove: chrome.browsingData.DataTypeSet) => {
     const removal = (raw ?? {}) as RemovalOptions;
     const types = (Object.keys(dataToRemove) as DataType[]).filter((type) => dataToRemove[type]);
+    if (types.includes("passwords")) throw new Error("Requested data type is deprecated.");
     if (removal.origins && removal.excludeOrigins) throw new Error("Origins and excludeOrigins can't be used together.");
     const filtered = removal.origins ?? removal.excludeOrigins;
     if (filtered && types.some((type) => !ORIGIN_FILTERABLE.has(type))) {
@@ -106,11 +124,10 @@ export function installBrowsingData(service: ExtensionService) {
   router.handle(
     "browsingData.settings",
     () => {
-      const all = Object.fromEntries(SUPPORTED.map((type) => [type, true]));
       return {
         options: { since: 0, originTypes: { unprotectedWeb: true, protectedWeb: false, extension: false } },
-        dataToRemove: all,
-        dataRemovalPermitted: all,
+        dataToRemove: Object.fromEntries(SETTINGS_TYPES.map((type) => [type, SUPPORTED.includes(type)])),
+        dataRemovalPermitted: Object.fromEntries(SETTINGS_TYPES.map((type) => [type, true])),
       };
     },
     options,

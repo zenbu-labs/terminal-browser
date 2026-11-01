@@ -8,11 +8,23 @@ import { createDownload, deleteDownload, getDownload, interruptStaleDownloads, l
 import type { DownloadRecord } from "shared";
 
 import { Listeners } from "./listeners";
+import { mimeForFile } from "./mime";
+
+export type ConflictAction = "uniquify" | "overwrite" | "prompt";
+
+export interface FilenameSuggestion {
+  filename: string;
+  conflictAction: ConflictAction;
+}
+
+// Asked once per download before its file name is final; null means nobody
+// wants a say, so the download keeps the name it would have had anyway.
+export type FilenameDeterminer = (record: DownloadRecord, suggestedPath: string) => Promise<FilenameSuggestion | null> | null;
 
 export interface DownloadRequest {
   url: string;
   filename?: string;
-  conflictAction?: "uniquify" | "overwrite" | "prompt";
+  conflictAction?: ConflictAction;
   headers?: Record<string, string>;
   method?: "GET" | "POST";
   body?: string;
@@ -24,13 +36,21 @@ interface Control {
   resume(): void;
   cancel(): void;
   canResume(): boolean;
+  remainingMs(): number | null;
 }
 
 interface Pending {
   url: string;
-  savePath: string | null;
+  creator: FilenameSuggestion | null;
   extensionId: string | null;
   resolve(id: number): void;
+}
+
+interface Live {
+  record: DownloadRecord;
+  control: Control;
+  writtenAt: number;
+  determined: Promise<void>;
 }
 
 const PROGRESS_WRITE_MS = 1000;
@@ -50,25 +70,44 @@ function uniquePath(dir: string, filename: string): string {
   }
 }
 
-function requestedPath(filename: string, conflictAction: DownloadRequest["conflictAction"]): string {
-  const normalized = path.normalize(filename);
-  if (path.isAbsolute(filename) || normalized.startsWith("..") || filename.includes("\\") || !path.basename(normalized)) {
-    throw new Error("Invalid filename");
-  }
-  const target = path.join(downloadsFolder(), normalized);
-  if (conflictAction === "overwrite") {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    return target;
-  }
+export function safeRelativeFilename(filename: string): string | null {
+  const unified = filename.replace(/\\/g, "/");
+  if (unified.split("/").some((part) => part === "" || part === "." || part === "..")) return null;
+  return unified;
+}
+
+// `keep` is the file the download is already writing to, which may itself be the right name.
+function targetPath(suggestion: FilenameSuggestion, keep: string | null): string {
+  const relative = safeRelativeFilename(suggestion.filename);
+  if (!relative) throw new Error("Invalid filename");
+  const target = path.join(downloadsFolder(), relative);
+  if (target === keep) return target;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (suggestion.conflictAction === "overwrite") return target;
   return uniquePath(path.dirname(target), path.basename(target));
+}
+
+function attachmentName(disposition: string | null): string | null {
+  if (!disposition) return null;
+  const encoded = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(disposition)?.[1];
+  if (encoded) {
+    try {
+      return path.basename(decodeURIComponent(encoded.trim()));
+    } catch {}
+  }
+  const plain = /filename\s*=\s*(?:"([^"]*)"|([^;]+))/i.exec(disposition);
+  const name = (plain?.[1] ?? plain?.[2])?.trim();
+  return name ? path.basename(name) : null;
 }
 
 export class DownloadManager {
   readonly created = new Listeners<[DownloadRecord]>();
+  // Every update, including progress that only moved receivedBytes.
   readonly changed = new Listeners<[DownloadRecord]>();
   readonly erased = new Listeners<[number]>();
   readonly progressed = new Listeners<[]>();
-  private readonly live = new Map<number, { record: DownloadRecord; control: Control; writtenAt: number }>();
+  determiner: FilenameDeterminer | null = null;
+  private readonly live = new Map<number, Live>();
   private readonly pending: Pending[] = [];
   private readonly attached = new WeakSet<Session>();
 
@@ -83,7 +122,13 @@ export class DownloadManager {
   private attach(session: Session) {
     if (this.attached.has(session)) return;
     this.attached.add(session);
-    session.prependListener("will-download", (_event, item) => this.track(item));
+    session.prependListener("will-download", (_event, item) => {
+      try {
+        this.track(item);
+      } catch (error) {
+        process.stderr.write(`download tracking failed: ${error instanceof Error ? error.stack : String(error)}\n`);
+      }
+    });
   }
 
   list(): DownloadRecord[] {
@@ -98,6 +143,10 @@ export class DownloadManager {
     return this.live.get(id)?.control.canResume() ?? false;
   }
 
+  remainingMs(id: number): number | null {
+    return this.live.get(id)?.control.remainingMs() ?? null;
+  }
+
   async download(request: DownloadRequest): Promise<number> {
     let parsed: URL;
     try {
@@ -106,12 +155,15 @@ export class DownloadManager {
       throw new Error("Invalid URL");
     }
     if (!["http:", "https:", "data:", "blob:", "file:"].includes(parsed.protocol)) throw new Error("Invalid URL");
-    const savePath = request.filename ? requestedPath(request.filename, request.conflictAction) : null;
+    if (request.filename !== undefined && !safeRelativeFilename(request.filename)) throw new Error("Invalid filename");
+    const creator: FilenameSuggestion | null = request.filename
+      ? { filename: request.filename, conflictAction: request.conflictAction ?? "uniquify" }
+      : null;
     if ((request.method && request.method !== "GET") || request.body !== undefined) {
-      return this.fetchDownload(request, savePath ?? uniquePath(downloadsFolder(), path.basename(parsed.pathname) || "download"));
+      return this.fetchDownload(request, parsed, creator);
     }
     return new Promise<number>((resolve, reject) => {
-      const entry: Pending = { url: parsed.href, savePath, extensionId: request.extensionId, resolve };
+      const entry: Pending = { url: parsed.href, creator, extensionId: request.extensionId, resolve };
       this.pending.push(entry);
       setTimeout(() => {
         const at = this.pending.indexOf(entry);
@@ -173,7 +225,11 @@ export class DownloadManager {
     const record = this.get(id);
     if (!record || record.state !== "complete") throw new Error("Download must be complete");
     if (!fs.existsSync(record.filename)) throw new Error("Download file already deleted");
-    fs.rmSync(record.filename, { force: true });
+    try {
+      fs.unlinkSync(record.filename);
+    } catch {
+      throw new Error("Unable to remove file");
+    }
     this.changed.emit(record);
     this.progressed.emit();
   }
@@ -182,13 +238,11 @@ export class DownloadManager {
     const url = item.getURLChain()[0] ?? item.getURL();
     const at = this.pending.findIndex((entry) => entry.url === url);
     const request = at >= 0 ? this.pending.splice(at, 1)[0] : null;
-    if (request?.savePath) item.setSavePath(request.savePath);
-    else if (!item.getSavePath()) item.setSavePath(uniquePath(downloadsFolder(), item.getFilename()));
     const started = item.getStartTime();
     const record = createDownload({
       url,
       finalUrl: item.getURL(),
-      filename: item.getSavePath(),
+      filename: "",
       mime: item.getMimeType(),
       startTime: started > 0 ? Math.round(started * 1000) : Date.now(),
       endTime: null,
@@ -204,44 +258,96 @@ export class DownloadManager {
       resume: () => item.resume(),
       cancel: () => item.cancel(),
       canResume: () => item.canResume() && (item.isPaused() || item.getState() === "interrupted"),
+      remainingMs: () => {
+        const speed = item.getState() === "progressing" && !item.isPaused() ? item.getCurrentBytesPerSecond() : 0;
+        const total = item.getTotalBytes();
+        if (speed <= 0 || total <= 0) return null;
+        return ((total - item.getReceivedBytes()) / speed) * 1000;
+      },
     };
-    this.live.set(record.id, { record, control, writtenAt: Date.now() });
+    const entry: Live = { record, control, writtenAt: Date.now(), determined: Promise.resolve() };
+    this.live.set(record.id, entry);
     this.created.emit(record);
     this.progressed.emit();
     request?.resolve(record.id);
+
+    const fallback = uniquePath(downloadsFolder(), item.getFilename());
+    const choose = (suggestion: FilenameSuggestion | null, writingTo: string | null) => {
+      try {
+        return suggestion ? targetPath(suggestion, writingTo) : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    const determination = this.determiner?.({ ...entry.record }, path.join(downloadsFolder(), item.getFilename())) ?? null;
+    if (determination) {
+      // The name is only known once every extension answered, so the bytes land
+      // under the usual name first and move when the download finishes.
+      item.setSavePath(fallback);
+      entry.determined = determination
+        .catch(() => null)
+        .then((suggestion) => this.setTarget(record.id, choose(suggestion ?? request?.creator ?? null, fallback)));
+    } else {
+      const target = choose(request?.creator ?? null, null);
+      item.setSavePath(target);
+      this.setTarget(record.id, target);
+    }
+
     item.on("updated", (_event, state) => {
       this.update(record.id, {
         state: state === "interrupted" ? "interrupted" : "in_progress",
         error: state === "interrupted" ? "NETWORK_FAILED" : null,
         paused: item.isPaused(),
         finalUrl: item.getURL(),
-        filename: item.getSavePath(),
-        mime: item.getMimeType(),
         totalBytes: item.getTotalBytes(),
         receivedBytes: item.getReceivedBytes(),
       });
     });
     item.once("done", (_event, state) => {
-      const received = item.getReceivedBytes();
-      this.update(record.id, {
-        state: state === "completed" ? "complete" : "interrupted",
-        error: state === "completed" ? null : state === "cancelled" ? "USER_CANCELED" : "NETWORK_FAILED",
-        paused: false,
-        endTime: Date.now(),
-        filename: item.getSavePath(),
-        receivedBytes: received,
-        totalBytes: state === "completed" ? Math.max(received, item.getTotalBytes()) : item.getTotalBytes(),
+      this.finish(record.id, item, state).catch((error) => {
+        process.stderr.write(`download finish failed: ${error instanceof Error ? error.stack : String(error)}\n`);
       });
-      this.live.delete(record.id);
     });
   }
 
-  private async fetchDownload(request: DownloadRequest, savePath: string): Promise<number> {
+  private setTarget(id: number, target: string) {
+    const record = this.get(id);
+    if (!record) return;
+    this.update(id, { filename: target, mime: mimeForFile(target) ?? record.mime });
+  }
+
+  private async finish(id: number, item: DownloadItem, state: "completed" | "cancelled" | "interrupted") {
+    const entry = this.live.get(id);
+    if (state === "completed" && entry) await entry.determined;
+    const written = item.getSavePath();
+    let filename = this.get(id)?.filename || written;
+    if (state === "completed" && filename !== written) {
+      try {
+        fs.mkdirSync(path.dirname(filename), { recursive: true });
+        fs.renameSync(written, filename);
+      } catch {
+        filename = written;
+      }
+    }
+    const received = item.getReceivedBytes();
+    this.update(id, {
+      state: state === "completed" ? "complete" : "interrupted",
+      error: state === "completed" ? null : state === "cancelled" ? "USER_CANCELED" : "NETWORK_FAILED",
+      paused: false,
+      endTime: Date.now(),
+      filename,
+      receivedBytes: received,
+      totalBytes: state === "completed" ? Math.max(received, item.getTotalBytes()) : item.getTotalBytes(),
+    });
+    this.live.delete(id);
+  }
+
+  private fetchDownload(request: DownloadRequest, url: URL, creator: FilenameSuggestion | null): number {
     const abort = new AbortController();
     const record = createDownload({
       url: request.url,
       finalUrl: request.url,
-      filename: savePath,
+      filename: "",
       mime: "",
       startTime: Date.now(),
       endTime: null,
@@ -259,56 +365,77 @@ export class DownloadManager {
       resume: () => {},
       cancel: () => abort.abort(),
       canResume: () => false,
+      remainingMs: () => null,
     };
-    this.live.set(record.id, { record, control, writtenAt: Date.now() });
+    this.live.set(record.id, { record, control, writtenAt: Date.now(), determined: Promise.resolve() });
     this.created.emit(record);
     this.progressed.emit();
-    void (async () => {
-      const file = fs.createWriteStream(savePath);
-      let fileFailed = false;
-      file.on("error", () => {
-        fileFailed = true;
-        abort.abort();
-      });
-      const settled = (event: "drain" | "finish") =>
-        new Promise<void>((resolve) => {
-          file.once(event, () => resolve());
-          file.once("error", () => resolve());
-        });
-      try {
-        const response = await electronSession.defaultSession.fetch(request.url, {
-          method: request.method ?? "GET",
-          headers: request.headers,
-          body: request.body,
-          signal: abort.signal,
-        });
-        if (!response.ok) throw new Error(`SERVER_BAD_CONTENT`);
-        this.update(record.id, {
-          finalUrl: response.url || request.url,
-          mime: response.headers.get("content-type")?.split(";")[0] ?? "",
-          totalBytes: Number(response.headers.get("content-length")) || 0,
-        });
-        let received = 0;
-        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-          received += chunk.byteLength;
-          if (!file.write(chunk)) await settled("drain");
-          if (fileFailed) throw new Error("FILE_FAILED");
-          this.update(record.id, { receivedBytes: received });
-        }
-        const finished = settled("finish");
-        file.end();
-        await finished;
-        if (fileFailed) throw new Error("FILE_FAILED");
-        this.update(record.id, { state: "complete", endTime: Date.now(), totalBytes: received, receivedBytes: received });
-      } catch (error) {
-        file.destroy();
-        const reason = fileFailed ? "FILE_FAILED" : abort.signal.aborted ? "USER_CANCELED" : error instanceof Error && error.message === "SERVER_BAD_CONTENT" ? "SERVER_BAD_CONTENT" : "NETWORK_FAILED";
-        this.update(record.id, { state: "interrupted", error: reason, endTime: Date.now() });
-      } finally {
-        this.live.delete(record.id);
-      }
-    })();
+    void this.runFetch(record.id, request, url, creator, abort)
+      .catch((error) => process.stderr.write(`download failed: ${error instanceof Error ? error.stack : String(error)}\n`))
+      .finally(() => this.live.delete(record.id));
     return record.id;
+  }
+
+  private async runFetch(id: number, request: DownloadRequest, url: URL, creator: FilenameSuggestion | null, abort: AbortController) {
+    let file: fs.WriteStream | null = null;
+    let writeError: Error | null = null;
+    let failWrite: (error: Error) => void = () => {};
+    const failed = new Promise<never>((_resolve, reject) => {
+      failWrite = reject;
+      abort.signal.addEventListener("abort", () => reject(new Error("USER_CANCELED")), { once: true });
+    });
+    failed.catch(() => {});
+    try {
+      const response = await electronSession.defaultSession.fetch(request.url, {
+        method: request.method ?? "GET",
+        headers: request.headers,
+        body: request.body,
+        signal: abort.signal,
+      });
+      if (!response.ok) throw new Error("SERVER_BAD_CONTENT");
+      this.update(id, {
+        finalUrl: response.url || request.url,
+        mime: response.headers.get("content-type")?.split(";")[0] ?? "",
+        totalBytes: Number(response.headers.get("content-length")) || 0,
+      });
+      const name = attachmentName(response.headers.get("content-disposition")) || path.basename(url.pathname) || "download";
+      const determination = this.determiner?.({ ...this.get(id)! }, path.join(downloadsFolder(), name)) ?? null;
+      const suggestion = determination ? await Promise.race([determination.catch(() => null), failed]) : null;
+      const chosen = suggestion ?? creator;
+      let target: string;
+      try {
+        target = chosen ? targetPath(chosen, null) : uniquePath(downloadsFolder(), name);
+      } catch {
+        target = uniquePath(downloadsFolder(), name);
+      }
+      this.setTarget(id, target);
+      const stream = fs.createWriteStream(target);
+      file = stream;
+      stream.on("error", (error) => {
+        writeError ??= error;
+        failWrite(error);
+      });
+      let received = 0;
+      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        if (writeError) throw writeError;
+        received += chunk.byteLength;
+        if (!stream.write(chunk)) await Promise.race([new Promise<void>((resolve) => stream.once("drain", () => resolve())), failed]);
+        this.update(id, { receivedBytes: received });
+      }
+      await Promise.race([new Promise<void>((resolve) => stream.end(() => resolve())), failed]);
+      if (writeError) throw writeError;
+      this.update(id, { state: "complete", endTime: Date.now(), totalBytes: received, receivedBytes: received });
+    } catch (error) {
+      file?.destroy();
+      const reason = abort.signal.aborted
+        ? "USER_CANCELED"
+        : writeError
+          ? "FILE_FAILED"
+          : error instanceof Error && error.message === "SERVER_BAD_CONTENT"
+            ? "SERVER_BAD_CONTENT"
+            : "NETWORK_FAILED";
+      this.update(id, { state: "interrupted", error: reason, endTime: Date.now() });
+    }
   }
 
   private update(id: number, change: Partial<Omit<DownloadRecord, "id">>) {
@@ -325,7 +452,7 @@ export class DownloadManager {
       updateDownload(id, next);
       if (entry) entry.writtenAt = now;
     }
-    if (meaningful) this.changed.emit(next);
+    this.changed.emit(next);
     this.progressed.emit();
   }
 }

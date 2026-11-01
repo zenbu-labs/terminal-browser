@@ -3,6 +3,7 @@ import type { IpcMainEvent, ServiceWorkerMain, Session } from "electron";
 
 import { addLazyEvent, lazyEvents, removeLazyEvent } from "shared";
 
+import { Listeners as Signal } from "../browsing/listeners";
 import { API_EVENTS, EVENT_CHANNEL, LISTEN_CHANNEL, READY_CHANNEL, UNLISTEN_CHANNEL } from "./protocol";
 import { extensionIdFromUrl } from "./ids";
 import type { Router } from "./router";
@@ -81,6 +82,8 @@ export class EventHub {
   private readonly frames = new Map<string, Map<string, Map<string, FrameTarget>>>();
   private readonly workers = new Map<string, WorkerState>();
   private readonly lazy = new Map<string, Set<string>>();
+  // (extension id, event) whenever one of the extension's contexts stops listening.
+  readonly listenerRemoved = new Signal<[string, string]>();
 
   constructor(
     private readonly session: Session,
@@ -317,6 +320,7 @@ export class EventHub {
     state.listening.delete(name);
     lazy.delete(name);
     removeLazyEvent(id, name);
+    this.listenerRemoved.emit(id, name);
   }
 
   private frameListen(event: IpcMainEvent, name: string, add: boolean, key?: unknown, filter?: unknown) {
@@ -336,6 +340,9 @@ export class EventHub {
       targets.set(frameKey(location), target);
     }
     updateListeners(target.listeners, add, key, filter);
-    if (emptyListeners(target.listeners)) targets.delete(frameKey(location));
+    if (emptyListeners(target.listeners)) {
+      targets.delete(frameKey(location));
+      this.listenerRemoved.emit(id, name);
+    }
   }
 }

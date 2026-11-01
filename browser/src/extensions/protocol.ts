@@ -130,6 +130,10 @@ export const API_SPEC = {
     ],
     events: ["onCreated", "onErased", "onChanged", "onDeterminingFilename"],
   },
+  downloadsInternal: {
+    methods: ["determineFilename"],
+    events: [],
+  },
   bookmarks: {
     methods: [
       "get",
@@ -175,6 +179,7 @@ export const API_SPEC = {
       "removeIndexedDB",
       "removeLocalStorage",
       "removePasswords",
+      "removePluginData",
       "removeServiceWorkers",
       "removeWebSQL",
       "settings",
@@ -201,7 +206,7 @@ export const API_SPEC = {
       "nativeDisconnect",
       "watchSenderTabs",
     ],
-    events: ["onInstalled", "onStartup", "nativeMessage", "nativeDisconnect", "senderTabs"],
+    events: ["onInstalled", "onStartup", "nativeMessage", "nativeDisconnect", "senderTabs", "permissionsChanged"],
   },
   action: {
     methods: [
@@ -222,7 +227,7 @@ export const API_SPEC = {
       "openPopup",
       "getUserSettings",
     ],
-    events: ["onClicked"],
+    events: ["onClicked", "onUserSettingsChanged"],
   },
   search: {
     methods: ["query"],
@@ -248,6 +253,15 @@ export const EVENT_CHANNEL = "tb-ext:event";
 export const LISTEN_CHANNEL = "tb-ext:listen";
 export const UNLISTEN_CHANNEL = "tb-ext:unlisten";
 export const READY_CHANNEL = "tb-ext:ready";
+export const VIEW_INFO_CHANNEL = "tb-ext:view-info";
+export const GRANTED_CHANNEL = "tb-ext:granted";
+
+// Where an extension page is shown, for chrome.extension.getViews.
+export interface ViewInfo {
+  type: "tab" | "popup" | "side_panel" | "offscreen" | null;
+  windowId: number;
+  tabId: number;
+}
 
 export function channelFor(method: string): string {
   return `tb-ext:${method}`;
