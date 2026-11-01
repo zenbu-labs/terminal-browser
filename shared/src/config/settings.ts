@@ -60,6 +60,14 @@ export const SETTINGS = {
       { value: SUGGESTIONS_OFF, name: "Off", logo: null },
     ],
   }),
+  "mouse.focusClick": setting({
+    group: "general",
+    label: "Click on focus",
+    hint: "Simulate a click when the browser gains focus after recent mouse movement, for terminals that don't forward the click used to focus the pane.",
+    schema: z.enum(["on", "off"]),
+    default: "on",
+    choices: onOff,
+  }),
   "telemetry.usage": setting({
     group: "general",
     label: "Disable anonymous telemetry",
