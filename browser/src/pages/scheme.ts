@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { protocol } from "electron";
 
 import { MARKDOWN_CSP, renderMarkdown } from "./markdown";
-import { renderStartPage } from "./start";
+import { routeInternalPage } from "./routes";
 import type { Theme } from "../ui/theme";
 import { DOC_SCHEME } from "../url";
 
@@ -56,20 +56,34 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 
+// Web content can't fetch these pages: no fetch/CORS privileges, and the
+// handler refuses requests that web content (rather than the browser) started.
 export function registerScheme() {
   protocol.registerSchemesAsPrivileged([
-    { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+    { scheme: SCHEME, privileges: { standard: true, secure: true } },
     { scheme: DOC_SCHEME, privileges: { standard: true, secure: true, stream: true } },
   ]);
 }
 
+function startedByWebContent(request: Request): boolean {
+  const initiator = (request as { initiatorOrigin?: string }).initiatorOrigin;
+  return initiator !== undefined && !initiator.startsWith(`${SCHEME}://`);
+}
+
+// Local documents load their own files (their sandbox gives them an opaque
+// origin), but web pages and extensions must not pull local files in.
+function startedByOtherSite(request: Request): boolean {
+  const initiator = (request as { initiatorOrigin?: string }).initiatorOrigin;
+  return initiator !== undefined && /^(https?|chrome-extension|wss?):/.test(initiator);
+}
+
 export function servePages(context: () => PageContext) {
   protocol.handle(SCHEME, async (request) => {
-    const url = new URL(request.url);
-    if (url.host === "start") return renderStartPage(url, context());
-    return new Response("", { status: 404 });
+    if (startedByWebContent(request)) return new Response("", { status: 403 });
+    return routeInternalPage(new URL(request.url), context());
   });
   protocol.handle(DOC_SCHEME, async (request) => {
+    if (startedByOtherSite(request)) return new Response("", { status: 403 });
     const url = new URL(request.url);
     return serveDocument(decodeURIComponent(url.pathname), request.headers.get("range"), context().theme);
   });
@@ -143,6 +157,8 @@ export function pageColors(theme: Theme | null) {
     accent: css(theme?.accent, "#6ea8ff"),
     hairline: css(theme?.hairline, "rgba(255,255,255,0.12)"),
     field: css(theme?.field, "rgba(255,255,255,0.06)"),
+    hover: css(theme?.hover, "rgba(255,255,255,0.12)"),
+    surface: css(theme?.overlay, "#1e1e1e"),
     red: css(theme?.red, "#f2777a"),
     green: css(theme?.green, "#99cc99"),
     yellow: css(theme?.yellow, "#ffcc66"),

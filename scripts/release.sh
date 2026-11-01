@@ -40,6 +40,7 @@ cp "$AGENT_BROWSER_BIN" "$STAGE/agent-browser/bin/agent-browser"
 
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$STAGE/cli/dist/main.js"
 "$ROOT/scripts/bundle.sh" "$ROOT/browser/src/main.tsx" "$STAGE/browser/dist/main.js"
+node "$ROOT/browser/scripts/bundle-preloads.mjs" "$STAGE/browser/dist"
 
 cp "$ROOT/scripts/apparmor.sh" "$STAGE/scripts/apparmor.sh"
 

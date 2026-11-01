@@ -1,0 +1,181 @@
+diff --git a/shell/browser/extensions/electron_extension_loader.cc b/shell/browser/extensions/electron_extension_loader.cc
+--- a/shell/browser/extensions/electron_extension_loader.cc
++++ b/shell/browser/extensions/electron_extension_loader.cc
+@@ -15,15 +15,19 @@
+ #include "base/notimplemented.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/bind_post_task.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/threading/thread_restrictions.h"
+ #include "base/time/time.h"
+ #include "content/public/browser/browser_context.h"
++#include "extensions/browser/api/declarative_net_request/install_index_helper.h"
+ #include "extensions/browser/extension_file_task_runner.h"
+ #include "extensions/browser/extension_pref_names.h"
+ #include "extensions/browser/extension_prefs.h"
+ #include "extensions/browser/extension_registry.h"
+ #include "extensions/browser/pref_names.h"
++#include "extensions/browser/ruleset_parse_result.h"
++#include "extensions/common/api/declarative_net_request/dnr_manifest_data.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/error_utils.h"
+ #include "extensions/common/file_util.h"
+@@ -94,6 +98,71 @@ std::pair<scoped_refptr<const Extension>, std::string> LoadUnpacked(
+   return std::make_pair(extension, warnings);
+ }
+ 
++constexpr char kDNRIndexedVersionPref[] = "electron_dnr_indexed_version";
++constexpr char kDNREnabledStaticRulesetIDsPref[] = "dnr_enabled_ruleset_ids";
++
++// Loading an unpacked extension deletes its _metadata folder, which is where
++// Chromium keeps indexed rulesets, so the manifest-enabled static rulesets are
++// indexed again on every load, like Chromium does when installing a CRX.
++void IndexStaticRulesets(
++    scoped_refptr<const Extension> extension,
++    base::OnceCallback<void(RulesetParseResult)> callback) {
++  if (declarative_net_request::DNRManifestData::GetRulesets(*extension)
++          .empty()) {
++    std::move(callback).Run(RulesetParseResult());
++    return;
++  }
++  declarative_net_request::InstallIndexHelper::IndexStaticRulesets(
++      *extension,
++      declarative_net_request::FileBackedRulesetSource::RulesetFilter::
++          kIncludeManifestEnabled,
++      declarative_net_request::RulesetSource::kNone, std::move(callback));
++}
++
++// Merges freshly indexed ruleset checksums into the profile's prefs. Rulesets
++// enabled at runtime keep their checksums, so they load again after a restart.
++// A new extension version starts over from the manifest, like a Chrome update.
++void PersistRulesetPrefs(ExtensionPrefs* prefs,
++                         const Extension& extension,
++                         base::DictValue ruleset_install_prefs) {
++  const std::string version = extension.version().GetString();
++  std::string indexed_version;
++  bool same_version =
++      prefs->ReadPrefAsString(extension.id(), kDNRIndexedVersionPref,
++                              &indexed_version) &&
++      indexed_version == version;
++
++  base::DictValue merged;
++  if (same_version) {
++    if (const base::DictValue* existing = prefs->ReadPrefAsDict(
++            extension.id(), ExtensionPrefs::kDNRStaticRulesetPref)) {
++      merged = existing->Clone();
++    }
++  } else {
++    prefs->UpdateExtensionPref(extension.id(), kDNREnabledStaticRulesetIDsPref,
++                               std::nullopt);
++  }
++  merged.Merge(std::move(ruleset_install_prefs));
++
++  prefs->UpdateExtensionPref(
++      extension.id(), ExtensionPrefs::kDNRStaticRulesetPref,
++      merged.empty() ? std::nullopt
++                     : std::optional<base::Value>(std::move(merged)));
++  prefs->UpdateExtensionPref(extension.id(), kDNRIndexedVersionPref,
++                             base::Value(version));
++}
++
++void IndexStaticRulesetsAndReply(
++    scoped_refptr<const Extension> extension,
++    base::OnceCallback<void(RulesetParseResult)> reply) {
++  GetExtensionFileTaskRunner()->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          &IndexStaticRulesets, extension,
++          base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
++                             std::move(reply))));
++}
++
+ }  // namespace
+ 
+ ElectronExtensionLoader::ElectronExtensionLoader(
+@@ -144,8 +213,32 @@ void ElectronExtensionLoader::FinishExtensionLoad(
+     base::OnceCallback<void(const Extension*, const std::string&)> cb,
+     std::pair<scoped_refptr<const Extension>, std::string> result) {
+   scoped_refptr<const Extension> extension = result.first;
+-  if (extension) {
++  if (!extension) {
++    std::move(cb).Run(nullptr, result.second);
++    return;
++  }
++  IndexStaticRulesetsAndReply(
++      extension,
++      base::BindOnce(&ElectronExtensionLoader::FinishIndexedExtensionLoad,
++                     weak_factory_.GetWeakPtr(), std::move(cb),
++                     std::move(result)));
++}
++
++void ElectronExtensionLoader::FinishIndexedExtensionLoad(
++    base::OnceCallback<void(const Extension*, const std::string&)> cb,
++    std::pair<scoped_refptr<const Extension>, std::string> result,
++    RulesetParseResult ruleset_result) {
++  scoped_refptr<const Extension> extension = result.first;
++  if (ruleset_result.error) {
++    std::move(cb).Run(nullptr, "Loading extension at " +
++                                   extension->path().AsUTF8Unsafe() +
++                                   " failed with: " + *ruleset_result.error);
++    return;
++  }
++  {
+     ExtensionPrefs* extension_prefs = ExtensionPrefs::Get(browser_context_);
++    PersistRulesetPrefs(extension_prefs, *extension,
++                        std::move(ruleset_result.ruleset_install_prefs));
+ 
+     if (BackgroundInfo::IsServiceWorkerBased(extension.get())) {
+       // Tell Chromium that it needs to start the extension's service worker.
+@@ -185,9 +278,25 @@ void ElectronExtensionLoader::FinishExtensionReload(
+     const ExtensionId& old_extension_id,
+     std::pair<scoped_refptr<const Extension>, std::string> result) {
+   scoped_refptr<const Extension> extension = result.first;
+-  if (extension) {
+-    extension_registrar_->AddExtension(extension);
++  if (!extension)
++    return;
++  IndexStaticRulesetsAndReply(
++      extension,
++      base::BindOnce(&ElectronExtensionLoader::FinishIndexedExtensionReload,
++                     weak_factory_.GetWeakPtr(), extension));
++}
++
++void ElectronExtensionLoader::FinishIndexedExtensionReload(
++    scoped_refptr<const Extension> extension,
++    RulesetParseResult ruleset_result) {
++  if (ruleset_result.error) {
++    LOG(ERROR) << "Reloading extension " << extension->id()
++               << " failed with: " << *ruleset_result.error;
++    return;
+   }
++  PersistRulesetPrefs(ExtensionPrefs::Get(browser_context_), *extension,
++                      std::move(ruleset_result.ruleset_install_prefs));
++  extension_registrar_->AddExtension(extension);
+ }
+ 
+ void ElectronExtensionLoader::PreAddExtension(const Extension* extension,
+diff --git a/shell/browser/extensions/electron_extension_loader.h b/shell/browser/extensions/electron_extension_loader.h
+--- a/shell/browser/extensions/electron_extension_loader.h
++++ b/shell/browser/extensions/electron_extension_loader.h
+@@ -25,6 +25,7 @@ class BrowserContext;
+ namespace extensions {
+ 
+ class Extension;
++struct RulesetParseResult;
+ 
+ // Handles extension loading and reloading using ExtensionRegistrar.
+ class ElectronExtensionLoader : public ExtensionRegistrar::Delegate {
+@@ -72,6 +73,12 @@ class ElectronExtensionLoader : public ExtensionRegistrar::Delegate {
+   void FinishExtensionLoad(
+       base::OnceCallback<void(const Extension*, const std::string&)> cb,
+       std::pair<scoped_refptr<const Extension>, std::string> result);
++  void FinishIndexedExtensionLoad(
++      base::OnceCallback<void(const Extension*, const std::string&)> cb,
++      std::pair<scoped_refptr<const Extension>, std::string> result,
++      RulesetParseResult ruleset_result);
++  void FinishIndexedExtensionReload(scoped_refptr<const Extension> extension,
++                                    RulesetParseResult ruleset_result);
+   void DoLoadExtensionForReload(const ExtensionId& extension_id,
+                                 const base::FilePath& path);
+ 

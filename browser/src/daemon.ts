@@ -9,6 +9,12 @@ import { DAEMON_SOCKET } from "shared";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
+import { installPages } from "./pages/install";
+import { startExtensions } from "./extensions";
+import { extensionCommand } from "./extensions/remote";
+import type { ExtensionCommand } from "./extensions/remote";
+import { chromeUserAgent } from "./user-agent";
+import { startBrowsing } from "./browsing";
 
 // what
 const IDLE_EXIT_MS = 15_000;
@@ -42,13 +48,18 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   fs.rmSync(DAEMON_SOCKET, { force: true });
 
   const build = buildStamp();
+  app.userAgentFallback = chromeUserAgent();
+  startBrowsing();
+  const extensions = startExtensions();
   const sessions = new Map<string, SessionHandle>();
-  servePages(() => {
+  const pageContext = () => {
     const all = [...sessions.values()];
     const shown = all.filter((open) => open.showsStartPage());
     const chosen = shown[shown.length - 1] ?? all[all.length - 1];
     return chosen?.pageContext() ?? { cwd: process.cwd(), theme: null };
-  });
+  };
+  servePages(pageContext);
+  installPages(extensions, pageContext);
   let seq = 0;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -137,6 +148,11 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
           session?.nudgeResize();
         } else if (message.cmd === "close") {
           session?.close();
+        } else if (message.cmd === "extensions") {
+          void extensionCommand(message as unknown as ExtensionCommand).then(
+            (data) => reply({ ok: true, data }),
+            (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+          );
         } else if (message.cmd === "shutdown") {
           reply({ ok: true, sessions: sessions.size });
           connection.end();

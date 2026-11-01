@@ -42,6 +42,7 @@ import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 import { claudeBridgeCommand } from "./claude-bridge";
 import { configCommand } from "./config";
+import { extensionsCommand } from "./extensions";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
 const CAPABILITIES = ["embedding", "image-frames"] as const;
@@ -759,12 +760,12 @@ function appsCommand(args: string[]): number {
   return 0;
 }
 
-function helpCommand(topic: string | undefined): number {
+function helpCommand(topic: string | undefined, subcommand: string | undefined): number {
   if (!topic) {
     process.stdout.write(rootHelp());
     return 0;
   }
-  const help = commandHelp(topic);
+  const help = commandHelp(topic, subcommand);
   if (!help) fail(`no help for ${topic} (try ${helpTopics().join(", ")})`);
   process.stdout.write(help);
   return 0;
@@ -784,9 +785,9 @@ async function main(): Promise<number> {
     process.stdout.write(`${JSON.stringify({ capabilities: CAPABILITIES })}\n`);
     return 0;
   }
-  if (command === "help") return helpCommand(args[0]);
+  if (command === "help") return helpCommand(args[0], args[1]);
   if (asksForHelp(args)) {
-    process.stdout.write(commandHelp(command) ?? rootHelp());
+    process.stdout.write(commandHelp(command, args[0]) ?? rootHelp());
     return 0;
   }
   if (command !== "setup") ensureSetup();
@@ -804,6 +805,7 @@ async function main(): Promise<number> {
   if (command === "setup") return setupCommand(electronBinary());
   if (command === "upgrade") return upgradeCommand();
   if (command === "config") return configCommand(args);
+  if (command === "extensions") return extensionsCommand(args);
   if (command === "claude-bridge") return claudeBridgeCommand(args);
   if (command === "shutdown") return shutdownDaemon();
   if (command === "register-app") return registerAppCommand(args);

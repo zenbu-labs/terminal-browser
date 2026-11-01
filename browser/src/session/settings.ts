@@ -25,6 +25,7 @@ import type {
   ShortcutOverrides,
 } from "shared";
 import { bundledAsset } from "../assets";
+import { settingsWrittenByPage } from "../pages/settings-store";
 import type { ReleaseView, SettingRow, SettingsActions, SettingsSection, SettingsView } from "../ui/types";
 
 export interface SettingsHost {
@@ -131,7 +132,7 @@ export class SettingsManager {
     if (loaded.settings) this.host.settingsChanged();
     this.host.requestRender();
     if (loaded.errors.length) this.host.toast(loaded.errors[0], "failed");
-    else if (announce) this.host.toast("Config reloaded", "done");
+    else if (announce && !settingsWrittenByPage()) this.host.toast("Config reloaded", "done");
   }
 
   watch() {

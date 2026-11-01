@@ -4,6 +4,7 @@ import { initialWebViewState } from "@zenbu-labs/pixel";
 import type { OpenWindowDecision, WebViewHandle, WebViewState } from "@zenbu-labs/pixel";
 
 import type { TabRow } from "../ui/types";
+import { isInternalUrl } from "../pages/internal";
 import { DOC_SCHEME, displayUrl, isMarkdownDocument } from "../url";
 
 export interface Tab {
@@ -15,6 +16,18 @@ export interface Tab {
   targetId: string | null;
   agentControlAt: number | null;
   devtools: boolean;
+  contentsId: number | null;
+  openerId: number | null;
+  lastAccessed: number;
+}
+
+export interface TabObserver {
+  created(tab: Tab): void;
+  ready(tab: Tab): void;
+  updated(tab: Tab, previous: WebViewState): void;
+  activated(tab: Tab, previous: Tab | null): void;
+  moved(tab: Tab, from: number, to: number): void;
+  removed(tab: Tab): void;
 }
 
 export interface TabTarget {
@@ -46,6 +59,8 @@ export class TabManager {
   private activeId = 0;
   private seq = 1;
   private agentSweep: ReturnType<typeof setInterval> | null = null;
+  private readonly waiting = new Map<Tab, (() => void)[]>();
+  observer: TabObserver | null = null;
 
   constructor(
     private readonly host: TabHost,
@@ -72,7 +87,7 @@ export class TabManager {
     return this.tabs;
   }
 
-  create(url: string, activate = true): Tab {
+  create(url: string, activate = true, options: { index?: number; openerId?: number | null } = {}): Tab {
     const first = this.seq === 1;
     const tab: Tab = {
       id: this.seq++,
@@ -87,8 +102,13 @@ export class TabManager {
       targetId: null,
       agentControlAt: null,
       devtools: false,
+      contentsId: null,
+      openerId: options.openerId ?? null,
+      lastAccessed: Date.now(),
     };
-    this.tabs.push(tab);
+    const index = options.index ?? this.tabs.length;
+    this.tabs.splice(Math.max(0, Math.min(index, this.tabs.length)), 0, tab);
+    this.observer?.created(tab);
     if (activate) this.activate(tab.id);
     this.host.onTabsChanged();
     this.host.requestRender();
@@ -103,15 +123,59 @@ export class TabManager {
     const tab = this.get(id);
     if (!tab) return;
     const urlChanged = state.url !== tab.state.url;
+    const previous = tab.state;
     tab.state = state;
+    this.noticeContents(tab);
+    if (tab.contentsId !== null) this.observer?.updated(tab, previous);
     if (!tab.targetId) void this.resolveTargetId(tab);
     if (tab.id === this.activeId) this.host.onActiveState(state, urlChanged);
+    this.host.requestRender();
+  }
+
+  noticeContents(tab: Tab) {
+    if (tab.contentsId !== null) return;
+    let contents: Electron.WebContents | undefined;
+    try {
+      contents = tab.ref.current?.webContents;
+    } catch {
+      return;
+    }
+    if (!contents) return;
+    tab.contentsId = contents.id;
+    this.observer?.ready(tab);
+    for (const resolve of this.waiting.get(tab) ?? []) resolve();
+    this.waiting.delete(tab);
+  }
+
+  whenReady(tab: Tab): Promise<void> {
+    this.noticeContents(tab);
+    if (tab.contentsId !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      const list = this.waiting.get(tab) ?? [];
+      list.push(resolve);
+      this.waiting.set(tab, list);
+    });
+  }
+
+  byContentsId(contentsId: number): Tab | null {
+    return this.tabs.find((tab) => tab.contentsId === contentsId) ?? null;
+  }
+
+  move(id: number, index: number) {
+    const from = this.tabs.findIndex((tab) => tab.id === id);
+    if (from < 0) return;
+    const [tab] = this.tabs.splice(from, 1);
+    const to = Math.max(0, Math.min(index < 0 ? this.tabs.length : index, this.tabs.length));
+    this.tabs.splice(to, 0, tab);
+    if (from !== to) this.observer?.moved(tab, from, to);
+    this.host.onTabsChanged();
     this.host.requestRender();
   }
 
   openWindow(id: number, details: Electron.HandlerDetails): OpenWindowDecision {
     const tab = this.get(id);
     if (!tab) return "deny";
+    if (isInternalUrl(details.url) && !isInternalUrl(tab.state.url)) return "deny";
     const wantsTab = details.disposition === "foreground-tab" || details.disposition === "background-tab";
     if (!wantsTab) {
       // a page-opened window (window.open with features) is a readable
@@ -120,7 +184,10 @@ export class TabManager {
       if (details.url.startsWith(`${DOC_SCHEME}://`)) return "deny";
       return "popup";
     }
-    this.create(details.url, details.disposition === "foreground-tab");
+    this.create(details.url, details.disposition === "foreground-tab", {
+      index: this.tabs.indexOf(tab) + 1,
+      openerId: tab.id,
+    });
     this.host.onTabOpened(tab, details.url);
     return "deny";
   }
@@ -160,7 +227,10 @@ export class TabManager {
   activate(id: number) {
     const tab = this.get(id);
     if (!tab || (id !== this.activeId && !this.host.tabSwitchAllowed())) return;
+    const previous = this.active;
     this.activeId = id;
+    tab.lastAccessed = Date.now();
+    if (previous !== tab) this.observer?.activated(tab, previous);
     tab.ref.current?.focus();
     this.host.onActivated();
     this.host.requestRender();
@@ -169,7 +239,9 @@ export class TabManager {
   close(id: number) {
     const at = this.tabs.findIndex((t) => t.id === id);
     if (at < 0) return;
-    this.tabs.splice(at, 1);
+    const [closing] = this.tabs.splice(at, 1);
+    this.waiting.delete(closing);
+    this.observer?.removed(closing);
     if (this.activeId === id) {
       const fallback = this.tabs[Math.min(at, this.tabs.length - 1)];
       if (fallback) this.activate(fallback.id);

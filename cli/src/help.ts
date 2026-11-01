@@ -163,6 +163,37 @@ Examples:
   terminal-browser config path
 `,
   },
+  extensions: {
+    summary: "Install and manage Chrome extensions",
+    usage: "terminal-browser extensions <command> [args]",
+    body: `
+Works whether or not a browser is open. Changes show up in open browsers right
+away. install, import and remove ask first when run in a terminal; otherwise
+they need --yes.
+
+Commands:
+  list [--json]              Installed extensions and their errors
+  install <id|url|file.crx>  Install from the Chrome Web Store or a .crx file
+  import                     Add another Chromium browser's extensions
+  load <dir>                 Load an unpacked extension (reloads on change)
+  remove <id>                Remove an extension
+  enable <id>                Turn an extension on
+  disable <id>               Turn an extension off
+  update [<id>]              Update Chrome Web Store extensions now
+  reload [<id>]              Reload unpacked extensions
+  pin <id>, unpin <id>       Show or hide the toolbar icon
+
+Options:
+  -y, --yes                  Do not ask first
+
+terminal-browser extensions import --help for import's options
+
+Examples:
+  terminal-browser extensions install https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh
+  terminal-browser extensions load ./my-extension
+  terminal-browser extensions list --json
+`,
+  },
   action: {
     summary: "Use the open browser through the agent-browser CLI",
     usage: "terminal-browser action [selectors] -- <command>",
@@ -187,6 +218,22 @@ Examples:
   },
 };
 
+// Commands with options of their own, keyed by "<command> <subcommand>".
+const SUBCOMMANDS: Record<string, Omit<CommandHelp, "summary">> = {
+  "extensions import": {
+    usage: "terminal-browser extensions import [options]",
+    body: `
+Import your chrome extensions from another browser
+
+Options:
+  --from <browser>   Browser to import from
+  --profile <name>   Profile to import from
+  --all              Every browser and profile
+  -y, --yes          Do not ask first
+`,
+  },
+};
+
 function block(text: string): string {
   return `${text.trim()}\n`;
 }
@@ -207,7 +254,9 @@ terminal-browser --version prints the installed version
 `);
 }
 
-export function commandHelp(name: string): string | null {
+export function commandHelp(name: string, subcommand?: string): string | null {
+  const sub = subcommand ? SUBCOMMANDS[`${name} ${subcommand}`] : undefined;
+  if (sub) return block(`Usage: ${sub.usage}\n${sub.body}`);
   const help = COMMANDS[name];
   if (!help) return null;
   return block(`Usage: ${help.usage}\n${help.body}`);

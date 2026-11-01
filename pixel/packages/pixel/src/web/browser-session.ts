@@ -69,7 +69,10 @@ export function onPermissionFor(contents: WebContents, gate: PermissionGate): vo
 function originOf(url: string | undefined): string {
   if (!url) return "";
   try {
-    return new URL(url).origin;
+    const parsed = new URL(url);
+    // Node's URL gives "null" as the origin of schemes it doesn't know, like chrome-extension:
+    if (parsed.protocol === "chrome-extension:") return `chrome-extension://${parsed.host}`;
+    return parsed.origin;
   } catch {
     return "";
   }
@@ -174,10 +177,10 @@ export function configureBrowserSession(target: Session): void {
   });
 
   target.on("will-download", (_event, item, contents) => {
-    const onDownload = downloadHandlers.get(contents.id);
+    const onDownload = contents ? downloadHandlers.get(contents.id) : undefined;
     if (!onDownload) return;
-    const savePath = downloadPath(item.getFilename());
-    item.setSavePath(savePath);
+    if (!item.getSavePath()) item.setSavePath(downloadPath(item.getFilename()));
+    const savePath = item.getSavePath();
     const report = (state: DownloadProgress["state"]) =>
       onDownload({
         name: path.basename(savePath),

@@ -1,0 +1,41 @@
+diff --git a/shell/common/extensions/api/_permission_features.json b/shell/common/extensions/api/_permission_features.json
+--- a/shell/common/extensions/api/_permission_features.json
++++ b/shell/common/extensions/api/_permission_features.json
+@@ -143,6 +143,10 @@
+     "channel": "trunk",
+     "extension_types": ["extension"]
+   },
++  "management": {
++    "channel": "stable",
++    "extension_types": ["extension", "legacy_packaged_app"]
++  },
+   "notifications": {
+     "channel": "stable",
+     "extension_types": [
+diff --git a/shell/common/extensions/electron_extensions_api_provider.cc b/shell/common/extensions/electron_extensions_api_provider.cc
+--- a/shell/common/extensions/electron_extensions_api_provider.cc
++++ b/shell/common/extensions/electron_extensions_api_provider.cc
+@@ -40,6 +40,23 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
+      APIPermissionInfo::kFlagRequiresManagementUIWarning},
+     {mojom::APIPermissionID::kScripting, "scripting",
+      APIPermissionInfo::kFlagRequiresManagementUIWarning},
++    // Implemented by the embedder in JavaScript; registering them keeps them
++    // in the extension's permissions instead of dropping them as unknown.
++    {mojom::APIPermissionID::kBookmark, "bookmarks"},
++    {mojom::APIPermissionID::kBrowsingData, "browsingData"},
++    {mojom::APIPermissionID::kContextMenus, "contextMenus"},
++    {mojom::APIPermissionID::kCookie, "cookies"},
++    {mojom::APIPermissionID::kDebugger, "debugger"},
++    {mojom::APIPermissionID::kDownloads, "downloads"},
++    {mojom::APIPermissionID::kHistory, "history"},
++    {mojom::APIPermissionID::kIdentity, "identity"},
++    {mojom::APIPermissionID::kNotifications, "notifications"},
++    {mojom::APIPermissionID::kSearch, "search"},
++    {mojom::APIPermissionID::kSessions, "sessions"},
++    {mojom::APIPermissionID::kSidePanel, "sidePanel"},
++    {mojom::APIPermissionID::kTabGroups, "tabGroups"},
++    {mojom::APIPermissionID::kTopSites, "topSites"},
++    {mojom::APIPermissionID::kWebNavigation, "webNavigation"},
+ };
+ base::span<const APIPermissionInfo::InitInfo> GetPermissionInfos() {
+   return base::span(permissions_to_register);

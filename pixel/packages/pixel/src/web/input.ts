@@ -179,7 +179,7 @@ export class PageInput {
     const keyCode = electronKey(event.key);
     if (event.kind === "release") {
       if (!keyCode || !this.sentKeys.delete(event.key)) return;
-      const modifiers = this.modifiers(event.mods);
+      const modifiers = this.keyModifiers(event);
       if (event.key.startsWith("left")) modifiers.push("left");
       if (event.key.startsWith("right")) modifiers.push("right");
       this.send({ type: "keyUp", keyCode, modifiers });
@@ -190,7 +190,7 @@ export class PageInput {
       if (event.text) void this.dispatchText(event.text).catch(() => { });
       return;
     }
-    const modifiers = this.modifiers(event.mods);
+    const modifiers = this.keyModifiers(event);
     if (event.key.startsWith("left")) modifiers.push("left");
     if (event.key.startsWith("right")) modifiers.push("right");
     if (event.kind === "repeat") modifiers.push("isautorepeat");
@@ -336,6 +336,13 @@ export class PageInput {
       : 1;
     this.click = { button, at: now, x, y, count };
     return count;
+  }
+
+  // Terminals without full kitty key reporting send "T" with no shift flag, and Chromium would read it as "t"
+  private keyModifiers(event: EngineKeyEvent) {
+    const modifiers = this.modifiers(event.mods);
+    if (!event.mods.shift && /^\p{Lu}$/u.test(event.key)) modifiers.push("shift");
+    return modifiers;
   }
 
   private modifiers(mods: { shift: boolean; alt: boolean; ctrl: boolean; super: boolean }) {
