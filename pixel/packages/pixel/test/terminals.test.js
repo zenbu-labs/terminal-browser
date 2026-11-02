@@ -370,3 +370,26 @@ test("ghostty asks the owning instance for a split's neighbor by window and tab"
   assert.equal(commands.at(-1), `osascript -l JavaScript - ${process.ppid} neighbor w1 t1 AAAA right`);
 });
 
+// ssh carries LC_* across, so a shell on another machine says iTerm2 while osascript there
+// would have nothing to talk to. ITERM_SESSION_ID stays behind, so it is the honest signal
+test("a session reached over ssh from iTerm2 is not iTerm2", () => {
+  const env = { LC_TERMINAL: "iTerm2", LC_TERMINAL_VERSION: "3.7b", TERM: "xterm-256color" };
+  assert.equal(detect(env, async () => ""), null);
+});
+
+test("a terminal launched from iTerm2 keeps its own name", () => {
+  const env = { ...GHOSTTY_LOOKALIKE, ITERM_SESSION_ID: "w0t0p0:CLOSED" };
+  assert.equal(detect(env, async () => "")?.name, "ghostty");
+});
+
+test("iTerm2 trusts the tty over the id the shell inherited", async () => {
+  const listed = "23551\t1\tLIVE\t/dev/ttys003\n23551\t2\tOTHER\t/dev/ttys004\n";
+  for (const inheritedId of ["CLOSED", "OTHER"]) {
+    const env = { TERM_PROGRAM: "iTerm.app", ITERM_SESSION_ID: `w0t0p0:${inheritedId}` };
+    const terminal = detect(env, async () => listed);
+    assert.deepEqual(await terminal.getCurrentPane({ tty: "/dev/ttys003", cwd: "/" }), {
+      id: "LIVE",
+      tab: "23551:1",
+    });
+  }
+});

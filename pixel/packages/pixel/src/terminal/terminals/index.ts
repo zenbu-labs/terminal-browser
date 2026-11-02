@@ -2,6 +2,7 @@ import type { Detect } from "../terminal";
 import { cmux } from "./cmux";
 import { ghostty } from "./ghostty";
 import { herdr } from "./herdr";
+import { iterm2 } from "./iterm2";
 import { kitty } from "./kitty";
 import { rex } from "./rex";
 import { supacode } from "./supacode";
@@ -22,6 +23,7 @@ export const TERMINALS: Detect[] = [
   kitty,
   cmux,
   supacode,
+  iterm2,
   ghostty,
   vscode,
 ];
