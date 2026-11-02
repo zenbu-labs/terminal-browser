@@ -704,6 +704,8 @@ export class ExtensionService {
   }
 }
 
+const ERR_ABORTED = -3;
+
 // Chrome's tabs also say which split view they're in (missing from @types/chrome); terminal-browser has none.
 const NOT_SPLIT: object = { splitViewId: -1 };
 
@@ -885,8 +887,12 @@ class TabEvents {
       if (state) state.committed = true;
       settled();
     });
-    contents.on("did-fail-load", (_event, _code, _description, _url, isMainFrame) => {
-      if (isMainFrame) settled();
+    contents.on("did-fail-load", (_event, code, _description, _url, isMainFrame) => {
+      if (!isMainFrame) return;
+      // Like Chrome, a failed load shows an error page at its URL; only a cancelled one leaves the tab where it was.
+      const state = extras();
+      if (state && code !== ERR_ABORTED) state.committed = true;
+      settled();
     });
     contents.prependListener("did-stop-loading", () => {
       const state = extras();
