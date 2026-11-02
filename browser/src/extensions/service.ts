@@ -704,10 +704,10 @@ export class ExtensionService {
   }
 }
 
-// WebContents.getURL() already shows a navigation that hasn't committed yet; the frame doesn't.
 // Chrome's tabs also say which split view they're in (missing from @types/chrome); terminal-browser has none.
 const NOT_SPLIT: object = { splitViewId: -1 };
 
+// WebContents.getURL() already shows a navigation that hasn't committed yet; the frame doesn't.
 function committedUrl(contents: WebContents): string {
   try {
     return contents.mainFrame.url;
