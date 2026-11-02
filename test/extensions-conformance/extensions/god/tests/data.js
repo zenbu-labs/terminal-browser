@@ -257,8 +257,18 @@
   });
 
   test("downloads.onChanged#complete", async (t) => {
-    const done = async () => (await chrome.downloads.search({ id: S.dl }))[0]?.state === "complete";
-    if (!(await done())) await t.event(chrome.downloads.onChanged, null, { filter: (d) => d.id === S.dl && d.state?.current === "complete" });
+    // Listen before looking, so a download that finishes in between still reports.
+    let completed;
+    const finished = new Promise((resolve) => (completed = resolve));
+    const listener = (d) => d.id === S.dl && d.state?.current === "complete" && completed();
+    chrome.downloads.onChanged.addListener(listener);
+    try {
+      if ((await chrome.downloads.search({ id: S.dl }))[0]?.state !== "complete") {
+        await Promise.race([finished, t.sleep(6000).then(() => t.fail("event did not fire"))]);
+      }
+    } finally {
+      chrome.downloads.onChanged.removeListener(listener);
+    }
     return "complete";
   });
 
@@ -285,8 +295,11 @@
     };
     chrome.downloads.onDeterminingFilename.addListener(listener);
     try {
-      const id = await chrome.downloads.download({ url: `${c.site}/download.txt` });
-      const [d] = await t.event(chrome.downloads.onChanged, null, { filter: (d) => d.id === id && d.filename });
+      let id;
+      const [d] = await t.event(chrome.downloads.onChanged, async () => {
+        id = await chrome.downloads.download({ url: `${c.site}/download.txt` });
+      }, { filter: (d) => !!d.filename });
+      t.eq(d.id, id);
       t.ok(d.filename.current.endsWith("god-renamed.txt"), d.filename.current);
       S.renamed = id;
     } finally {
