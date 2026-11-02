@@ -14,6 +14,11 @@ on:
   push:
     branches: [main, "ci/extensions-conformance"]
   workflow_dispatch:
+    inputs:
+      electron-artifact:
+        # fixme: placeholder copy
+        description: "Use this patched Electron artifact instead of the one built for the current patches"
+        required: false
 
 permissions:
   contents: read
@@ -35,11 +40,12 @@ jobs:
       - id: find
         env:
           GH_TOKEN: ${{ github.token }}
+          ELECTRON_ARTIFACT: ${{ inputs.electron-artifact }}
         run: |
           set -euo pipefail
           version=$(node -p 'require("./pixel/packages/pixel/package.json").config.electron')
           key=$(bash pixel/electron/scripts/patches-key.sh "$version")
-          artifact="patched-electron-darwin-arm64-$key"
+          artifact="${ELECTRON_ARTIFACT:-patched-electron-darwin-arm64-$key}"
           run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact&per_page=20" \
             --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
           if [ -z "$run_id" ]; then

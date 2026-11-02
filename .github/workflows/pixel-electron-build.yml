@@ -21,8 +21,9 @@ permissions:
   contents: write
   issues: write
 
+# builds that only upload an artifact don't touch the release, so they don't queue behind each other
 concurrency:
-  group: electron-build-${{ inputs.version }}
+  group: electron-build-${{ inputs.version }}${{ !inputs.publish && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # Releases are tagged electron-v<version> so they never collide with the pixel-v<version>
