@@ -14,6 +14,7 @@
   "dependencies": {
     "@zenbu-labs/pixel": "workspace:*",
     "pele": "1.12.0",
+    "re2js": "2.9.1",
     "react": "^18.3.1",
     "react-grab": "0.2.0",
     "rehype-highlight": "7.0.2",

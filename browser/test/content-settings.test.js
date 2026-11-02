@@ -26,6 +26,7 @@ electron.app.getPath = () => userData;
 const { ContentSettingsStore, parsePattern, patternMatches, comparePatterns } = require("../dist/extensions/content-settings.js");
 const { installContentSettings, getSetting, setSetting, clearSettings, popupBlocked } = require("../dist/extensions/api/content-settings.js");
 const { Router } = require("../dist/extensions/router.js");
+const { listenForUserActivation } = require("../dist/extensions/user-activation.js");
 const { channelFor } = require("../dist/extensions/protocol.js");
 const { PermissionPrompts } = require("../dist/session/permissions.js");
 
@@ -273,6 +274,7 @@ function fakeService() {
   };
   installContentSettings(service);
   router.listen();
+  listenForUserActivation();
   const respond = (details) => {
     const listener = hooks.at(-1);
     if (!listener) return null;

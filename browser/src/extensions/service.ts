@@ -29,6 +29,7 @@ import { Importer } from "./import";
 import { Installer } from "./install";
 import { MenuStore } from "./menus";
 import { LoadedExtension, allowsFileAccess } from "./loaded";
+import { listenForUserActivation } from "./user-activation";
 import { grantNativeActiveTab, revokeNativeActiveTab, setNativeUserScriptsAllowed, setNativeViewType } from "./native";
 import { asManifest } from "./manifest";
 import { Router } from "./router";
@@ -138,6 +139,8 @@ export class ExtensionService {
     this.declarativeContent = new DeclarativeContentStore(this);
     this.contentSettings = new ContentSettingsStore(this);
     session.registerPreloadScript({ type: "frame", filePath: preloadPath("chrome-web-store-preload.js") });
+    session.registerPreloadScript({ type: "frame", filePath: preloadPath("frame-activation-preload.js") });
+    listenForUserActivation();
     this.ready = this.loadAll();
   }
 

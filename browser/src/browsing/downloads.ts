@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -29,6 +30,7 @@ export interface DownloadRequest {
   method?: "GET" | "POST";
   body?: string;
   extensionId: string | null;
+  allowFileAccess: boolean;
 }
 
 interface Control {
@@ -54,19 +56,28 @@ interface Live {
 }
 
 const PROGRESS_WRITE_MS = 1000;
+const EXCLUSIVE_CREATE = fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW;
 const START_TIMEOUT_MS = 30_000;
 
 export function downloadsFolder(): string {
   return app.getPath("downloads");
 }
 
+function exists(file: string): boolean {
+  try {
+    fs.lstatSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function uniquePath(dir: string, filename: string): string {
-  fs.mkdirSync(dir, { recursive: true });
   const ext = path.extname(filename);
   const base = path.basename(filename, ext);
   for (let i = 0; ; i++) {
     const candidate = path.join(dir, i === 0 ? filename : `${base} (${i})${ext}`);
-    if (!fs.existsSync(candidate)) return candidate;
+    if (!exists(candidate)) return candidate;
   }
 }
 
@@ -76,15 +87,88 @@ export function safeRelativeFilename(filename: string): string | null {
   return unified;
 }
 
-// `keep` is the file the download is already writing to, which may itself be the right name.
-function targetPath(suggestion: FilenameSuggestion, keep: string | null): string {
+// A directory under the downloads folder that a relative name leads to. A
+// symlink or file anywhere on the way is refused, so no name can lead a
+// download out of the folder.
+function downloadsDirectory(relativeDir = ""): string {
+  let dir = downloadsFolder();
+  fs.mkdirSync(dir, { recursive: true });
+  for (const part of relativeDir.split("/").filter((piece) => piece && piece !== ".")) {
+    if (part === "..") throw new Error("Invalid filename");
+    dir = path.join(dir, part);
+    if (!exists(dir)) fs.mkdirSync(dir);
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Invalid filename");
+  }
+  return dir;
+}
+
+function relativeDirectoryOf(target: string): string {
+  const relative = path.relative(downloadsFolder(), path.dirname(target));
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Invalid filename");
+  return relative.split(path.sep).join("/");
+}
+
+// Bytes are written to a file we just created ourselves, and only renamed onto
+// the chosen name at the end; a rename replaces a symlink instead of following it.
+function reserveIntermediate(): { file: string; fd: number } {
+  const dir = downloadsDirectory();
+  for (;;) {
+    const file = path.join(dir, `Unconfirmed ${crypto.randomInt(1_000_000)}.crdownload`);
+    try {
+      const fd = fs.openSync(file, EXCLUSIVE_CREATE, 0o600);
+      return { file, fd };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+}
+
+function placeFile(written: string, target: string) {
+  const dir = downloadsDirectory(relativeDirectoryOf(target));
+  fs.renameSync(written, path.join(dir, path.basename(target)));
+  placeholders.delete(target);
+}
+
+const placeholders = new Set<string>();
+
+// Holds a free name with an empty file until the download is renamed onto it,
+// so two downloads can't pick the same name.
+function reserveUnique(dir: string, filename: string): string {
+  for (;;) {
+    const candidate = uniquePath(dir, filename);
+    try {
+      fs.closeSync(fs.openSync(candidate, EXCLUSIVE_CREATE, 0o600));
+      placeholders.add(candidate);
+      return candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+}
+
+function removePlaceholder(file: string) {
+  if (!placeholders.delete(file)) return;
+  try {
+    const stat = fs.lstatSync(file);
+    if (stat.isFile() && stat.size === 0) fs.unlinkSync(file);
+  } catch {}
+}
+
+function targetPath(suggestion: FilenameSuggestion): string {
   const relative = safeRelativeFilename(suggestion.filename);
   if (!relative) throw new Error("Invalid filename");
-  const target = path.join(downloadsFolder(), relative);
-  if (target === keep) return target;
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  if (suggestion.conflictAction === "overwrite") return target;
-  return uniquePath(path.dirname(target), path.basename(target));
+  const dir = downloadsDirectory(path.posix.dirname(relative));
+  const name = path.posix.basename(relative);
+  return suggestion.conflictAction === "overwrite" ? path.join(dir, name) : reserveUnique(dir, name);
+}
+
+function tryTargetPath(suggestion: FilenameSuggestion): string | null {
+  try {
+    return targetPath(suggestion);
+  } catch {
+    return null;
+  }
 }
 
 function attachmentName(disposition: string | null): string | null {
@@ -157,6 +241,7 @@ export class DownloadManager {
     }
     if (!["http:", "https:", "data:", "blob:", "file:"].includes(parsed.protocol)) throw new Error("Invalid URL");
     if (request.filename !== undefined && !safeRelativeFilename(request.filename)) throw new Error("Invalid filename");
+    if (parsed.protocol === "file:" && !request.allowFileAccess) return this.refuseDownload(request);
     const creator: FilenameSuggestion | null = request.filename
       ? { filename: request.filename, conflictAction: request.conflictAction ?? "uniquify" }
       : null;
@@ -272,26 +357,18 @@ export class DownloadManager {
     this.progressed.emit();
     request?.resolve(record.id);
 
-    const fallback = uniquePath(downloadsFolder(), item.getFilename());
-    const choose = (suggestion: FilenameSuggestion | null, writingTo: string | null) => {
-      try {
-        return suggestion ? targetPath(suggestion, writingTo) : fallback;
-      } catch {
-        return fallback;
-      }
-    };
+    const intermediate = reserveIntermediate();
+    fs.closeSync(intermediate.fd);
+    item.setSavePath(intermediate.file);
+    const choose = (suggestion: FilenameSuggestion | null) =>
+      (suggestion && tryTargetPath(suggestion)) || reserveUnique(downloadsDirectory(), item.getFilename());
     const determination = this.determiner?.({ ...entry.record }, path.join(downloadsFolder(), item.getFilename())) ?? null;
     if (determination) {
-      // The name is only known once every extension answered, so the bytes land
-      // under the usual name first and move when the download finishes.
-      item.setSavePath(fallback);
       entry.determined = determination
         .catch(() => null)
-        .then((suggestion) => this.setTarget(record.id, choose(suggestion ?? request?.creator ?? null, fallback)));
+        .then((suggestion) => this.setTarget(record.id, choose(suggestion ?? request?.creator ?? null)));
     } else {
-      const target = choose(request?.creator ?? null, null);
-      item.setSavePath(target);
-      this.setTarget(record.id, target);
+      this.setTarget(record.id, choose(request?.creator ?? null));
     }
 
     item.on("updated", (_event, state) => {
@@ -324,12 +401,12 @@ export class DownloadManager {
     let filename = this.get(id)?.filename || written;
     if (state === "completed" && filename !== written) {
       try {
-        fs.mkdirSync(path.dirname(filename), { recursive: true });
-        fs.renameSync(written, filename);
+        placeFile(written, filename);
       } catch {
         filename = written;
       }
     }
+    if (state === "cancelled") removePlaceholder(filename);
     const received = item.getReceivedBytes();
     this.update(id, {
       state: state === "completed" ? "complete" : "interrupted",
@@ -341,6 +418,29 @@ export class DownloadManager {
       totalBytes: state === "completed" ? Math.max(received, item.getTotalBytes()) : item.getTotalBytes(),
     });
     this.live.delete(id);
+  }
+
+  // Chrome starts the download and interrupts it at once when the caller may
+  // not request the URL, without reading anything.
+  private refuseDownload(request: DownloadRequest): number {
+    const record = createDownload({
+      url: request.url,
+      finalUrl: request.url,
+      filename: "",
+      mime: "",
+      startTime: Date.now(),
+      endTime: null,
+      state: "in_progress",
+      error: null,
+      paused: false,
+      totalBytes: 0,
+      receivedBytes: 0,
+      byExtensionId: request.extensionId,
+    });
+    this.created.emit(record);
+    this.progressed.emit();
+    setImmediate(() => this.update(record.id, { state: "interrupted", error: "NETWORK_INVALID_REQUEST", endTime: Date.now() }));
+    return record.id;
   }
 
   private fetchDownload(request: DownloadRequest, url: URL, creator: FilenameSuggestion | null): number {
@@ -379,6 +479,8 @@ export class DownloadManager {
 
   private async runFetch(id: number, request: DownloadRequest, url: URL, creator: FilenameSuggestion | null, abort: AbortController) {
     let file: fs.WriteStream | null = null;
+    let target: string | null = null;
+    let intermediate: string | null = null;
     let writeError: Error | null = null;
     let failWrite: (error: Error) => void = () => {};
     const failed = new Promise<never>((_resolve, reject) => {
@@ -403,14 +505,17 @@ export class DownloadManager {
       const determination = this.determiner?.({ ...this.get(id)! }, path.join(downloadsFolder(), name)) ?? null;
       const suggestion = determination ? await Promise.race([determination.catch(() => null), failed]) : null;
       const chosen = suggestion ?? creator;
-      let target: string;
+      let reserved: { file: string; fd: number };
       try {
-        target = chosen ? targetPath(chosen, null) : uniquePath(downloadsFolder(), name);
-      } catch {
-        target = uniquePath(downloadsFolder(), name);
+        target = (chosen && tryTargetPath(chosen)) || reserveUnique(downloadsDirectory(), name);
+        reserved = reserveIntermediate();
+      } catch (error) {
+        writeError = error as Error;
+        throw error;
       }
       this.setTarget(id, target);
-      const stream = fs.createWriteStream(target);
+      intermediate = reserved.file;
+      const stream = fs.createWriteStream("", { fd: reserved.fd });
       file = stream;
       stream.on("error", (error) => {
         writeError ??= error;
@@ -425,9 +530,18 @@ export class DownloadManager {
       }
       await Promise.race([new Promise<void>((resolve) => stream.end(() => resolve())), failed]);
       if (writeError) throw writeError;
+      try {
+        placeFile(intermediate, target);
+      } catch (error) {
+        writeError = error as Error;
+        throw error;
+      }
+      intermediate = null;
       this.update(id, { state: "complete", endTime: Date.now(), totalBytes: received, receivedBytes: received });
     } catch (error) {
       file?.destroy();
+      if (intermediate) fs.rmSync(intermediate, { force: true });
+      if (target) removePlaceholder(target);
       const reason = abort.signal.aborted
         ? "USER_CANCELED"
         : writeError

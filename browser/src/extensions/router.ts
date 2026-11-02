@@ -1,9 +1,10 @@
-import { app, ipcMain, webContents as allWebContents } from "electron";
+import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent, IpcMainServiceWorkerInvokeEvent, ServiceWorkerMain, Session, WebContents, WebFrameMain } from "electron";
 
 import type { LoadedExtension } from "./loaded";
 import { extensionIdFromOrigin, extensionIdFromUrl } from "./ids";
 import { API_METHODS, channelFor } from "./protocol";
+import { hasTransientUserActivation } from "./user-activation";
 
 export type Caller =
   | { kind: "worker"; extension: LoadedExtension; worker: ServiceWorkerMain }
@@ -55,11 +56,11 @@ export function nextUserInput(contents: WebContents): Promise<boolean> {
   });
 }
 
-// A page acts for the user when the user just clicked or typed in it. A
-// service worker has no input of its own, so it needs a recent click on the
-// extension (its action, menu item or shortcut).
+// A page acts for the user when the user just clicked or typed in the calling
+// frame itself. A service worker has no input of its own, so it needs a recent
+// click on the extension (its action, menu item or shortcut).
 export function hasUserGesture(caller: Caller): boolean {
-  return caller.kind === "frame" ? hadRecentInput(caller.contents) : caller.extension.hadRecentUserGesture();
+  return caller.kind === "frame" ? hasTransientUserActivation(caller.frame) : caller.extension.hadRecentUserGesture();
 }
 
 // Every privileged call is answered here. The calling extension is always
@@ -77,8 +78,6 @@ export class Router {
     for (const method of API_METHODS) {
       ipcMain.handle(channelFor(method), (event, ...args) => this.fromFrame(method, event, args));
     }
-    for (const contents of allWebContents.getAllWebContents()) watchInput(contents);
-    app.on("web-contents-created", (_event, contents) => watchInput(contents));
   }
 
   handle(method: string, run: Handler, options: HandlerOptions = {}) {

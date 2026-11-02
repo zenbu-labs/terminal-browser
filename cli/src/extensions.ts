@@ -34,6 +34,8 @@ import {
 } from "shared";
 import type { DisabledReason, ExtensionPackage, ExtensionRecord, ImportBrowser, ImportItem, ImportProfile, UpdateResult } from "shared";
 
+import { terminalSafe, terminalSafeJson } from "./terminal-text";
+
 // The parts of the daemon's ExtensionSummary that `list` shows.
 interface Listed {
   id: string;
@@ -50,7 +52,7 @@ interface Listed {
 class UsageError extends Error {}
 
 function out(line = "") {
-  process.stdout.write(`${line}\n`);
+  process.stdout.write(`${terminalSafe(line)}\n`);
 }
 
 function takeBool(args: string[], ...names: string[]): boolean {
@@ -125,7 +127,7 @@ async function confirm(question: string, yes: boolean): Promise<boolean> {
   }
   const ask = readline.createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise<string>((resolve) => {
-    ask.question(`${question} [y/N] `, resolve);
+    ask.question(`${terminalSafe(question)} [y/N] `, resolve);
     ask.on("close", () => resolve("n"));
   });
   ask.close();
@@ -181,7 +183,7 @@ async function listCommand(args: string[]): Promise<number> {
       pinned,
       errors,
     }));
-    out(JSON.stringify(fields, null, 2));
+    process.stdout.write(`${terminalSafeJson(fields)}\n`);
     return 0;
   }
   if (entries.length === 0) {
@@ -406,8 +408,10 @@ async function reloadCommand(args: string[]): Promise<number> {
   for (const reloaded of result.reloaded) {
     const record = getExtension(reloaded);
     const errors = result.failed[reloaded];
-    if (errors) out(`${record?.name ?? reloaded} failed to load:\n  ${errors.join("\n  ")}`);
-    else out(`reloaded ${record?.name ?? reloaded}`);
+    if (errors) {
+      out(`${record?.name ?? reloaded} failed to load:`);
+      for (const error of errors) out(`  ${error}`);
+    } else out(`reloaded ${record?.name ?? reloaded}`);
   }
   if (result.reloaded.length === 0) out("no unpacked extensions to reload");
   return Object.keys(result.failed).length > 0 ? 1 : 0;
@@ -572,7 +576,7 @@ export async function extensionsCommand(args: string[]): Promise<number> {
         throw new UsageError(action ? `unknown extensions command ${action} (see terminal-browser extensions --help)` : "missing command (see terminal-browser extensions --help)");
     }
   } catch (error) {
-    process.stderr.write(`terminal-browser: ${friendly(error)}\n`);
+    process.stderr.write(`terminal-browser: ${terminalSafe(friendly(error))}\n`);
     return 1;
   }
 }

@@ -29,6 +29,7 @@ export function patternCovers(outer: MatchPattern, inner: MatchPattern): boolean
   if (inner.all) return outer.all;
   if (!inner.schemes.every((scheme) => outer.schemes.includes(scheme))) return false;
   if (outer.all) return true;
+  if (outer.port !== "*" && inner.port !== outer.port) return false;
   if (outer.host !== "*") {
     if (inner.host === "*") return false;
     const sameHost = inner.host === outer.host;

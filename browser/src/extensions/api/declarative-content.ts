@@ -285,7 +285,7 @@ export class DeclarativeContentStore {
   private requestContentScripts(extension: LoadedExtension, ref: TabRef, rule: ContentRule, page: PageState) {
     if (page.injected.has(`${extension.id}:${rule.id}`)) return;
     const scripts = rule.actions.filter((action) => action.instanceType === CONTENT_SCRIPT);
-    if (scripts.length === 0 || !extension.hasHostAccess(ref.tab.state.url)) return;
+    if (scripts.length === 0 || extension.pageAccessError(ref.tab.state.url, null) !== null) return;
     page.injected.add(`${extension.id}:${rule.id}`);
     for (const script of scripts) {
       this.service.dispatch(extension.id, "declarativeContent.inject", [

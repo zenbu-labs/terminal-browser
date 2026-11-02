@@ -133,13 +133,18 @@ export class Installer {
   private async ask(pkg: ExtensionPackage, window: ExtensionWindow | null): Promise<boolean> {
     const target = window ?? this.service.lastFocusedWindow();
     if (!target) return false;
-    return target.host.prompt({
-      kind: "install",
-      extensionId: pkg.id,
-      name: pkg.name,
-      icon: packageIcon(pkg),
-      warnings: installWarnings(pkg.manifest),
-    });
+    const icon = packageIcon(pkg);
+    try {
+      return await target.host.prompt({
+        kind: "install",
+        extensionId: pkg.id,
+        name: pkg.name,
+        icon: icon?.file ?? null,
+        warnings: installWarnings(pkg.manifest),
+      });
+    } finally {
+      icon?.dispose();
+    }
   }
 
   async checkForUpdates(id?: string): Promise<InstallResult[]> {
@@ -250,19 +255,23 @@ function iconFile(dir: string, manifest: Record<string, unknown>): string | null
   return file.startsWith(`${dir}${path.sep}`) && fs.existsSync(file) ? file : null;
 }
 
-// The prompt shows before anything is unpacked, so the icon goes to a temp file.
-function packageIcon(pkg: ExtensionPackage): string | null {
+// The prompt shows before anything is unpacked, so the icon goes to a fresh
+// directory only this user can open, removed once the prompt is answered.
+function packageIcon(pkg: ExtensionPackage): { file: string; dispose(): void } | null {
   const relative = manifestIcon(pkg.manifest);
   if (!relative) return null;
+  let dir: string | null = null;
   try {
     const bytes = readZipFile(pkg.archive, relative);
     if (!bytes) return null;
-    const dir = path.join(os.tmpdir(), "terminal-browser-install-icons");
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `${pkg.id}-${pkg.version}${path.extname(relative) || ".png"}`);
-    fs.writeFileSync(file, bytes);
-    return file;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-browser-icon-"));
+    const ext = path.extname(relative).toLowerCase();
+    const file = path.join(dir, `icon${/^\.[a-z0-9]+$/.test(ext) ? ext : ".png"}`);
+    fs.writeFileSync(file, bytes, { flag: "wx", mode: 0o600 });
+    const created = dir;
+    return { file, dispose: () => fs.rmSync(created, { recursive: true, force: true }) };
   } catch {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
     return null;
   }
 }

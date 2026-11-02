@@ -9,8 +9,10 @@ import { browsing } from "../../browsing";
 import { safeRelativeFilename } from "../../browsing/downloads";
 import type { ConflictAction, DownloadRequest, FilenameSuggestion } from "../../browsing/downloads";
 import { extensionIcon } from "../action";
+import { matchRegexFilters } from "../download-regex";
 import type { LoadedExtension } from "../loaded";
-import { hadRecentInput, hasUserGesture } from "../router";
+import { hasUserGesture } from "../router";
+import { hadRecentInput } from "../user-activation";
 import type { Caller } from "../router";
 import type { ExtensionService } from "../service";
 
@@ -93,15 +95,6 @@ function iso(time: number | null): string | undefined {
 function downloadId(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value)) throw new Error(INVALID_ID);
   return value;
-}
-
-function regex(source: string | undefined): RegExp | null {
-  if (source === undefined) return null;
-  try {
-    return new RegExp(source);
-  } catch {
-    throw new Error("Invalid query filter");
-  }
 }
 
 export function checkDownloadHeaders(headers: unknown): Record<string, string> | undefined {
@@ -301,14 +294,11 @@ export function installDownloads(service: ExtensionService) {
     options,
   );
 
-  const search = (query: Query): Item[] => {
+  const search = async (query: Query): Promise<Item[]> => {
     if (query.limit !== undefined && query.limit < 0) throw new Error("Invalid query limit");
     const order = query.orderBy ?? ["-startTime"];
     if (order.some((raw) => raw !== "" && !ORDER_FIELDS.has(raw.replace(/^-/, "")))) throw new Error("Invalid orderBy field");
     const terms = (query.query ?? []).map((term) => term.toLowerCase());
-    const filenameRegex = regex(query.filenameRegex);
-    const urlRegex = regex(query.urlRegex);
-    const finalUrlRegex = regex(query.finalUrlRegex);
     const time = (value: string | undefined) => (value === undefined ? undefined : Date.parse(value));
     const startedBefore = time(query.startedBefore);
     const startedAfter = time(query.startedAfter);
@@ -331,27 +321,33 @@ export function installDownloads(service: ExtensionService) {
       "fileSize",
       "exists",
     ];
-    let results = downloads
-      .list()
-      .map((record) => item(record))
-      .filter((download) => {
-        const haystack = `${download.url} ${download.filename}`.toLowerCase();
-        for (const term of terms) {
-          if (term.startsWith("-") ? haystack.includes(term.slice(1)) : !haystack.includes(term)) return false;
-        }
-        if (filenameRegex && !filenameRegex.test(download.filename)) return false;
-        if (urlRegex && !urlRegex.test(download.url)) return false;
-        if (finalUrlRegex && !finalUrlRegex.test(download.finalUrl)) return false;
-        const started = Date.parse(download.startTime);
-        const ended = download.endTime ? Date.parse(download.endTime) : undefined;
-        if (startedBefore !== undefined && !(started < startedBefore)) return false;
-        if (startedAfter !== undefined && !(started > startedAfter)) return false;
-        if (endedBefore !== undefined && !(ended !== undefined && ended < endedBefore)) return false;
-        if (endedAfter !== undefined && !(ended !== undefined && ended > endedAfter)) return false;
-        if (query.totalBytesGreater !== undefined && !(download.totalBytes > query.totalBytesGreater)) return false;
-        if (query.totalBytesLess !== undefined && !(download.totalBytes < query.totalBytesLess)) return false;
-        return exact.every((key) => query[key] === undefined || query[key] === download[key]);
-      });
+    const all = downloads.list().map((record) => item(record));
+    const regexFields = (
+      [
+        [query.filenameRegex, "filename"],
+        [query.urlRegex, "url"],
+        [query.finalUrlRegex, "finalUrl"],
+      ] as const
+    ).filter((entry): entry is readonly [string, "filename" | "url" | "finalUrl"] => entry[0] !== undefined);
+    const regexMatches = await matchRegexFilters(
+      regexFields.map(([pattern, field]) => ({ pattern, subjects: all.map((download) => download[field]) })),
+    );
+    let results = all.filter((download, index) => {
+      const haystack = `${download.url} ${download.filename}`.toLowerCase();
+      for (const term of terms) {
+        if (term.startsWith("-") ? haystack.includes(term.slice(1)) : !haystack.includes(term)) return false;
+      }
+      if (regexMatches.some((matches) => !matches[index])) return false;
+      const started = Date.parse(download.startTime);
+      const ended = download.endTime ? Date.parse(download.endTime) : undefined;
+      if (startedBefore !== undefined && !(started < startedBefore)) return false;
+      if (startedAfter !== undefined && !(started > startedAfter)) return false;
+      if (endedBefore !== undefined && !(ended !== undefined && ended < endedBefore)) return false;
+      if (endedAfter !== undefined && !(ended !== undefined && ended > endedAfter)) return false;
+      if (query.totalBytesGreater !== undefined && !(download.totalBytes > query.totalBytesGreater)) return false;
+      if (query.totalBytesLess !== undefined && !(download.totalBytes < query.totalBytesLess)) return false;
+      return exact.every((key) => query[key] === undefined || query[key] === download[key]);
+    });
     results.sort((a, b) => {
       for (const raw of order) {
         if (!raw) continue;
@@ -388,6 +384,7 @@ export function installDownloads(service: ExtensionService) {
         method: request.method as DownloadRequest["method"],
         body: request.body,
         extensionId: caller.extension.id,
+        allowFileAccess: caller.extension.allowsFileAccess,
       };
       return downloads.download(download);
     },
@@ -462,8 +459,8 @@ export function installDownloads(service: ExtensionService) {
 
   router.handle(
     "downloads.erase",
-    (_caller, query) => {
-      const ids = search((query ?? {}) as Query).map((download) => download.id);
+    async (_caller, query) => {
+      const ids = (await search((query ?? {}) as Query)).map((download) => download.id);
       for (const id of ids) downloads.erase(id);
       return ids;
     },

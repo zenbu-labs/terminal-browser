@@ -74,38 +74,64 @@ export interface MatchPattern {
   schemes: string[];
   host: string;
   subdomains: boolean;
+  port: string;
   path: RegExp;
   source: string;
 }
 
+const ALL_URLS_SCHEMES = ["http", "https", "file", "ftp", "ws", "wss", "urn"];
+const DEFAULT_PORTS: Record<string, string> = { http: "80", https: "443", ws: "80", wss: "443", ftp: "21" };
+
 function globToRegExp(glob: string): RegExp {
   const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${escaped}$`);
+  const parent = glob.endsWith("/*") ? `|${glob.slice(0, -2).replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}` : "";
+  return new RegExp(`^(?:${escaped}${parent})$`);
 }
 
+// Chromium canonicalizes pattern and page hosts the same way before comparing
+// them, and ignores a trailing dot.
+function canonicalHost(host: string): string | null {
+  try {
+    return new URL(`http://${host}/`).hostname.replace(/\.+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function isIpAddress(host: string): boolean {
+  return host.startsWith("[") || /^\d+\.\d+\.\d+\.\d+$/.test(host);
+}
+
+// Chromium's URLPattern::Parse.
 export function parseMatchPattern(source: string): MatchPattern | null {
   if (source === "<all_urls>") {
-    return { all: true, schemes: ["http", "https", "file", "ftp", "ws", "wss", "urn"], host: "*", subdomains: true, path: /.*/, source };
+    return { all: true, schemes: ALL_URLS_SCHEMES, host: "*", subdomains: true, port: "*", path: /.*/, source };
   }
   const match = /^(\*|[a-z][a-z0-9+.-]*):\/\/([^/]*)(\/.*)?$/.exec(source);
   if (!match) return null;
-  const [, scheme, rawHost, rawPath] = match;
+  const [, scheme, hostAndPort, rawPath] = match;
   if (scheme !== "*" && !SCHEMES.includes(scheme)) return null;
-  if (scheme !== "file" && !rawHost) return null;
-  const host = rawHost.split(":")[0].toLowerCase();
-  if (host.includes("*") && host !== "*" && !host.startsWith("*.")) return null;
-  if (host.slice(2).includes("*")) return null;
-  const subdomains = host === "*" || host.startsWith("*.");
-  return {
-    all: false,
-    schemes: scheme === "*" ? ["http", "https", "ws", "wss"] : [scheme],
-    host: host === "*" ? "*" : host.replace(/^\*\./, ""),
-    subdomains,
-    path: globToRegExp(rawPath ?? "/*"),
-    source,
-  };
+  const schemes = scheme === "*" ? ["http", "https"] : [scheme];
+  if (scheme === "file") {
+    return { all: false, schemes, host: "*", subdomains: true, port: "*", path: globToRegExp(rawPath ?? "/*"), source };
+  }
+  if (!hostAndPort || rawPath === undefined) return null;
+  const ipv6 = /^(\[[^\]]*\])(?::(.*))?$/.exec(hostAndPort);
+  if (hostAndPort.startsWith("[") && !ipv6) return null;
+  const colon = hostAndPort.indexOf(":");
+  const rawHost = ipv6 ? ipv6[1] : colon < 0 ? hostAndPort : hostAndPort.slice(0, colon);
+  const port = ipv6 ? (ipv6[2] ?? "*") : colon < 0 ? "*" : hostAndPort.slice(colon + 1);
+  if (port !== "*" && (!DEFAULT_PORTS[scheme] || !/^\d+$/.test(port) || Number(port) > 65535)) return null;
+  if (!rawHost || rawHost === "*.") return null;
+  const subdomains = rawHost === "*" || rawHost.startsWith("*.");
+  const bare = rawHost === "*" ? "" : rawHost.replace(/^\*\./, "");
+  if (bare.includes("*") || bare.includes("\0")) return null;
+  const host = bare ? canonicalHost(bare) : "*";
+  if (!host) return null;
+  return { all: false, schemes, host, subdomains, port: port === "*" ? "*" : String(Number(port)), path: globToRegExp(rawPath), source };
 }
 
+// Chromium's URLPattern::MatchesURL.
 export function patternMatches(pattern: MatchPattern, url: string): boolean {
   let parsed: URL;
   try {
@@ -115,13 +141,23 @@ export function patternMatches(pattern: MatchPattern, url: string): boolean {
   }
   const scheme = parsed.protocol.slice(0, -1);
   if (!pattern.schemes.includes(scheme)) return false;
+  if (pattern.all) return true;
   if (scheme !== "file" && pattern.host !== "*") {
-    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    const host = parsed.hostname.toLowerCase().replace(/\.+$/, "");
     const exact = host === pattern.host;
-    const sub = pattern.subdomains && host.endsWith(`.${pattern.host}`);
+    const sub = pattern.subdomains && !isIpAddress(host) && host.endsWith(`.${pattern.host}`);
     if (!exact && !sub) return false;
   }
+  if (pattern.port !== "*" && (parsed.port || DEFAULT_PORTS[scheme]) !== pattern.port) return false;
   return pattern.path.test(`${parsed.pathname}${parsed.search}`);
+}
+
+// What a host permission grants (Chromium's PermissionsParser): the extension
+// scheme isn't allowed, and the path is ignored.
+export function hostPermissionPattern(source: string): MatchPattern | null {
+  const pattern = parseMatchPattern(source);
+  if (!pattern || pattern.schemes.includes("chrome-extension")) return null;
+  return { ...pattern, path: /.*/ };
 }
 
 export class PatternSet {

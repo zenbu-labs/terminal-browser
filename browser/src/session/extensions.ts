@@ -30,6 +30,11 @@ const ACTION_MENU = {
   importAll: "Import extensions…",
 };
 
+// Chrome's install dialog keeps its accept button off for this long after it
+// shows, and its input protector ignores input closer together than this, so a
+// key press or click meant for something else can't answer a prompt.
+const PROMPT_ARMING_MS = 500;
+
 const MENU_ITEM = "ext:";
 const ACTION_ITEM = "action:";
 const RUN_ITEM = "run:";
@@ -103,6 +108,8 @@ export class PaneExtensions implements WindowHost {
   private showingSidePanel: string | null = null;
   private pendingFocus: string | null = null;
   private seq = 1;
+  private promptShownAt = 0;
+  private lastPromptInputAt = 0;
 
   constructor(private readonly hooks: PaneHooks) {
     this.service = extensionService();
@@ -384,6 +391,7 @@ export class PaneExtensions implements WindowHost {
 
   prompt(request: ExtensionPrompt): Promise<boolean> {
     return new Promise((resolve) => {
+      if (this.prompts.length === 0) this.promptShownAt = Date.now();
       this.prompts.push({ ...request, resolve });
       this.menuOpen = false;
       this.closeActionPopup();
@@ -392,9 +400,20 @@ export class PaneExtensions implements WindowHost {
     });
   }
 
+  // Accepting only counts once the prompt has been up for a moment and the
+  // input isn't part of a quick run of keys or clicks that began before it.
+  private promptArmed(): boolean {
+    const now = Date.now();
+    const armed = now - this.promptShownAt >= PROMPT_ARMING_MS && now - this.lastPromptInputAt >= PROMPT_ARMING_MS;
+    this.lastPromptInputAt = now;
+    return armed;
+  }
+
   answerPrompt(accepted: boolean) {
+    if (accepted && !this.promptArmed()) return;
     const prompt = this.prompts.shift();
     prompt?.resolve(accepted);
+    this.promptShownAt = Date.now();
     if (this.prompts.length === 0) this.hooks.activate();
     this.hooks.requestRender();
   }
@@ -403,7 +422,8 @@ export class PaneExtensions implements WindowHost {
   handleKey(event: EngineKeyEvent): boolean {
     if (this.prompts.length > 0) {
       if (event.key === "escape") this.answerPrompt(false);
-      else if (event.key === "enter") this.answerPrompt(true);
+      else if (event.key === "enter" && event.kind === "press") this.answerPrompt(true);
+      else this.lastPromptInputAt = Date.now();
       return true;
     }
     if (this.menuOpen) {

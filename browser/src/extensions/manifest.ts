@@ -1,6 +1,7 @@
 export {
   asManifest,
   grantedByInstall,
+  hostPermissionPattern,
   isHostPattern,
   manifestAction,
   optionalPermissions,

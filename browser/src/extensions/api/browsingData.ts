@@ -94,11 +94,13 @@ export function installBrowsingData(service: ExtensionService) {
     const session = service.session;
     const dataTypes = types.map((type) => ELECTRON_TYPES[type]).filter((type) => type !== undefined);
     const keepExtensions = !removal.originTypes?.extension;
+    const origins = keepExtensions ? removal.origins?.filter((origin) => !origin.startsWith("chrome-extension:")) : removal.origins;
+    if (origins?.length === 0) return;
     const excludeOrigins = [
       ...(removal.excludeOrigins ?? []),
-      ...(keepExtensions && !removal.origins ? listExtensions().map((record) => `chrome-extension://${record.id}`) : []),
+      ...(keepExtensions && !origins ? listExtensions().map((record) => `chrome-extension://${record.id}`) : []),
     ];
-    const scope: ClearDataOptions = removal.origins ? { origins: removal.origins } : excludeOrigins.length ? { excludeOrigins } : {};
+    const scope: ClearDataOptions = origins ? { origins } : excludeOrigins.length ? { excludeOrigins } : {};
     if (dataTypes.length) await clearSessionData(session, { ...scope, dataTypes }, since);
     if (types.includes("cacheStorage")) await clearSessionData(session, { ...scope, dataTypes: ["cacheStorage"] }, since);
     if (types.includes("cache")) {

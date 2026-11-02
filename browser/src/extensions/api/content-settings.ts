@@ -4,7 +4,7 @@ import type { OnHeadersReceivedListenerDetails, Session, WebContents } from "ele
 import { CONTENT_TYPES, WILDCARD, isWildcard, parsePattern, samePattern } from "../content-settings";
 import type { ContentSettingsStore, Pattern, Setting } from "../content-settings";
 import { networkHooks } from "../network-hooks";
-import { hadRecentInput } from "../router";
+import { hadRecentInput } from "../user-activation";
 import type { ExtensionService } from "../service";
 
 const INCOGNITO_ERROR = "You do not have permission to access incognito preferences.";

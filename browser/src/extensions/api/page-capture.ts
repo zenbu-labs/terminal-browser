@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { webContents as allWebContents } from "electron";
 
+import { CANNOT_ACCESS_PAGE } from "../loaded";
 import type { LoadedExtension } from "../loaded";
 import type { ExtensionService } from "../service";
 
@@ -28,6 +29,35 @@ export function canCapturePage(extension: LoadedExtension, tabId: number, url: s
   if (parsed.protocol === "chrome-extension:" && parsed.host === extension.id) return true;
   const needsActiveTab = INTERNAL_SCHEMES.has(parsed.protocol) || WEBSTORE_ORIGINS.has(parsed.origin);
   return needsActiveTab && extension.hasActiveTab(tabId, url);
+}
+
+// The URL of a page's origin the way Chromium's url::Origin::GetURL() gives it;
+// empty for pages without one, like data: URLs.
+function originUrl(parsed: URL): string {
+  if (parsed.protocol === "file:") return "file:///";
+  if (parsed.protocol === "chrome:" || parsed.protocol === "chrome-extension:") return `${parsed.protocol}//${parsed.host}/`;
+  return parsed.origin === "null" ? "" : `${parsed.origin}/`;
+}
+
+// Chrome's PermissionsData::CanCaptureVisiblePage for tabs.captureVisibleTab;
+// returns Chrome's error, or null when the capture is allowed.
+export function captureVisiblePageError(extension: LoadedExtension, tabId: number, url: string): string | null {
+  const hasActiveTab = extension.hasActiveTabGrant(tabId);
+  if (!hasActiveTab && !extension.hasAllUrls) return "Either the '<all_urls>' or 'activeTab' permission is required.";
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return CANNOT_ACCESS_PAGE;
+  }
+  const origin = originUrl(parsed);
+  const accessError = extension.pageAccessError(origin, tabId);
+  if (!accessError) return null;
+  if (parsed.host === extension.id) return null;
+  const allowedWithActiveTab =
+    parsed.protocol === "chrome:" || parsed.protocol === "chrome-extension:" || parsed.protocol === "data:" || WEBSTORE_ORIGINS.has(parsed.origin);
+  if (!allowedWithActiveTab) return accessError;
+  return hasActiveTab ? null : "The 'activeTab' permission is not in effect because this extension has not been in invoked.";
 }
 
 export function installPageCapture(service: ExtensionService) {
