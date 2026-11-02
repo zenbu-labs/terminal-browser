@@ -91,6 +91,16 @@ export interface NativeDebuggerTarget {
   faviconUrl?: string;
 }
 
+// pixel's Electron patches: a chrome.debugger client for one extension on one page. Chromium limits it as it
+// does Chrome's extension debugger (no browser-wide methods, no local files without file access) and detaches it
+// before the page navigates somewhere the extension may not debug. attach() throws Chrome's errors.
+export function createNativeDebugger(session: Session, extensionId: string, contents: WebContents): Electron.Debugger | null {
+  return (session.extensions as unknown as { createDebugger(id: string, contents: WebContents): Electron.Debugger | null }).createDebugger(
+    extensionId,
+    contents,
+  );
+}
+
 export function nativeDebuggerTargets(session: Session): NativeDebuggerTarget[] {
   return (session.extensions as unknown as { getDebuggerTargets(): NativeDebuggerTarget[] }).getDebuggerTargets();
 }

@@ -27,8 +27,8 @@ export class Importer {
 
   constructor(private readonly service: ExtensionService) {}
 
-  find(): Promise<ImportBrowser[]> {
-    return findImports({ prodversion: process.versions.chrome });
+  find(checkStore: boolean): Promise<ImportBrowser[]> {
+    return findImports({ prodversion: process.versions.chrome, checkStore });
   }
 
   async install(id: string, enabled: boolean): Promise<InstallResult> {

@@ -1,34 +1,15 @@
 import type { WebContents } from "electron";
 
 import type { LoadedExtension } from "../loaded";
-import { nativeDebuggerTargets } from "../native";
+import { createNativeDebugger, nativeDebuggerTargets } from "../native";
 import type { ExtensionService } from "../service";
 
 const permission = "debugger";
-const RESTRICTED_SCHEMES = ["chrome:", "chrome-untrusted:", "devtools:", "terminal-browser:", "file:", "view-source:", "javascript:"];
-
-// Methods that would reach past the attached tab (other targets, the browser,
-// downloads, local files or every site's cookies). Chrome scopes these by
-// client permissions we can't express on a shared connection, so they're refused.
-const BLOCKED_DOMAINS = ["Target.", "Browser.", "SystemInfo.", "Tethering.", "IO.", "Storage.", "Extensions.", "PWA.", "BluetoothEmulation."];
-const BLOCKED_METHODS = [
-  "Page.setDownloadBehavior",
-  "DOM.setFileInputFiles",
-  "Network.getAllCookies",
-  "Network.clearBrowserCookies",
-  "Network.clearBrowserCache",
-  "Network.setCookies",
-  "Network.deleteCookies",
-  "Page.addCompilationCache",
-  "Runtime.getIsolateId",
-];
-const NAVIGATING_METHODS = ["Page.navigate"];
 
 interface Attachment {
   extensionId: string;
   tabId: number;
-  contents: WebContents;
-  sessionId: string | undefined;
+  client: Electron.Debugger;
   stop: () => void;
 }
 
@@ -36,23 +17,7 @@ interface Debuggee {
   tabId?: number;
   extensionId?: string;
   targetId?: string;
-}
-
-function protocolError(message: string): Error {
-  return new Error(JSON.stringify({ code: -32000, message }));
-}
-
-export function mayDebugUrl(extension: LoadedExtension, url: string): boolean {
-  if (!url || url === "about:blank") return true;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (RESTRICTED_SCHEMES.includes(parsed.protocol)) return false;
-  if (parsed.protocol === "chrome-extension:") return parsed.host === extension.id;
-  return extension.hasHostAccess(url);
+  sessionId?: string;
 }
 
 function supportedVersion(version: unknown): boolean {
@@ -79,9 +44,7 @@ export function installDebugger(service: ExtensionService) {
     if (attachments.get(key(attachment.extensionId, attachment.tabId)) !== attachment) return;
     attachments.delete(key(attachment.extensionId, attachment.tabId));
     attachment.stop();
-    if (attachment.sessionId && !attachment.contents.isDestroyed()) {
-      void attachment.contents.debugger.sendCommand("Target.detachFromTarget", { sessionId: attachment.sessionId }).catch(() => {});
-    }
+    if (attachment.client.isAttached()) attachment.client.detach();
     updateDebugging();
     if (reason) service.dispatch(attachment.extensionId, "debugger.onDetach", [{ tabId: attachment.tabId }, reason]);
   };
@@ -117,45 +80,24 @@ export function installDebugger(service: ExtensionService) {
       const target = (value ?? {}) as Debuggee;
       if (!supportedVersion(version)) throw new Error(`Requested protocol version is not supported: ${version}.`);
       const { tabId, contents } = tabOf(target);
-      const url = contents.getURL();
-      if (url.startsWith("chrome-extension://") && !url.startsWith(extension.baseUrl)) {
-        throw new Error("Cannot access a chrome-extension:// URL of different extension");
-      }
-      if (!mayDebugUrl(extension, url)) throw new Error("Cannot attach to this target.");
       if (attachments.has(key(extension.id, tabId))) throw new Error(`Another debugger is already attached to the tab with id: ${tabId}.`);
-      const cdp = contents.debugger;
-      if (!cdp.isAttached()) cdp.attach("1.3");
-      let sessionId: string | undefined;
-      try {
-        const info = (await cdp.sendCommand("Target.getTargetInfo")) as { targetInfo: { targetId: string } };
-        const result = (await cdp.sendCommand("Target.attachToTarget", { targetId: info.targetInfo.targetId, flatten: true })) as {
-          sessionId: string;
-        };
-        sessionId = result.sessionId;
-      } catch {
-        throw new Error("Cannot attach to this target.");
-      }
-      const onMessage = (_event: unknown, method: string, params: unknown, fromSession?: string) => {
-        if (fromSession !== sessionId) return;
-        service.dispatch(extension.id, "debugger.onEvent", [{ tabId }, method, params ?? {}]);
+      const client = createNativeDebugger(service.session, extension.id, contents);
+      if (!client) throw new Error("Cannot attach to this target.");
+      client.attach(String(version));
+      const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
+        const source: Debuggee = sessionId ? { tabId, sessionId } : { tabId };
+        service.dispatch(extension.id, "debugger.onEvent", [source, method, params ?? {}]);
       };
-      const onDestroyed = () => detach(attachment, "target_closed");
-      const onNavigate = (_event: unknown, url: string) => {
-        if (!mayDebugUrl(extension, url)) detach(attachment, "target_closed");
-      };
-      cdp.on("message", onMessage);
-      contents.once("destroyed", onDestroyed);
-      contents.on("did-navigate", onNavigate);
+      const onDetach = () => detach(attachment, "target_closed");
+      client.on("message", onMessage);
+      client.on("detach", onDetach);
       const attachment: Attachment = {
         extensionId: extension.id,
         tabId,
-        contents,
-        sessionId,
+        client,
         stop: () => {
-          cdp.off("message", onMessage);
-          if (contents.isDestroyed()) return;
-          contents.off("destroyed", onDestroyed);
-          contents.off("did-navigate", onNavigate);
+          client.off("message", onMessage);
+          client.off("detach", onDetach);
         },
       };
       attachments.set(key(extension.id, tabId), attachment);
@@ -176,18 +118,12 @@ export function installDebugger(service: ExtensionService) {
     "debugger.sendCommand",
     async (caller, value, method, params) => {
       const extension = caller.extension;
-      const attachment = attached(extension, (value ?? {}) as Debuggee);
-      const name = String(method);
-      if (BLOCKED_DOMAINS.some((domain) => name.startsWith(domain)) || BLOCKED_METHODS.includes(name)) throw protocolError("Not allowed");
-      if (NAVIGATING_METHODS.includes(name)) {
-        const url = String((params as { url?: string } | undefined)?.url ?? "");
-        if (!mayDebugUrl(extension, url)) throw protocolError("Navigating to this URL is not allowed");
-      }
+      const target = (value ?? {}) as Debuggee;
+      const attachment = attached(extension, target);
       try {
-        return (await attachment.contents.debugger.sendCommand(name, (params ?? {}) as Record<string, unknown>, attachment.sessionId)) ?? {};
+        return (await attachment.client.sendCommand(String(method), (params ?? {}) as Record<string, unknown>, target.sessionId)) ?? {};
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw message.startsWith("{") ? new Error(message) : protocolError(message);
+        throw new Error(error instanceof Error ? error.message : String(error));
       }
     },
     { permission },

@@ -79,3 +79,21 @@ test("lists only browsers with a readable Local State and profile", async () => 
   assert.deepEqual(found.map((browser) => browser.key), ["chrome"]);
   assert.deepEqual(await findImports({ home: fs.mkdtempSync(path.join(os.tmpdir(), "tb-import-empty-")) }), []);
 });
+
+test("only asks the Web Store about other browsers' extensions when told to", async () => {
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    asked.push(String(url));
+    return new Response("<gupdate></gupdate>", { status: 200 });
+  };
+  try {
+    const home = fakeHome();
+    await findImports({ home, checkStore: false });
+    assert.deepEqual(asked, []);
+    await findImports({ home });
+    assert.ok(asked.some((url) => url.startsWith("https://clients2.google.com/")));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -171,6 +171,8 @@ function sortItems(items: ImportItem[]): ImportItem[] {
 export interface FindImportsOptions {
   prodversion?: string;
   home?: string;
+  // Whether to ask the Web Store which extensions it has, which sends their ids to Google.
+  checkStore?: boolean;
 }
 
 // Every browser on this machine we can import extensions from, with each
@@ -193,7 +195,7 @@ export async function findImports(options: FindImportsOptions = {}): Promise<Imp
 
   const candidates = browsers.flatMap((browser) => browser.profiles.flatMap((profile) => profile.items));
   const lookup = candidates.filter((item) => item.status === "ready" && !getExtension(item.id)).map((item) => item.id);
-  const available = lookup.length > 0 ? await storeAvailability(lookup, options.prodversion ?? DEFAULT_PRODVERSION).catch(() => null) : new Set<string>();
+  const available = lookup.length > 0 && options.checkStore !== false ? await storeAvailability(lookup, options.prodversion ?? DEFAULT_PRODVERSION).catch(() => null) : new Set<string>();
   for (const item of candidates) {
     if (item.status !== "ready") continue;
     if (getExtension(item.id)) item.status = "installed";
