@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { CrxError, checkStoreUpdates, downloadStoreCrx, downloadUpdate, readZipFile, unzipTo, verifyCrx } from "./crx";
 import type { VerifyOptions } from "./crx";
@@ -141,11 +142,21 @@ export function sourceFor(pkg: ExtensionPackage): ExtensionSource {
 
 // Unpacks into EXTENSIONS_DIR/<id>/<version>_0 like Chrome, and writes the
 // developer key into manifest.json so the id stays the same when loaded.
+// The unpacked manifest must be the one the user was shown.
 export function unpackPackage(pkg: ExtensionPackage): string {
   const dir = path.join(EXTENSIONS_DIR, pkg.id, `${pkg.version}_0`);
   unzipTo(pkg.archive, dir);
   const file = path.join(dir, "manifest.json");
-  const manifest = parseJson(fs.readFileSync(file), "manifest.json");
+  let manifest: Record<string, unknown>;
+  try {
+    manifest = parseJson(fs.readFileSync(file), "manifest.json");
+    checkManifest(manifest);
+    // fixme: placeholder copy
+    if (!isDeepStrictEqual(manifest, pkg.manifest)) throw new ManifestError("The unpacked manifest.json differs from the package's");
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
   manifest.key = pkg.publicKey.toString("base64");
   fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
   return dir;

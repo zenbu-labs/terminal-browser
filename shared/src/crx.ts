@@ -208,8 +208,12 @@ export interface ZipEntry {
   crc: number;
   offset: number;
   directory: boolean;
-  symlink: boolean;
+  // A symlink, device, fifo or socket.
+  special: boolean;
 }
+
+const UNIX_FILE = 0o100000;
+const UNIX_DIRECTORY = 0o040000;
 
 function badZip(detail: string): CrxError {
   return new CrxError("bad_zip", `The package archive is invalid: ${detail}`);
@@ -279,7 +283,7 @@ export function zipEntries(zip: Buffer): ZipEntry[] {
       extra += 4 + length;
     }
     if (flags & 0x1) throw badZip(`${name} is encrypted`);
-    const unixMode = madeBy >> 8 === 3 ? attributes >>> 16 : 0;
+    const type = madeBy >> 8 === 3 ? (attributes >>> 16) & 0o170000 : 0;
     entries.push({
       name,
       method,
@@ -287,8 +291,8 @@ export function zipEntries(zip: Buffer): ZipEntry[] {
       size,
       crc,
       offset,
-      directory: name.endsWith("/"),
-      symlink: (unixMode & 0o170000) === 0o120000,
+      directory: name.endsWith("/") || type === UNIX_DIRECTORY,
+      special: type !== 0 && type !== UNIX_FILE && type !== UNIX_DIRECTORY,
     });
     at = nameEnd + extraLength + commentLength;
   }
@@ -327,25 +331,52 @@ function safeRelativePath(name: string): string | null {
   return parts.join("/");
 }
 
+interface ArchiveEntry extends ZipEntry {
+  relative: string;
+}
+
+// The one checked view of an archive that both the install prompt and the
+// unpacker read, so they can never disagree about which file is which.
+// macOS folds case and Unicode forms, so names that collide there are rejected.
+function archiveEntries(zip: Buffer): ArchiveEntry[] {
+  const files = new Set<string>();
+  const directories = new Set<string>();
+  const entries: ArchiveEntry[] = [];
+  for (const entry of zipEntries(zip)) {
+    // fixme: placeholder copy
+    if (entry.special) throw badZip(`${JSON.stringify(entry.name)} is not a regular file`);
+    const relative = safeRelativePath(entry.name);
+    if (relative === null) throw badZip(`unsafe path ${JSON.stringify(entry.name)}`);
+    const folded = relative.normalize("NFC").toLowerCase();
+    const parents = folded.split("/").slice(0, -1).map((_part, index, parts) => parts.slice(0, index + 1).join("/"));
+    if (files.has(folded) || (!entry.directory && directories.has(folded)) || parents.some((parent) => files.has(parent))) {
+      // fixme: placeholder copy
+      throw badZip(`more than one entry for ${JSON.stringify(relative)}`);
+    }
+    for (const parent of parents) directories.add(parent);
+    if (entry.directory) directories.add(folded);
+    else files.add(folded);
+    entries.push({ ...entry, relative });
+  }
+  return entries;
+}
+
 export function readZipFile(zip: Buffer, name: string): Buffer | null {
-  const entry = zipEntries(zip).find((candidate) => safeRelativePath(candidate.name) === name && !candidate.directory);
+  const entry = archiveEntries(zip).find((candidate) => candidate.relative === name && !candidate.directory);
   return entry ? readZipEntry(zip, entry) : null;
 }
 
 // Extracts into a fresh directory next to dest and renames it into place, so a
 // failed unpack never leaves a half-written extension behind.
 export function unzipTo(zip: Buffer, dest: string): void {
-  const entries = zipEntries(zip);
+  const entries = archiveEntries(zip);
   const total = entries.reduce((sum, entry) => sum + entry.size, 0);
   if (total > MAX_UNPACKED_BYTES) throw badZip("too large when unpacked");
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const staging = fs.mkdtempSync(`${dest}.unpacking-`);
   try {
     for (const entry of entries) {
-      if (entry.symlink) continue;
-      const relative = safeRelativePath(entry.name);
-      if (relative === null) throw badZip(`unsafe path ${JSON.stringify(entry.name)}`);
-      const target = path.join(staging, relative);
+      const target = path.join(staging, entry.relative);
       if (!target.startsWith(`${staging}${path.sep}`)) throw badZip(`unsafe path ${JSON.stringify(entry.name)}`);
       if (entry.directory) {
         fs.mkdirSync(target, { recursive: true });

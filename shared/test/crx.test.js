@@ -8,7 +8,7 @@ const { test } = require("node:test");
 
 process.env.XDG_DATA_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "tb-crx-data-"));
 
-const { CrxError, extensionIdForKey, packageFromCrx, verifyCrx } = require("../dist/index.js");
+const { CrxError, ManifestError, extensionIdForKey, packageFromCrx, unpackPackage, verifyCrx } = require("../dist/index.js");
 
 const STORE_CRX = fs.readFileSync(path.join(__dirname, "fixtures/json-formatter.crx"));
 const STORE_ID = "bcjindcccaagfpapjjmafapmmgkkhgoa";
@@ -28,10 +28,15 @@ function field(number, bytes) {
 }
 
 function zip(files) {
+  return zipList(Object.entries(files));
+}
+
+// Entries are [name, text, unixMode?], so a list can repeat a name or hold a symlink.
+function zipList(files) {
   const locals = [];
   const centrals = [];
   let offset = 0;
-  for (const [name, text] of Object.entries(files)) {
+  for (const [name, text, mode] of files) {
     const data = Buffer.from(text);
     const nameBytes = Buffer.from(name);
     const crc = zlib.crc32(data) >>> 0;
@@ -44,7 +49,8 @@ function zip(files) {
     local.writeUInt16LE(nameBytes.length, 26);
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(mode === undefined ? 20 : (3 << 8) | 20, 4);
+    if (mode !== undefined) central.writeUInt32LE((mode << 16) >>> 0, 38);
     central.writeUInt16LE(20, 6);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(data.length, 20);
@@ -58,8 +64,8 @@ function zip(files) {
   const directory = Buffer.concat(centrals);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(Object.keys(files).length, 8);
-  end.writeUInt16LE(Object.keys(files).length, 10);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
   end.writeUInt32LE(directory.length, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...locals, directory, end]);
@@ -183,4 +189,48 @@ test("a proof with a mismatched key type is refused", () => {
   const relabeled = Buffer.from(crx);
   relabeled[proofTag] = 0x1a;
   rejects(() => verifyCrx(relabeled), "bad_signature");
+});
+
+const shown = JSON.stringify({ manifest_version: 3, name: "Shown", version: "1.0" });
+const hidden = JSON.stringify({ manifest_version: 3, name: "Hidden", version: "1.0", host_permissions: ["<all_urls>"] });
+const SYMLINK = 0o120777;
+const FILE = 0o100644;
+
+function signed(entries) {
+  return buildCrx({ archive: zipList(entries), signers: [developer] });
+}
+
+test("a symlink manifest ahead of the real one is refused, so the prompt can't show a decoy", () => {
+  rejects(() => packageFromCrx(signed([["manifest.json", shown, SYMLINK], ["manifest.json", hidden, FILE]])), "bad_zip");
+});
+
+test("an archive with two entries for the same file is refused", () => {
+  rejects(() => packageFromCrx(signed([["manifest.json", shown], ["manifest.json", hidden]])), "bad_zip");
+  rejects(() => packageFromCrx(signed([["manifest.json", shown], ["./manifest.json", hidden]])), "bad_zip");
+  rejects(() => packageFromCrx(signed([["manifest.json", shown], ["Manifest.JSON", hidden]])), "bad_zip");
+  rejects(() => packageFromCrx(signed([["manifest.json", shown], ["lib", "x"], ["lib/a.js", "y"]])), "bad_zip");
+});
+
+test("symlinks and other special files are refused anywhere in the archive, like Chrome's unzipper", () => {
+  rejects(() => packageFromCrx(signed([["manifest.json", shown], ["link.js", "/etc/passwd", SYMLINK]])), "bad_zip");
+  rejects(() => packageFromCrx(signed([["manifest.json", shown], ["fifo", "", 0o010644]])), "bad_zip");
+});
+
+test("unsafe paths anywhere in the archive are refused before the prompt", () => {
+  for (const name of ["../evil.js", "/abs.js", "a/../../evil.js", "C:/evil.js", "a\\b.js"]) {
+    rejects(() => packageFromCrx(signed([["manifest.json", shown], [name, "x"]])), "bad_zip");
+  }
+});
+
+test("an unpacked extension keeps the manifest the user was shown", () => {
+  const pkg = packageFromCrx(signed([["manifest.json", shown], ["lib/", ""], ["lib/a.js", "x"]]));
+  const dir = unpackPackage(pkg);
+  const unpacked = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
+  assert.equal(unpacked.name, "Shown");
+  assert.equal(unpacked.key, developer.der.toString("base64"));
+
+  const other = buildCrx({ archive: zipList([["manifest.json", hidden]]), signers: [keyPair()] });
+  const swapped = { ...packageFromCrx(other), manifest: JSON.parse(shown) };
+  assert.throws(() => unpackPackage(swapped), ManifestError);
+  assert.equal(fs.existsSync(path.join(path.dirname(path.dirname(dir)), swapped.id, "1.0_0")), false);
 });

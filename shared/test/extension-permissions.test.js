@@ -36,6 +36,10 @@ const accepted = (manifest, record = { grantedPermissions: [], grantedOrigins: [
 test("content script matches warn like host permissions, as in Chrome", () => {
   assert.deepEqual(installWarnings(v3(script("<all_urls>"))), [ALL]);
   assert.deepEqual(installWarnings(v3(script("*://*/*"))), [ALL]);
+  assert.deepEqual(installWarnings(v3({ ...script("<all_urls>"), permissions: ["declarativeNetRequest", "favicon", "notifications"] })), [
+    ALL,
+    "Display notifications",
+  ]);
   assert.deepEqual(installWarnings(v3({ ...script("https://b.test/*"), host_permissions: ["https://a.test/*"] })), [
     "Read and change your data on a.test and b.test",
   ]);

@@ -253,6 +253,17 @@ const API_WARNINGS: Record<string, string> = {
 };
 
 const FULL_URL_ACCESS_APIS = new Set(["debugger", "devtools", "pageCapture", "proxy", "tabCapture"]);
+// chrome_permission_message_rules.cc: the all-sites warning already covers these.
+const ALL_HOSTS_ABSORBS = new Set([
+  "declarativeNetRequest",
+  "declarativeNetRequestFeedback",
+  "declarativeWebRequest",
+  "favicon",
+  "processes",
+  "tabs",
+  "topSites",
+  "webNavigation",
+]);
 
 function effectivePatterns(requested: RequestedPermissions): MatchPattern[] {
   return [...requested.hosts, ...(requested.scriptableHosts ?? [])]
@@ -345,7 +356,7 @@ export function permissionWarnings(requested: RequestedPermissions): string[] {
   for (const permission of requested.api) {
     const warning = API_WARNINGS[permission];
     if (!warning) continue;
-    if (allHosts && warning === "Read your browsing history") continue;
+    if (allHosts && (ALL_HOSTS_ABSORBS.has(permission) || warning === "Read your browsing history")) continue;
     if (!warnings.includes(warning)) warnings.push(warning);
   }
   return warnings;
