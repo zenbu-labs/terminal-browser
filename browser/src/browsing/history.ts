@@ -25,6 +25,7 @@ export interface HistoryRemoval {
 
 const NOT_RECORDED = /^(?:terminal-browser|chrome-extension|chrome|devtools|about|data|blob|javascript|view-source):/i;
 const TYPED_WINDOW_MS = 30_000;
+const TITLES_PER_TAB = 50;
 const TAB_TYPES = new Set(["window", "offscreen"]);
 
 // Markdown and html previews are local files, so history keeps the file:// url
@@ -110,6 +111,14 @@ export class HistoryRecorder {
     let committed = "";
     let lastVisit: number | null = null;
     let linkTarget: string | null = null;
+    // Chromium only reports a title when it changes, so a reload or a back/forward
+    // restore of an already-titled page reports none; remember each page's title.
+    const titles = new Map<string, string>();
+    const remember = (url: string, title: string) => {
+      titles.delete(url);
+      titles.set(url, title);
+      if (titles.size > TITLES_PER_TAB) titles.delete(titles.keys().next().value!);
+    };
     contents.on("will-navigate", (event) => {
       if (event.isMainFrame) linkTarget = event.url;
     });
@@ -122,19 +131,25 @@ export class HistoryRecorder {
       linkTarget = null;
       committed = url;
       if (!this.records(contents)) return;
-      const visit = this.add(url, transition, undefined, transition === "link" ? lastVisit : null);
+      const visit = this.add(url, transition, titles.get(url), transition === "link" ? lastVisit : null);
       if (visit !== null) lastVisit = visit;
     });
     contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
       if (!isMainFrame || url === committed) return;
+      const title = titles.get(committed);
       committed = url;
+      if (title !== undefined) remember(url, title);
       if (!this.records(contents)) return;
-      const visit = this.add(url, "link", undefined, lastVisit);
+      const visit = this.add(url, "link", title, lastVisit);
       if (visit !== null) lastVisit = visit;
     });
-    contents.on("page-title-updated", (_event, title) => {
-      const url = historyUrl(contents.getURL());
-      if (!url || !title || !this.records(contents)) return;
+    // Without a <title> Chromium reports the url as an implicit title; history keeps "" like Chrome.
+    contents.on("page-title-updated", (_event, title, explicitSet) => {
+      if (!explicitSet || !title) return;
+      const current = contents.getURL();
+      remember(current, title);
+      const url = historyUrl(current);
+      if (!url || !this.records(contents)) return;
       if (setHistoryTitle(url, title)) this.changed.emit();
     });
   }
