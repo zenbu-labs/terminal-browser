@@ -19,7 +19,7 @@ import {
   unpackPackage,
   updateExtension,
 } from "shared";
-import type { ExtensionPackage, ExtensionRecord, Manifest, UpdateResult } from "shared";
+import type { DisabledReason, ExtensionPackage, ExtensionRecord, Manifest, UpdateResult } from "shared";
 
 import type { ExtensionService } from "./service";
 import type { ExtensionWindow } from "./window";
@@ -73,12 +73,12 @@ export class Installer {
     return this.guard(pkg.id, async () => ((await this.ask(pkg, window)) ? this.commit(pkg) : null));
   }
 
-  async commit(pkg: ExtensionPackage, enabled = true): Promise<InstallResult> {
+  async commit(pkg: ExtensionPackage, disabledReason: DisabledReason | null = null): Promise<InstallResult> {
     const previous = getExtension(pkg.id);
     const dir = unpackPackage(pkg);
-    const record = recordForPackage(pkg, dir, enabled ? {} : { enabled: false, disabledReason: "user" });
+    const record = recordForPackage(pkg, dir, disabledReason ? { enabled: false, disabledReason } : {});
     saveExtension(record);
-    if (enabled) {
+    if (!disabledReason) {
       try {
         await this.service.manager.start(record, previous ? "update" : "install", previous?.version);
       } catch (error) {
@@ -93,9 +93,27 @@ export class Installer {
   }
 
   // Installs without asking, for packages the user already accepted somewhere else.
-  async installPrepared(pkg: ExtensionPackage, enabled: boolean): Promise<InstallResult> {
+  async installPrepared(pkg: ExtensionPackage, disabledReason: DisabledReason | null): Promise<InstallResult> {
     if (getExtension(pkg.id)) throw new AlreadyInstalledError(pkg.id);
-    return this.guard(pkg.id, () => this.commit(pkg, enabled));
+    return this.guard(pkg.id, () => this.commit(pkg, disabledReason));
+  }
+
+  // Asks before turning on an extension that wants more than the user accepted.
+  async approveNewPermissions(id: string, window: ExtensionWindow | null): Promise<boolean> {
+    const record = getExtension(id);
+    const target = window ?? this.service.lastFocusedWindow();
+    if (!record || record.disabledReason !== "permissions_increase" || !target) return false;
+    const manifest = readManifest(record.path);
+    const accepted = await target.host.prompt({
+      kind: "update",
+      extensionId: record.id,
+      name: record.name,
+      icon: manifest ? iconFile(record.path, manifest) : null,
+      warnings: manifest ? installWarnings(manifest) : [],
+    });
+    if (!accepted || getExtension(id)?.disabledReason !== "permissions_increase") return false;
+    await this.acceptNewPermissions(id);
+    return true;
   }
 
   private async guard<T>(id: string, run: () => Promise<T>): Promise<T> {

@@ -1,9 +1,14 @@
-import { CrxError, fetchStorePackage, findImports, getExtension, isExtensionId } from "shared";
+import { CrxError, fetchStorePackage, findImportSource, findImports, getExtension, importDisabledReason, isExtensionId } from "shared";
 import type { ImportBrowser } from "shared";
 
 import { AlreadyInstalledError } from "./install";
 import type { InstallResult } from "./install";
 import type { ExtensionService } from "./service";
+
+export interface ImportResult extends InstallResult {
+  enabled: boolean;
+  needsApproval: boolean;
+}
 
 // Welcome pages an extension opens right after it's imported stay in the
 // background so the import page keeps focus.
@@ -31,13 +36,20 @@ export class Importer {
     return findImports({ prodversion: process.versions.chrome });
   }
 
-  async install(id: string, enabled: boolean): Promise<InstallResult> {
+  // The id must be a Web Store extension in the chosen profile right now;
+  // whether it ends up on comes from that profile too, never from the page.
+  async install(browser: string, profile: string, id: string): Promise<ImportResult> {
     if (!isExtensionId(id)) throw new Error(`${id} is not an extension id`);
+    const source = findImportSource(browser, profile, id);
+    // fixme: placeholder copy
+    if (!source || source.item.status !== "ready") throw new Error("Not in this profile");
     try {
       if (getExtension(id)) throw new AlreadyInstalledError(id);
       const pkg = await fetchStorePackage(id, process.versions.chrome);
+      const disabledReason = importDisabledReason(source, pkg.manifest);
       this.importedAt.set(id, Date.now());
-      return await this.service.installer.installPrepared(pkg, enabled);
+      const result = await this.service.installer.installPrepared(pkg, disabledReason);
+      return { ...result, enabled: disabledReason === null, needsApproval: disabledReason === "permissions_increase" && source.item.enabled };
     } catch (error) {
       throw new Error(importFailure(error));
     }

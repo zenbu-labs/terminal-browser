@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { DEFAULT_PRODVERSION, storeAvailability } from "./crx";
-import { directoryDisplayName } from "./extension-install";
+import { directoryDisplayName, permissionsIncreased } from "./extension-install";
 import { getExtension, isExtensionId } from "./extensions";
-import type { ManifestIcons } from "./manifest";
+import type { DisabledReason } from "./extensions";
+import type { ManifestIcons, RequestedPermissions } from "./manifest";
 import { pickIcon } from "./manifest";
 
 export type ImportStatus = "ready" | "installed" | "unavailable";
@@ -18,6 +19,11 @@ export interface ImportItem {
   icon: string | null;
   status: ImportStatus;
   reason: ImportUnavailable | null;
+}
+
+export interface ImportSource {
+  item: ImportItem;
+  accepted: RequestedPermissions;
 }
 
 export interface ImportProfile {
@@ -133,14 +139,37 @@ function chromiumEnabled(entry: Json): boolean {
   return reasons === undefined || reasons === 0 || (Array.isArray(reasons) && reasons.length === 0);
 }
 
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+// Chrome keeps the permissions the user accepted as granted_permissions
+// ({api, explicit_host, scriptable_host}); API permissions with settings are
+// objects keyed by name.
+function acceptedIn(entry: Json): RequestedPermissions {
+  const sets = [object(entry.granted_permissions), object(entry.active_permissions)];
+  const api = sets.flatMap((set) =>
+    Array.isArray(set.api) ? set.api.flatMap((item) => (typeof item === "string" ? [item] : Object.keys(object(item)))) : [],
+  );
+  return {
+    api: [...new Set(api)],
+    hosts: [...new Set(sets.flatMap((set) => strings(set.explicit_host)))],
+    scriptableHosts: [...new Set(sets.flatMap((set) => strings(set.scriptable_host)))],
+  };
+}
+
+function chromiumItems(profileDir: string): ImportItem[] {
+  return chromiumEntries(profileDir).map((entry) => entry.item);
+}
+
 // Brave's importer reads the same prefs (brave-core chrome_importer_utils.cc):
 // both files can hold extensions.settings, and Preferences wins.
-function chromiumItems(profileDir: string): ImportItem[] {
+function chromiumEntries(profileDir: string): ImportSource[] {
   const settings = {
     ...object(object(readJson(path.join(profileDir, "Secure Preferences"))?.extensions).settings),
     ...object(object(readJson(path.join(profileDir, "Preferences"))?.extensions).settings),
   };
-  const items: ImportItem[] = [];
+  const items: ImportSource[] = [];
   for (const [id, value] of Object.entries(settings)) {
     const entry = object(value);
     const location = entry.location;
@@ -152,12 +181,15 @@ function chromiumItems(profileDir: string): ImportItem[] {
     if ("theme" in manifest || "app" in manifest) continue;
     const unpacked = location === LOCATION_UNPACKED || location === LOCATION_COMMAND_LINE;
     items.push({
-      id,
-      name: directoryDisplayName(dir, manifest),
-      enabled: chromiumEnabled(entry),
-      icon: iconIn(dir, manifest.icons),
-      status: unpacked ? "unavailable" : "ready",
-      reason: unpacked ? "unpacked" : null,
+      item: {
+        id,
+        name: directoryDisplayName(dir, manifest),
+        enabled: chromiumEnabled(entry),
+        icon: iconIn(dir, manifest.icons),
+        status: unpacked ? "unavailable" : "ready",
+        reason: unpacked ? "unpacked" : null,
+      },
+      accepted: acceptedIn(entry),
     });
   }
   return items;
@@ -177,14 +209,26 @@ export interface FindImportsOptions {
 
 // Every browser on this machine we can import extensions from, with each
 // profile's extensions and whether we can install them from the Web Store.
+function browserProfiles(location: BrowserLocation, home: string) {
+  return browserRoots(location, home)
+    .filter(isDirectory)
+    .map(chromiumProfiles)
+    .find((found) => found.length > 0);
+}
+
+// Re-reads one extension straight from the other browser's profile, so an
+// import installs only what that profile really has.
+export function findImportSource(browserKey: string, profileKey: string, id: string, home = os.homedir()): ImportSource | null {
+  const location = BROWSERS.find((candidate) => candidate.key === browserKey);
+  const profile = location ? browserProfiles(location, home)?.find((candidate) => candidate.key === profileKey) : undefined;
+  return profile ? (chromiumEntries(profile.dir).find((entry) => entry.item.id === id) ?? null) : null;
+}
+
 export async function findImports(options: FindImportsOptions = {}): Promise<ImportBrowser[]> {
   const home = options.home ?? os.homedir();
   const browsers: ImportBrowser[] = [];
   for (const location of BROWSERS) {
-    const profiles = browserRoots(location, home)
-      .filter(isDirectory)
-      .map(chromiumProfiles)
-      .find((found) => found.length > 0);
+    const profiles = browserProfiles(location, home);
     if (!profiles) continue;
     browsers.push({
       key: location.key,
@@ -210,4 +254,12 @@ export async function findImports(options: FindImportsOptions = {}): Promise<Imp
 
 export function importableItems(items: ImportItem[]): ImportItem[] {
   return items.filter((item) => item.status === "ready");
+}
+
+// Import skips the install prompt because the user accepted the extension in
+// the other browser. If today's Web Store version asks for more than that, it
+// waits for approval like an update would.
+export function importDisabledReason(source: ImportSource, manifest: Record<string, unknown>): DisabledReason | null {
+  if (permissionsIncreased(source.accepted, manifest)) return "permissions_increase";
+  return source.item.enabled ? null : "user";
 }

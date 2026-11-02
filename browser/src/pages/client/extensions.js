@@ -63,6 +63,8 @@ const IMPORT_COPY = {
   installedOff: "Installed, off",
   failed: "Couldn't install",
   skipped: "Skipped",
+  // fixme: placeholder copy
+  needsApproval: "Needs approval",
 };
 
 const state = {
@@ -539,7 +541,10 @@ function progressStatus(item, progress) {
   }
   if (progress.state === "installing") return h("span", { class: "muted import-status" }, spinner());
   if (progress.state === "queued") return h("span", { class: "muted import-status" });
-  const text = progress.state === "installed" ? (item.enabled ? IMPORT_COPY.installed : IMPORT_COPY.installedOff) : IMPORT_COPY[progress.state];
+  if (progress.state === "needsApproval") {
+    return h("button", { class: "link clip import-status", onclick: () => approveImport(item, progress) }, IMPORT_COPY.needsApproval);
+  }
+  const text = progress.state === "installed" ? (progress.enabled ? IMPORT_COPY.installed : IMPORT_COPY.installedOff) : IMPORT_COPY[progress.state];
   return h("span", { class: "muted clip import-status" }, text);
 }
 
@@ -620,8 +625,9 @@ function importView() {
 }
 
 async function startImport() {
+  const browser = currentBrowser();
   const profile = currentProfile();
-  if (!profile) return;
+  if (!browser || !profile) return;
   const chosen = profile.items.filter((item) => item.status === "ready" && imports.selected.has(item.id));
   imports.phase = "install";
   imports.stopping = false;
@@ -633,8 +639,9 @@ async function startImport() {
     progress.state = "installing";
     render();
     try {
-      await api.importInstall(item.id, item.enabled);
-      progress.state = "installed";
+      const result = await api.importInstall(browser.key, profile.key, item.id);
+      progress.state = result.needsApproval ? "needsApproval" : "installed";
+      progress.enabled = result.enabled;
     } catch (error) {
       progress.state = "failed";
       progress.error = error.message;
@@ -642,6 +649,18 @@ async function startImport() {
     render();
   }
   imports.phase = "done";
+  render();
+}
+
+async function approveImport(item, progress) {
+  try {
+    if (!(await api.setEnabled(item.id, true))) return;
+    progress.state = "installed";
+    progress.enabled = true;
+  } catch (error) {
+    progress.state = "failed";
+    progress.error = error.message;
+  }
   render();
 }
 

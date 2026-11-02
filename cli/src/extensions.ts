@@ -14,8 +14,10 @@ import {
   downloadStoreUpdates,
   extensionIdForDirectory,
   fetchStorePackage,
+  findImportSource,
   findImports,
   getExtension,
+  importDisabledReason,
   importableItems,
   installWarnings,
   isExtensionId,
@@ -30,7 +32,7 @@ import {
   unpackPackage,
   updateExtension,
 } from "shared";
-import type { ExtensionPackage, ExtensionRecord, ImportBrowser, ImportItem, ImportProfile, UpdateResult } from "shared";
+import type { DisabledReason, ExtensionPackage, ExtensionRecord, ImportBrowser, ImportItem, ImportProfile, UpdateResult } from "shared";
 
 // The parts of the daemon's ExtensionSummary that `list` shows.
 interface Listed {
@@ -424,6 +426,12 @@ interface ImportSource {
   profile: ImportProfile;
 }
 
+function importNote(id: string, disabledReason: DisabledReason | null, enabledInSource: boolean): string {
+  // fixme: placeholder copy
+  if (disabledReason === "permissions_increase" && enabledInSource) return ` (needs approval, run: terminal-browser extensions enable ${id})`;
+  return disabledReason ? " (off)" : "";
+}
+
 function importSourceLabel(source: ImportSource): string {
   return source.browser.profiles.length > 1 ? `${source.browser.name}, ${source.profile.name}` : source.browser.name;
 }
@@ -472,16 +480,15 @@ async function importCommand(args: string[]): Promise<number> {
     throw new UsageError(`${from} was not found (found: ${browsers.map((browser) => browser.key).join(", ")})`);
   }
   const sources = pickSources(browsers, from, profile, all);
-  const planned = new Map<string, ImportItem>();
+  const planned = new Map<string, { item: ImportItem; source: ImportSource }>();
   for (const source of sources) {
     const adding = new Set(importableItems(source.profile.items));
     out(`${importSourceLabel(source)}:`);
     if (source.profile.items.length === 0) out("  nothing to import");
     const width = Math.max(0, ...source.profile.items.map((item) => item.name.length));
     for (const item of source.profile.items) {
-      const add = adding.has(item) && !planned.has(item.id);
-      if (add) planned.set(item.id, { ...item });
-      else if (adding.has(item) && item.enabled) planned.get(item.id)!.enabled = true;
+      const add = adding.has(item) && (!planned.has(item.id) || (item.enabled && !planned.get(item.id)!.item.enabled));
+      if (add) planned.set(item.id, { item, source });
       out(`  ${item.name.padEnd(width)}  ${itemLabel(item, adding.has(item))}`);
     }
   }
@@ -490,21 +497,26 @@ async function importCommand(args: string[]): Promise<number> {
     return 0;
   }
   out();
-  const items = [...planned.values()];
+  const plan = [...planned.values()];
+  const items = plan.map((entry) => entry.item);
   if (!(await confirm(items.length === 1 ? `Install ${items[0].name}?` : `Install ${items.length} extensions?`, yes))) {
     out("cancelled");
     return 0;
   }
   let failed = false;
-  for (const item of items) {
+  for (const { item, source } of plan) {
     try {
       if (getExtension(item.id)) {
         out(`${item.name} is already installed`);
         continue;
       }
+      const found = findImportSource(source.browser.key, source.profile.key, item.id);
+      // fixme: placeholder copy
+      if (!found || found.item.status !== "ready") throw new Error(`it is no longer in ${importSourceLabel(source)}`);
       const pkg = await fetchStorePackage(item.id);
+      const disabledReason = importDisabledReason(found, pkg.manifest);
       const dir = unpackPackage(pkg);
-      saveExtension(recordForPackage(pkg, dir, item.enabled ? {} : { enabled: false, disabledReason: "user" }));
+      saveExtension(recordForPackage(pkg, dir, disabledReason ? { enabled: false, disabledReason } : {}));
       try {
         await inBrowser({ action: "installed", id: pkg.id });
       } catch (error) {
@@ -512,7 +524,7 @@ async function importCommand(args: string[]): Promise<number> {
         throw error;
       }
       removeOtherVersions(pkg.id, dir);
-      out(`installed ${pkg.name} ${pkg.version}${item.enabled ? "" : " (off)"}`);
+      out(`installed ${pkg.name} ${pkg.version}${importNote(pkg.id, disabledReason, found.item.enabled)}`);
     } catch (error) {
       failed = true;
       out(`could not install ${item.name}: ${friendly(error)}`);

@@ -6,7 +6,7 @@ const { test } = require("node:test");
 
 process.env.XDG_DATA_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "tb-import-data-"));
 
-const { findImports, importableItems } = require("../dist/index.js");
+const { findImportSource, findImports, importDisabledReason, importableItems } = require("../dist/index.js");
 
 function write(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -37,7 +37,15 @@ function fakeHome() {
   const e = "e".repeat(32);
   const f = "f".repeat(32);
   chromeProfile(chrome, "Default", {
-    [a]: { location: 1, from_webstore: true, was_installed_by_default: false, disable_reasons: [], path: installed(chrome, "Default", a, { name: "__MSG_appName__", version: "1.0", default_locale: "en" }) },
+    [a]: {
+      location: 1,
+      from_webstore: true,
+      was_installed_by_default: false,
+      disable_reasons: [],
+      path: installed(chrome, "Default", a, { name: "__MSG_appName__", version: "1.0", default_locale: "en" }),
+      granted_permissions: { api: ["storage", { socket: ["tcp-connect"] }], explicit_host: ["https://a.test/*"], scriptable_host: ["https://b.test/*"] },
+      active_permissions: { api: ["tabs"], explicit_host: [], scriptable_host: [] },
+    },
     [b]: { location: 1, from_webstore: true, was_installed_by_default: false, disable_reasons: [1], path: installed(chrome, "Default", b, { name: "Turned Off", version: "1.0" }) },
     [c]: { location: 5, from_webstore: false, path: "/Applications/Chrome.app/pdf", manifest: { name: "PDF Viewer", version: "1" } },
     [d]: { location: 10, from_webstore: true, was_installed_by_default: true, path: installed(chrome, "Default", d, { name: "Payments", version: "1.0" }) },
@@ -96,4 +104,29 @@ test("only asks the Web Store about other browsers' extensions when told to", as
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("an import source is re-read from that one profile, with what the user accepted there", () => {
+  const home = fakeHome();
+  const a = "a".repeat(32);
+  const source = findImportSource("chrome", "Default", a, home);
+  assert.equal(source.item.name, "Localized Name");
+  assert.deepEqual(source.accepted, { api: ["storage", "socket", "tabs"], hosts: ["https://a.test/*"], scriptableHosts: ["https://b.test/*"] });
+  assert.equal(findImportSource("chrome", "Profile 1", a, home).item.status, "unavailable");
+  assert.equal(findImportSource("chrome", "Default", "9".repeat(32), home), null);
+  assert.equal(findImportSource("chrome", "Nope", a, home), null);
+  assert.equal(findImportSource("brave", "Default", a, home), null);
+});
+
+test("an import waits for approval when the store version asks for more than the profile accepted", () => {
+  const home = fakeHome();
+  const on = findImportSource("chrome", "Default", "a".repeat(32), home);
+  const off = findImportSource("chrome", "Default", "b".repeat(32), home);
+  const base = { manifest_version: 3, name: "x", version: "2" };
+  assert.equal(importDisabledReason(on, { ...base, permissions: ["storage", "tabs"], host_permissions: ["https://a.test/*"] }), null);
+  assert.equal(importDisabledReason(on, { ...base, content_scripts: [{ matches: ["https://b.test/*"] }] }), null);
+  assert.equal(importDisabledReason(on, { ...base, content_scripts: [{ matches: ["<all_urls>"] }] }), "permissions_increase");
+  assert.equal(importDisabledReason(on, { ...base, permissions: ["history"] }), "permissions_increase");
+  assert.equal(importDisabledReason(off, base), "user");
+  assert.equal(importDisabledReason(off, { ...base, permissions: ["history"] }), "permissions_increase");
 });

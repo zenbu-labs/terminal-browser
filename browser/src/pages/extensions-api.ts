@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { extensionsDeveloperMode, listExtensions, readManifestFile, setExtensionsDeveloperMode } from "shared";
+import { extensionsDeveloperMode, getExtension, listExtensions, readManifestFile, setExtensionsDeveloperMode } from "shared";
 
 import type { ExtensionSummary } from "../extensions/manage";
 import { asManifest, manifestAction, pickIcon, resolveExtensionPath } from "../extensions/manifest";
@@ -130,7 +130,14 @@ export function extensionsHandlers(): InternalHandlers["extensions"] {
         path: contractHome(summary.path),
       })),
     }),
-    setEnabled: (_sender, id, enabled) => manager.setEnabled(asId(id), enabled === true),
+    setEnabled: async (sender, id, enabled) => {
+      const target = asId(id);
+      if (enabled === true && getExtension(target)?.disabledReason === "permissions_increase") {
+        return service.installer.approveNewPermissions(target, service.windowForContents(sender.id));
+      }
+      await manager.setEnabled(target, enabled === true);
+      return true;
+    },
     remove: (_sender, id) => manager.remove(asId(id)),
     setPinned: (_sender, id, pinned) => manager.setPinned(asId(id), pinned === true),
     setUserScriptsAllowed: (_sender, id, allowed) => manager.setUserScriptsAllowed(asId(id), allowed === true),
@@ -184,6 +191,10 @@ export function extensionsHandlers(): InternalHandlers["extensions"] {
         })),
       }));
     },
-    importInstall: (_sender, id, enabled) => importer.install(asId(id), enabled !== false),
+    importInstall: (_sender, browser, profile, id) => {
+      // fixme: placeholder copy
+      if (typeof browser !== "string" || typeof profile !== "string") throw new Error("Invalid source");
+      return importer.install(browser, profile, asId(id));
+    },
   };
 }
