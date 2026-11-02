@@ -6,9 +6,10 @@ import { extensionsDeveloperMode, listExtensions, readManifestFile, setExtension
 
 import type { ExtensionSummary } from "../extensions/manage";
 import { asManifest, manifestAction, pickIcon, resolveExtensionPath } from "../extensions/manifest";
-import { hadRecentInput } from "../extensions/router";
+import { nextUserInput } from "../extensions/router";
 import { extensionService } from "../extensions/service";
 import type { InternalHandlers } from "./internal";
+import { pageOpenedByExtension } from "./opened-by";
 import { openFromPage } from "./open";
 
 const ICON_TYPES: Record<string, string> = {
@@ -171,10 +172,10 @@ export function extensionsHandlers(): InternalHandlers["extensions"] {
       service.changed();
     },
     completePath: (_sender, partial) => (typeof partial === "string" ? completePath(partial) : []),
-    // Other browsers' extension ids only go to the Web Store when the user opened the import page themselves,
-    // not when an extension opened it.
+    // Other browsers' extension ids go to the Web Store, so a page an extension opened waits for the user first.
     importFind: async (sender) => {
-      const browsers = await importer.find(hadRecentInput(sender));
+      if (pageOpenedByExtension(sender) && !(await nextUserInput(sender))) return [];
+      const browsers = await importer.find();
       return browsers.map((browser) => ({
         ...browser,
         profiles: browser.profiles.map((profile) => ({

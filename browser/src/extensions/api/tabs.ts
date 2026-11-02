@@ -1,3 +1,5 @@
+import { isInternalUrl } from "../../pages/internal";
+import { expectExtensionNavigation } from "../../pages/opened-by";
 import { DOC_SCHEME } from "../../url";
 import type { LoadedExtension } from "../loaded";
 import { PatternSet } from "../manifest";
@@ -83,6 +85,7 @@ export function extensionNavigableUrl(
   if (!allowOtherExtensionPages && otherExtensionPage(service, extension, resolved)) {
     throw new Error(`Cannot navigate to ${raw}.`);
   }
+  if (isInternalUrl(resolved)) expectExtensionNavigation(resolved);
   return resolved;
 }
 
@@ -197,6 +200,7 @@ export function installTabs(service: ExtensionService) {
   router.handle("tabs.duplicate", async (caller, tabId) => {
     const { window, tab } = find(tabId);
     const index = window.host.tabs.all().indexOf(tab) + 1;
+    if (isInternalUrl(tab.state.url)) expectExtensionNavigation(tab.state.url);
     const copy = window.host.tabs.create(tab.state.url, true, { index, openerId: tab.id });
     return info(caller.extension, await waitForReady(window, copy));
   });

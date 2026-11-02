@@ -3,6 +3,7 @@ import type { WebContents } from "electron";
 
 import { extensionService } from "../extensions/service";
 import { INTERNAL_SCHEME, internalHostOf, isInternalUrl } from "./internal";
+import { trackInternalPageOpener } from "./opened-by";
 
 const OVERRIDABLE = ["newtab", "history", "bookmarks"] as const;
 
@@ -47,5 +48,6 @@ export function guardInternalNavigation() {
   app.on("web-contents-created", (_event, contents) => {
     blockWebNavigation(contents);
     followOverrides(contents);
+    trackInternalPageOpener(contents);
   });
 }

@@ -35,6 +35,26 @@ export function hadRecentInput(contents: WebContents): boolean {
   return Date.now() - (lastInput.get(contents) ?? 0) <= USER_ACTIVATION_MS;
 }
 
+// Resolves on the next click or key press in `contents`, or false if it closes first.
+export function nextUserInput(contents: WebContents): Promise<boolean> {
+  watchInput(contents);
+  if (hadRecentInput(contents)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onInput = (_event: unknown, input: { type: string }) => {
+      if (!ACTIVATING_INPUT.has(input.type)) return;
+      contents.off("input-event", onInput);
+      contents.off("destroyed", onDestroyed);
+      resolve(true);
+    };
+    const onDestroyed = () => {
+      contents.off("input-event", onInput);
+      resolve(false);
+    };
+    contents.on("input-event", onInput);
+    contents.once("destroyed", onDestroyed);
+  });
+}
+
 // A page acts for the user when the user just clicked or typed in it. A
 // service worker has no input of its own, so it needs a recent click on the
 // extension (its action, menu item or shortcut).
