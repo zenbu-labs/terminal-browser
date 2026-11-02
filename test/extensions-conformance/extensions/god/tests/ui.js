@@ -298,7 +298,9 @@
     const page = targets.find((x) => x.url.startsWith("http://localhost"));
     t.ok(page, "test page not listed");
     t.shape(page, { id: "string", type: "string", title: "string", url: "string", attached: "boolean", tabId: "number", faviconUrl: "string?", extensionId: "string?" });
-    return `${t.keys(page)} types=${[...new Set(targets.map((x) => x.type))].sort().join(",")}`;
+    // Chrome's own toolbar and omnibox popup are chrome:// targets no other browser has.
+    const listed = targets.filter((x) => !x.url.startsWith("chrome://"));
+    return `${t.keys(page)} types=${[...new Set(listed.map((x) => x.type))].sort().join(",")}`;
   });
 
   test("debugger.attach", async (t) => {

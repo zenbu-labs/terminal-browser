@@ -58,6 +58,10 @@ export async function interact(d, { which, site, ids, base, sleep, log }) {
   else push("context.offscreen", false, "offscreen context never reported");
 
   log("  devtools");
+  if (which === "chrome") {
+    const page = await d.waitTarget((t) => t.type === "page" && t.url === `${site}/page.html`);
+    await d.cdp.send("Target.openDevTools", { targetId: page.targetId });
+  }
   if (which === "tb") {
     const tb = d.tb;
     await tb.control("activate-tab", { url: `${site}/page.html` }).catch(() => {});

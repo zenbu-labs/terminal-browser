@@ -1463,7 +1463,7 @@
   "sw|debugger.getTargets": [
    {
     "ok": true,
-    "sig": "attached,id,tabId,title,type,url types=other,page,worker"
+    "sig": "attached,id,tabId,title,type,url types=page,worker"
    }
   ],
   "sw|debugger.onDetach": [
@@ -3189,10 +3189,6 @@
    }
   ],
   "sw|tabs.onUpdated#status-sequence": [
-   {
-    "ok": true,
-    "sig": "status+url:loading title status:complete status:loading"
-   },
    {
     "ok": true,
     "sig": "status+url:loading title status:complete"

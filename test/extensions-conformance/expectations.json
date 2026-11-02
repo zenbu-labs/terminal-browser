@@ -30,21 +30,8 @@
   "webAuthenticationProxy": "not implemented: no remote desktop WebAuthn proxying"
  },
  "knownDiffers": {
-  "cs|extension.inIncognitoContext": "fails on harden/integ 7e3b742: fails: throws: Cannot read properties of undefined (reading 'inIncognitoContext')",
-  "cs|i18n.getMessage": "differs on harden/integ 7e3b742: en",
-  "options|i18n.getMessage": "differs on harden/integ 7e3b742: en",
-  "page|i18n.getMessage": "differs on harden/integ 7e3b742: en",
-  "popup|i18n.getMessage": "differs on harden/integ 7e3b742: en",
-  "sidepanel|i18n.getMessage": "differs on harden/integ 7e3b742: en",
-  "surface:cs|extension.inIncognitoContext": "fails on harden/integ 7e3b742: missing",
   "sw|bookmarks.getTree": "approved copy, pending Rob",
-  "sw|cookies.set#partitioned": "fails on harden/integ 7e3b742: fails: throws: Failed to parse or set cookie named \"chip\".",
-  "sw|debugger.attach#extension-page": "fails on harden/integ 7e3b742: fails: throws: Cannot navigate to chrome-extension://lcklaejdobalopdokfonmbaebpondmhh/page.html.",
-  "sw|debugger.getTargets": "differs on harden/integ 7e3b742: attached,id,tabId,title,type,url types=page",
-  "sw|i18n.getMessage": "differs on harden/integ 7e3b742: en",
-  "sw|management.getPermissionWarningsByManifest": "approved copy, pending Rob",
-  "sw|scripting.executeScript#chrome-url": "differs on harden/integ 7e3b742: rejects: Cannot access contents of url \"terminal-browser://version/\". Extension manifest must request permission to acce",
-  "sw|tabs.goBack/goForward": "differs on harden/integ 7e3b742: back=resolved: undefined at=?t=history-a | forward=resolved: undefined at=?t=history-b"
+  "sw|management.getPermissionWarningsByManifest": "approved copy, pending Rob"
  },
  "notRun": {
   "^instanceID\\.(getID|getCreationTime)$": "needs the internet: Chrome asks Google's GCM servers for the ID, and runs are offline"

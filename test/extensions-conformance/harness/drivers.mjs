@@ -32,7 +32,7 @@ export async function chromeDriver({ binary, extensions, nativeHost, log, headle
     headless,
     log: log ?? (() => {}),
     filter: () => false,
-    extraArgs: ["--disable-features=DisableLoadExtensionCommandLineSwitch", "--auto-open-devtools-for-tabs", ...extraArgs],
+    extraArgs: ["--disable-features=DisableLoadExtensionCommandLineSwitch", ...extraArgs],
   });
   const ids = [];
   for (const dir of extensions) {
