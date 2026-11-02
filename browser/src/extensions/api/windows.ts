@@ -1,7 +1,12 @@
+import { randomUUID } from "node:crypto";
+
 import type { Caller } from "../router";
 import { WINDOW_ID_CURRENT } from "../service";
 import type { ExtensionService } from "../service";
 import { extensionNavigableUrl } from "./tabs";
+import type { ExtensionWindow } from "../window";
+
+const PANE_JOIN_MS = 20_000;
 
 interface GetInfo {
   populate?: boolean;
@@ -59,6 +64,23 @@ export function installWindows(service: ExtensionService) {
     return windows;
   });
 
+  // Like `terminal-browser open --split`: the terminal opens a pane whose browser joins as the new window.
+  const openPane = async (owner: ExtensionWindow, urls: string[], focused: boolean): Promise<ExtensionWindow | null> => {
+    const token = randomUUID();
+    const joined = service.expectPane(token, PANE_JOIN_MS);
+    const opened = await owner.host.openPane({ url: urls[0] ?? null, token, focused }).catch(() => false);
+    if (!opened) {
+      service.forgetPane(token);
+      return null;
+    }
+    const window = await joined;
+    // fixme: placeholder copy
+    if (!window) throw new Error("The new window did not open.");
+    for (const url of urls.slice(1)) window.host.tabs.create(url, false);
+    await Promise.all(window.host.tabs.all().map((tab) => window.host.tabs.whenReady(tab)));
+    return window;
+  };
+
   router.handle("windows.create", async (caller, createData) => {
     const data = (createData ?? {}) as chrome.windows.CreateData;
     const owner = service.lastFocusedWindow();
@@ -84,6 +106,8 @@ export function installWindows(service: ExtensionService) {
       if (data.focused !== false) owner.host.updatePopupWindow(id, { focused: true });
       return service.popupWindowInfo(entry, true, caller.extension);
     }
+    const pane = await openPane(owner, urls, data.focused !== false);
+    if (pane) return service.windowInfo(pane, true, caller.extension);
     const opened = (urls.length > 0 ? urls : [owner.host.resolveUrl("")]).map((url, index) =>
       owner.host.tabs.create(url, (data.focused ?? true) && index === 0),
     );
@@ -92,7 +116,7 @@ export function installWindows(service: ExtensionService) {
     return service.windowInfo(owner, true, caller.extension);
   });
 
-  router.handle("windows.update", (caller, windowId, updateInfo) => {
+  router.handle("windows.update", async (caller, windowId, updateInfo) => {
     if (typeof windowId !== "number") throw new Error(`No window with id: ${windowId}.`);
     const info = (updateInfo ?? {}) as chrome.windows.UpdateInfo;
     const popup = service.popupWindow(windowId);
@@ -109,6 +133,7 @@ export function installWindows(service: ExtensionService) {
       });
     } else if (window && info.focused) {
       window.host.activate();
+      await window.host.focusPane();
     }
     return describe(caller, windowId, { populate: false });
   });
@@ -120,8 +145,11 @@ export function installWindows(service: ExtensionService) {
       popup.owner.host.closePopupWindow(popup.id);
       return;
     }
-    if (!service.window(windowId)) throw new Error(`No window with id: ${windowId}.`);
-    throw new Error("Extensions cannot close terminal-browser panes.");
+    const window = service.window(windowId);
+    if (!window) throw new Error(`No window with id: ${windowId}.`);
+    // Only panes opened by windows.create; the user's own panes stay theirs.
+    if (!service.openedByExtension(window)) throw new Error("Extensions cannot close terminal-browser panes.");
+    window.host.closePane();
   });
 
   router.handle("windows.closeSelf", (caller) => {

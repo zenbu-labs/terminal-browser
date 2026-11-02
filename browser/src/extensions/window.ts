@@ -40,6 +40,10 @@ export interface WindowHost {
   closeActionPopup(extensionId?: string): void;
   openPopupWindow(request: PopupWindowRequest): Promise<WebContents>;
   closePopupWindow(windowId: number): void;
+  // A new terminal pane with its own browser; false when the terminal can't split.
+  openPane(request: { url: string | null; token: string; focused: boolean }): Promise<boolean>;
+  focusPane(): Promise<void>;
+  closePane(): void;
   popupWindowBounds(windowId: number): { width: number; height: number } | null;
   updatePopupWindow(windowId: number, change: PopupWindowChange): void;
   // The window's side panels changed; focus means the user just opened one.

@@ -103,6 +103,9 @@ export class ExtensionService {
   private readonly listeners = new Set<ServiceListener>();
   private nextWindowId = 1;
   private lastFocusedWindowId: number | null = null;
+  private focusedWindowId: number | null = null;
+  private readonly expectedPanes = new Map<string, (window: ExtensionWindow) => void>();
+  private readonly panesFromExtensions = new Set<number>();
   private readonly ready: Promise<void>;
   private activated = false;
   private readonly activateListeners: (() => void)[] = [];
@@ -301,15 +304,44 @@ export class ExtensionService {
     return getExtension(id);
   }
 
-  addWindow(host: WindowHost): ExtensionWindow {
+  addWindow(host: WindowHost, token: string | null = null): ExtensionWindow {
     const window: ExtensionWindow = { id: this.nextWindowId++, host };
     this.windows.set(window.id, window);
+    const expected = token ? this.expectedPanes.get(token) : undefined;
+    if (expected && token) {
+      this.expectedPanes.delete(token);
+      this.panesFromExtensions.add(window.id);
+    }
     if (this.lastFocusedWindowId === null || host.focused()) this.lastFocusedWindowId = window.id;
+    if (host.focused()) this.focusedWindowId = window.id;
     const events = new TabEvents(this, window);
     this.tabEvents.set(window.id, events);
     host.tabs.observer = events;
     this.broadcastWindow("windows.onCreated", window);
+    expected?.(window);
     return window;
+  }
+
+  // windows.create opens a pane, whose browser then joins as a new window carrying `token`.
+  expectPane(token: string, timeoutMs: number): Promise<ExtensionWindow | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.expectedPanes.delete(token);
+        resolve(null);
+      }, timeoutMs);
+      this.expectedPanes.set(token, (window) => {
+        clearTimeout(timer);
+        resolve(window);
+      });
+    });
+  }
+
+  forgetPane(token: string) {
+    this.expectedPanes.delete(token);
+  }
+
+  openedByExtension(window: ExtensionWindow): boolean {
+    return this.panesFromExtensions.has(window.id);
   }
 
   removeWindow(window: ExtensionWindow) {
@@ -318,6 +350,8 @@ export class ExtensionService {
     for (const tab of [...window.host.tabs.all()]) events?.removed(tab, true);
     this.windows.delete(window.id);
     this.tabEvents.delete(window.id);
+    this.panesFromExtensions.delete(window.id);
+    if (this.focusedWindowId === window.id) this.focusedWindowId = null;
     this.sidePanels.windowRemoved(window);
     for (const entry of [...this.popupWindows.values()]) {
       if (entry.owner === window) this.removePopupWindow(entry.id);
@@ -331,9 +365,13 @@ export class ExtensionService {
 
   windowFocused(window: ExtensionWindow, focused: boolean) {
     if (!focused) {
-      if (this.lastFocusedWindowId === window.id) this.broadcast("windows.onFocusChanged", () => [WINDOW_ID_NONE]);
+      if (this.focusedWindowId !== window.id) return;
+      this.focusedWindowId = null;
+      this.broadcast("windows.onFocusChanged", () => [WINDOW_ID_NONE]);
       return;
     }
+    if (this.focusedWindowId === window.id) return;
+    this.focusedWindowId = window.id;
     this.lastFocusedWindowId = window.id;
     this.broadcast("windows.onFocusChanged", () => [this.focusedPopups.get(window.id) ?? window.id]);
   }

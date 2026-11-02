@@ -82,6 +82,10 @@ export interface PaneHooks {
   toast(message: string): void;
   requestRender(): void;
   layoutChanged(): void;
+  windowToken: string | null;
+  openPane(request: { url: string | null; token: string; focused: boolean }): Promise<boolean>;
+  focusPane(): Promise<void>;
+  closePane(): void;
 }
 
 // The extension UI owned by one pane: which popup, side panel, popup windows
@@ -102,7 +106,19 @@ export class PaneExtensions implements WindowHost {
 
   constructor(private readonly hooks: PaneHooks) {
     this.service = extensionService();
-    this.window = this.service.addWindow(this);
+    this.window = this.service.addWindow(this, hooks.windowToken);
+  }
+
+  openPane(request: { url: string | null; token: string; focused: boolean }): Promise<boolean> {
+    return this.hooks.openPane(request);
+  }
+
+  focusPane(): Promise<void> {
+    return this.hooks.focusPane();
+  }
+
+  closePane() {
+    this.hooks.closePane();
   }
 
   get tabs(): TabManager {

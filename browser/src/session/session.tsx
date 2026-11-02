@@ -90,6 +90,7 @@ import { SettingsManager } from "./settings";
 import { Telemetry } from "../telemetry";
 import { fetchSuggestions } from "./suggest";
 import { AddressKeyword } from "./address-keyword";
+import { EXTENSION_WINDOW_ENV, paneLaunchCommand } from "./pane-launch";
 import { TabManager } from "./tabs";
 import { EXTENSIONS_PAGE, PaneExtensions } from "./extensions";
 import type { ExtensionActions } from "../ui/extension-types";
@@ -413,6 +414,10 @@ class Session {
       toast: (message) => this.showToast(message, "done"),
       requestRender: () => this.render(),
       layoutChanged: () => this.recalculateLayout(),
+      windowToken: this.ctx.env[EXTENSION_WINDOW_ENV] ?? null,
+      openPane: (request) => this.openExtensionPane(request),
+      focusPane: () => this.focusOwnPane(),
+      closePane: () => this.shutdown(),
     });
     this.tabs.create(this.fallbackState.url);
     this.registry = new Registry({
@@ -452,6 +457,26 @@ class Session {
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
     this.render();
+  }
+
+  private async openExtensionPane(request: { url: string | null; token: string; focused: boolean }): Promise<boolean> {
+    const from = this.terminal?.split ? await this.findOwnPane() : null;
+    if (!this.terminal?.split || !from) return false;
+    const argv = [...(request.url ? [request.url] : []), "--split-dir=right"];
+    if (this.ctx.tty) argv.push(`--parent-tty=${this.ctx.tty}`);
+    const command = paneLaunchCommand(this.ctx.env, argv, { [EXTENSION_WINDOW_ENV]: request.token });
+    if (!command) return false;
+    await this.terminal.split({ from, direction: "right", command, size: null, tty: this.ctx.tty ?? null });
+    if (!request.focused) await this.terminal.focusPane?.(from.id).catch(() => {});
+    return true;
+  }
+
+  private async focusOwnPane() {
+    const pane = this.terminal?.focusPane ? await this.findOwnPane() : null;
+    if (!pane || !this.terminal?.focusPane) return;
+    await this.terminal.focusPane(pane.id).catch(() => {});
+    this.terminalFocused = true;
+    this.extensions?.focusChanged(true);
   }
 
   private findOwnPane(): Promise<Pane | null> {
