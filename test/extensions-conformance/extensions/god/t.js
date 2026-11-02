@@ -170,7 +170,7 @@
       note = errorText(error);
       sig = error instanceof AssertionError ? `assert: ${note}` : `throws: ${note}`;
     }
-    const result = { id: test.id, ctx, ok, sig: String(sig).slice(0, 300), note, ms: Date.now() - started };
+    const result = { id: test.id, ctx, ok, sig: String(sig).slice(0, test.sigLimit ?? 300), note, ms: Date.now() - started };
     results.push(result);
     for (const l of listeners) l(result);
     return result;

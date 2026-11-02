@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { launchChrome, sleep } from "./chrome.mjs";
-import { startBrowser, OUT } from "./tb.mjs";
+import { startBrowser } from "./tb.mjs";
 
 export { sleep };
 
@@ -19,14 +19,15 @@ function nativeHostManifest(hostDir, nativeHost) {
   fs.writeFileSync(path.join(hostDir, `${nativeHost.name}.json`), JSON.stringify(nativeHost.manifest, null, 2));
 }
 
-export async function chromeDriver({ extensions, nativeHost, log, headless = true, extraArgs = [], prefs, godId = "" }) {
-  const profile = fs.mkdtempSync(path.join(OUT, "profiles", "chrome-"));
+export async function chromeDriver({ binary, extensions, nativeHost, log, headless = true, extraArgs = [], prefs, godId = "" }) {
+  const profile = fs.mkdtempSync("/tmp/tbc-chrome-");
   if (prefs) {
     fs.mkdirSync(path.join(profile, "Default"), { recursive: true });
     fs.writeFileSync(path.join(profile, "Default", "Preferences"), JSON.stringify(prefs));
   }
   nativeHostManifest(path.join(profile, "NativeMessagingHosts"), nativeHost);
   const c = await launchChrome({
+    binary,
     profile,
     headless,
     log: log ?? (() => {}),
@@ -107,7 +108,7 @@ export async function chromeDriver({ extensions, nativeHost, log, headless = tru
 }
 
 export async function tbDriver({ extensions, nativeHost, label = "god", startUrl, recordVideo = false, ...rest }) {
-  const home = fs.mkdtempSync(path.join(OUT, "profiles", "tb-"));
+  const home = fs.mkdtempSync("/tmp/tbc-tb-");
   const tb = await startBrowser({ label, home, url: startUrl, extensions, ...rest });
   if (nativeHost) {
     const userData = await tb.mainEval("return process.mainModule.require('electron').app.getPath('userData')");

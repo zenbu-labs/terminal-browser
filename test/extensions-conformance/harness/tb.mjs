@@ -11,12 +11,12 @@ import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
 const require = createRequire(import.meta.url);
-export const REPO = process.env.TB_REPO ?? path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../..");
-export const OUT = process.env.GOD_OUT ?? "/tmp/tb-god-ext";
+export const REPO = process.env.TB_REPO ?? path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function png({ bytes, width, height }, bg) {
@@ -44,12 +44,10 @@ function png({ bytes, width, height }, bg) {
 
 export async function startBrowser(options = {}) {
   const label = options.label ?? "tb";
-  const out = options.out ?? path.join(OUT, "runs", `${label}-${Date.now()}`);
+  const out = options.out ?? fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`));
   const frames = path.join(out, "frames");
   fs.mkdirSync(frames, { recursive: true });
-  const patched = process.env.TB_ELECTRON ?? path.join(OUT, "Electron.app/Contents/MacOS/Electron");
-  const electron = options.electron ?? process.env.PIXEL_ELECTRON_BIN ??
-    (fs.existsSync(patched) ? patched : path.join(REPO, "pixel/packages/pixel/electron/dist/Electron.app/Contents/MacOS/pixel"));
+  const electron = options.electron ?? process.env.TB_ELECTRON ?? path.join(REPO, "pixel/packages/pixel/electron/dist/Electron.app/Contents/MacOS/pixel");
   const light = options.light ?? false;
   const bg = light ? [250, 250, 250] : [24, 24, 28];
   const fg = light ? [30, 30, 30] : [230, 230, 230];
@@ -132,14 +130,14 @@ export async function startBrowser(options = {}) {
   delete daemonEnv.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(daemonEnv)) if (k.startsWith("PIXEL_") && k !== "PIXEL_ELECTRON_BIN") delete daemonEnv[k];
   const daemonLog = fs.openSync(path.join(out, "daemon.log"), "w");
-  const inspectPort = options.inspectPort ?? (20000 + Math.floor(Math.random() * 20000));
-  const daemon = spawn(electron, [`--inspect=127.0.0.1:${inspectPort}`, path.join(REPO, "browser/dist/main.js"), "--daemon"], { cwd: path.join(REPO, "browser"), env: daemonEnv, stdio: ["ignore", daemonLog, daemonLog] });
+  const daemon = spawn(electron, ["--inspect=127.0.0.1:0", ...(options.chromiumArgs ?? []), path.join(REPO, "browser/dist/main.js"), "--daemon"], { cwd: path.join(REPO, "browser"), env: daemonEnv, stdio: ["ignore", daemonLog, daemonLog] });
   let mainSession = null;
   // Evaluates in the daemon's main process; `svc` is the extension service.
   const mainEval = async (expression) => {
     if (!mainSession) {
-      const list = await (await fetch(`http://127.0.0.1:${inspectPort}/json/list`)).json();
-      const ws = new WebSocket(list[0].webSocketDebuggerUrl);
+      const inspector = fs.readFileSync(path.join(out, "daemon.log"), "utf8").match(/Debugger listening on (ws:\/\/\S+)/)?.[1];
+      if (!inspector) throw new Error(`daemon inspector not listening, see ${out}/daemon.log`);
+      const ws = new WebSocket(inspector);
       await new Promise((r, j) => { ws.addEventListener("open", r, { once: true }); ws.addEventListener("error", j, { once: true }); });
       let nextId = 1;
       const pending = new Map();
@@ -231,10 +229,22 @@ export async function startBrowser(options = {}) {
       const msg = JSON.parse(m.data);
       if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
     });
+    const fail = (message) => {
+      for (const resolve of pending.values()) resolve({ error: { message } });
+      pending.clear();
+    };
+    ws.addEventListener("close", () => {
+      sockets.delete(target.id);
+      fail("target closed");
+    });
     const session = {
       send: (method, params = {}) => new Promise((resolve) => {
         const id = nextId++;
-        pending.set(id, resolve);
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          resolve({ error: { message: `${method} timed out` } });
+        }, 30000);
+        pending.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
         ws.send(JSON.stringify({ id, method, params }));
       }),
       close: () => ws.close(),
@@ -255,6 +265,7 @@ export async function startBrowser(options = {}) {
     const target = await waitTarget(typeof predicate === "string" ? (t) => t.url.startsWith(predicate) : predicate, timeout);
     const session = await connect(target);
     const res = await session.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+    if (res.error) throw new Error(res.error.message);
     if (res.result?.exceptionDetails) throw new Error(JSON.stringify(res.result.exceptionDetails));
     return res.result?.result?.value;
   };

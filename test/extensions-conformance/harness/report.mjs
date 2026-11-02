@@ -1,17 +1,21 @@
 // Renders verdicts into one self-contained, phone-first HTML page.
 import { CATALOG } from "./catalog.mjs";
 
-const RANK = { crashes: 0, fails: 1, differs: 2, unsupported: 3, pass: 4 };
-const LABEL = { crashes: "crashes", fails: "fails", differs: "differs from Chrome", unsupported: "documented unsupported", pass: "pass" };
+const RANK = { crashes: 0, fails: 1, differs: 2, expected: 3, unsupported: 3, pass: 4 };
+const LABEL = {
+  crashes: "crashes", fails: "fails", differs: "differs from Chrome", unsupported: "documented unsupported", pass: "pass",
+  // fixme: placeholder copy
+  expected: "expected",
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const short = (s, n = 220) => {
   const t = String(s ?? "");
   return t.length > n ? t.slice(0, n) + "…" : t;
 };
-const sig = (r) => (r == null ? "—" : typeof r === "string" ? r : `${r.ok ? "" : "✗ "}${r.sig}`);
+const sig = (r) => (r == null ? "—" : typeof r === "string" ? r : Array.isArray(r) ? r.map(sig).join(" | ") : `${r.ok ? "" : "✗ "}${r.sig}`);
 
 function counts(rows) {
-  const c = { crashes: 0, fails: 0, differs: 0, unsupported: 0, pass: 0 };
+  const c = { crashes: 0, fails: 0, differs: 0, expected: 0, unsupported: 0, pass: 0 };
   for (const r of rows) c[r.verdict] = (c[r.verdict] ?? 0) + 1;
   return c;
 }
@@ -44,7 +48,7 @@ function checkRow(r) {
 </li>`;
 }
 
-export function renderReport({ at, rows, surfaceRows, bugs = [], extras = {} }) {
+export function renderReport({ at, chrome, rows, surfaceRows, extras = {} }) {
   const c = counts(rows), sc = counts(surfaceRows);
   const groups = group(rows);
   const surfaceGroups = group(surfaceRows.filter((r) => r.verdict !== "pass"));
@@ -58,8 +62,8 @@ export function renderReport({ at, rows, surfaceRows, bugs = [], extras = {} }) 
 <meta name="color-scheme" content="dark light">
 <title>God Extension: terminal-browser vs Chrome</title>
 <style>
-:root { --bg: #0e0f12; --card: #17191e; --line: #272a33; --fg: #ececee; --dim: #9094a0; --pass: #3fb950; --fails: #f85149; --crashes: #ff7b72; --differs: #d29922; --unsupported: #8b949e; }
-@media (prefers-color-scheme: light) { :root { --bg: #f6f6f8; --card: #fff; --line: #e3e4e8; --fg: #1b1c20; --dim: #63666f; --pass: #1a7f37; --fails: #cf222e; --crashes: #a40e26; --differs: #9a6700; --unsupported: #6e7781; } }
+:root { --bg: #0e0f12; --card: #17191e; --line: #272a33; --fg: #ececee; --dim: #9094a0; --pass: #3fb950; --fails: #f85149; --crashes: #ff7b72; --differs: #d29922; --unsupported: #8b949e; --expected: #8b949e; }
+@media (prefers-color-scheme: light) { :root { --bg: #f6f6f8; --card: #fff; --line: #e3e4e8; --fg: #1b1c20; --dim: #63666f; --pass: #1a7f37; --fails: #cf222e; --crashes: #a40e26; --differs: #9a6700; --unsupported: #6e7781; --expected: #6e7781; } }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; overflow-wrap: anywhere; background: var(--bg); color: var(--fg); font: 16px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; padding: env(safe-area-inset-top) env(safe-area-inset-right) calc(env(safe-area-inset-bottom) + 24px) env(safe-area-inset-left); }
@@ -70,14 +74,10 @@ h1 { font-size: 22px; margin: 0 0 4px; line-height: 1.2; }
 .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
 .tile b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .tile span { color: var(--dim); font-size: 13px; }
-.tile.pass b { color: var(--pass); } .tile.fails b { color: var(--fails); } .tile.crashes b { color: var(--crashes); } .tile.differs b { color: var(--differs); } .tile.unsupported b { color: var(--unsupported); }
+.tile.pass b { color: var(--pass); } .tile.fails b { color: var(--fails); } .tile.crashes b { color: var(--crashes); } .tile.differs b { color: var(--differs); } .tile.unsupported b { color: var(--unsupported); } .tile.expected b { color: var(--expected); }
 .card { min-width: 0; margin: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
 .card h2 { margin: 0 0 10px; font-size: 17px; }
 video { width: 100%; border-radius: 10px; background: #000; }
-.bugs ol { margin: 0; padding-left: 22px; }
-.bugs li { margin: 0 0 12px; }
-.bugs li b { display: block; }
-.bugs small { color: var(--dim); display: block; font-size: 14px; }
 h3.section { margin: 22px 16px 6px; font-size: 15px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 details { margin: 8px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
 summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 14px; min-height: 52px; cursor: pointer; font-weight: 600; }
@@ -87,14 +87,14 @@ summary .ns small { display: block; color: var(--dim); font-weight: 400; font-si
 summary::after { content: "›"; color: var(--dim); font-size: 22px; transition: transform .15s; }
 details[open] summary::after { transform: rotate(90deg); }
 .pill { font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 99px; color: #fff; font-variant-numeric: tabular-nums; }
-.pill.pass { background: var(--pass); } .pill.fails { background: var(--fails); } .pill.crashes { background: var(--crashes); } .pill.differs { background: var(--differs); } .pill.unsupported { background: var(--unsupported); }
+.pill.pass { background: var(--pass); } .pill.fails { background: var(--fails); } .pill.crashes { background: var(--crashes); } .pill.differs { background: var(--differs); } .pill.unsupported { background: var(--unsupported); } .pill.expected { background: var(--expected); }
 ul { list-style: none; margin: 0; padding: 0; }
 .row { border-top: 1px solid var(--line); padding: 10px 14px; }
 .head { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: baseline; }
 .head code { font: 14px/1.4 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
 .ctx { font-size: 12px; color: var(--dim); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; }
 .v { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
-.v.pass { color: var(--pass); } .v.fails { color: var(--fails); } .v.crashes { color: var(--crashes); } .v.differs { color: var(--differs); } .v.unsupported { color: var(--unsupported); }
+.v.pass { color: var(--pass); } .v.fails { color: var(--fails); } .v.crashes { color: var(--crashes); } .v.differs { color: var(--differs); } .v.unsupported { color: var(--unsupported); } .v.expected { color: var(--expected); }
 .obs { color: var(--dim); font: 13px/1.4 ui-monospace, Menlo, monospace; margin-top: 4px; overflow-wrap: anywhere; }
 dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 8px 0 0; font-size: 14px; }
 dt { color: var(--dim); }
@@ -109,7 +109,8 @@ body.hide-pass .row.pass, body.hide-pass details.all-pass { display: none; }
 <body class="hide-pass">
 <header>
   <h1>God Extension: terminal-browser vs Chrome</h1>
-  <div class="sub">PR #237 (ext/chrome-extensions) vs Chrome for Testing 156 · ${esc(at.slice(0, 16).replace("T", " "))} UTC</div>
+  <!-- fixme: placeholder copy -->
+  <div class="sub">vs Chrome for Testing ${esc(chrome)} · ${esc(at.slice(0, 16).replace("T", " "))} UTC</div>
 </header>
 <div class="tiles">
   <div class="tile"><b>${rows.length}</b><span>checks</span></div>
@@ -117,11 +118,11 @@ body.hide-pass .row.pass, body.hide-pass details.all-pass { display: none; }
   <div class="tile differs"><b>${c.differs}</b><span>differ</span></div>
   <div class="tile fails"><b>${c.fails}</b><span>fail</span></div>
   <div class="tile crashes"><b>${c.crashes}</b><span>crash</span></div>
-  <div class="tile unsupported"><b>${c.unsupported}</b><span>documented unsupported</span></div>
+  <!-- fixme: placeholder copy -->
+  <div class="tile expected"><b>${c.expected}</b><span>expected</span></div>
 </div>
-<div class="sub" style="padding:0 16px">Plus ${surfaceRows.length} API members compared by presence: ${surfacePass} present, ${sc.fails} missing, ${sc.differs} different, ${sc.unsupported} documented unsupported.</div>
+<div class="sub" style="padding:0 16px">Plus ${surfaceRows.length} API members compared by presence: ${surfacePass} present, ${sc.fails} missing, ${sc.differs} different, ${sc.expected} expected.</div>
 ${video}
-${bugs.length ? `<section class="card bugs"><h2>Bugs, worst first</h2><ol>${bugs.map((b) => `<li><b>${esc(b.title)}</b><small>${esc(b.ns)} · ${esc(b.severity)}</small>${esc(b.summary)}</li>`).join("")}</ol></section>` : ""}
 <div class="filters" role="group" aria-label="Filter">
   <button type="button" aria-pressed="true" data-hide="1">Problems only</button>
   <button type="button" aria-pressed="false" data-hide="0">Everything</button>

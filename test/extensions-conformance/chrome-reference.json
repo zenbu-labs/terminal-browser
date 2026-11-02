@@ -1,0 +1,5436 @@
+{
+ "chrome": "156.0.8078.80",
+ "runs": 5,
+ "checks": {
+  "cs|browser-namespace": [
+   {
+    "ok": true,
+    "sig": "present same=false"
+   }
+  ],
+  "cs|dom.openOrClosedShadowRoot": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "cs|extension.inIncognitoContext": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "cs|i18n.detectLanguage": [
+   {
+    "ok": true,
+    "sig": "fr reliable=true"
+   }
+  ],
+  "cs|i18n.getAcceptLanguages": [
+   {
+    "ok": true,
+    "sig": "en-US,en"
+   }
+  ],
+  "cs|i18n.getMessage": [
+   {
+    "ok": true,
+    "sig": "en_US"
+   }
+  ],
+  "cs|i18n.getUILanguage": [
+   {
+    "ok": true,
+    "sig": "en-US"
+   }
+  ],
+  "cs|runtime.Port.onDisconnect": [
+   {
+    "ok": true,
+    "sig": "lastError=none"
+   }
+  ],
+  "cs|runtime.connect#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "documentId,documentLifecycle,frameId,id,origin,tab,url"
+   }
+  ],
+  "cs|runtime.dynamicId": [
+   {
+    "ok": true,
+    "sig": "differs from id"
+   }
+  ],
+  "cs|runtime.getManifest": [
+   {
+    "ok": true,
+    "sig": "perms=77"
+   }
+  ],
+  "cs|runtime.getURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "cs|runtime.getVersion": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "cs|runtime.id": [
+   {
+    "ok": true,
+    "sig": "id ok"
+   }
+  ],
+  "cs|runtime.sendMessage#async-reply": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "cs|runtime.sendMessage#promise-reply": [
+   {
+    "ok": true,
+    "sig": "promise return"
+   }
+  ],
+  "cs|storage.local.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "cs|storage.session#untrusted-access": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "cs|storage.sync.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|context.chrome-namespaces": [
+   {
+    "ok": true,
+    "sig": "accessibilityFeatures,action,alarms,bookmarks,browsingData,clipboard,commands,contentSettings,contextMenus,cookies,csi,debugger,declarativeContent,declarativeNetRequest,desktopCapture,devtools,dns,dom,downloads,extension,fontSettings,gcm,history,i18n,identity,idle,instanceID,loadTimes,management,notifications,offscreen,omnibox,pageCapture,permissions,power,printerProvider,privacy,processes,proxy,publicSuffix,readingList,runtime,scripting,search,sessions,sidePanel,storage,system,tabCapture,tabGroups,tabs,topSites,tts,ttsEngine,userScripts,webAuthenticationProxy,webNavigation,webRequest,windows"
+   }
+  ],
+  "devtools|devtools.inspectedWindow.eval": [
+   {
+    "ok": true,
+    "sig": "title=God test page"
+   }
+  ],
+  "devtools|devtools.inspectedWindow.eval#exception": [
+   {
+    "ok": true,
+    "sig": "isException,value"
+   }
+  ],
+  "devtools|devtools.inspectedWindow.getResources": [
+   {
+    "ok": true,
+    "sig": "types=document,image,script"
+   }
+  ],
+  "devtools|devtools.inspectedWindow.tabId": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|devtools.languageServices": [
+   {
+    "ok": true,
+    "sig": "present"
+   }
+  ],
+  "devtools|devtools.network.getHAR": [
+   {
+    "ok": true,
+    "sig": "har"
+   }
+  ],
+  "devtools|devtools.network.onNavigated": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|devtools.network.onRequestFinished": [
+   {
+    "ok": false,
+    "sig": "throws: DevTools API encountered an error"
+   }
+  ],
+  "devtools|devtools.panels.create": [
+   {
+    "ok": true,
+    "sig": "methods=createStatusBarButton,onHidden,onSearch,onShown,show"
+   }
+  ],
+  "devtools|devtools.panels.elements.createSidebarPane": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|devtools.panels.openResource": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|devtools.panels.setOpenResourceHandler": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|devtools.panels.sources.createSidebarPane": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|devtools.panels.themeName": [
+   {
+    "ok": true,
+    "sig": "dark"
+   }
+  ],
+  "devtools|devtools.performance.events": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "devtools|devtools.recorder.registerRecorderExtensionPlugin": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "interactive|permissions.request#gesture-already-granted": [
+   {
+    "ok": true,
+    "sig": "granted=true"
+   }
+  ],
+  "interactive|sidePanel.close+onClosed": [
+   {
+    "ok": true,
+    "sig": "closed onClosed=1"
+   }
+  ],
+  "interactive|sidePanel.onOpened": [
+   {
+    "ok": true,
+    "sig": "keys=path,windowId path=/sidepanel.html"
+   }
+  ],
+  "interactive|sidePanel.open#gesture": [
+   {
+    "ok": true,
+    "sig": "opened"
+   }
+  ],
+  "noperm|gating.action-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.alarms-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.bookmarks-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.browsingData-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.chrome-namespaces": [
+   {
+    "ok": true,
+    "sig": "csi,dom,extension,i18n,loadTimes,management,permissions,runtime,tabs,windows"
+   }
+  ],
+  "noperm|gating.commands-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.contentSettings-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.contextMenus-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.cookies-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.debugger-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.debugger-other-extension": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.declarativeContent-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.declarativeNetRequest-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.devtools-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.downloads-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.fontSettings-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.history-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.identity-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.idle-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.management.getSelf": [
+   {
+    "ok": true,
+    "sig": "God No Permissions"
+   }
+  ],
+  "noperm|gating.management.without-permission": [
+   {
+    "ok": true,
+    "sig": "ExtensionDisabledReason,ExtensionInstallType,ExtensionType,LaunchType,getPermissionWarningsByManifest,getSelf,uninstallSelf"
+   }
+  ],
+  "noperm|gating.notifications-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.offscreen-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.omnibox-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.optional-permission-hidden-before-grant": [
+   {
+    "ok": true,
+    "sig": "hidden"
+   }
+  ],
+  "noperm|gating.optional.permissions.contains": [
+   {
+    "ok": true,
+    "sig": "false"
+   }
+  ],
+  "noperm|gating.pageCapture-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.permissions.getAll": [
+   {
+    "ok": true,
+    "sig": "|http://localhost/*"
+   }
+  ],
+  "noperm|gating.permissions.request-undeclared": [
+   {
+    "ok": true,
+    "sig": "rejects: This function must be called during a user gesture"
+   }
+  ],
+  "noperm|gating.power-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.privacy-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.proxy-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.readingList-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.runtime.sendNativeMessage-absent": [
+   {
+    "ok": true,
+    "sig": "undefined/undefined"
+   }
+  ],
+  "noperm|gating.scripting-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.search-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.sessions-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.sidePanel-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.storage-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.system-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.tabCapture-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.tabGroups-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.tabs.captureVisibleTab-needs-permission": [
+   {
+    "ok": true,
+    "sig": "rejects: Either the '<all_urls>' or 'activeTab' permission is required."
+   }
+  ],
+  "noperm|gating.tabs.create-returns-scrubbed": [
+   {
+    "ok": true,
+    "sig": "url=hidden pendingUrl=hidden"
+   }
+  ],
+  "noperm|gating.tabs.executeScript-mv3-absent": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.tabs.onUpdated-scrubbed": [
+   {
+    "ok": true,
+    "sig": "status"
+   }
+  ],
+  "noperm|gating.tabs.query-by-url-needs-permission": [
+   {
+    "ok": true,
+    "sig": "count=0"
+   }
+  ],
+  "noperm|gating.tabs.query-scrubbed": [
+   {
+    "ok": true,
+    "sig": "scrubbed per host"
+   }
+  ],
+  "noperm|gating.tabs.sendMessage-allowed": [
+   {
+    "ok": true,
+    "sig": "function"
+   }
+  ],
+  "noperm|gating.topSites-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.tts-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.ttsEngine-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.userScripts-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.webNavigation-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.webRequest-hidden": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "noperm|gating.windows.populate-scrubbed": [
+   {
+    "ok": true,
+    "sig": "scrubbed"
+   }
+  ],
+  "offscreen|context.chrome-namespaces": [
+   {
+    "ok": true,
+    "sig": "csi,loadTimes,runtime"
+   }
+  ],
+  "offscreen|context.offscreen-runtime-only": [
+   {
+    "ok": true,
+    "sig": "getContexts=undefined keys=connect,getURL,sendMessage"
+   }
+  ],
+  "offscreen|runtime.getURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "offscreen|runtime.id": [
+   {
+    "ok": true,
+    "sig": "id ok"
+   }
+  ],
+  "offscreen|runtime.sendMessage#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "id,origin,url"
+   }
+  ],
+  "options|context.chrome-namespaces": [
+   {
+    "ok": true,
+    "sig": "accessibilityFeatures,action,alarms,bookmarks,browsingData,clipboard,commands,contentSettings,contextMenus,cookies,csi,debugger,declarativeContent,declarativeNetRequest,desktopCapture,dns,dom,downloads,extension,fontSettings,gcm,history,i18n,identity,idle,instanceID,loadTimes,management,notifications,offscreen,omnibox,pageCapture,permissions,power,printerProvider,privacy,processes,proxy,publicSuffix,readingList,runtime,scripting,search,sessions,sidePanel,storage,system,tabCapture,tabGroups,tabs,topSites,tts,ttsEngine,userScripts,webAuthenticationProxy,webNavigation,webRequest,windows"
+   }
+  ],
+  "options|i18n.getMessage": [
+   {
+    "ok": true,
+    "sig": "en_US"
+   }
+  ],
+  "options|runtime.getContexts#self": [
+   {
+    "ok": true,
+    "sig": "TAB"
+   }
+  ],
+  "options|runtime.getManifest": [
+   {
+    "ok": true,
+    "sig": "perms=77"
+   }
+  ],
+  "options|runtime.getURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "options|runtime.id": [
+   {
+    "ok": true,
+    "sig": "id ok"
+   }
+  ],
+  "options|runtime.sendMessage#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "documentId,documentLifecycle,frameId,id,origin,tab,url"
+   }
+  ],
+  "options|tabs.getCurrent#options": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "page|browser-namespace": [
+   {
+    "ok": true,
+    "sig": "present same=false"
+   }
+  ],
+  "page|extension.getBackgroundPage": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "page|extension.getViews": [
+   {
+    "ok": true,
+    "sig": "all=true tabSelf=true"
+   }
+  ],
+  "page|extension.inIncognitoContext": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "page|i18n.getMessage": [
+   {
+    "ok": true,
+    "sig": "en_US"
+   }
+  ],
+  "page|runtime.Port.onDisconnect": [
+   {
+    "ok": true,
+    "sig": "lastError=none"
+   }
+  ],
+  "page|runtime.connect#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "documentId,documentLifecycle,frameId,id,origin,tab,url"
+   }
+  ],
+  "page|runtime.getBackgroundPage": [
+   {
+    "ok": true,
+    "sig": "rejects: You do not have a background page."
+   }
+  ],
+  "page|runtime.getContexts#self": [
+   {
+    "ok": true,
+    "sig": "TAB"
+   }
+  ],
+  "page|runtime.getManifest": [
+   {
+    "ok": true,
+    "sig": "perms=77"
+   }
+  ],
+  "page|runtime.getPackageDirectoryEntry": [
+   {
+    "ok": true,
+    "sig": "directory"
+   }
+  ],
+  "page|runtime.getURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "page|runtime.id": [
+   {
+    "ok": true,
+    "sig": "id ok"
+   }
+  ],
+  "page|runtime.sendMessage#async-reply": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "page|runtime.sendMessage#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "documentId,documentLifecycle,frameId,id,origin,tab,url"
+   }
+  ],
+  "page|runtime.sendMessage#promise-reply": [
+   {
+    "ok": true,
+    "sig": "promise return"
+   }
+  ],
+  "page|storage.local.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "page|storage.session.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "page|storage.sync.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "page|tabs.getCurrent#page": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "popup|context.chrome-namespaces": [
+   {
+    "ok": true,
+    "sig": "accessibilityFeatures,action,alarms,bookmarks,browsingData,clipboard,commands,contentSettings,contextMenus,cookies,csi,debugger,declarativeContent,declarativeNetRequest,desktopCapture,dns,dom,downloads,extension,fontSettings,gcm,history,i18n,identity,idle,instanceID,loadTimes,management,notifications,offscreen,omnibox,pageCapture,permissions,power,printerProvider,privacy,processes,proxy,publicSuffix,readingList,runtime,scripting,search,sessions,sidePanel,storage,system,tabCapture,tabGroups,tabs,topSites,tts,ttsEngine,userScripts,webAuthenticationProxy,webNavigation,webRequest,windows"
+   }
+  ],
+  "popup|extension.getViews#popup": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "popup|i18n.getMessage": [
+   {
+    "ok": true,
+    "sig": "en_US"
+   }
+  ],
+  "popup|runtime.connect#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "id,origin,url"
+   }
+  ],
+  "popup|runtime.getContexts#self": [
+   {
+    "ok": true,
+    "sig": "POPUP"
+   }
+  ],
+  "popup|runtime.getManifest": [
+   {
+    "ok": true,
+    "sig": "perms=77"
+   }
+  ],
+  "popup|runtime.getURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "popup|runtime.id": [
+   {
+    "ok": true,
+    "sig": "id ok"
+   }
+  ],
+  "popup|runtime.sendMessage#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "id,origin,url"
+   }
+  ],
+  "popup|tabs.getCurrent#popup": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "popup|window.close#popup-closes": [
+   {
+    "ok": true,
+    "sig": "checked by harness"
+   }
+  ],
+  "sidepanel|context.chrome-namespaces": [
+   {
+    "ok": true,
+    "sig": "accessibilityFeatures,action,alarms,bookmarks,browsingData,clipboard,commands,contentSettings,contextMenus,cookies,csi,debugger,declarativeContent,declarativeNetRequest,desktopCapture,dns,dom,downloads,extension,fontSettings,gcm,history,i18n,identity,idle,instanceID,loadTimes,management,notifications,offscreen,omnibox,pageCapture,permissions,power,printerProvider,privacy,processes,proxy,publicSuffix,readingList,runtime,scripting,search,sessions,sidePanel,storage,system,tabCapture,tabGroups,tabs,topSites,tts,ttsEngine,userScripts,webAuthenticationProxy,webNavigation,webRequest,windows"
+   }
+  ],
+  "sidepanel|i18n.getMessage": [
+   {
+    "ok": true,
+    "sig": "en_US"
+   }
+  ],
+  "sidepanel|runtime.connect#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "id,origin,url"
+   }
+  ],
+  "sidepanel|runtime.getContexts#self": [
+   {
+    "ok": true,
+    "sig": "SIDE_PANEL"
+   }
+  ],
+  "sidepanel|runtime.getManifest": [
+   {
+    "ok": true,
+    "sig": "perms=77"
+   }
+  ],
+  "sidepanel|runtime.getURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sidepanel|runtime.id": [
+   {
+    "ok": true,
+    "sig": "id ok"
+   }
+  ],
+  "sidepanel|runtime.sendMessage#page-to-sw": [
+   {
+    "ok": true,
+    "sig": "id,origin,url"
+   }
+  ],
+  "sidepanel|tabs.getCurrent#sidepanel": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|accessibilityFeatures.animationPolicy": [
+   {
+    "ok": true,
+    "sig": "value=\"allowed\" level=controllable_by_this_extension"
+   }
+  ],
+  "sw|action.enable/disable/isEnabled": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.getUserSettings": [
+   {
+    "ok": true,
+    "sig": "isOnToolbar=true"
+   }
+  ],
+  "sw|action.onClicked": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.onUserSettingsChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.openPopup": [
+   {
+    "ok": true,
+    "sig": "resolved popupContext=1"
+   }
+  ],
+  "sw|action.setBadgeBackgroundColor#invalid": [
+   {
+    "ok": true,
+    "sig": "rejects: The color specification could not be parsed."
+   }
+  ],
+  "sw|action.setBadgeBackgroundColor/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.setBadgeText/getBadgeText": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.setBadgeTextColor/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.setIcon#imageData": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.setIcon#missing-path": [
+   {
+    "ok": true,
+    "sig": "rejects: Failed to set icon 'icons/nope.png': Failed to fetch"
+   }
+  ],
+  "sw|action.setIcon#path": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.setPopup/getPopup": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|action.setTitle/getTitle": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|alarms.clear": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|alarms.clearAll": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|alarms.create/get": [
+   {
+    "ok": true,
+    "sig": "name,periodInMinutes,persistAcrossSessions,scheduledTime"
+   }
+  ],
+  "sw|alarms.getAll": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|alarms.onAlarm": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|api#bad-arguments-throw-sync": [
+   {
+    "ok": true,
+    "sig": "throws sync: Error in invocation of tabs.get(integer tabId, optional function callback): No m"
+   }
+  ],
+  "sw|bookmarks.constants": [
+   {
+    "ok": true,
+    "sig": "0,N,N"
+   }
+  ],
+  "sw|bookmarks.create#default-parent": [
+   {
+    "ok": true,
+    "sig": "parent=2"
+   }
+  ],
+  "sw|bookmarks.create#folder": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.create#in-root": [
+   {
+    "ok": true,
+    "sig": "rejects: Can't modify the root bookmark folders."
+   }
+  ],
+  "sw|bookmarks.create+onCreated": [
+   {
+    "ok": true,
+    "sig": "dateAdded,id,index,parentId,syncing,title,url"
+   }
+  ],
+  "sw|bookmarks.get": [
+   {
+    "ok": true,
+    "sig": "rejects: Can't find bookmark for id."
+   }
+  ],
+  "sw|bookmarks.getChildren": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.getRecent": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.getSubTree": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.getTree": [
+   {
+    "ok": true,
+    "sig": "1:Bookmarks Bar:bookmarks-bar 2:Other Bookmarks:other"
+   }
+  ],
+  "sw|bookmarks.move#forward-index": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.move+onMoved": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.onChildrenReordered": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.onImportBegan/Ended": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.remove#non-empty-folder": [
+   {
+    "ok": true,
+    "sig": "rejects: Can't remove non-empty folder (use recursive to force)."
+   }
+  ],
+  "sw|bookmarks.remove#root": [
+   {
+    "ok": true,
+    "sig": "rejects: Can't modify the root bookmark folders."
+   }
+  ],
+  "sw|bookmarks.remove+onRemoved": [
+   {
+    "ok": true,
+    "sig": "index,node,parentId"
+   }
+  ],
+  "sw|bookmarks.removeTree": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.search": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|bookmarks.update#folder-url": [
+   {
+    "ok": true,
+    "sig": "rejects: Can't set URL of a bookmark folder."
+   }
+  ],
+  "sw|bookmarks.update+onChanged": [
+   {
+    "ok": true,
+    "sig": "title,url"
+   }
+  ],
+  "sw|browser-namespace": [
+   {
+    "ok": true,
+    "sig": "present same=false"
+   }
+  ],
+  "sw|browsingData.remove": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|browsingData.remove#bad-origin-type": [
+   {
+    "ok": true,
+    "sig": "rejects: At least one data type doesn't support filtering by origin."
+   }
+  ],
+  "sw|browsingData.removeAppcache": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeCache": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeCacheStorage": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeCookies": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeCookies#origins": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|browsingData.removeDownloads": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeFileSystems": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeFormData": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeHistory": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeHistory#since": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|browsingData.removeIndexedDB": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeLocalStorage": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removePasswords": [
+   {
+    "ok": true,
+    "sig": "rejects: Requested data type is deprecated."
+   }
+  ],
+  "sw|browsingData.removePluginData": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeServiceWorkers": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.removeWebSQL": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|browsingData.settings": [
+   {
+    "ok": true,
+    "sig": "toRemove=cache,cacheStorage,cookies,downloads,fileSystems,formData,history,indexedDB,localStorage,passwords,pluginData,serviceWorkers"
+   }
+  ],
+  "sw|chrome_url_overrides.bookmarks": [
+   {
+    "ok": true,
+    "sig": "url=SCHEME://bookmarks/"
+   }
+  ],
+  "sw|chrome_url_overrides.history": [
+   {
+    "ok": true,
+    "sig": "url=SCHEME://history/"
+   }
+  ],
+  "sw|chrome_url_overrides.newtab": [
+   {
+    "ok": true,
+    "sig": "url=SCHEME://newtab/"
+   }
+  ],
+  "sw|commands.getAll": [
+   {
+    "ok": true,
+    "sig": "_execute_action=⌥⇧G god-command=⌥⇧Y god-unbound="
+   }
+  ],
+  "sw|commands.onCommand": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|contentSettings.cookies.getResourceIdentifiers": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "sw|contentSettings.javascript.get/set/clear": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|contextMenus.ACTION_MENU_TOP_LEVEL_LIMIT": [
+   {
+    "ok": true,
+    "sig": "6"
+   }
+  ],
+  "sw|contextMenus.create": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|contextMenus.create#duplicate": [
+   {
+    "ok": true,
+    "sig": "Cannot create item with duplicate id god-page"
+   }
+  ],
+  "sw|contextMenus.create#missing-id-mv3": [
+   {
+    "ok": true,
+    "sig": "created number"
+   }
+  ],
+  "sw|contextMenus.onClicked": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|contextMenus.remove": [
+   {
+    "ok": true,
+    "sig": "rejects: Cannot find menu item with id god-sel"
+   }
+  ],
+  "sw|contextMenus.removeAll": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|contextMenus.update": [
+   {
+    "ok": true,
+    "sig": "rejects: Cannot find menu item with id no-such-item"
+   }
+  ],
+  "sw|cookies.get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|cookies.getAll": [
+   {
+    "ok": true,
+    "sig": "filters ok"
+   }
+  ],
+  "sw|cookies.getAllCookieStores": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|cookies.getPartitionKey": [
+   {
+    "ok": true,
+    "sig": "{\"hasCrossSiteAncestor\":false,\"topLevelSite\":\"http://localhost\"}"
+   }
+  ],
+  "sw|cookies.onChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|cookies.onChanged#from-page": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|cookies.remove": [
+   {
+    "ok": true,
+    "sig": "name,storeId,url"
+   }
+  ],
+  "sw|cookies.remove#missing": [
+   {
+    "ok": true,
+    "sig": "name,storeId,url"
+   }
+  ],
+  "sw|cookies.set": [
+   {
+    "ok": true,
+    "sig": "domain,hostOnly,httpOnly,name,path,sameSite,secure,session,storeId,value storeId=0"
+   }
+  ],
+  "sw|cookies.set#expiry+attrs": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|cookies.set#invalid-url": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid url: \"not a url\"."
+   }
+  ],
+  "sw|cookies.set#partitioned": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|debugger.attach": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|debugger.attach#bad-version": [
+   {
+    "ok": true,
+    "sig": "rejects: Requested protocol version is not supported: N.N."
+   }
+  ],
+  "sw|debugger.attach#extension-page": [
+   {
+    "ok": true,
+    "sig": "rejects: Cannot access a chrome-extension:// URL of different extension"
+   }
+  ],
+  "sw|debugger.attach#twice": [
+   {
+    "ok": true,
+    "sig": "rejects: Another debugger is already attached to the tab with id: N."
+   }
+  ],
+  "sw|debugger.detach": [
+   {
+    "ok": true,
+    "sig": "rejects: Debugger is not attached to the tab with id: N."
+   }
+  ],
+  "sw|debugger.getTargets": [
+   {
+    "ok": true,
+    "sig": "attached,id,tabId,title,type,url types=other,page,worker"
+   }
+  ],
+  "sw|debugger.onDetach": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|debugger.onEvent": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|debugger.sendCommand": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|debugger.sendCommand#bad-method": [
+   {
+    "ok": true,
+    "sig": "rejects: {\"code\":-N,\"message\":\"'No.suchMethod' wasn't found\"}"
+   }
+  ],
+  "sw|declarativeContent.classes": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeContent.onPageChanged.addRules/getRules/removeRules": [
+   {
+    "ok": true,
+    "sig": "actions,conditions,id,priority"
+   }
+  ],
+  "sw|declarativeNetRequest#cleanup": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeNetRequest#static-rule-blocks": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeNetRequest.constants": [
+   {
+    "ok": true,
+    "sig": "DYNAMIC_RULESET_ID=_dynamic SESSION_RULESET_ID=_session GUARANTEED_MINIMUM_STATIC_RULES=30000 MAX_NUMBER_OF_DYNAMIC_RULES=30000 MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES=5000 MAX_NUMBER_OF_SESSION_RULES=5000 MAX_NUMBER_OF_UNSAFE_SESSION_RULES=5000 MAX_NUMBER_OF_REGEX_RULES=1000 MAX_NUMBER_OF_STATIC_RULESET"
+   }
+  ],
+  "sw|declarativeNetRequest.getAvailableStaticRuleCount": [
+   {
+    "ok": true,
+    "sig": "N"
+   }
+  ],
+  "sw|declarativeNetRequest.getEnabledRulesets": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeNetRequest.getMatchedRules": [
+   {
+    "ok": true,
+    "sig": "count>0 keys=rule,tabId,timeStamp"
+   }
+  ],
+  "sw|declarativeNetRequest.isRegexSupported": [
+   {
+    "ok": true,
+    "sig": "{\"isSupported\":false,\"reason\":\"syntaxError\"}"
+   }
+  ],
+  "sw|declarativeNetRequest.onRuleMatchedDebug": [
+   {
+    "ok": true,
+    "sig": "request=documentId,documentLifecycle,frameId,frameType,initiator,method,parentFrameId,requestId,tabId,type,url"
+   }
+  ],
+  "sw|declarativeNetRequest.setExtensionActionOptions": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeNetRequest.testMatchOutcome": [
+   {
+    "ok": true,
+    "sig": "{\"matchedRules\":[{\"ruleId\":10,\"rulesetId\":\"_dynamic\"}]}"
+   }
+  ],
+  "sw|declarativeNetRequest.updateDynamicRules#invalid": [
+   {
+    "ok": true,
+    "sig": "rejects: Rule with id N has an invalid value for id key. This should be greater than or equal to N."
+   }
+  ],
+  "sw|declarativeNetRequest.updateDynamicRules/getDynamicRules": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeNetRequest.updateEnabledRulesets": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeNetRequest.updateEnabledRulesets#unknown": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid ruleset id: nope."
+   }
+  ],
+  "sw|declarativeNetRequest.updateSessionRules/getSessionRules": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|declarativeNetRequest.updateStaticRules/getDisabledRuleIds": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|desktopCapture.chooseDesktopMedia/cancel": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|dns.resolve#dev-channel": [
+   {
+    "ok": true,
+    "sig": "resultCode=0"
+   }
+  ],
+  "sw|dom#absent-in-sw": [
+   {
+    "ok": true,
+    "sig": "present"
+   }
+  ],
+  "sw|downloads.acceptDanger#safe": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|downloads.download#bad-filename": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid filename"
+   }
+  ],
+  "sw|downloads.download#invalid-url": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid URL"
+   }
+  ],
+  "sw|downloads.download+onCreated": [
+   {
+    "ok": true,
+    "sig": "bytesReceived,canResume,danger,exists,fileSize,filename,finalUrl,id,incognito,mime,paused,referrer,startTime,state,totalBytes,url byExtensionId(onCreated)=false byExtensionId(search)=true"
+   }
+  ],
+  "sw|downloads.erase+onErased": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|downloads.getFileIcon": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|downloads.onChanged#bytes": [
+   {
+    "ok": true,
+    "sig": "canResume+danger+exists+fileSize+filename+finalUrl+mime+paused+startTime+state+totalBytes+url"
+   }
+  ],
+  "sw|downloads.onChanged#complete": [
+   {
+    "ok": true,
+    "sig": "complete"
+   }
+  ],
+  "sw|downloads.onDeterminingFilename": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|downloads.open#no-gesture": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid downloadId"
+   }
+  ],
+  "sw|downloads.pause#complete": [
+   {
+    "ok": true,
+    "sig": "rejects: Download must be in progress"
+   }
+  ],
+  "sw|downloads.pause/resume/cancel": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|downloads.removeFile": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|downloads.resume#complete": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|downloads.search": [
+   {
+    "ok": true,
+    "sig": "byExtensionId,byExtensionName,bytesReceived,canResume,danger,endTime,exists,fileSize,filename,finalUrl,id,incognito,mime,paused,referrer,startTime,state,totalBytes,url mime=text/plain"
+   }
+  ],
+  "sw|downloads.setShelfEnabled": [
+   {
+    "ok": true,
+    "sig": "called"
+   }
+  ],
+  "sw|downloads.setUiOptions": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|downloads.show/showDefaultFolder": [
+   {
+    "ok": true,
+    "sig": "present (not called: opens Finder)"
+   }
+  ],
+  "sw|events.Event#bad-listener": [
+   {
+    "ok": true,
+    "sig": "accepted"
+   }
+  ],
+  "sw|events.Event#listener-api": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|extension.inIncognitoContext": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|extension.isAllowedFileSchemeAccess": [
+   {
+    "ok": true,
+    "sig": "true"
+   }
+  ],
+  "sw|extension.isAllowedIncognitoAccess": [
+   {
+    "ok": true,
+    "sig": "false"
+   }
+  ],
+  "sw|extension.setUpdateUrlData": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|externally_connectable#from-web-page": [
+   {
+    "ok": true,
+    "sig": "ran 6"
+   }
+  ],
+  "sw|fontSettings.getDefaultFontSize/set/clear": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|fontSettings.getFont": [
+   {
+    "ok": true,
+    "sig": "[\"fontId\",\"levelOfControl\"]"
+   }
+  ],
+  "sw|fontSettings.getFontList": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|gcm.MAX_MESSAGE_SIZE": [
+   {
+    "ok": true,
+    "sig": "4096"
+   }
+  ],
+  "sw|gcm.register": [
+   {
+    "ok": true,
+    "sig": "pending"
+   }
+  ],
+  "sw|history.addUrl#invalid": [
+   {
+    "ok": true,
+    "sig": "rejects: Url is invalid."
+   }
+  ],
+  "sw|history.addUrl+onVisited": [
+   {
+    "ok": true,
+    "sig": "id,lastVisitTime,title,typedCount,url,visitCount"
+   }
+  ],
+  "sw|history.deleteAll": [
+   {
+    "ok": true,
+    "sig": "urls=[]"
+   }
+  ],
+  "sw|history.deleteRange": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|history.deleteUrl+onVisitRemoved": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|history.getVisits": [
+   {
+    "ok": true,
+    "sig": "id,isLocal,referringVisitId,transition,visitId,visitTime transition=link"
+   }
+  ],
+  "sw|history.search": [
+   {
+    "ok": true,
+    "sig": "id,lastVisitTime,title,typedCount,url,visitCount"
+   }
+  ],
+  "sw|i18n.detectLanguage": [
+   {
+    "ok": true,
+    "sig": "fr reliable=true"
+   }
+  ],
+  "sw|i18n.getAcceptLanguages": [
+   {
+    "ok": true,
+    "sig": "en-US,en"
+   }
+  ],
+  "sw|i18n.getMessage": [
+   {
+    "ok": true,
+    "sig": "en_US"
+   }
+  ],
+  "sw|i18n.getUILanguage": [
+   {
+    "ok": true,
+    "sig": "en-US"
+   }
+  ],
+  "sw|identity.clearAllCachedAuthTokens": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "sw|identity.getAccounts": [
+   {
+    "ok": true,
+    "sig": "[]"
+   }
+  ],
+  "sw|identity.getAuthToken": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid OAuthN Client ID."
+   }
+  ],
+  "sw|identity.getProfileUserInfo": [
+   {
+    "ok": true,
+    "sig": "{\"email\":\"\",\"id\":\"\"}"
+   }
+  ],
+  "sw|identity.getRedirectURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|identity.launchWebAuthFlow#needs-interaction": [
+   {
+    "ok": true,
+    "sig": "rejects: User interaction required. Try setting `abortOnLoadForNonInteractive` and `timeoutMsForNonInteractive` if multiple navigations are required, or if code is used for redirects in the authorization page after it's loaded."
+   }
+  ],
+  "sw|identity.launchWebAuthFlow#redirect": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|identity.onSignInChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|identity.removeCachedAuthToken": [
+   {
+    "ok": true,
+    "sig": "undefined"
+   }
+  ],
+  "sw|idle.queryState": [
+   {
+    "ok": true,
+    "sig": "state ok"
+   }
+  ],
+  "sw|idle.setDetectionInterval": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|instanceID.getCreationTime": [
+   {
+    "ok": false,
+    "sig": "assert: timeout"
+   }
+  ],
+  "sw|instanceID.getID": [
+   {
+    "ok": false,
+    "sig": "assert: timeout"
+   }
+  ],
+  "sw|management.createAppShortcut": [
+   {
+    "ok": true,
+    "sig": "rejects: chrome.management.createAppShortcut requires a user gesture."
+   }
+  ],
+  "sw|management.generateAppForLink": [
+   {
+    "ok": true,
+    "sig": "rejects: chrome.management.generateAppForLink requires a user gesture."
+   }
+  ],
+  "sw|management.get": [
+   {
+    "ok": true,
+    "sig": "rejects: Failed to find extension with id EXTID."
+   }
+  ],
+  "sw|management.getAll": [
+   {
+    "ok": true,
+    "sig": "ids=bookmarks,god,history,newtab,noperm,peer"
+   }
+  ],
+  "sw|management.getPermissionWarningsById": [
+   {
+    "ok": true,
+    "sig": "count=0"
+   }
+  ],
+  "sw|management.getPermissionWarningsByManifest": [
+   {
+    "ok": true,
+    "sig": "Read and change your browsing history on all your signed-in devices"
+   }
+  ],
+  "sw|management.getSelf": [
+   {
+    "ok": true,
+    "sig": "description,enabled,homepageUrl,hostPermissions,icons,id,installType,isApp,mayDisable,name,offlineEnabled,optionsUrl,permissions,shortName,type,version,versionName options=/options.html"
+   }
+  ],
+  "sw|management.launchApp": [
+   {
+    "ok": true,
+    "sig": "rejects: Extension EXTID is not an App."
+   }
+  ],
+  "sw|management.onInstalled": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|management.setEnabled#unknown-id": [
+   {
+    "ok": true,
+    "sig": "rejects: Failed to find extension with id EXTID."
+   }
+  ],
+  "sw|management.setEnabled+onDisabled+onEnabled": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|management.setLaunchType": [
+   {
+    "ok": true,
+    "sig": "rejects: chrome.management.setLaunchType requires a user gesture."
+   }
+  ],
+  "sw|management.uninstall#no-gesture": [
+   {
+    "ok": true,
+    "sig": "rejects: chrome.management.uninstall requires a user gesture."
+   }
+  ],
+  "sw|notifications.clear+onClosed": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|notifications.create": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|notifications.create#missing-fields": [
+   {
+    "ok": true,
+    "sig": "resolved: \"bad\""
+   }
+  ],
+  "sw|notifications.create#types": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|notifications.events": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|notifications.getAll": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|notifications.getPermissionLevel": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|notifications.update": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|offscreen.closeDocument": [
+   {
+    "ok": true,
+    "sig": "rejects: No current offscreen document."
+   }
+  ],
+  "sw|offscreen.createDocument": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|offscreen.createDocument#bad-reason": [
+   {
+    "ok": true,
+    "sig": "rejects: Error in invocation of offscreen.createDocument(offscreen.CreateParameters parameters, optional function callback): Error at parameter 'parameters': Error at property 'reasons': Error at index N: Value must be one of AUDIO_PLAYBACK, BATTERY"
+   }
+  ],
+  "sw|offscreen.createDocument#second": [
+   {
+    "ok": true,
+    "sig": "rejects: Only a single offscreen document may be created."
+   }
+  ],
+  "sw|offscreen.hasDocument": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|offscreen.messaging": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|omnibox.events": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|omnibox.sendSuggestions": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|omnibox.setDefaultSuggestion": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|omnibox.setDefaultSuggestion#bad-xml": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid XML: bad content: Entity: line N: parser error : Opening and ending tag mismatch: match line N and fragment\n<fragment><match>unclosed</fragment>"
+   }
+  ],
+  "sw|pageCapture.saveAsMHTML": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|permissions.addHostAccessRequest": [
+   {
+    "ok": true,
+    "sig": "rejects: No tab with id: N."
+   }
+  ],
+  "sw|permissions.contains": [
+   {
+    "ok": true,
+    "sig": "optional-covered-by-all_urls=true rejects: 'notARealPermission' is not a recognized permission."
+   }
+  ],
+  "sw|permissions.getAll": [
+   {
+    "ok": true,
+    "sig": "origins=<all_urls>,http://localhost/* permissions=accessibilityFeatures.modify,accessibilityFeatures.read,activeTab,alarms,background,bookmarks,browsingData,clipboardRead,clipboardWrite,contentSettings,contextMenus,cookies,debugger,declarativeContent,declarativeNetRequest,declarativeNetRequestFeedba"
+   }
+  ],
+  "sw|permissions.remove#optional": [
+   {
+    "ok": true,
+    "sig": "rejects: You cannot remove required permissions."
+   }
+  ],
+  "sw|permissions.remove#required": [
+   {
+    "ok": true,
+    "sig": "rejects: You cannot remove required permissions."
+   }
+  ],
+  "sw|permissions.remove#undeclared": [
+   {
+    "ok": true,
+    "sig": "rejects: You cannot remove required permissions."
+   }
+  ],
+  "sw|permissions.removeHostAccessRequest": [
+   {
+    "ok": true,
+    "sig": "rejects: No tab with id: N."
+   }
+  ],
+  "sw|permissions.request#no-gesture": [
+   {
+    "ok": true,
+    "sig": "rejects: This function must be called during a user gesture"
+   }
+  ],
+  "sw|power.releaseKeepAwake": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|power.requestKeepAwake": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|printerProvider.events": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|privacy.network.networkPredictionEnabled": [
+   {
+    "ok": true,
+    "sig": "value=true level=controllable_by_this_extension"
+   }
+  ],
+  "sw|privacy.network.webRTCIPHandlingPolicy#set": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|privacy.onChange": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|privacy.services.passwordSavingEnabled": [
+   {
+    "ok": true,
+    "sig": "value=true level=controllable_by_this_extension"
+   }
+  ],
+  "sw|privacy.websites.doNotTrackEnabled": [
+   {
+    "ok": true,
+    "sig": "value=false level=controllable_by_this_extension"
+   }
+  ],
+  "sw|privacy.websites.thirdPartyCookiesAllowed": [
+   {
+    "ok": true,
+    "sig": "value=true level=controllable_by_this_extension"
+   }
+  ],
+  "sw|processes#dev-channel": [
+   {
+    "ok": true,
+    "sig": "pid=number"
+   }
+  ],
+  "sw|proxy.onProxyError": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|proxy.settings.clear": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|proxy.settings.get": [
+   {
+    "ok": true,
+    "sig": "{\"mode\":\"system\"} controllable_by_this_extension"
+   }
+  ],
+  "sw|proxy.settings.set+onChange": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|publicSuffix.getDomain": [
+   {
+    "ok": true,
+    "sig": "\"example.co.uk\""
+   }
+  ],
+  "sw|readingList.addEntry": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|readingList.events": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|readingList.query": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|readingList.removeEntry": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|readingList.updateEntry": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.connect#no-receiver": [
+   {
+    "ok": true,
+    "sig": "disconnect lastError=none name=nobody-home"
+   }
+  ],
+  "sw|runtime.connect#to-peer": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.connectNative": [
+   {
+    "ok": true,
+    "sig": "exit lastError=none"
+   }
+  ],
+  "sw|runtime.connectNative#unknown-host": [
+   {
+    "ok": true,
+    "sig": "no lastError"
+   }
+  ],
+  "sw|runtime.dynamicId": [
+   {
+    "ok": true,
+    "sig": "differs from id"
+   }
+  ],
+  "sw|runtime.getContexts": [
+   {
+    "ok": true,
+    "sig": "contextId,contextType,frameId,incognito,tabId,windowId"
+   }
+  ],
+  "sw|runtime.getContexts#filter": [
+   {
+    "ok": true,
+    "sig": "bg=1 offscreen=0"
+   }
+  ],
+  "sw|runtime.getManifest": [
+   {
+    "ok": true,
+    "sig": "perms=77"
+   }
+  ],
+  "sw|runtime.getPlatformInfo": [
+   {
+    "ok": true,
+    "sig": "mac/arm64 keys=arch,os"
+   }
+  ],
+  "sw|runtime.getPlatformInfo#callback": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.getURL": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.getVersion": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.id": [
+   {
+    "ok": true,
+    "sig": "id ok"
+   }
+  ],
+  "sw|runtime.lastError#callback": [
+   {
+    "ok": true,
+    "sig": "No tab with id: N."
+   }
+  ],
+  "sw|runtime.lastError#promise": [
+   {
+    "ok": true,
+    "sig": "rejects: No tab with id: N."
+   }
+  ],
+  "sw|runtime.onConnectExternal#from-peer": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.onConnectNative": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.onInstalled": [
+   {
+    "ok": true,
+    "sig": "count=1 reason=install"
+   }
+  ],
+  "sw|runtime.onMessageExternal#from-peer": [
+   {
+    "ok": true,
+    "sig": "sender=id,url"
+   }
+  ],
+  "sw|runtime.onStartup": [
+   {
+    "ok": true,
+    "sig": "count=0"
+   }
+  ],
+  "sw|runtime.onUserScriptConnect": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|runtime.openOptionsPage": [
+   {
+    "ok": true,
+    "sig": "options tab opened"
+   }
+  ],
+  "sw|runtime.requestUpdateCheck": [
+   {
+    "ok": true,
+    "sig": "no_update"
+   }
+  ],
+  "sw|runtime.restart": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|runtime.restartAfterDelay": [
+   {
+    "ok": true,
+    "sig": "rejects: API available only for ChromeOS kiosk mode."
+   }
+  ],
+  "sw|runtime.sendMessage#to-missing-extension": [
+   {
+    "ok": true,
+    "sig": "rejects: Could not establish connection. Receiving end does not exist."
+   }
+  ],
+  "sw|runtime.sendMessage#to-peer": [
+   {
+    "ok": true,
+    "sig": "id,url"
+   }
+  ],
+  "sw|runtime.sendMessage#to-self-no-receiver": [
+   {
+    "ok": true,
+    "sig": "rejects: Could not establish connection. Receiving end does not exist."
+   }
+  ],
+  "sw|runtime.sendNativeMessage": [
+   {
+    "ok": true,
+    "sig": "argv-origin=true"
+   }
+  ],
+  "sw|runtime.sendNativeMessage#unknown-host": [
+   {
+    "ok": true,
+    "sig": "rejects: Specified native messaging host not found."
+   }
+  ],
+  "sw|runtime.setUninstallURL": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid URL: \"ftp://example.com/x\"."
+   }
+  ],
+  "sw|scripting.ExecutionWorld": [
+   {
+    "ok": true,
+    "sig": "{\"ISOLATED\":\"ISOLATED\",\"MAIN\":\"MAIN\"}"
+   }
+  ],
+  "sw|scripting.executeScript#allFrames": [
+   {
+    "ok": true,
+    "sig": "/frames.html,/page.html"
+   }
+  ],
+  "sw|scripting.executeScript#chrome-url": [
+   {
+    "ok": true,
+    "sig": "rejects: Cannot access a chrome:// URL"
+   }
+  ],
+  "sw|scripting.executeScript#error": [
+   {
+    "ok": true,
+    "sig": "result=null error=null"
+   }
+  ],
+  "sw|scripting.executeScript#files": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|scripting.executeScript#frameIds": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|scripting.executeScript#func": [
+   {
+    "ok": true,
+    "sig": "documentId,frameId,result"
+   }
+  ],
+  "sw|scripting.executeScript#injectImmediately": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|scripting.executeScript#promise-result": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|scripting.executeScript#world-main": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|scripting.getRegisteredContentScripts": [
+   {
+    "ok": true,
+    "sig": "allFrames,id,js,matchOriginAsFallback,matches,persistAcrossSessions,runAt,world"
+   }
+  ],
+  "sw|scripting.insertCSS/removeCSS": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|scripting.registerContentScripts": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|scripting.registerContentScripts#duplicate": [
+   {
+    "ok": true,
+    "sig": "rejects: Duplicate script ID 'god-dyn'"
+   }
+  ],
+  "sw|scripting.unregisterContentScripts": [
+   {
+    "ok": true,
+    "sig": "rejects: Nonexistent script ID 'god-dyn'"
+   }
+  ],
+  "sw|scripting.updateContentScripts": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|search.query": [
+   {
+    "ok": true,
+    "sig": "host=www.google.com"
+   }
+  ],
+  "sw|search.query#bad-disposition": [
+   {
+    "ok": true,
+    "sig": "rejects: Cannot set both 'disposition' and 'tabId'."
+   }
+  ],
+  "sw|sessions.MAX_SESSION_RESULTS": [
+   {
+    "ok": true,
+    "sig": "25"
+   }
+  ],
+  "sw|sessions.getDevices": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|sessions.getRecentlyClosed": [
+   {
+    "ok": true,
+    "sig": "tab keys=active,autoDiscardable,discarded,favIconUrl,frozen,groupId,highlighted,incognito,index,lastAccessed,pinned,selected,sessionId,title,url,windowId"
+   }
+  ],
+  "sw|sessions.onChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|sessions.restore": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|sessions.restore#bad-id": [
+   {
+    "ok": true,
+    "sig": "rejects: Invalid session id: \"nope\"."
+   }
+  ],
+  "sw|sidePanel.close#not-open": [
+   {
+    "ok": true,
+    "sig": "resolved"
+   }
+  ],
+  "sw|sidePanel.events": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|sidePanel.getLayout": [
+   {
+    "ok": true,
+    "sig": "right"
+   }
+  ],
+  "sw|sidePanel.open#no-gesture": [
+   {
+    "ok": true,
+    "sig": "rejects: `sidePanel.open()` may only be called in response to a user gesture."
+   }
+  ],
+  "sw|sidePanel.setOptions#bad-path": [
+   {
+    "ok": true,
+    "sig": "resolved"
+   }
+  ],
+  "sw|sidePanel.setOptions/getOptions": [
+   {
+    "ok": true,
+    "sig": "global={\"enabled\":true,\"path\":\"sidepanel.html\"} tab={\"enabled\":true,\"path\":\"sidepanel.html?tab=1\",\"tabId\":N}"
+   }
+  ],
+  "sw|sidePanel.setPanelBehavior/getPanelBehavior": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.local.QUOTA_BYTES": [
+   {
+    "ok": true,
+    "sig": "N"
+   }
+  ],
+  "sw|storage.local.clear": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.local.getBytesInUse": [
+   {
+    "ok": true,
+    "sig": "bytes=16"
+   }
+  ],
+  "sw|storage.local.getKeys": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.local.onChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.local.remove": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.local.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.local.setAccessLevel": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|storage.managed.get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.managed.set": [
+   {
+    "ok": true,
+    "sig": "rejects: This is a read-only store."
+   }
+  ],
+  "sw|storage.onChanged#local": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.onChanged#session": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.onChanged#sync": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.session.QUOTA_BYTES": [
+   {
+    "ok": true,
+    "sig": "N"
+   }
+  ],
+  "sw|storage.session.clear": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.session.getBytesInUse": [
+   {
+    "ok": true,
+    "sig": "bytes=0"
+   }
+  ],
+  "sw|storage.session.getKeys": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.session.onChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.session.remove": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.session.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.session.setAccessLevel": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.sync.QUOTA_BYTES": [
+   {
+    "ok": true,
+    "sig": "N"
+   }
+  ],
+  "sw|storage.sync.QUOTA_BYTES_PER_ITEM#enforced": [
+   {
+    "ok": true,
+    "sig": "rejects: Resource::kQuotaBytesPerItem quota exceeded"
+   }
+  ],
+  "sw|storage.sync.clear": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.sync.constants": [
+   {
+    "ok": true,
+    "sig": "N,8192,512,1800,120"
+   }
+  ],
+  "sw|storage.sync.getBytesInUse": [
+   {
+    "ok": true,
+    "sig": "bytes=15"
+   }
+  ],
+  "sw|storage.sync.getKeys": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.sync.onChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.sync.remove": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|storage.sync.set/get": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|system.cpu.getInfo": [
+   {
+    "ok": true,
+    "sig": "archName,features,modelName,numOfProcessors,processors,temperatures"
+   }
+  ],
+  "sw|system.display.clearTouchCalibration": [
+   {
+    "ok": true,
+    "sig": "resolved undefined"
+   }
+  ],
+  "sw|system.display.completeCustomTouchCalibration": [
+   {
+    "ok": true,
+    "sig": "rejects/throws: Error in invocation of system.display.completeCustomTouchCalibration(system.disp"
+   }
+  ],
+  "sw|system.display.enableUnifiedDesktop": [
+   {
+    "ok": true,
+    "sig": "resolved undefined"
+   }
+  ],
+  "sw|system.display.getDisplayLayout": [
+   {
+    "ok": true,
+    "sig": "rejects: Function available only on ChromeOS."
+   }
+  ],
+  "sw|system.display.getInfo": [
+   {
+    "ok": true,
+    "sig": "activeState,availableDisplayZoomFactors,bounds,displayZoomFactor,dpiX,dpiY,hasAccelerometerSupport,hasTouchSupport,id,isEnabled,isInternal,isPrimary,isUnified,mirroringDestinationIds,mirroringSourceId,modes,name,overscan,rotation,workArea"
+   }
+  ],
+  "sw|system.display.onDisplayChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|system.display.overscanCalibrationAdjust": [
+   {
+    "ok": true,
+    "sig": "resolved undefined"
+   }
+  ],
+  "sw|system.display.overscanCalibrationComplete": [
+   {
+    "ok": true,
+    "sig": "resolved undefined"
+   }
+  ],
+  "sw|system.display.overscanCalibrationReset": [
+   {
+    "ok": true,
+    "sig": "resolved undefined"
+   }
+  ],
+  "sw|system.display.overscanCalibrationStart": [
+   {
+    "ok": true,
+    "sig": "resolved undefined"
+   }
+  ],
+  "sw|system.display.setDisplayLayout": [
+   {
+    "ok": true,
+    "sig": "rejects/throws: Function available only on ChromeOS."
+   }
+  ],
+  "sw|system.display.setDisplayProperties": [
+   {
+    "ok": true,
+    "sig": "rejects/throws: Function available only on ChromeOS."
+   }
+  ],
+  "sw|system.display.setMirrorMode": [
+   {
+    "ok": true,
+    "sig": "rejects/throws: Function available only on ChromeOS."
+   }
+  ],
+  "sw|system.display.showNativeTouchCalibration": [
+   {
+    "ok": true,
+    "sig": "rejects/throws: Function available only on ChromeOS."
+   }
+  ],
+  "sw|system.display.startCustomTouchCalibration": [
+   {
+    "ok": true,
+    "sig": "resolved undefined"
+   }
+  ],
+  "sw|system.memory.getInfo": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|system.storage.ejectDevice": [
+   {
+    "ok": true,
+    "sig": "no_such_device"
+   }
+  ],
+  "sw|system.storage.events": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|system.storage.getAvailableCapacity": [
+   {
+    "ok": true,
+    "sig": "rejects: Error occurred when querying available capacity."
+   }
+  ],
+  "sw|system.storage.getInfo": [
+   {
+    "ok": true,
+    "sig": "array"
+   }
+  ],
+  "sw|tabCapture.getCapturedTabs": [
+   {
+    "ok": true,
+    "sig": "[]"
+   }
+  ],
+  "sw|tabCapture.getMediaStreamId": [
+   {
+    "ok": true,
+    "sig": "rejects: Extension has not been invoked for the current page (see activeTab permission). Chrome pages cannot be captured."
+   }
+  ],
+  "sw|tabGroups.TAB_GROUP_ID_NONE": [
+   {
+    "ok": true,
+    "sig": "-1"
+   }
+  ],
+  "sw|tabGroups.get": [
+   {
+    "ok": true,
+    "sig": "collapsed,color,id,shared,title,windowId"
+   }
+  ],
+  "sw|tabGroups.move+onMoved": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabGroups.onCreated": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabGroups.query": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabGroups.update+onUpdated": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.captureVisibleTab": [
+   {
+    "ok": true,
+    "sig": "default=image/jpeg"
+   }
+  ],
+  "sw|tabs.connect": [
+   {
+    "ok": true,
+    "sig": "sender=id,origin,url"
+   }
+  ],
+  "sw|tabs.constants": [
+   {
+    "ok": true,
+    "sig": "-1,-1,2,-1"
+   }
+  ],
+  "sw|tabs.create#chrome-url": [
+   {
+    "ok": true,
+    "sig": "url=SCHEME://version/"
+   }
+  ],
+  "sw|tabs.create#extension-relative-url": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.create#javascript-url": [
+   {
+    "ok": true,
+    "sig": "rejects: JavaScript URLs are not allowed in API based extension navigations. Use chrome.scripting.executeScript instead."
+   }
+  ],
+  "sw|tabs.create#opener": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.create+onCreated": [
+   {
+    "ok": true,
+    "sig": "active,audible,autoDiscardable,discarded,frozen,groupId,height,highlighted,id,incognito,index,lastAccessed,mutedInfo,pendingUrl,pinned,selected,splitViewId,status,title,url,width,windowId | pending=true"
+   }
+  ],
+  "sw|tabs.createSplit": [
+   {
+    "ok": true,
+    "sig": "rejects: Error in invocation of tabs.createSplit(array tabIds, optional function callback): Error at parameter 'tabIds': Array must have at least N items; found N."
+   }
+  ],
+  "sw|tabs.detectLanguage": [
+   {
+    "ok": true,
+    "sig": "und"
+   }
+  ],
+  "sw|tabs.discard": [
+   {
+    "ok": true,
+    "sig": "sameId=true"
+   }
+  ],
+  "sw|tabs.discard#active": [
+   {
+    "ok": true,
+    "sig": "discarded=true"
+   }
+  ],
+  "sw|tabs.duplicate": [
+   {
+    "ok": true,
+    "sig": "index=next"
+   }
+  ],
+  "sw|tabs.get": [
+   {
+    "ok": true,
+    "sig": "active,audible,autoDiscardable,discarded,frozen,groupId,height,highlighted,id,incognito,index,lastAccessed,mutedInfo,pinned,selected,splitViewId,status,title,url,width,windowId"
+   }
+  ],
+  "sw|tabs.get#missing": [
+   {
+    "ok": true,
+    "sig": "rejects: No tab with id: N."
+   }
+  ],
+  "sw|tabs.getCurrent#sw": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.getZoom": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.getZoomSettings": [
+   {
+    "ok": true,
+    "sig": "{\"defaultZoomFactor\":1,\"mode\":\"automatic\",\"scope\":\"per-origin\"}"
+   }
+  ],
+  "sw|tabs.goBack/goForward": [
+   {
+    "ok": true,
+    "sig": "back=rejects: Cannot find a next page in history. at=?t=history-b | forward=rejects: Cannot find a next page in history. at=?t=history-b"
+   }
+  ],
+  "sw|tabs.goForward#no-entry": [
+   {
+    "ok": true,
+    "sig": "rejects: Cannot find a next page in history."
+   }
+  ],
+  "sw|tabs.group": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.highlight": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.move#returns": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.move+onMoved": [
+   {
+    "ok": true,
+    "sig": "fromIndex,toIndex,windowId"
+   }
+  ],
+  "sw|tabs.onDetached+onAttached": [
+   {
+    "ok": false,
+    "sig": "assert: event did not fire"
+   }
+  ],
+  "sw|tabs.onHighlighted": [
+   {
+    "ok": true,
+    "sig": "tabIds,windowId"
+   }
+  ],
+  "sw|tabs.onRemoved#window-closing": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.onUpdated#status-sequence": [
+   {
+    "ok": true,
+    "sig": "status+url:loading title status:complete"
+   }
+  ],
+  "sw|tabs.query#all": [
+   {
+    "ok": true,
+    "sig": "shape ok"
+   }
+  ],
+  "sw|tabs.query#filters": [
+   {
+    "ok": true,
+    "sig": "byUrl>0=true status>0=true"
+   }
+  ],
+  "sw|tabs.reload": [
+   {
+    "ok": true,
+    "sig": "reloaded"
+   }
+  ],
+  "sw|tabs.remove#array": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.remove+onRemoved": [
+   {
+    "ok": true,
+    "sig": "isWindowClosing,windowId"
+   }
+  ],
+  "sw|tabs.sendMessage": [
+   {
+    "ok": true,
+    "sig": "frameId=N"
+   }
+  ],
+  "sw|tabs.sendMessage#documentId": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.sendMessage#frameId": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.sendMessage#no-receiver": [
+   {
+    "ok": true,
+    "sig": "rejects: Could not establish connection. Receiving end does not exist."
+   }
+  ],
+  "sw|tabs.setZoom#out-of-range": [
+   {
+    "ok": true,
+    "sig": "resolved: undefined"
+   }
+  ],
+  "sw|tabs.setZoom+onZoomChange": [
+   {
+    "ok": true,
+    "sig": "newZoomFactor,oldZoomFactor,tabId,zoomSettings settings=mode,scope"
+   }
+  ],
+  "sw|tabs.setZoomSettings": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.ungroup+tabGroups.onRemoved": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.unsplit": [
+   {
+    "ok": true,
+    "sig": "rejects: No split view with id: N."
+   }
+  ],
+  "sw|tabs.update#active+onActivated": [
+   {
+    "ok": true,
+    "sig": "tabId,windowId"
+   }
+  ],
+  "sw|tabs.update#autoDiscardable": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.update#muted": [
+   {
+    "ok": true,
+    "sig": "extensionId,muted,reason"
+   }
+  ],
+  "sw|tabs.update#pinned": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tabs.update#url+onUpdated": [
+   {
+    "ok": true,
+    "sig": "status,url"
+   }
+  ],
+  "sw|topSites.get": [
+   {
+    "ok": true,
+    "sig": "array"
+   }
+  ],
+  "sw|tts.getVoices": [
+   {
+    "ok": true,
+    "sig": "count>0=false god=false"
+   }
+  ],
+  "sw|tts.isSpeaking": [
+   {
+    "ok": true,
+    "sig": "false"
+   }
+  ],
+  "sw|tts.speak+ttsEngine.onSpeak": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|tts.stop/pause/resume": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|ttsEngine.updateVoices": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|userScripts.configureWorld": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|userScripts.execute": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|userScripts.getScripts": [
+   {
+    "ok": true,
+    "sig": "allFrames,id,js,matches,runAt,world"
+   }
+  ],
+  "sw|userScripts.getWorldConfigurations": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|userScripts.register": [
+   {
+    "ok": true,
+    "sig": "ran + onUserScriptMessage"
+   }
+  ],
+  "sw|userScripts.register#invalid": [
+   {
+    "ok": true,
+    "sig": "rejects: Script's ID '_bad' must not start with '_'"
+   }
+  ],
+  "sw|userScripts.resetWorldConfiguration": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|userScripts.unregister": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|userScripts.update": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webAuthenticationProxy.attach/detach": [
+   {
+    "ok": true,
+    "sig": "attach=ok"
+   }
+  ],
+  "sw|webNavigation.events#sequence": [
+   {
+    "ok": true,
+    "sig": "before=documentLifecycle,frameId,frameType,parentFrameId,processId,tabId,timeStamp,url | committed=documentId,documentLifecycle,frameId,frameType,parentFrameId,processId,tabId,timeStamp,transitionQualifiers,transitionType,url transition=link | completed=documentId,documentLifecycle,frameId,frameType"
+   }
+  ],
+  "sw|webNavigation.filters": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webNavigation.getAllFrames": [
+   {
+    "ok": true,
+    "sig": "documentId,documentLifecycle,errorOccurred,frameId,frameType,parentFrameId,processId,url"
+   }
+  ],
+  "sw|webNavigation.getFrame": [
+   {
+    "ok": true,
+    "sig": "documentId,documentLifecycle,errorOccurred,frameType,parentFrameId,url"
+   }
+  ],
+  "sw|webNavigation.getFrame#missing": [
+   {
+    "ok": true,
+    "sig": "null"
+   }
+  ],
+  "sw|webNavigation.onCreatedNavigationTarget": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webNavigation.onErrorOccurred": [
+   {
+    "ok": true,
+    "sig": "net::ERR_UNSAFE_PORT"
+   }
+  ],
+  "sw|webNavigation.onHistoryStateUpdated": [
+   {
+    "ok": true,
+    "sig": "transition=link"
+   }
+  ],
+  "sw|webNavigation.onReferenceFragmentUpdated": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webNavigation.onTabReplaced": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webRequest#blocking-mv3": [
+   {
+    "ok": true,
+    "sig": "accepted"
+   }
+  ],
+  "sw|webRequest#filter-types": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webRequest.MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES": [
+   {
+    "ok": true,
+    "sig": "20"
+   }
+  ],
+  "sw|webRequest.handlerBehaviorChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webRequest.lifecycle": [
+   {
+    "ok": true,
+    "sig": "before=documentId,documentLifecycle,frameId,frameType,initiator,method,parentFrameId,requestId,tabId,timeStamp,type,url | completed=documentId,documentLifecycle,frameId,frameType,fromCache,initiator,ip,method,parentFrameId,requestId,responseHeaders,statusCode,statusLine,tabId,timeStamp,type,url"
+   }
+  ],
+  "sw|webRequest.onActionIgnored": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webRequest.onAuthRequired": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webRequest.onBeforeRedirect": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|webRequest.onErrorOccurred": [
+   {
+    "ok": true,
+    "sig": "net::ERR_BLOCKED_BY_CLIENT"
+   }
+  ],
+  "sw|web_accessible_resources#extension_ids": [
+   {
+    "ok": true,
+    "sig": "war-ext,blocked,blocked"
+   }
+  ],
+  "sw|web_accessible_resources#from-page": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|windows.constants": [
+   {
+    "ok": true,
+    "sig": "-1,-2"
+   }
+  ],
+  "sw|windows.create#extension-page": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|windows.create#popup": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|windows.create#tabId": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|windows.create+onCreated": [
+   {
+    "ok": true,
+    "sig": "create keys=alwaysOnTop,focused,height,id,incognito,left,state,tabs,top,type,width"
+   }
+  ],
+  "sw|windows.get": [
+   {
+    "ok": true,
+    "sig": "alwaysOnTop,focused,height,id,incognito,left,state,top,type,width"
+   }
+  ],
+  "sw|windows.get#missing": [
+   {
+    "ok": true,
+    "sig": "rejects: No window with id: N."
+   }
+  ],
+  "sw|windows.getAll": [
+   {
+    "ok": true,
+    "sig": "count>=1"
+   }
+  ],
+  "sw|windows.getCurrent": [
+   {
+    "ok": true,
+    "sig": "alwaysOnTop,focused,height,id,incognito,left,state,tabs,top,type,width"
+   }
+  ],
+  "sw|windows.getLastFocused": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|windows.remove+onRemoved": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|windows.update#bounds+onBoundsChanged": [
+   {
+    "ok": true,
+    "sig": "700x500"
+   }
+  ],
+  "sw|windows.update#focused+onFocusChanged": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "sw|windows.update#state": [
+   {
+    "ok": true,
+    "sig": "ok"
+   }
+  ],
+  "web|web.chrome.runtime-exposed": [
+   {
+    "ok": true,
+    "sig": "function/function/id=undefined"
+   }
+  ],
+  "web|web.main-world-content-script": [
+   {
+    "ok": true,
+    "sig": "runtime.id=undefined sendMessage=function storage=undefined"
+   }
+  ],
+  "web|web.runtime.connect": [
+   {
+    "ok": true,
+    "sig": "port reply"
+   }
+  ],
+  "web|web.runtime.sendMessage": [
+   {
+    "ok": true,
+    "sig": "origin=true url=true tab=object keys=documentId,documentLifecycle,frameId,origin,tab,url"
+   }
+  ],
+  "web|web.runtime.sendMessage#callback": [
+   {
+    "ok": true,
+    "sig": "callback reply"
+   }
+  ],
+  "web|web.runtime.sendMessage#not-connectable": [
+   {
+    "ok": true,
+    "sig": "rejects: Could not establish connection. Receiving end does not exist."
+   }
+  ]
+ },
+ "surfaces": {
+  "sw": {
+   "accessibilityFeatures": "namespace",
+   "accessibilityFeatures.animationPolicy": "object",
+   "accessibilityFeatures.animationPolicy.clear": "method",
+   "accessibilityFeatures.animationPolicy.get": "method",
+   "accessibilityFeatures.animationPolicy.onChange": "event",
+   "accessibilityFeatures.animationPolicy.set": "method",
+   "action": "namespace",
+   "action.disable": "method",
+   "action.enable": "method",
+   "action.getBadgeBackgroundColor": "method",
+   "action.getBadgeText": "method",
+   "action.getBadgeTextColor": "method",
+   "action.getPopup": "method",
+   "action.getTitle": "method",
+   "action.getUserSettings": "method",
+   "action.isEnabled": "method",
+   "action.onClicked": "event",
+   "action.onUserSettingsChanged": "event",
+   "action.openPopup": "method",
+   "action.setBadgeBackgroundColor": "method",
+   "action.setBadgeText": "method",
+   "action.setBadgeTextColor": "method",
+   "action.setIcon": "method",
+   "action.setPopup": "method",
+   "action.setTitle": "method",
+   "alarms": "namespace",
+   "alarms.clear": "method",
+   "alarms.clearAll": "method",
+   "alarms.create": "method",
+   "alarms.get": "method",
+   "alarms.getAll": "method",
+   "alarms.onAlarm": "event",
+   "bookmarks": "namespace",
+   "bookmarks.BookmarkTreeNodeUnmodifiable": "enum",
+   "bookmarks.create": "method",
+   "bookmarks.FolderType": "enum",
+   "bookmarks.get": "method",
+   "bookmarks.getChildren": "method",
+   "bookmarks.getRecent": "method",
+   "bookmarks.getSubTree": "method",
+   "bookmarks.getTree": "method",
+   "bookmarks.MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "bookmarks.MAX_WRITE_OPERATIONS_PER_HOUR": "property:number",
+   "bookmarks.move": "method",
+   "bookmarks.onChanged": "event",
+   "bookmarks.onChildrenReordered": "event",
+   "bookmarks.onCreated": "event",
+   "bookmarks.onImportBegan": "event",
+   "bookmarks.onImportEnded": "event",
+   "bookmarks.onMoved": "event",
+   "bookmarks.onRemoved": "event",
+   "bookmarks.remove": "method",
+   "bookmarks.removeTree": "method",
+   "bookmarks.ROOT_NODE_ID": "property:string",
+   "bookmarks.search": "method",
+   "bookmarks.update": "method",
+   "browsingData": "namespace",
+   "browsingData.remove": "method",
+   "browsingData.removeAppcache": "method",
+   "browsingData.removeCache": "method",
+   "browsingData.removeCacheStorage": "method",
+   "browsingData.removeCookies": "method",
+   "browsingData.removeDownloads": "method",
+   "browsingData.removeFileSystems": "method",
+   "browsingData.removeFormData": "method",
+   "browsingData.removeHistory": "method",
+   "browsingData.removeIndexedDB": "method",
+   "browsingData.removeLocalStorage": "method",
+   "browsingData.removePasswords": "method",
+   "browsingData.removePluginData": "method",
+   "browsingData.removeServiceWorkers": "method",
+   "browsingData.removeWebSQL": "method",
+   "browsingData.settings": "method",
+   "clipboard": "namespace",
+   "clipboard.DataItemType": "enum",
+   "clipboard.ImageType": "enum",
+   "clipboard.onClipboardDataChanged": "event",
+   "clipboard.setImageData": "method",
+   "commands": "namespace",
+   "commands.getAll": "method",
+   "commands.onCommand": "event",
+   "contentSettings": "namespace",
+   "contentSettings.automaticDownloads": "object",
+   "contentSettings.automaticDownloads.clear": "method",
+   "contentSettings.automaticDownloads.get": "method",
+   "contentSettings.automaticDownloads.getResourceIdentifiers": "method",
+   "contentSettings.automaticDownloads.set": "method",
+   "contentSettings.autoVerify": "object",
+   "contentSettings.autoVerify.clear": "method",
+   "contentSettings.autoVerify.get": "method",
+   "contentSettings.autoVerify.getResourceIdentifiers": "method",
+   "contentSettings.autoVerify.set": "method",
+   "contentSettings.AutoVerifyContentSetting": "enum",
+   "contentSettings.camera": "object",
+   "contentSettings.camera.clear": "method",
+   "contentSettings.camera.get": "method",
+   "contentSettings.camera.getResourceIdentifiers": "method",
+   "contentSettings.camera.set": "method",
+   "contentSettings.CameraContentSetting": "enum",
+   "contentSettings.clipboard": "object",
+   "contentSettings.clipboard.clear": "method",
+   "contentSettings.clipboard.get": "method",
+   "contentSettings.clipboard.getResourceIdentifiers": "method",
+   "contentSettings.clipboard.set": "method",
+   "contentSettings.ClipboardContentSetting": "enum",
+   "contentSettings.cookies": "object",
+   "contentSettings.cookies.clear": "method",
+   "contentSettings.cookies.get": "method",
+   "contentSettings.cookies.getResourceIdentifiers": "method",
+   "contentSettings.cookies.set": "method",
+   "contentSettings.CookiesContentSetting": "enum",
+   "contentSettings.fullscreen": "object",
+   "contentSettings.fullscreen.clear": "method",
+   "contentSettings.fullscreen.get": "method",
+   "contentSettings.fullscreen.getResourceIdentifiers": "method",
+   "contentSettings.fullscreen.set": "method",
+   "contentSettings.FullscreenContentSetting": "enum",
+   "contentSettings.images": "object",
+   "contentSettings.images.clear": "method",
+   "contentSettings.images.get": "method",
+   "contentSettings.images.getResourceIdentifiers": "method",
+   "contentSettings.images.set": "method",
+   "contentSettings.ImagesContentSetting": "enum",
+   "contentSettings.javascript": "object",
+   "contentSettings.javascript.clear": "method",
+   "contentSettings.javascript.get": "method",
+   "contentSettings.javascript.getResourceIdentifiers": "method",
+   "contentSettings.javascript.set": "method",
+   "contentSettings.JavascriptContentSetting": "enum",
+   "contentSettings.location": "object",
+   "contentSettings.location.clear": "method",
+   "contentSettings.location.get": "method",
+   "contentSettings.location.getResourceIdentifiers": "method",
+   "contentSettings.location.set": "method",
+   "contentSettings.LocationContentSetting": "enum",
+   "contentSettings.microphone": "object",
+   "contentSettings.microphone.clear": "method",
+   "contentSettings.microphone.get": "method",
+   "contentSettings.microphone.getResourceIdentifiers": "method",
+   "contentSettings.microphone.set": "method",
+   "contentSettings.MicrophoneContentSetting": "enum",
+   "contentSettings.mouselock": "object",
+   "contentSettings.mouselock.clear": "method",
+   "contentSettings.mouselock.get": "method",
+   "contentSettings.mouselock.getResourceIdentifiers": "method",
+   "contentSettings.mouselock.set": "method",
+   "contentSettings.MouselockContentSetting": "enum",
+   "contentSettings.MultipleAutomaticDownloadsContentSetting": "enum",
+   "contentSettings.notifications": "object",
+   "contentSettings.notifications.clear": "method",
+   "contentSettings.notifications.get": "method",
+   "contentSettings.notifications.getResourceIdentifiers": "method",
+   "contentSettings.notifications.set": "method",
+   "contentSettings.NotificationsContentSetting": "enum",
+   "contentSettings.plugins": "object",
+   "contentSettings.plugins.clear": "method",
+   "contentSettings.plugins.get": "method",
+   "contentSettings.plugins.getResourceIdentifiers": "method",
+   "contentSettings.plugins.set": "method",
+   "contentSettings.PluginsContentSetting": "enum",
+   "contentSettings.popups": "object",
+   "contentSettings.popups.clear": "method",
+   "contentSettings.popups.get": "method",
+   "contentSettings.popups.getResourceIdentifiers": "method",
+   "contentSettings.popups.set": "method",
+   "contentSettings.PopupsContentSetting": "enum",
+   "contentSettings.PpapiBrokerContentSetting": "enum",
+   "contentSettings.Scope": "enum",
+   "contentSettings.sound": "object",
+   "contentSettings.sound.clear": "method",
+   "contentSettings.sound.get": "method",
+   "contentSettings.sound.getResourceIdentifiers": "method",
+   "contentSettings.sound.set": "method",
+   "contentSettings.SoundContentSetting": "enum",
+   "contentSettings.unsandboxedPlugins": "object",
+   "contentSettings.unsandboxedPlugins.clear": "method",
+   "contentSettings.unsandboxedPlugins.get": "method",
+   "contentSettings.unsandboxedPlugins.getResourceIdentifiers": "method",
+   "contentSettings.unsandboxedPlugins.set": "method",
+   "contextMenus": "namespace",
+   "contextMenus.ACTION_MENU_TOP_LEVEL_LIMIT": "property:number",
+   "contextMenus.ContextType": "enum",
+   "contextMenus.create": "method",
+   "contextMenus.ItemType": "enum",
+   "contextMenus.onClicked": "event",
+   "contextMenus.remove": "method",
+   "contextMenus.removeAll": "method",
+   "contextMenus.update": "method",
+   "cookies": "namespace",
+   "cookies.get": "method",
+   "cookies.getAll": "method",
+   "cookies.getAllCookieStores": "method",
+   "cookies.getPartitionKey": "method",
+   "cookies.onChanged": "event",
+   "cookies.OnChangedCause": "enum",
+   "cookies.remove": "method",
+   "cookies.SameSiteStatus": "enum",
+   "cookies.set": "method",
+   "csi": "method",
+   "debugger": "namespace",
+   "debugger.attach": "method",
+   "debugger.detach": "method",
+   "debugger.DetachReason": "enum",
+   "debugger.getTargets": "method",
+   "debugger.onDetach": "event",
+   "debugger.onEvent": "event",
+   "debugger.sendCommand": "method",
+   "debugger.TargetInfoType": "enum",
+   "declarativeContent": "namespace",
+   "declarativeContent.onPageChanged": "object",
+   "declarativeContent.onPageChanged.addRules": "method",
+   "declarativeContent.onPageChanged.getRules": "method",
+   "declarativeContent.onPageChanged.removeRules": "method",
+   "declarativeContent.PageStateMatcher": "class",
+   "declarativeContent.PageStateMatcherInstanceType": "enum",
+   "declarativeContent.RequestContentScript": "class",
+   "declarativeContent.RequestContentScriptInstanceType": "enum",
+   "declarativeContent.SetIcon": "class",
+   "declarativeContent.SetIconInstanceType": "enum",
+   "declarativeContent.ShowAction": "class",
+   "declarativeContent.ShowActionInstanceType": "enum",
+   "declarativeContent.ShowPageAction": "class",
+   "declarativeContent.ShowPageActionInstanceType": "enum",
+   "declarativeNetRequest": "namespace",
+   "declarativeNetRequest.DomainType": "enum",
+   "declarativeNetRequest.DYNAMIC_RULESET_ID": "property:string",
+   "declarativeNetRequest.getAvailableStaticRuleCount": "method",
+   "declarativeNetRequest.getDisabledRuleIds": "method",
+   "declarativeNetRequest.getDynamicRules": "method",
+   "declarativeNetRequest.getEnabledRulesets": "method",
+   "declarativeNetRequest.getMatchedRules": "method",
+   "declarativeNetRequest.GETMATCHEDRULES_QUOTA_INTERVAL": "property:number",
+   "declarativeNetRequest.getSessionRules": "method",
+   "declarativeNetRequest.GUARANTEED_MINIMUM_STATIC_RULES": "property:number",
+   "declarativeNetRequest.HeaderOperation": "enum",
+   "declarativeNetRequest.isRegexSupported": "method",
+   "declarativeNetRequest.MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_ENABLED_STATIC_RULESETS": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_REGEX_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_SESSION_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_STATIC_RULESETS": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_UNSAFE_SESSION_RULES": "property:number",
+   "declarativeNetRequest.onRuleMatchedDebug": "event",
+   "declarativeNetRequest.RequestMethod": "enum",
+   "declarativeNetRequest.ResourceType": "enum",
+   "declarativeNetRequest.RuleActionType": "enum",
+   "declarativeNetRequest.RuleConditionKeys": "enum",
+   "declarativeNetRequest.SESSION_RULESET_ID": "property:string",
+   "declarativeNetRequest.setExtensionActionOptions": "method",
+   "declarativeNetRequest.testMatchOutcome": "method",
+   "declarativeNetRequest.UnsupportedRegexReason": "enum",
+   "declarativeNetRequest.updateDynamicRules": "method",
+   "declarativeNetRequest.updateEnabledRulesets": "method",
+   "declarativeNetRequest.updateSessionRules": "method",
+   "declarativeNetRequest.updateStaticRules": "method",
+   "desktopCapture": "namespace",
+   "desktopCapture.cancelChooseDesktopMedia": "method",
+   "desktopCapture.chooseDesktopMedia": "method",
+   "desktopCapture.DesktopCaptureSourceType": "enum",
+   "desktopCapture.SelfCapturePreferenceEnum": "enum",
+   "desktopCapture.SystemAudioPreferenceEnum": "enum",
+   "desktopCapture.WindowAudioPreferenceEnum": "enum",
+   "dns": "namespace",
+   "dns.resolve": "method",
+   "dom": "namespace",
+   "dom.openOrClosedShadowRoot": "method",
+   "downloads": "namespace",
+   "downloads.acceptDanger": "method",
+   "downloads.cancel": "method",
+   "downloads.DangerType": "enum",
+   "downloads.download": "method",
+   "downloads.erase": "method",
+   "downloads.FilenameConflictAction": "enum",
+   "downloads.getFileIcon": "method",
+   "downloads.HttpMethod": "enum",
+   "downloads.InterruptReason": "enum",
+   "downloads.onChanged": "event",
+   "downloads.onCreated": "event",
+   "downloads.onDeterminingFilename": "event",
+   "downloads.onErased": "event",
+   "downloads.open": "method",
+   "downloads.pause": "method",
+   "downloads.removeFile": "method",
+   "downloads.resume": "method",
+   "downloads.search": "method",
+   "downloads.setShelfEnabled": "method",
+   "downloads.setUiOptions": "method",
+   "downloads.show": "method",
+   "downloads.showDefaultFolder": "method",
+   "downloads.State": "enum",
+   "extension": "namespace",
+   "extension.inIncognitoContext": "property:boolean",
+   "extension.isAllowedFileSchemeAccess": "method",
+   "extension.isAllowedIncognitoAccess": "method",
+   "extension.setUpdateUrlData": "method",
+   "extension.ViewType": "enum",
+   "fontSettings": "namespace",
+   "fontSettings.clearDefaultFixedFontSize": "method",
+   "fontSettings.clearDefaultFontSize": "method",
+   "fontSettings.clearFont": "method",
+   "fontSettings.clearMinimumFontSize": "method",
+   "fontSettings.GenericFamily": "enum",
+   "fontSettings.getDefaultFixedFontSize": "method",
+   "fontSettings.getDefaultFontSize": "method",
+   "fontSettings.getFont": "method",
+   "fontSettings.getFontList": "method",
+   "fontSettings.getMinimumFontSize": "method",
+   "fontSettings.LevelOfControl": "enum",
+   "fontSettings.onDefaultFixedFontSizeChanged": "event",
+   "fontSettings.onDefaultFontSizeChanged": "event",
+   "fontSettings.onFontChanged": "event",
+   "fontSettings.onMinimumFontSizeChanged": "event",
+   "fontSettings.ScriptCode": "enum",
+   "fontSettings.setDefaultFixedFontSize": "method",
+   "fontSettings.setDefaultFontSize": "method",
+   "fontSettings.setFont": "method",
+   "fontSettings.setMinimumFontSize": "method",
+   "gcm": "namespace",
+   "gcm.MAX_MESSAGE_SIZE": "property:number",
+   "gcm.onMessage": "event",
+   "gcm.onMessagesDeleted": "event",
+   "gcm.onSendError": "event",
+   "gcm.register": "method",
+   "gcm.send": "method",
+   "gcm.unregister": "method",
+   "history": "namespace",
+   "history.addUrl": "method",
+   "history.deleteAll": "method",
+   "history.deleteRange": "method",
+   "history.deleteUrl": "method",
+   "history.getVisits": "method",
+   "history.onVisited": "event",
+   "history.onVisitRemoved": "event",
+   "history.search": "method",
+   "history.TransitionType": "enum",
+   "i18n": "namespace",
+   "i18n.detectLanguage": "method",
+   "i18n.getAcceptLanguages": "method",
+   "i18n.getMessage": "method",
+   "i18n.getUILanguage": "method",
+   "identity": "namespace",
+   "identity.AccountStatus": "enum",
+   "identity.clearAllCachedAuthTokens": "method",
+   "identity.getAccounts": "method",
+   "identity.getAuthToken": "method",
+   "identity.getProfileUserInfo": "method",
+   "identity.getRedirectURL": "method",
+   "identity.launchWebAuthFlow": "method",
+   "identity.onSignInChanged": "event",
+   "identity.removeCachedAuthToken": "method",
+   "idle": "namespace",
+   "idle.IdleState": "enum",
+   "idle.onStateChanged": "event",
+   "idle.queryState": "method",
+   "idle.setDetectionInterval": "method",
+   "instanceID": "namespace",
+   "instanceID.deleteID": "method",
+   "instanceID.deleteToken": "method",
+   "instanceID.getCreationTime": "method",
+   "instanceID.getID": "method",
+   "instanceID.getToken": "method",
+   "instanceID.onTokenRefresh": "event",
+   "loadTimes": "method",
+   "management": "namespace",
+   "management.createAppShortcut": "method",
+   "management.ExtensionDisabledReason": "enum",
+   "management.ExtensionInstallType": "enum",
+   "management.ExtensionType": "enum",
+   "management.generateAppForLink": "method",
+   "management.get": "method",
+   "management.getAll": "method",
+   "management.getPermissionWarningsById": "method",
+   "management.getPermissionWarningsByManifest": "method",
+   "management.getSelf": "method",
+   "management.launchApp": "method",
+   "management.LaunchType": "enum",
+   "management.onDisabled": "event",
+   "management.onEnabled": "event",
+   "management.onInstalled": "event",
+   "management.onUninstalled": "event",
+   "management.setEnabled": "method",
+   "management.setLaunchType": "method",
+   "management.uninstall": "method",
+   "management.uninstallSelf": "method",
+   "notifications": "namespace",
+   "notifications.clear": "method",
+   "notifications.create": "method",
+   "notifications.getAll": "method",
+   "notifications.getPermissionLevel": "method",
+   "notifications.onButtonClicked": "event",
+   "notifications.onClicked": "event",
+   "notifications.onClosed": "event",
+   "notifications.onPermissionLevelChanged": "event",
+   "notifications.onShowSettings": "event",
+   "notifications.PermissionLevel": "enum",
+   "notifications.TemplateType": "enum",
+   "notifications.update": "method",
+   "offscreen": "namespace",
+   "offscreen.closeDocument": "method",
+   "offscreen.createDocument": "method",
+   "offscreen.hasDocument": "method",
+   "offscreen.Reason": "enum",
+   "omnibox": "namespace",
+   "omnibox.DescriptionStyleType": "enum",
+   "omnibox.onActionExecuted": "event",
+   "omnibox.onDeleteSuggestion": "event",
+   "omnibox.onInputCancelled": "event",
+   "omnibox.onInputChanged": "event",
+   "omnibox.onInputEntered": "event",
+   "omnibox.OnInputEnteredDisposition": "enum",
+   "omnibox.onInputStarted": "event",
+   "omnibox.sendSuggestions": "method",
+   "omnibox.setDefaultSuggestion": "method",
+   "pageCapture": "namespace",
+   "pageCapture.saveAsMHTML": "method",
+   "permissions": "namespace",
+   "permissions.addHostAccessRequest": "method",
+   "permissions.contains": "method",
+   "permissions.getAll": "method",
+   "permissions.onAdded": "event",
+   "permissions.onRemoved": "event",
+   "permissions.remove": "method",
+   "permissions.removeHostAccessRequest": "method",
+   "permissions.request": "method",
+   "power": "namespace",
+   "power.Level": "enum",
+   "power.releaseKeepAwake": "method",
+   "power.requestKeepAwake": "method",
+   "printerProvider": "namespace",
+   "printerProvider.onGetCapabilityRequested": "event",
+   "printerProvider.onGetPrintersRequested": "event",
+   "printerProvider.onGetUsbPrinterInfoRequested": "event",
+   "printerProvider.onPrintRequested": "event",
+   "printerProvider.PrintError": "enum",
+   "privacy": "namespace",
+   "privacy.AutofillBlockedType": "enum",
+   "privacy.IPHandlingPolicy": "enum",
+   "privacy.network": "object",
+   "privacy.network.networkPredictionEnabled": "object",
+   "privacy.network.networkPredictionEnabled.clear": "method",
+   "privacy.network.networkPredictionEnabled.get": "method",
+   "privacy.network.networkPredictionEnabled.onChange": "event",
+   "privacy.network.networkPredictionEnabled.set": "method",
+   "privacy.network.webRTCIPHandlingPolicy": "object",
+   "privacy.network.webRTCIPHandlingPolicy.clear": "method",
+   "privacy.network.webRTCIPHandlingPolicy.get": "method",
+   "privacy.network.webRTCIPHandlingPolicy.onChange": "event",
+   "privacy.network.webRTCIPHandlingPolicy.set": "method",
+   "privacy.services": "object",
+   "privacy.services.alternateErrorPagesEnabled": "object",
+   "privacy.services.alternateErrorPagesEnabled.clear": "method",
+   "privacy.services.alternateErrorPagesEnabled.get": "method",
+   "privacy.services.alternateErrorPagesEnabled.onChange": "event",
+   "privacy.services.alternateErrorPagesEnabled.set": "method",
+   "privacy.services.autofillAddressEnabled": "object",
+   "privacy.services.autofillAddressEnabled.clear": "method",
+   "privacy.services.autofillAddressEnabled.get": "method",
+   "privacy.services.autofillAddressEnabled.onChange": "event",
+   "privacy.services.autofillAddressEnabled.set": "method",
+   "privacy.services.autofillCreditCardEnabled": "object",
+   "privacy.services.autofillCreditCardEnabled.clear": "method",
+   "privacy.services.autofillCreditCardEnabled.get": "method",
+   "privacy.services.autofillCreditCardEnabled.onChange": "event",
+   "privacy.services.autofillCreditCardEnabled.set": "method",
+   "privacy.services.autofillEnabled": "object",
+   "privacy.services.autofillEnabled.clear": "method",
+   "privacy.services.autofillEnabled.get": "method",
+   "privacy.services.autofillEnabled.onChange": "event",
+   "privacy.services.autofillEnabled.set": "method",
+   "privacy.services.autofillSettings": "object",
+   "privacy.services.autofillSettings.clear": "method",
+   "privacy.services.autofillSettings.get": "method",
+   "privacy.services.autofillSettings.onChange": "event",
+   "privacy.services.autofillSettings.set": "method",
+   "privacy.services.passwordSavingEnabled": "object",
+   "privacy.services.passwordSavingEnabled.clear": "method",
+   "privacy.services.passwordSavingEnabled.get": "method",
+   "privacy.services.passwordSavingEnabled.onChange": "event",
+   "privacy.services.passwordSavingEnabled.set": "method",
+   "privacy.services.safeBrowsingEnabled": "object",
+   "privacy.services.safeBrowsingEnabled.clear": "method",
+   "privacy.services.safeBrowsingEnabled.get": "method",
+   "privacy.services.safeBrowsingEnabled.onChange": "event",
+   "privacy.services.safeBrowsingEnabled.set": "method",
+   "privacy.services.safeBrowsingExtendedReportingEnabled": "object",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.clear": "method",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.get": "method",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.onChange": "event",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.set": "method",
+   "privacy.services.searchSuggestEnabled": "object",
+   "privacy.services.searchSuggestEnabled.clear": "method",
+   "privacy.services.searchSuggestEnabled.get": "method",
+   "privacy.services.searchSuggestEnabled.onChange": "event",
+   "privacy.services.searchSuggestEnabled.set": "method",
+   "privacy.services.spellingServiceEnabled": "object",
+   "privacy.services.spellingServiceEnabled.clear": "method",
+   "privacy.services.spellingServiceEnabled.get": "method",
+   "privacy.services.spellingServiceEnabled.onChange": "event",
+   "privacy.services.spellingServiceEnabled.set": "method",
+   "privacy.services.translationServiceEnabled": "object",
+   "privacy.services.translationServiceEnabled.clear": "method",
+   "privacy.services.translationServiceEnabled.get": "method",
+   "privacy.services.translationServiceEnabled.onChange": "event",
+   "privacy.services.translationServiceEnabled.set": "method",
+   "privacy.websites": "object",
+   "privacy.websites.adMeasurementEnabled": "object",
+   "privacy.websites.adMeasurementEnabled.clear": "method",
+   "privacy.websites.adMeasurementEnabled.get": "method",
+   "privacy.websites.adMeasurementEnabled.onChange": "event",
+   "privacy.websites.adMeasurementEnabled.set": "method",
+   "privacy.websites.doNotTrackEnabled": "object",
+   "privacy.websites.doNotTrackEnabled.clear": "method",
+   "privacy.websites.doNotTrackEnabled.get": "method",
+   "privacy.websites.doNotTrackEnabled.onChange": "event",
+   "privacy.websites.doNotTrackEnabled.set": "method",
+   "privacy.websites.fledgeEnabled": "object",
+   "privacy.websites.fledgeEnabled.clear": "method",
+   "privacy.websites.fledgeEnabled.get": "method",
+   "privacy.websites.fledgeEnabled.onChange": "event",
+   "privacy.websites.fledgeEnabled.set": "method",
+   "privacy.websites.hyperlinkAuditingEnabled": "object",
+   "privacy.websites.hyperlinkAuditingEnabled.clear": "method",
+   "privacy.websites.hyperlinkAuditingEnabled.get": "method",
+   "privacy.websites.hyperlinkAuditingEnabled.onChange": "event",
+   "privacy.websites.hyperlinkAuditingEnabled.set": "method",
+   "privacy.websites.referrersEnabled": "object",
+   "privacy.websites.referrersEnabled.clear": "method",
+   "privacy.websites.referrersEnabled.get": "method",
+   "privacy.websites.referrersEnabled.onChange": "event",
+   "privacy.websites.referrersEnabled.set": "method",
+   "privacy.websites.thirdPartyCookiesAllowed": "object",
+   "privacy.websites.thirdPartyCookiesAllowed.clear": "method",
+   "privacy.websites.thirdPartyCookiesAllowed.get": "method",
+   "privacy.websites.thirdPartyCookiesAllowed.onChange": "event",
+   "privacy.websites.thirdPartyCookiesAllowed.set": "method",
+   "privacy.websites.topicsEnabled": "object",
+   "privacy.websites.topicsEnabled.clear": "method",
+   "privacy.websites.topicsEnabled.get": "method",
+   "privacy.websites.topicsEnabled.onChange": "event",
+   "privacy.websites.topicsEnabled.set": "method",
+   "processes": "namespace",
+   "processes.getProcessIdForTab": "method",
+   "processes.getProcessInfo": "method",
+   "processes.onCreated": "event",
+   "processes.onExited": "event",
+   "processes.onUnresponsive": "event",
+   "processes.onUpdated": "event",
+   "processes.onUpdatedWithMemory": "event",
+   "processes.ProcessType": "enum",
+   "processes.terminate": "method",
+   "proxy": "namespace",
+   "proxy.Mode": "enum",
+   "proxy.onProxyError": "event",
+   "proxy.Scheme": "enum",
+   "proxy.settings": "object",
+   "proxy.settings.clear": "method",
+   "proxy.settings.get": "method",
+   "proxy.settings.onChange": "event",
+   "proxy.settings.set": "method",
+   "publicSuffix": "namespace",
+   "publicSuffix.DomainEncoding": "enum",
+   "publicSuffix.getDomain": "method",
+   "publicSuffix.getKnownSuffix": "method",
+   "publicSuffix.isKnownSuffix": "method",
+   "readingList": "namespace",
+   "readingList.addEntry": "method",
+   "readingList.onEntryAdded": "event",
+   "readingList.onEntryRemoved": "event",
+   "readingList.onEntryUpdated": "event",
+   "readingList.query": "method",
+   "readingList.removeEntry": "method",
+   "readingList.updateEntry": "method",
+   "runtime": "namespace",
+   "runtime.connect": "method",
+   "runtime.connectNative": "method",
+   "runtime.ContextType": "enum",
+   "runtime.dynamicId": "property:string",
+   "runtime.getContexts": "method",
+   "runtime.getManifest": "method",
+   "runtime.getPlatformInfo": "method",
+   "runtime.getURL": "method",
+   "runtime.getVersion": "method",
+   "runtime.id": "property:string",
+   "runtime.onBrowserUpdateAvailable": "event",
+   "runtime.onConnect": "event",
+   "runtime.onConnectExternal": "event",
+   "runtime.onConnectNative": "event",
+   "runtime.onEnabled": "event",
+   "runtime.onInstalled": "event",
+   "runtime.OnInstalledReason": "enum",
+   "runtime.onMessage": "event",
+   "runtime.onMessageExternal": "event",
+   "runtime.onRestartRequired": "event",
+   "runtime.OnRestartRequiredReason": "enum",
+   "runtime.onStartup": "event",
+   "runtime.onSuspend": "event",
+   "runtime.onSuspendCanceled": "event",
+   "runtime.onUpdateAvailable": "event",
+   "runtime.onUserScriptConnect": "event",
+   "runtime.onUserScriptMessage": "event",
+   "runtime.openOptionsPage": "method",
+   "runtime.PlatformArch": "enum",
+   "runtime.PlatformNaclArch": "enum",
+   "runtime.PlatformOs": "enum",
+   "runtime.reload": "method",
+   "runtime.requestUpdateCheck": "method",
+   "runtime.RequestUpdateCheckStatus": "enum",
+   "runtime.restart": "method",
+   "runtime.restartAfterDelay": "method",
+   "runtime.sendMessage": "method",
+   "runtime.sendNativeMessage": "method",
+   "runtime.setUninstallURL": "method",
+   "scripting": "namespace",
+   "scripting.executeScript": "method",
+   "scripting.ExecutionWorld": "enum",
+   "scripting.getRegisteredContentScripts": "method",
+   "scripting.insertCSS": "method",
+   "scripting.registerContentScripts": "method",
+   "scripting.removeCSS": "method",
+   "scripting.StyleOrigin": "enum",
+   "scripting.unregisterContentScripts": "method",
+   "scripting.updateContentScripts": "method",
+   "search": "namespace",
+   "search.Disposition": "enum",
+   "search.query": "method",
+   "sessions": "namespace",
+   "sessions.getDevices": "method",
+   "sessions.getRecentlyClosed": "method",
+   "sessions.MAX_SESSION_RESULTS": "property:number",
+   "sessions.onChanged": "event",
+   "sessions.restore": "method",
+   "sidePanel": "namespace",
+   "sidePanel.close": "method",
+   "sidePanel.getLayout": "method",
+   "sidePanel.getOptions": "method",
+   "sidePanel.getPanelBehavior": "method",
+   "sidePanel.onClosed": "event",
+   "sidePanel.onOpened": "event",
+   "sidePanel.open": "method",
+   "sidePanel.setOptions": "method",
+   "sidePanel.setPanelBehavior": "method",
+   "sidePanel.Side": "enum",
+   "storage": "namespace",
+   "storage.AccessLevel": "enum",
+   "storage.local": "object",
+   "storage.local.clear": "method",
+   "storage.local.get": "method",
+   "storage.local.getBytesInUse": "method",
+   "storage.local.getKeys": "method",
+   "storage.local.onChanged": "event",
+   "storage.local.QUOTA_BYTES": "property:number",
+   "storage.local.remove": "method",
+   "storage.local.set": "method",
+   "storage.local.setAccessLevel": "method",
+   "storage.managed": "object",
+   "storage.managed.clear": "method",
+   "storage.managed.get": "method",
+   "storage.managed.getBytesInUse": "method",
+   "storage.managed.getKeys": "method",
+   "storage.managed.onChanged": "event",
+   "storage.managed.remove": "method",
+   "storage.managed.set": "method",
+   "storage.managed.setAccessLevel": "method",
+   "storage.onChanged": "event",
+   "storage.session": "object",
+   "storage.session.clear": "method",
+   "storage.session.get": "method",
+   "storage.session.getBytesInUse": "method",
+   "storage.session.getKeys": "method",
+   "storage.session.onChanged": "event",
+   "storage.session.QUOTA_BYTES": "property:number",
+   "storage.session.remove": "method",
+   "storage.session.set": "method",
+   "storage.session.setAccessLevel": "method",
+   "storage.sync": "object",
+   "storage.sync.clear": "method",
+   "storage.sync.get": "method",
+   "storage.sync.getBytesInUse": "method",
+   "storage.sync.getKeys": "method",
+   "storage.sync.MAX_ITEMS": "property:number",
+   "storage.sync.MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "storage.sync.MAX_WRITE_OPERATIONS_PER_HOUR": "property:number",
+   "storage.sync.MAX_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "storage.sync.onChanged": "event",
+   "storage.sync.QUOTA_BYTES": "property:number",
+   "storage.sync.QUOTA_BYTES_PER_ITEM": "property:number",
+   "storage.sync.remove": "method",
+   "storage.sync.set": "method",
+   "storage.sync.setAccessLevel": "method",
+   "system": "namespace",
+   "system.cpu": "object",
+   "system.cpu.getInfo": "method",
+   "system.display": "object",
+   "system.display.ActiveState": "enum",
+   "system.display.clearTouchCalibration": "method",
+   "system.display.completeCustomTouchCalibration": "method",
+   "system.display.enableUnifiedDesktop": "method",
+   "system.display.getDisplayLayout": "method",
+   "system.display.getInfo": "method",
+   "system.display.LayoutPosition": "enum",
+   "system.display.MirrorMode": "enum",
+   "system.display.onDisplayChanged": "event",
+   "system.display.overscanCalibrationAdjust": "method",
+   "system.display.overscanCalibrationComplete": "method",
+   "system.display.overscanCalibrationReset": "method",
+   "system.display.overscanCalibrationStart": "method",
+   "system.display.setDisplayLayout": "method",
+   "system.display.setDisplayProperties": "method",
+   "system.display.setMirrorMode": "method",
+   "system.display.showNativeTouchCalibration": "method",
+   "system.display.startCustomTouchCalibration": "method",
+   "system.memory": "object",
+   "system.memory.getInfo": "method",
+   "system.storage": "object",
+   "system.storage.ejectDevice": "method",
+   "system.storage.EjectDeviceResultCode": "enum",
+   "system.storage.getAvailableCapacity": "method",
+   "system.storage.getInfo": "method",
+   "system.storage.onAttached": "event",
+   "system.storage.onDetached": "event",
+   "system.storage.StorageUnitType": "enum",
+   "tabCapture": "namespace",
+   "tabCapture.getCapturedTabs": "method",
+   "tabCapture.getMediaStreamId": "method",
+   "tabCapture.onStatusChanged": "event",
+   "tabCapture.TabCaptureState": "enum",
+   "tabGroups": "namespace",
+   "tabGroups.Color": "enum",
+   "tabGroups.get": "method",
+   "tabGroups.move": "method",
+   "tabGroups.onCreated": "event",
+   "tabGroups.onMoved": "event",
+   "tabGroups.onRemoved": "event",
+   "tabGroups.onUpdated": "event",
+   "tabGroups.query": "method",
+   "tabGroups.TAB_GROUP_ID_NONE": "property:number",
+   "tabGroups.update": "method",
+   "tabs": "namespace",
+   "tabs.captureVisibleTab": "method",
+   "tabs.connect": "method",
+   "tabs.create": "method",
+   "tabs.createSplit": "method",
+   "tabs.detectLanguage": "method",
+   "tabs.discard": "method",
+   "tabs.duplicate": "method",
+   "tabs.get": "method",
+   "tabs.getCurrent": "method",
+   "tabs.getZoom": "method",
+   "tabs.getZoomSettings": "method",
+   "tabs.goBack": "method",
+   "tabs.goForward": "method",
+   "tabs.group": "method",
+   "tabs.highlight": "method",
+   "tabs.MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND": "property:number",
+   "tabs.move": "method",
+   "tabs.MutedInfoReason": "enum",
+   "tabs.onActivated": "event",
+   "tabs.onAttached": "event",
+   "tabs.onCreated": "event",
+   "tabs.onDetached": "event",
+   "tabs.onHighlighted": "event",
+   "tabs.onMoved": "event",
+   "tabs.onRemoved": "event",
+   "tabs.onReplaced": "event",
+   "tabs.onUpdated": "event",
+   "tabs.onZoomChange": "event",
+   "tabs.query": "method",
+   "tabs.reload": "method",
+   "tabs.remove": "method",
+   "tabs.sendMessage": "method",
+   "tabs.setZoom": "method",
+   "tabs.setZoomSettings": "method",
+   "tabs.SPLIT_VIEW_ID_NONE": "property:number",
+   "tabs.TAB_ID_NONE": "property:number",
+   "tabs.TAB_INDEX_NONE": "property:number",
+   "tabs.TabStatus": "enum",
+   "tabs.ungroup": "method",
+   "tabs.unsplit": "method",
+   "tabs.update": "method",
+   "tabs.WindowType": "enum",
+   "tabs.ZoomSettingsMode": "enum",
+   "tabs.ZoomSettingsScope": "enum",
+   "topSites": "namespace",
+   "topSites.get": "method",
+   "tts": "namespace",
+   "tts.EventType": "enum",
+   "tts.getVoices": "method",
+   "tts.isSpeaking": "method",
+   "tts.onEvent": "event",
+   "tts.onVoicesChanged": "event",
+   "tts.pause": "method",
+   "tts.resume": "method",
+   "tts.speak": "method",
+   "tts.stop": "method",
+   "tts.VoiceGender": "enum",
+   "ttsEngine": "namespace",
+   "ttsEngine.LanguageInstallStatus": "enum",
+   "ttsEngine.onInstallLanguageRequest": "event",
+   "ttsEngine.onLanguageStatusRequest": "event",
+   "ttsEngine.onPause": "event",
+   "ttsEngine.onResume": "event",
+   "ttsEngine.onSpeak": "event",
+   "ttsEngine.onSpeakWithAudioStream": "event",
+   "ttsEngine.onStop": "event",
+   "ttsEngine.onUninstallLanguageRequest": "event",
+   "ttsEngine.sendTtsAudio": "method",
+   "ttsEngine.sendTtsEvent": "method",
+   "ttsEngine.TtsClientSource": "enum",
+   "ttsEngine.updateLanguage": "method",
+   "ttsEngine.updateVoices": "method",
+   "ttsEngine.VoiceGender": "enum",
+   "webAuthenticationProxy": "namespace",
+   "webAuthenticationProxy.attach": "method",
+   "webAuthenticationProxy.completeCreateRequest": "method",
+   "webAuthenticationProxy.completeGetRequest": "method",
+   "webAuthenticationProxy.completeIsUvpaaRequest": "method",
+   "webAuthenticationProxy.detach": "method",
+   "webAuthenticationProxy.onCreateRequest": "event",
+   "webAuthenticationProxy.onGetRequest": "event",
+   "webAuthenticationProxy.onIsUvpaaRequest": "event",
+   "webAuthenticationProxy.onRemoteSessionStateChange": "event",
+   "webAuthenticationProxy.onRequestCanceled": "event",
+   "webNavigation": "namespace",
+   "webNavigation.getAllFrames": "method",
+   "webNavigation.getFrame": "method",
+   "webNavigation.onBeforeNavigate": "event",
+   "webNavigation.onCommitted": "event",
+   "webNavigation.onCompleted": "event",
+   "webNavigation.onCreatedNavigationTarget": "event",
+   "webNavigation.onDOMContentLoaded": "event",
+   "webNavigation.onErrorOccurred": "event",
+   "webNavigation.onHistoryStateUpdated": "event",
+   "webNavigation.onReferenceFragmentUpdated": "event",
+   "webNavigation.onTabReplaced": "event",
+   "webNavigation.TransitionQualifier": "enum",
+   "webNavigation.TransitionType": "enum",
+   "webRequest": "namespace",
+   "webRequest.handlerBehaviorChanged": "method",
+   "webRequest.IgnoredActionType": "enum",
+   "webRequest.MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES": "property:number",
+   "webRequest.onActionIgnored": "event",
+   "webRequest.onAuthRequired": "event",
+   "webRequest.OnAuthRequiredOptions": "enum",
+   "webRequest.onBeforeRedirect": "event",
+   "webRequest.OnBeforeRedirectOptions": "enum",
+   "webRequest.onBeforeRequest": "event",
+   "webRequest.OnBeforeRequestOptions": "enum",
+   "webRequest.onBeforeSendHeaders": "event",
+   "webRequest.OnBeforeSendHeadersOptions": "enum",
+   "webRequest.onCompleted": "event",
+   "webRequest.OnCompletedOptions": "enum",
+   "webRequest.onErrorOccurred": "event",
+   "webRequest.OnErrorOccurredOptions": "enum",
+   "webRequest.onHeadersReceived": "event",
+   "webRequest.OnHeadersReceivedOptions": "enum",
+   "webRequest.onResponseStarted": "event",
+   "webRequest.OnResponseStartedOptions": "enum",
+   "webRequest.onSendHeaders": "event",
+   "webRequest.OnSendHeadersOptions": "enum",
+   "webRequest.ResourceType": "enum",
+   "windows": "namespace",
+   "windows.create": "method",
+   "windows.CreateType": "enum",
+   "windows.get": "method",
+   "windows.getAll": "method",
+   "windows.getCurrent": "method",
+   "windows.getLastFocused": "method",
+   "windows.onBoundsChanged": "event",
+   "windows.onCreated": "event",
+   "windows.onFocusChanged": "event",
+   "windows.onRemoved": "event",
+   "windows.remove": "method",
+   "windows.update": "method",
+   "windows.WINDOW_ID_CURRENT": "property:number",
+   "windows.WINDOW_ID_NONE": "property:number",
+   "windows.WindowState": "enum",
+   "windows.WindowType": "enum"
+  },
+  "page": {
+   "accessibilityFeatures": "namespace",
+   "accessibilityFeatures.animationPolicy": "object",
+   "accessibilityFeatures.animationPolicy.clear": "method",
+   "accessibilityFeatures.animationPolicy.get": "method",
+   "accessibilityFeatures.animationPolicy.onChange": "event",
+   "accessibilityFeatures.animationPolicy.set": "method",
+   "action": "namespace",
+   "action.disable": "method",
+   "action.enable": "method",
+   "action.getBadgeBackgroundColor": "method",
+   "action.getBadgeText": "method",
+   "action.getBadgeTextColor": "method",
+   "action.getPopup": "method",
+   "action.getTitle": "method",
+   "action.getUserSettings": "method",
+   "action.isEnabled": "method",
+   "action.onClicked": "event",
+   "action.onUserSettingsChanged": "event",
+   "action.openPopup": "method",
+   "action.setBadgeBackgroundColor": "method",
+   "action.setBadgeText": "method",
+   "action.setBadgeTextColor": "method",
+   "action.setIcon": "method",
+   "action.setPopup": "method",
+   "action.setTitle": "method",
+   "alarms": "namespace",
+   "alarms.clear": "method",
+   "alarms.clearAll": "method",
+   "alarms.create": "method",
+   "alarms.get": "method",
+   "alarms.getAll": "method",
+   "alarms.onAlarm": "event",
+   "bookmarks": "namespace",
+   "bookmarks.BookmarkTreeNodeUnmodifiable": "enum",
+   "bookmarks.create": "method",
+   "bookmarks.FolderType": "enum",
+   "bookmarks.get": "method",
+   "bookmarks.getChildren": "method",
+   "bookmarks.getRecent": "method",
+   "bookmarks.getSubTree": "method",
+   "bookmarks.getTree": "method",
+   "bookmarks.MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "bookmarks.MAX_WRITE_OPERATIONS_PER_HOUR": "property:number",
+   "bookmarks.move": "method",
+   "bookmarks.onChanged": "event",
+   "bookmarks.onChildrenReordered": "event",
+   "bookmarks.onCreated": "event",
+   "bookmarks.onImportBegan": "event",
+   "bookmarks.onImportEnded": "event",
+   "bookmarks.onMoved": "event",
+   "bookmarks.onRemoved": "event",
+   "bookmarks.remove": "method",
+   "bookmarks.removeTree": "method",
+   "bookmarks.ROOT_NODE_ID": "property:string",
+   "bookmarks.search": "method",
+   "bookmarks.update": "method",
+   "browsingData": "namespace",
+   "browsingData.remove": "method",
+   "browsingData.removeAppcache": "method",
+   "browsingData.removeCache": "method",
+   "browsingData.removeCacheStorage": "method",
+   "browsingData.removeCookies": "method",
+   "browsingData.removeDownloads": "method",
+   "browsingData.removeFileSystems": "method",
+   "browsingData.removeFormData": "method",
+   "browsingData.removeHistory": "method",
+   "browsingData.removeIndexedDB": "method",
+   "browsingData.removeLocalStorage": "method",
+   "browsingData.removePasswords": "method",
+   "browsingData.removePluginData": "method",
+   "browsingData.removeServiceWorkers": "method",
+   "browsingData.removeWebSQL": "method",
+   "browsingData.settings": "method",
+   "clipboard": "namespace",
+   "clipboard.DataItemType": "enum",
+   "clipboard.ImageType": "enum",
+   "clipboard.onClipboardDataChanged": "event",
+   "clipboard.setImageData": "method",
+   "commands": "namespace",
+   "commands.getAll": "method",
+   "commands.onCommand": "event",
+   "contentSettings": "namespace",
+   "contentSettings.automaticDownloads": "object",
+   "contentSettings.automaticDownloads.clear": "method",
+   "contentSettings.automaticDownloads.get": "method",
+   "contentSettings.automaticDownloads.getResourceIdentifiers": "method",
+   "contentSettings.automaticDownloads.set": "method",
+   "contentSettings.autoVerify": "object",
+   "contentSettings.autoVerify.clear": "method",
+   "contentSettings.autoVerify.get": "method",
+   "contentSettings.autoVerify.getResourceIdentifiers": "method",
+   "contentSettings.autoVerify.set": "method",
+   "contentSettings.AutoVerifyContentSetting": "enum",
+   "contentSettings.camera": "object",
+   "contentSettings.camera.clear": "method",
+   "contentSettings.camera.get": "method",
+   "contentSettings.camera.getResourceIdentifiers": "method",
+   "contentSettings.camera.set": "method",
+   "contentSettings.CameraContentSetting": "enum",
+   "contentSettings.clipboard": "object",
+   "contentSettings.clipboard.clear": "method",
+   "contentSettings.clipboard.get": "method",
+   "contentSettings.clipboard.getResourceIdentifiers": "method",
+   "contentSettings.clipboard.set": "method",
+   "contentSettings.ClipboardContentSetting": "enum",
+   "contentSettings.cookies": "object",
+   "contentSettings.cookies.clear": "method",
+   "contentSettings.cookies.get": "method",
+   "contentSettings.cookies.getResourceIdentifiers": "method",
+   "contentSettings.cookies.set": "method",
+   "contentSettings.CookiesContentSetting": "enum",
+   "contentSettings.fullscreen": "object",
+   "contentSettings.fullscreen.clear": "method",
+   "contentSettings.fullscreen.get": "method",
+   "contentSettings.fullscreen.getResourceIdentifiers": "method",
+   "contentSettings.fullscreen.set": "method",
+   "contentSettings.FullscreenContentSetting": "enum",
+   "contentSettings.images": "object",
+   "contentSettings.images.clear": "method",
+   "contentSettings.images.get": "method",
+   "contentSettings.images.getResourceIdentifiers": "method",
+   "contentSettings.images.set": "method",
+   "contentSettings.ImagesContentSetting": "enum",
+   "contentSettings.javascript": "object",
+   "contentSettings.javascript.clear": "method",
+   "contentSettings.javascript.get": "method",
+   "contentSettings.javascript.getResourceIdentifiers": "method",
+   "contentSettings.javascript.set": "method",
+   "contentSettings.JavascriptContentSetting": "enum",
+   "contentSettings.location": "object",
+   "contentSettings.location.clear": "method",
+   "contentSettings.location.get": "method",
+   "contentSettings.location.getResourceIdentifiers": "method",
+   "contentSettings.location.set": "method",
+   "contentSettings.LocationContentSetting": "enum",
+   "contentSettings.microphone": "object",
+   "contentSettings.microphone.clear": "method",
+   "contentSettings.microphone.get": "method",
+   "contentSettings.microphone.getResourceIdentifiers": "method",
+   "contentSettings.microphone.set": "method",
+   "contentSettings.MicrophoneContentSetting": "enum",
+   "contentSettings.mouselock": "object",
+   "contentSettings.mouselock.clear": "method",
+   "contentSettings.mouselock.get": "method",
+   "contentSettings.mouselock.getResourceIdentifiers": "method",
+   "contentSettings.mouselock.set": "method",
+   "contentSettings.MouselockContentSetting": "enum",
+   "contentSettings.MultipleAutomaticDownloadsContentSetting": "enum",
+   "contentSettings.notifications": "object",
+   "contentSettings.notifications.clear": "method",
+   "contentSettings.notifications.get": "method",
+   "contentSettings.notifications.getResourceIdentifiers": "method",
+   "contentSettings.notifications.set": "method",
+   "contentSettings.NotificationsContentSetting": "enum",
+   "contentSettings.plugins": "object",
+   "contentSettings.plugins.clear": "method",
+   "contentSettings.plugins.get": "method",
+   "contentSettings.plugins.getResourceIdentifiers": "method",
+   "contentSettings.plugins.set": "method",
+   "contentSettings.PluginsContentSetting": "enum",
+   "contentSettings.popups": "object",
+   "contentSettings.popups.clear": "method",
+   "contentSettings.popups.get": "method",
+   "contentSettings.popups.getResourceIdentifiers": "method",
+   "contentSettings.popups.set": "method",
+   "contentSettings.PopupsContentSetting": "enum",
+   "contentSettings.PpapiBrokerContentSetting": "enum",
+   "contentSettings.Scope": "enum",
+   "contentSettings.sound": "object",
+   "contentSettings.sound.clear": "method",
+   "contentSettings.sound.get": "method",
+   "contentSettings.sound.getResourceIdentifiers": "method",
+   "contentSettings.sound.set": "method",
+   "contentSettings.SoundContentSetting": "enum",
+   "contentSettings.unsandboxedPlugins": "object",
+   "contentSettings.unsandboxedPlugins.clear": "method",
+   "contentSettings.unsandboxedPlugins.get": "method",
+   "contentSettings.unsandboxedPlugins.getResourceIdentifiers": "method",
+   "contentSettings.unsandboxedPlugins.set": "method",
+   "contextMenus": "namespace",
+   "contextMenus.ACTION_MENU_TOP_LEVEL_LIMIT": "property:number",
+   "contextMenus.ContextType": "enum",
+   "contextMenus.create": "method",
+   "contextMenus.ItemType": "enum",
+   "contextMenus.onClicked": "event",
+   "contextMenus.remove": "method",
+   "contextMenus.removeAll": "method",
+   "contextMenus.update": "method",
+   "cookies": "namespace",
+   "cookies.get": "method",
+   "cookies.getAll": "method",
+   "cookies.getAllCookieStores": "method",
+   "cookies.getPartitionKey": "method",
+   "cookies.onChanged": "event",
+   "cookies.OnChangedCause": "enum",
+   "cookies.remove": "method",
+   "cookies.SameSiteStatus": "enum",
+   "cookies.set": "method",
+   "csi": "method",
+   "debugger": "namespace",
+   "debugger.attach": "method",
+   "debugger.detach": "method",
+   "debugger.DetachReason": "enum",
+   "debugger.getTargets": "method",
+   "debugger.onDetach": "event",
+   "debugger.onEvent": "event",
+   "debugger.sendCommand": "method",
+   "debugger.TargetInfoType": "enum",
+   "declarativeContent": "namespace",
+   "declarativeContent.onPageChanged": "object",
+   "declarativeContent.onPageChanged.addRules": "method",
+   "declarativeContent.onPageChanged.getRules": "method",
+   "declarativeContent.onPageChanged.removeRules": "method",
+   "declarativeContent.PageStateMatcher": "class",
+   "declarativeContent.PageStateMatcherInstanceType": "enum",
+   "declarativeContent.RequestContentScript": "class",
+   "declarativeContent.RequestContentScriptInstanceType": "enum",
+   "declarativeContent.SetIcon": "class",
+   "declarativeContent.SetIconInstanceType": "enum",
+   "declarativeContent.ShowAction": "class",
+   "declarativeContent.ShowActionInstanceType": "enum",
+   "declarativeContent.ShowPageAction": "class",
+   "declarativeContent.ShowPageActionInstanceType": "enum",
+   "declarativeNetRequest": "namespace",
+   "declarativeNetRequest.DomainType": "enum",
+   "declarativeNetRequest.DYNAMIC_RULESET_ID": "property:string",
+   "declarativeNetRequest.getAvailableStaticRuleCount": "method",
+   "declarativeNetRequest.getDisabledRuleIds": "method",
+   "declarativeNetRequest.getDynamicRules": "method",
+   "declarativeNetRequest.getEnabledRulesets": "method",
+   "declarativeNetRequest.getMatchedRules": "method",
+   "declarativeNetRequest.GETMATCHEDRULES_QUOTA_INTERVAL": "property:number",
+   "declarativeNetRequest.getSessionRules": "method",
+   "declarativeNetRequest.GUARANTEED_MINIMUM_STATIC_RULES": "property:number",
+   "declarativeNetRequest.HeaderOperation": "enum",
+   "declarativeNetRequest.isRegexSupported": "method",
+   "declarativeNetRequest.MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_ENABLED_STATIC_RULESETS": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_REGEX_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_SESSION_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_STATIC_RULESETS": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES": "property:number",
+   "declarativeNetRequest.MAX_NUMBER_OF_UNSAFE_SESSION_RULES": "property:number",
+   "declarativeNetRequest.onRuleMatchedDebug": "event",
+   "declarativeNetRequest.RequestMethod": "enum",
+   "declarativeNetRequest.ResourceType": "enum",
+   "declarativeNetRequest.RuleActionType": "enum",
+   "declarativeNetRequest.RuleConditionKeys": "enum",
+   "declarativeNetRequest.SESSION_RULESET_ID": "property:string",
+   "declarativeNetRequest.setExtensionActionOptions": "method",
+   "declarativeNetRequest.testMatchOutcome": "method",
+   "declarativeNetRequest.UnsupportedRegexReason": "enum",
+   "declarativeNetRequest.updateDynamicRules": "method",
+   "declarativeNetRequest.updateEnabledRulesets": "method",
+   "declarativeNetRequest.updateSessionRules": "method",
+   "declarativeNetRequest.updateStaticRules": "method",
+   "desktopCapture": "namespace",
+   "desktopCapture.cancelChooseDesktopMedia": "method",
+   "desktopCapture.chooseDesktopMedia": "method",
+   "desktopCapture.DesktopCaptureSourceType": "enum",
+   "desktopCapture.SelfCapturePreferenceEnum": "enum",
+   "desktopCapture.SystemAudioPreferenceEnum": "enum",
+   "desktopCapture.WindowAudioPreferenceEnum": "enum",
+   "dns": "namespace",
+   "dns.resolve": "method",
+   "dom": "namespace",
+   "dom.openOrClosedShadowRoot": "method",
+   "downloads": "namespace",
+   "downloads.acceptDanger": "method",
+   "downloads.cancel": "method",
+   "downloads.DangerType": "enum",
+   "downloads.download": "method",
+   "downloads.erase": "method",
+   "downloads.FilenameConflictAction": "enum",
+   "downloads.getFileIcon": "method",
+   "downloads.HttpMethod": "enum",
+   "downloads.InterruptReason": "enum",
+   "downloads.onChanged": "event",
+   "downloads.onCreated": "event",
+   "downloads.onDeterminingFilename": "event",
+   "downloads.onErased": "event",
+   "downloads.open": "method",
+   "downloads.pause": "method",
+   "downloads.removeFile": "method",
+   "downloads.resume": "method",
+   "downloads.search": "method",
+   "downloads.setShelfEnabled": "method",
+   "downloads.setUiOptions": "method",
+   "downloads.show": "method",
+   "downloads.showDefaultFolder": "method",
+   "downloads.State": "enum",
+   "extension": "namespace",
+   "extension.getBackgroundPage": "method",
+   "extension.getViews": "method",
+   "extension.inIncognitoContext": "property:boolean",
+   "extension.isAllowedFileSchemeAccess": "method",
+   "extension.isAllowedIncognitoAccess": "method",
+   "extension.setUpdateUrlData": "method",
+   "extension.ViewType": "enum",
+   "fontSettings": "namespace",
+   "fontSettings.clearDefaultFixedFontSize": "method",
+   "fontSettings.clearDefaultFontSize": "method",
+   "fontSettings.clearFont": "method",
+   "fontSettings.clearMinimumFontSize": "method",
+   "fontSettings.GenericFamily": "enum",
+   "fontSettings.getDefaultFixedFontSize": "method",
+   "fontSettings.getDefaultFontSize": "method",
+   "fontSettings.getFont": "method",
+   "fontSettings.getFontList": "method",
+   "fontSettings.getMinimumFontSize": "method",
+   "fontSettings.LevelOfControl": "enum",
+   "fontSettings.onDefaultFixedFontSizeChanged": "event",
+   "fontSettings.onDefaultFontSizeChanged": "event",
+   "fontSettings.onFontChanged": "event",
+   "fontSettings.onMinimumFontSizeChanged": "event",
+   "fontSettings.ScriptCode": "enum",
+   "fontSettings.setDefaultFixedFontSize": "method",
+   "fontSettings.setDefaultFontSize": "method",
+   "fontSettings.setFont": "method",
+   "fontSettings.setMinimumFontSize": "method",
+   "gcm": "namespace",
+   "gcm.MAX_MESSAGE_SIZE": "property:number",
+   "gcm.onMessage": "event",
+   "gcm.onMessagesDeleted": "event",
+   "gcm.onSendError": "event",
+   "gcm.register": "method",
+   "gcm.send": "method",
+   "gcm.unregister": "method",
+   "history": "namespace",
+   "history.addUrl": "method",
+   "history.deleteAll": "method",
+   "history.deleteRange": "method",
+   "history.deleteUrl": "method",
+   "history.getVisits": "method",
+   "history.onVisited": "event",
+   "history.onVisitRemoved": "event",
+   "history.search": "method",
+   "history.TransitionType": "enum",
+   "i18n": "namespace",
+   "i18n.detectLanguage": "method",
+   "i18n.getAcceptLanguages": "method",
+   "i18n.getMessage": "method",
+   "i18n.getUILanguage": "method",
+   "identity": "namespace",
+   "identity.AccountStatus": "enum",
+   "identity.clearAllCachedAuthTokens": "method",
+   "identity.getAccounts": "method",
+   "identity.getAuthToken": "method",
+   "identity.getProfileUserInfo": "method",
+   "identity.getRedirectURL": "method",
+   "identity.launchWebAuthFlow": "method",
+   "identity.onSignInChanged": "event",
+   "identity.removeCachedAuthToken": "method",
+   "idle": "namespace",
+   "idle.IdleState": "enum",
+   "idle.onStateChanged": "event",
+   "idle.queryState": "method",
+   "idle.setDetectionInterval": "method",
+   "instanceID": "namespace",
+   "instanceID.deleteID": "method",
+   "instanceID.deleteToken": "method",
+   "instanceID.getCreationTime": "method",
+   "instanceID.getID": "method",
+   "instanceID.getToken": "method",
+   "instanceID.onTokenRefresh": "event",
+   "loadTimes": "method",
+   "management": "namespace",
+   "management.createAppShortcut": "method",
+   "management.ExtensionDisabledReason": "enum",
+   "management.ExtensionInstallType": "enum",
+   "management.ExtensionType": "enum",
+   "management.generateAppForLink": "method",
+   "management.get": "method",
+   "management.getAll": "method",
+   "management.getPermissionWarningsById": "method",
+   "management.getPermissionWarningsByManifest": "method",
+   "management.getSelf": "method",
+   "management.launchApp": "method",
+   "management.LaunchType": "enum",
+   "management.onDisabled": "event",
+   "management.onEnabled": "event",
+   "management.onInstalled": "event",
+   "management.onUninstalled": "event",
+   "management.setEnabled": "method",
+   "management.setLaunchType": "method",
+   "management.uninstall": "method",
+   "management.uninstallSelf": "method",
+   "notifications": "namespace",
+   "notifications.clear": "method",
+   "notifications.create": "method",
+   "notifications.getAll": "method",
+   "notifications.getPermissionLevel": "method",
+   "notifications.onButtonClicked": "event",
+   "notifications.onClicked": "event",
+   "notifications.onClosed": "event",
+   "notifications.onPermissionLevelChanged": "event",
+   "notifications.onShowSettings": "event",
+   "notifications.PermissionLevel": "enum",
+   "notifications.TemplateType": "enum",
+   "notifications.update": "method",
+   "offscreen": "namespace",
+   "offscreen.closeDocument": "method",
+   "offscreen.createDocument": "method",
+   "offscreen.hasDocument": "method",
+   "offscreen.Reason": "enum",
+   "omnibox": "namespace",
+   "omnibox.DescriptionStyleType": "enum",
+   "omnibox.onActionExecuted": "event",
+   "omnibox.onDeleteSuggestion": "event",
+   "omnibox.onInputCancelled": "event",
+   "omnibox.onInputChanged": "event",
+   "omnibox.onInputEntered": "event",
+   "omnibox.OnInputEnteredDisposition": "enum",
+   "omnibox.onInputStarted": "event",
+   "omnibox.sendSuggestions": "method",
+   "omnibox.setDefaultSuggestion": "method",
+   "pageCapture": "namespace",
+   "pageCapture.saveAsMHTML": "method",
+   "permissions": "namespace",
+   "permissions.addHostAccessRequest": "method",
+   "permissions.contains": "method",
+   "permissions.getAll": "method",
+   "permissions.onAdded": "event",
+   "permissions.onRemoved": "event",
+   "permissions.remove": "method",
+   "permissions.removeHostAccessRequest": "method",
+   "permissions.request": "method",
+   "power": "namespace",
+   "power.Level": "enum",
+   "power.releaseKeepAwake": "method",
+   "power.requestKeepAwake": "method",
+   "printerProvider": "namespace",
+   "printerProvider.onGetCapabilityRequested": "event",
+   "printerProvider.onGetPrintersRequested": "event",
+   "printerProvider.onGetUsbPrinterInfoRequested": "event",
+   "printerProvider.onPrintRequested": "event",
+   "printerProvider.PrintError": "enum",
+   "privacy": "namespace",
+   "privacy.AutofillBlockedType": "enum",
+   "privacy.IPHandlingPolicy": "enum",
+   "privacy.network": "object",
+   "privacy.network.networkPredictionEnabled": "object",
+   "privacy.network.networkPredictionEnabled.clear": "method",
+   "privacy.network.networkPredictionEnabled.get": "method",
+   "privacy.network.networkPredictionEnabled.onChange": "event",
+   "privacy.network.networkPredictionEnabled.set": "method",
+   "privacy.network.webRTCIPHandlingPolicy": "object",
+   "privacy.network.webRTCIPHandlingPolicy.clear": "method",
+   "privacy.network.webRTCIPHandlingPolicy.get": "method",
+   "privacy.network.webRTCIPHandlingPolicy.onChange": "event",
+   "privacy.network.webRTCIPHandlingPolicy.set": "method",
+   "privacy.services": "object",
+   "privacy.services.alternateErrorPagesEnabled": "object",
+   "privacy.services.alternateErrorPagesEnabled.clear": "method",
+   "privacy.services.alternateErrorPagesEnabled.get": "method",
+   "privacy.services.alternateErrorPagesEnabled.onChange": "event",
+   "privacy.services.alternateErrorPagesEnabled.set": "method",
+   "privacy.services.autofillAddressEnabled": "object",
+   "privacy.services.autofillAddressEnabled.clear": "method",
+   "privacy.services.autofillAddressEnabled.get": "method",
+   "privacy.services.autofillAddressEnabled.onChange": "event",
+   "privacy.services.autofillAddressEnabled.set": "method",
+   "privacy.services.autofillCreditCardEnabled": "object",
+   "privacy.services.autofillCreditCardEnabled.clear": "method",
+   "privacy.services.autofillCreditCardEnabled.get": "method",
+   "privacy.services.autofillCreditCardEnabled.onChange": "event",
+   "privacy.services.autofillCreditCardEnabled.set": "method",
+   "privacy.services.autofillEnabled": "object",
+   "privacy.services.autofillEnabled.clear": "method",
+   "privacy.services.autofillEnabled.get": "method",
+   "privacy.services.autofillEnabled.onChange": "event",
+   "privacy.services.autofillEnabled.set": "method",
+   "privacy.services.autofillSettings": "object",
+   "privacy.services.autofillSettings.clear": "method",
+   "privacy.services.autofillSettings.get": "method",
+   "privacy.services.autofillSettings.onChange": "event",
+   "privacy.services.autofillSettings.set": "method",
+   "privacy.services.passwordSavingEnabled": "object",
+   "privacy.services.passwordSavingEnabled.clear": "method",
+   "privacy.services.passwordSavingEnabled.get": "method",
+   "privacy.services.passwordSavingEnabled.onChange": "event",
+   "privacy.services.passwordSavingEnabled.set": "method",
+   "privacy.services.safeBrowsingEnabled": "object",
+   "privacy.services.safeBrowsingEnabled.clear": "method",
+   "privacy.services.safeBrowsingEnabled.get": "method",
+   "privacy.services.safeBrowsingEnabled.onChange": "event",
+   "privacy.services.safeBrowsingEnabled.set": "method",
+   "privacy.services.safeBrowsingExtendedReportingEnabled": "object",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.clear": "method",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.get": "method",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.onChange": "event",
+   "privacy.services.safeBrowsingExtendedReportingEnabled.set": "method",
+   "privacy.services.searchSuggestEnabled": "object",
+   "privacy.services.searchSuggestEnabled.clear": "method",
+   "privacy.services.searchSuggestEnabled.get": "method",
+   "privacy.services.searchSuggestEnabled.onChange": "event",
+   "privacy.services.searchSuggestEnabled.set": "method",
+   "privacy.services.spellingServiceEnabled": "object",
+   "privacy.services.spellingServiceEnabled.clear": "method",
+   "privacy.services.spellingServiceEnabled.get": "method",
+   "privacy.services.spellingServiceEnabled.onChange": "event",
+   "privacy.services.spellingServiceEnabled.set": "method",
+   "privacy.services.translationServiceEnabled": "object",
+   "privacy.services.translationServiceEnabled.clear": "method",
+   "privacy.services.translationServiceEnabled.get": "method",
+   "privacy.services.translationServiceEnabled.onChange": "event",
+   "privacy.services.translationServiceEnabled.set": "method",
+   "privacy.websites": "object",
+   "privacy.websites.adMeasurementEnabled": "object",
+   "privacy.websites.adMeasurementEnabled.clear": "method",
+   "privacy.websites.adMeasurementEnabled.get": "method",
+   "privacy.websites.adMeasurementEnabled.onChange": "event",
+   "privacy.websites.adMeasurementEnabled.set": "method",
+   "privacy.websites.doNotTrackEnabled": "object",
+   "privacy.websites.doNotTrackEnabled.clear": "method",
+   "privacy.websites.doNotTrackEnabled.get": "method",
+   "privacy.websites.doNotTrackEnabled.onChange": "event",
+   "privacy.websites.doNotTrackEnabled.set": "method",
+   "privacy.websites.fledgeEnabled": "object",
+   "privacy.websites.fledgeEnabled.clear": "method",
+   "privacy.websites.fledgeEnabled.get": "method",
+   "privacy.websites.fledgeEnabled.onChange": "event",
+   "privacy.websites.fledgeEnabled.set": "method",
+   "privacy.websites.hyperlinkAuditingEnabled": "object",
+   "privacy.websites.hyperlinkAuditingEnabled.clear": "method",
+   "privacy.websites.hyperlinkAuditingEnabled.get": "method",
+   "privacy.websites.hyperlinkAuditingEnabled.onChange": "event",
+   "privacy.websites.hyperlinkAuditingEnabled.set": "method",
+   "privacy.websites.referrersEnabled": "object",
+   "privacy.websites.referrersEnabled.clear": "method",
+   "privacy.websites.referrersEnabled.get": "method",
+   "privacy.websites.referrersEnabled.onChange": "event",
+   "privacy.websites.referrersEnabled.set": "method",
+   "privacy.websites.thirdPartyCookiesAllowed": "object",
+   "privacy.websites.thirdPartyCookiesAllowed.clear": "method",
+   "privacy.websites.thirdPartyCookiesAllowed.get": "method",
+   "privacy.websites.thirdPartyCookiesAllowed.onChange": "event",
+   "privacy.websites.thirdPartyCookiesAllowed.set": "method",
+   "privacy.websites.topicsEnabled": "object",
+   "privacy.websites.topicsEnabled.clear": "method",
+   "privacy.websites.topicsEnabled.get": "method",
+   "privacy.websites.topicsEnabled.onChange": "event",
+   "privacy.websites.topicsEnabled.set": "method",
+   "processes": "namespace",
+   "processes.getProcessIdForTab": "method",
+   "processes.getProcessInfo": "method",
+   "processes.onCreated": "event",
+   "processes.onExited": "event",
+   "processes.onUnresponsive": "event",
+   "processes.onUpdated": "event",
+   "processes.onUpdatedWithMemory": "event",
+   "processes.ProcessType": "enum",
+   "processes.terminate": "method",
+   "proxy": "namespace",
+   "proxy.Mode": "enum",
+   "proxy.onProxyError": "event",
+   "proxy.Scheme": "enum",
+   "proxy.settings": "object",
+   "proxy.settings.clear": "method",
+   "proxy.settings.get": "method",
+   "proxy.settings.onChange": "event",
+   "proxy.settings.set": "method",
+   "publicSuffix": "namespace",
+   "publicSuffix.DomainEncoding": "enum",
+   "publicSuffix.getDomain": "method",
+   "publicSuffix.getKnownSuffix": "method",
+   "publicSuffix.isKnownSuffix": "method",
+   "readingList": "namespace",
+   "readingList.addEntry": "method",
+   "readingList.onEntryAdded": "event",
+   "readingList.onEntryRemoved": "event",
+   "readingList.onEntryUpdated": "event",
+   "readingList.query": "method",
+   "readingList.removeEntry": "method",
+   "readingList.updateEntry": "method",
+   "runtime": "namespace",
+   "runtime.connect": "method",
+   "runtime.connectNative": "method",
+   "runtime.ContextType": "enum",
+   "runtime.dynamicId": "property:string",
+   "runtime.getBackgroundPage": "method",
+   "runtime.getContexts": "method",
+   "runtime.getManifest": "method",
+   "runtime.getPackageDirectoryEntry": "method",
+   "runtime.getPlatformInfo": "method",
+   "runtime.getURL": "method",
+   "runtime.getVersion": "method",
+   "runtime.id": "property:string",
+   "runtime.onBrowserUpdateAvailable": "event",
+   "runtime.onConnect": "event",
+   "runtime.onConnectExternal": "event",
+   "runtime.onConnectNative": "event",
+   "runtime.onEnabled": "event",
+   "runtime.onInstalled": "event",
+   "runtime.OnInstalledReason": "enum",
+   "runtime.onMessage": "event",
+   "runtime.onMessageExternal": "event",
+   "runtime.onRestartRequired": "event",
+   "runtime.OnRestartRequiredReason": "enum",
+   "runtime.onStartup": "event",
+   "runtime.onSuspend": "event",
+   "runtime.onSuspendCanceled": "event",
+   "runtime.onUpdateAvailable": "event",
+   "runtime.onUserScriptConnect": "event",
+   "runtime.onUserScriptMessage": "event",
+   "runtime.openOptionsPage": "method",
+   "runtime.PlatformArch": "enum",
+   "runtime.PlatformNaclArch": "enum",
+   "runtime.PlatformOs": "enum",
+   "runtime.reload": "method",
+   "runtime.requestUpdateCheck": "method",
+   "runtime.RequestUpdateCheckStatus": "enum",
+   "runtime.restart": "method",
+   "runtime.restartAfterDelay": "method",
+   "runtime.sendMessage": "method",
+   "runtime.sendNativeMessage": "method",
+   "runtime.setUninstallURL": "method",
+   "scripting": "namespace",
+   "scripting.executeScript": "method",
+   "scripting.ExecutionWorld": "enum",
+   "scripting.getRegisteredContentScripts": "method",
+   "scripting.insertCSS": "method",
+   "scripting.registerContentScripts": "method",
+   "scripting.removeCSS": "method",
+   "scripting.StyleOrigin": "enum",
+   "scripting.unregisterContentScripts": "method",
+   "scripting.updateContentScripts": "method",
+   "search": "namespace",
+   "search.Disposition": "enum",
+   "search.query": "method",
+   "sessions": "namespace",
+   "sessions.getDevices": "method",
+   "sessions.getRecentlyClosed": "method",
+   "sessions.MAX_SESSION_RESULTS": "property:number",
+   "sessions.onChanged": "event",
+   "sessions.restore": "method",
+   "sidePanel": "namespace",
+   "sidePanel.close": "method",
+   "sidePanel.getLayout": "method",
+   "sidePanel.getOptions": "method",
+   "sidePanel.getPanelBehavior": "method",
+   "sidePanel.onClosed": "event",
+   "sidePanel.onOpened": "event",
+   "sidePanel.open": "method",
+   "sidePanel.setOptions": "method",
+   "sidePanel.setPanelBehavior": "method",
+   "sidePanel.Side": "enum",
+   "storage": "namespace",
+   "storage.AccessLevel": "enum",
+   "storage.local": "object",
+   "storage.local.clear": "method",
+   "storage.local.get": "method",
+   "storage.local.getBytesInUse": "method",
+   "storage.local.getKeys": "method",
+   "storage.local.onChanged": "event",
+   "storage.local.QUOTA_BYTES": "property:number",
+   "storage.local.remove": "method",
+   "storage.local.set": "method",
+   "storage.local.setAccessLevel": "method",
+   "storage.managed": "object",
+   "storage.managed.clear": "method",
+   "storage.managed.get": "method",
+   "storage.managed.getBytesInUse": "method",
+   "storage.managed.getKeys": "method",
+   "storage.managed.onChanged": "event",
+   "storage.managed.remove": "method",
+   "storage.managed.set": "method",
+   "storage.managed.setAccessLevel": "method",
+   "storage.onChanged": "event",
+   "storage.session": "object",
+   "storage.session.clear": "method",
+   "storage.session.get": "method",
+   "storage.session.getBytesInUse": "method",
+   "storage.session.getKeys": "method",
+   "storage.session.onChanged": "event",
+   "storage.session.QUOTA_BYTES": "property:number",
+   "storage.session.remove": "method",
+   "storage.session.set": "method",
+   "storage.session.setAccessLevel": "method",
+   "storage.sync": "object",
+   "storage.sync.clear": "method",
+   "storage.sync.get": "method",
+   "storage.sync.getBytesInUse": "method",
+   "storage.sync.getKeys": "method",
+   "storage.sync.MAX_ITEMS": "property:number",
+   "storage.sync.MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "storage.sync.MAX_WRITE_OPERATIONS_PER_HOUR": "property:number",
+   "storage.sync.MAX_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "storage.sync.onChanged": "event",
+   "storage.sync.QUOTA_BYTES": "property:number",
+   "storage.sync.QUOTA_BYTES_PER_ITEM": "property:number",
+   "storage.sync.remove": "method",
+   "storage.sync.set": "method",
+   "storage.sync.setAccessLevel": "method",
+   "system": "namespace",
+   "system.cpu": "object",
+   "system.cpu.getInfo": "method",
+   "system.display": "object",
+   "system.display.ActiveState": "enum",
+   "system.display.clearTouchCalibration": "method",
+   "system.display.completeCustomTouchCalibration": "method",
+   "system.display.enableUnifiedDesktop": "method",
+   "system.display.getDisplayLayout": "method",
+   "system.display.getInfo": "method",
+   "system.display.LayoutPosition": "enum",
+   "system.display.MirrorMode": "enum",
+   "system.display.onDisplayChanged": "event",
+   "system.display.overscanCalibrationAdjust": "method",
+   "system.display.overscanCalibrationComplete": "method",
+   "system.display.overscanCalibrationReset": "method",
+   "system.display.overscanCalibrationStart": "method",
+   "system.display.setDisplayLayout": "method",
+   "system.display.setDisplayProperties": "method",
+   "system.display.setMirrorMode": "method",
+   "system.display.showNativeTouchCalibration": "method",
+   "system.display.startCustomTouchCalibration": "method",
+   "system.memory": "object",
+   "system.memory.getInfo": "method",
+   "system.storage": "object",
+   "system.storage.ejectDevice": "method",
+   "system.storage.EjectDeviceResultCode": "enum",
+   "system.storage.getAvailableCapacity": "method",
+   "system.storage.getInfo": "method",
+   "system.storage.onAttached": "event",
+   "system.storage.onDetached": "event",
+   "system.storage.StorageUnitType": "enum",
+   "tabCapture": "namespace",
+   "tabCapture.capture": "method",
+   "tabCapture.getCapturedTabs": "method",
+   "tabCapture.getMediaStreamId": "method",
+   "tabCapture.onStatusChanged": "event",
+   "tabCapture.TabCaptureState": "enum",
+   "tabGroups": "namespace",
+   "tabGroups.Color": "enum",
+   "tabGroups.get": "method",
+   "tabGroups.move": "method",
+   "tabGroups.onCreated": "event",
+   "tabGroups.onMoved": "event",
+   "tabGroups.onRemoved": "event",
+   "tabGroups.onUpdated": "event",
+   "tabGroups.query": "method",
+   "tabGroups.TAB_GROUP_ID_NONE": "property:number",
+   "tabGroups.update": "method",
+   "tabs": "namespace",
+   "tabs.captureVisibleTab": "method",
+   "tabs.connect": "method",
+   "tabs.create": "method",
+   "tabs.createSplit": "method",
+   "tabs.detectLanguage": "method",
+   "tabs.discard": "method",
+   "tabs.duplicate": "method",
+   "tabs.get": "method",
+   "tabs.getCurrent": "method",
+   "tabs.getZoom": "method",
+   "tabs.getZoomSettings": "method",
+   "tabs.goBack": "method",
+   "tabs.goForward": "method",
+   "tabs.group": "method",
+   "tabs.highlight": "method",
+   "tabs.MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND": "property:number",
+   "tabs.move": "method",
+   "tabs.MutedInfoReason": "enum",
+   "tabs.onActivated": "event",
+   "tabs.onAttached": "event",
+   "tabs.onCreated": "event",
+   "tabs.onDetached": "event",
+   "tabs.onHighlighted": "event",
+   "tabs.onMoved": "event",
+   "tabs.onRemoved": "event",
+   "tabs.onReplaced": "event",
+   "tabs.onUpdated": "event",
+   "tabs.onZoomChange": "event",
+   "tabs.query": "method",
+   "tabs.reload": "method",
+   "tabs.remove": "method",
+   "tabs.sendMessage": "method",
+   "tabs.setZoom": "method",
+   "tabs.setZoomSettings": "method",
+   "tabs.SPLIT_VIEW_ID_NONE": "property:number",
+   "tabs.TAB_ID_NONE": "property:number",
+   "tabs.TAB_INDEX_NONE": "property:number",
+   "tabs.TabStatus": "enum",
+   "tabs.ungroup": "method",
+   "tabs.unsplit": "method",
+   "tabs.update": "method",
+   "tabs.WindowType": "enum",
+   "tabs.ZoomSettingsMode": "enum",
+   "tabs.ZoomSettingsScope": "enum",
+   "topSites": "namespace",
+   "topSites.get": "method",
+   "tts": "namespace",
+   "tts.EventType": "enum",
+   "tts.getVoices": "method",
+   "tts.isSpeaking": "method",
+   "tts.onEvent": "event",
+   "tts.onVoicesChanged": "event",
+   "tts.pause": "method",
+   "tts.resume": "method",
+   "tts.speak": "method",
+   "tts.stop": "method",
+   "tts.VoiceGender": "enum",
+   "ttsEngine": "namespace",
+   "ttsEngine.LanguageInstallStatus": "enum",
+   "ttsEngine.onInstallLanguageRequest": "event",
+   "ttsEngine.onLanguageStatusRequest": "event",
+   "ttsEngine.onPause": "event",
+   "ttsEngine.onResume": "event",
+   "ttsEngine.onSpeak": "event",
+   "ttsEngine.onSpeakWithAudioStream": "event",
+   "ttsEngine.onStop": "event",
+   "ttsEngine.onUninstallLanguageRequest": "event",
+   "ttsEngine.sendTtsAudio": "method",
+   "ttsEngine.sendTtsEvent": "method",
+   "ttsEngine.TtsClientSource": "enum",
+   "ttsEngine.updateLanguage": "method",
+   "ttsEngine.updateVoices": "method",
+   "ttsEngine.VoiceGender": "enum",
+   "userScripts": "namespace",
+   "userScripts.configureWorld": "method",
+   "userScripts.execute": "method",
+   "userScripts.ExecutionWorld": "enum",
+   "userScripts.getScripts": "method",
+   "userScripts.getWorldConfigurations": "method",
+   "userScripts.register": "method",
+   "userScripts.resetWorldConfiguration": "method",
+   "userScripts.unregister": "method",
+   "userScripts.update": "method",
+   "webAuthenticationProxy": "namespace",
+   "webAuthenticationProxy.attach": "method",
+   "webAuthenticationProxy.completeCreateRequest": "method",
+   "webAuthenticationProxy.completeGetRequest": "method",
+   "webAuthenticationProxy.completeIsUvpaaRequest": "method",
+   "webAuthenticationProxy.detach": "method",
+   "webAuthenticationProxy.onCreateRequest": "event",
+   "webAuthenticationProxy.onGetRequest": "event",
+   "webAuthenticationProxy.onIsUvpaaRequest": "event",
+   "webAuthenticationProxy.onRemoteSessionStateChange": "event",
+   "webAuthenticationProxy.onRequestCanceled": "event",
+   "webNavigation": "namespace",
+   "webNavigation.getAllFrames": "method",
+   "webNavigation.getFrame": "method",
+   "webNavigation.onBeforeNavigate": "event",
+   "webNavigation.onCommitted": "event",
+   "webNavigation.onCompleted": "event",
+   "webNavigation.onCreatedNavigationTarget": "event",
+   "webNavigation.onDOMContentLoaded": "event",
+   "webNavigation.onErrorOccurred": "event",
+   "webNavigation.onHistoryStateUpdated": "event",
+   "webNavigation.onReferenceFragmentUpdated": "event",
+   "webNavigation.onTabReplaced": "event",
+   "webNavigation.TransitionQualifier": "enum",
+   "webNavigation.TransitionType": "enum",
+   "webRequest": "namespace",
+   "webRequest.handlerBehaviorChanged": "method",
+   "webRequest.IgnoredActionType": "enum",
+   "webRequest.MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES": "property:number",
+   "webRequest.onActionIgnored": "event",
+   "webRequest.onAuthRequired": "event",
+   "webRequest.OnAuthRequiredOptions": "enum",
+   "webRequest.onBeforeRedirect": "event",
+   "webRequest.OnBeforeRedirectOptions": "enum",
+   "webRequest.onBeforeRequest": "event",
+   "webRequest.OnBeforeRequestOptions": "enum",
+   "webRequest.onBeforeSendHeaders": "event",
+   "webRequest.OnBeforeSendHeadersOptions": "enum",
+   "webRequest.onCompleted": "event",
+   "webRequest.OnCompletedOptions": "enum",
+   "webRequest.onErrorOccurred": "event",
+   "webRequest.OnErrorOccurredOptions": "enum",
+   "webRequest.onHeadersReceived": "event",
+   "webRequest.OnHeadersReceivedOptions": "enum",
+   "webRequest.onResponseStarted": "event",
+   "webRequest.OnResponseStartedOptions": "enum",
+   "webRequest.onSendHeaders": "event",
+   "webRequest.OnSendHeadersOptions": "enum",
+   "webRequest.ResourceType": "enum",
+   "windows": "namespace",
+   "windows.create": "method",
+   "windows.CreateType": "enum",
+   "windows.get": "method",
+   "windows.getAll": "method",
+   "windows.getCurrent": "method",
+   "windows.getLastFocused": "method",
+   "windows.onBoundsChanged": "event",
+   "windows.onCreated": "event",
+   "windows.onFocusChanged": "event",
+   "windows.onRemoved": "event",
+   "windows.remove": "method",
+   "windows.update": "method",
+   "windows.WINDOW_ID_CURRENT": "property:number",
+   "windows.WINDOW_ID_NONE": "property:number",
+   "windows.WindowState": "enum",
+   "windows.WindowType": "enum"
+  },
+  "cs": {}
+ }
+}

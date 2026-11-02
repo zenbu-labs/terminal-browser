@@ -11,6 +11,11 @@ on:
         description: "Comma separated platforms to build; the others keep their published assets"
         required: false
         default: "darwin-arm64,darwin-x64,linux-x64,linux-arm64"
+      publish:
+        # fixme: placeholder copy
+        description: "Publish to the electron-v<version> release; off keeps the build as a workflow artifact only (for CI)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -74,6 +79,7 @@ jobs:
             "$RUNNER_TEMP/out" "${{ matrix.platform }}"
           mv "$RUNNER_TEMP/out/SHASUMS256.txt" \
             "$RUNNER_TEMP/out/sha-${{ matrix.platform }}.txt"
+          echo "PATCHES_KEY=$(bash pixel/electron/scripts/patches-key.sh "${{ inputs.version }}")" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -84,8 +90,17 @@ jobs:
             ${{ runner.temp }}/out/sha-${{ matrix.platform }}.txt
           if-no-files-found: error
 
+      # found by the extensions conformance workflow, keyed by version + patches
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patched-electron-${{ matrix.platform }}-${{ env.PATCHES_KEY }}
+          path: ${{ runner.temp }}/out/electron-v${{ inputs.version }}-${{ matrix.platform }}.zip
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+
       - name: Report failure loudly
-        if: failure()
+        if: failure() && inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -105,7 +120,7 @@ jobs:
     # single writer for the release and SHASUMS256.txt: the build legs run in
     # parallel and never touch the release themselves
     needs: build
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

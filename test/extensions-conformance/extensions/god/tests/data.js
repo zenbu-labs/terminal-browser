@@ -376,8 +376,11 @@
   test("search.query", async (t) => {
     const before = new Set((await chrome.tabs.query({})).map((x) => x.id));
     await chrome.search.query({ text: "god extension", disposition: "NEW_TAB" });
-    await t.sleep(800);
-    const tab = (await chrome.tabs.query({})).find((x) => !before.has(x.id));
+    let tab;
+    for (let i = 0; i < 25 && !tab; i++) {
+      await t.sleep(200);
+      tab = (await chrome.tabs.query({})).find((x) => !before.has(x.id));
+    }
     t.ok(tab, "no new tab");
     const url = tab.pendingUrl || tab.url;
     await chrome.tabs.remove(tab.id);

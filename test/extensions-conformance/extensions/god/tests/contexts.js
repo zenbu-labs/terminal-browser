@@ -2,7 +2,7 @@
 (() => {
   const { test } = god;
 
-  test("context.chrome-namespaces", (t) => Object.keys(chrome).sort().join(","), { ctx: ["popup", "options", "sidepanel", "offscreen", "devtools", "devtools-panel"] });
+  test("context.chrome-namespaces", (t) => Object.keys(chrome).sort().join(","), { ctx: ["popup", "options", "sidepanel", "offscreen", "devtools", "devtools-panel"], sigLimit: 4000 });
 
   test("runtime.getContexts#self", async (t) => {
     const all = await chrome.runtime.getContexts({ documentUrls: [location.href] });
