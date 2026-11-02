@@ -1,10 +1,5 @@
 export type MutedReason = "user" | "capture" | "extension";
 
-export interface ZoomSettings {
-  mode: "automatic" | "manual" | "disabled";
-  scope: "per-origin" | "per-tab";
-}
-
 export interface MuteChange {
   muted: boolean;
   reason: MutedReason;
@@ -21,11 +16,7 @@ export interface TabExtras {
   requestedMute: MuteChange | null;
   autoDiscardable: boolean;
   discarded: boolean;
-  zoom: ZoomSettings;
-  zoomFactor: number;
 }
-
-export const DEFAULT_ZOOM: ZoomSettings = { mode: "automatic", scope: "per-origin" };
 
 export class TabStates {
   private readonly entries = new Map<number, TabExtras>();
@@ -43,8 +34,6 @@ export class TabStates {
         requestedMute: null,
         autoDiscardable: true,
         discarded: false,
-        zoom: DEFAULT_ZOOM,
-        zoomFactor: 1,
       };
       this.entries.set(contentsId, entry);
     }

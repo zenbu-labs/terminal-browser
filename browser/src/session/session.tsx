@@ -1147,7 +1147,6 @@ class Session {
   }
 
   private applyZoom(direction: ZoomDirection) {
-    if (this.extensions?.zoomDisabled(this.tabs.active)) return;
     this.tabs.activeHandle?.zoom(direction);
   }
 

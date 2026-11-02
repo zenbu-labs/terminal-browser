@@ -4,8 +4,9 @@ import { PatternSet } from "../manifest";
 import type { Caller } from "../router";
 import { WINDOW_ID_CURRENT } from "../service";
 import type { ExtensionService } from "../service";
-import type { ZoomSettings } from "../tab-state";
 import type { ExtensionWindow, TabRef } from "../window";
+import { nativeZoomMode, zoomSettings } from "../zoom";
+import type { ZoomSettings } from "../zoom";
 
 interface QueryInfo {
   active?: boolean;
@@ -329,17 +330,16 @@ export function installTabs(service: ExtensionService) {
   router.handle("tabs.setZoom", (caller, first, second) => {
     const [tabId, factor] = second === undefined ? [undefined, first] : [first, second];
     const ref = tabId === undefined ? activeTabOf(caller) : find(tabId);
-    if (service.tabStates.get(ref.tab.contentsId ?? -1).zoom.mode === "disabled") {
-      throw new Error("Cannot zoom a tab in disabled mode.");
-    }
-    const zoom = typeof factor === "number" && factor > 0 ? factor : 1;
-    service.contentsOf(ref.tab)?.setZoomFactor(zoom);
-    service.zoomMayHaveChanged();
+    const contents = service.contentsOf(ref.tab);
+    if (!contents) return;
+    if (contents.getZoomMode() === "disabled") throw new Error("Cannot zoom a tab in disabled mode.");
+    contents.setZoomFactor(typeof factor === "number" && factor > 0 ? factor : 1);
   });
 
   router.handle("tabs.getZoomSettings", (caller, tabId) => {
     const ref = tabId === undefined ? activeTabOf(caller) : find(tabId);
-    return { ...service.tabStates.get(ref.tab.contentsId ?? -1).zoom, defaultZoomFactor: 1 };
+    const contents = service.contentsOf(ref.tab);
+    return { ...(contents ? zoomSettings(contents) : { mode: "automatic", scope: "per-origin" }), defaultZoomFactor: 1 };
   });
 
   router.handle("tabs.setZoomSettings", (caller, first, second) => {
@@ -351,9 +351,7 @@ export function installTabs(service: ExtensionService) {
       throw new Error('Can only set scope to "per-origin" in "automatic" mode.');
     }
     const scope = mode === "automatic" && requested.scope !== "per-tab" ? "per-origin" : "per-tab";
-    service.tabStates.get(ref.tab.contentsId ?? -1).zoom = { mode, scope };
-    if (mode === "disabled") service.contentsOf(ref.tab)?.setZoomFactor(1);
-    service.zoomMayHaveChanged();
+    service.contentsOf(ref.tab)?.setZoomMode(nativeZoomMode({ mode, scope }));
   });
 
   router.handle("tabs.detectLanguage", async (caller, tabId) => {

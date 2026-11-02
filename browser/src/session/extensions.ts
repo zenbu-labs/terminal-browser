@@ -317,10 +317,6 @@ export class PaneExtensions implements WindowHost {
     this.hooks.requestRender();
   }
 
-  zoomDisabled(tab: Tab | null): boolean {
-    return tab?.contentsId != null && this.service.tabStates.peek(tab.contentsId)?.zoom.mode === "disabled";
-  }
-
   boundsChanged() {
     this.service.windowBoundsChanged(this.window);
   }
