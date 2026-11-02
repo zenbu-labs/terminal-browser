@@ -16,7 +16,7 @@ import {
 import type { ExtensionRecord } from "shared";
 
 import { extensionIcon } from "./action";
-import { asManifest, optionalPermissions, optionsPage, permissionWarnings, requiredPermissions } from "./manifest";
+import { asManifest, grantedByInstall, optionalPermissions, optionsPage, permissionWarnings, requiredPermissions } from "./manifest";
 import { setNativeUserScriptsAllowed } from "./native";
 import type { LoadedExtension } from "./loaded";
 import type { ExtensionService } from "./service";
@@ -90,7 +90,7 @@ export class ExtensionManager {
       homepageUrl: manifest?.homepage_url ?? null,
       permissions: [...required.api, ...record.grantedPermissions],
       hosts: [...required.hosts, ...record.grantedOrigins],
-      warnings: manifest ? permissionWarnings(required) : [],
+      warnings: manifest ? permissionWarnings(grantedByInstall(manifest)) : [],
       errors: this.service.visibleErrors(record.id),
       collectErrors: this.service.collectsErrors(record.id),
       userScripts: {

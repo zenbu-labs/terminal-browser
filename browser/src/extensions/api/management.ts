@@ -3,7 +3,7 @@ import type { ExtensionRecord } from "shared";
 
 import { extensionIcon } from "../action";
 import { LoadedExtension } from "../loaded";
-import { asManifest, permissionWarnings, requiredPermissions } from "../manifest";
+import { asManifest, grantedByInstall, permissionWarnings } from "../manifest";
 import type { Manifest } from "../manifest";
 import { hasUserGesture } from "../router";
 import type { Caller } from "../router";
@@ -41,7 +41,7 @@ export function installManagement(service: ExtensionService) {
     return record;
   };
 
-  const warningsFor = (manifest: Manifest) => permissionWarnings(requiredPermissions(manifest));
+  const warningsFor = (manifest: Manifest) => permissionWarnings(grantedByInstall(manifest));
 
   const confirmUninstall = async (caller: Caller, record: ExtensionRecord) => {
     const window = service.currentWindow(caller);

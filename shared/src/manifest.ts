@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { parse as parseDomain } from "tldts";
+
 export interface ManifestIcons {
   [size: string]: string;
 }
@@ -140,15 +142,14 @@ export class PatternSet {
   get sources(): string[] {
     return this.patterns.map((pattern) => pattern.source);
   }
-
-  coversAllHosts(): boolean {
-    return this.patterns.some((p) => p.all || (p.host === "*" && p.schemes.includes("https")));
-  }
 }
 
 export interface RequestedPermissions {
   api: string[];
   hosts: string[];
+  // Content script matches: Chrome warns about them like hosts, but they
+  // don't give API access to those sites.
+  scriptableHosts?: string[];
 }
 
 // Permissions Chrome on macOS drops from a user-installed extension
@@ -182,12 +183,32 @@ function availableApi(manifest: Manifest, permission: string): boolean {
   return manifest.manifest_version < 3 || !MV2_ONLY_PERMISSIONS.has(permission);
 }
 
+// Everything an install grants, like Chrome's PermissionsParser: some
+// manifest keys add API permissions on top of the required ones.
+export function grantedByInstall(manifest: Manifest): RequestedPermissions {
+  const required = requiredPermissions(manifest);
+  const implied = [
+    ...(manifest.devtools_page ? ["devtools"] : []),
+    ...(manifest.chrome_url_overrides?.newtab ? ["newTabPageOverride"] : []),
+  ];
+  return { ...required, api: [...new Set([...required.api, ...implied])] };
+}
+
+function contentScriptMatches(manifest: Manifest): string[] {
+  const scripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [];
+  const matches = scripts.flatMap((script) =>
+    Array.isArray(script?.matches) ? script.matches.filter((match): match is string => typeof match === "string") : [],
+  );
+  return [...new Set(matches)];
+}
+
 export function requiredPermissions(manifest: Manifest): RequestedPermissions {
   const raw = manifest.permissions ?? [];
   const hosts = manifest.manifest_version >= 3 ? [...(manifest.host_permissions ?? [])] : raw.filter(isHostPattern);
   return {
     api: raw.filter((p) => availableApi(manifest, p)),
     hosts: [...new Set(hosts)],
+    scriptableHosts: contentScriptMatches(manifest),
   };
 }
 
@@ -228,36 +249,142 @@ const API_WARNINGS: Record<string, string> = {
   webNavigation: "Read your browsing history",
   "system.storage": "Identify and eject storage devices",
   ttsEngine: "Read all text spoken using synthesized speech",
+  newTabPageOverride: "Replace the page you see when opening a new tab",
 };
 
-export function hostLabel(pattern: string): string | null {
-  const parsed = parseMatchPattern(pattern);
-  if (!parsed) return null;
-  if (parsed.all || parsed.host === "*") return null;
-  return parsed.subdomains ? `all ${parsed.host} sites` : parsed.host;
+const FULL_URL_ACCESS_APIS = new Set(["debugger", "devtools", "pageCapture", "proxy", "tabCapture"]);
+
+function effectivePatterns(requested: RequestedPermissions): MatchPattern[] {
+  return [...requested.hosts, ...(requested.scriptableHosts ?? [])]
+    .map(parseMatchPattern)
+    .filter((pattern): pattern is MatchPattern => pattern !== null);
+}
+
+// Chrome's PermissiveGetHostRegistryLength, ignoring unknown and private registries.
+function registryLength(host: string): number {
+  const parsed = parseDomain(host, { allowPrivateDomains: false });
+  return parsed.isIcann && parsed.domain && parsed.publicSuffix ? parsed.publicSuffix.length : 0;
+}
+
+function matchesAllUrls(pattern: MatchPattern): boolean {
+  return pattern.all || (pattern.subdomains && pattern.host === "*");
+}
+
+// Chrome's URLPattern::MatchesEffectiveTld: <all_urls>, http://*/* or *.com.
+function matchesEffectiveTld(pattern: MatchPattern): boolean {
+  if (matchesAllUrls(pattern)) return true;
+  if (!pattern.subdomains) return false;
+  return registryLength(pattern.host) === 0 && registryLength(`notatld.${pattern.host}`) > 0;
+}
+
+function isFilePattern(pattern: MatchPattern): boolean {
+  return !pattern.all && pattern.schemes.length === 1 && pattern.schemes[0] === "file";
+}
+
+function warnsAllHosts(requested: RequestedPermissions): boolean {
+  return effectivePatterns(requested).some(matchesEffectiveTld) || requested.api.some((p) => FULL_URL_ACCESS_APIS.has(p));
+}
+
+function hasAccessToAllHosts(requested: RequestedPermissions): boolean {
+  return effectivePatterns(requested).some(matchesAllUrls) || requested.api.some((p) => FULL_URL_ACCESS_APIS.has(p));
+}
+
+function displayHost(host: string): string {
+  try {
+    return new URL(`http://${host}`).hostname;
+  } catch {
+    return host;
+  }
+}
+
+const PREFERRED_REGISTRIES = ["com", "net", "org"];
+
+function betterRegistry(a: string, b: string): boolean {
+  const rank = PREFERRED_REGISTRIES.indexOf(a);
+  const other = PREFERRED_REGISTRIES.indexOf(b);
+  return a !== b && rank !== -1 && (other === -1 || rank < other);
+}
+
+// Chrome's permission_message_util::GetDistinctHosts: example.com and
+// example.de count as one site, shown with the best of their registries.
+function distinctHosts(patterns: MatchPattern[], includeRegistry: boolean, excludeFiles: boolean): string[] {
+  const seen: [string, string][] = [];
+  for (const pattern of patterns) {
+    if (excludeFiles && isFilePattern(pattern)) continue;
+    const bare = pattern.host === "*" || isFilePattern(pattern) ? "" : displayHost(pattern.host);
+    let host = pattern.subdomains ? `*.${bare}` : bare;
+    let registry = "";
+    const length = bare ? registryLength(bare) : 0;
+    if (length > 0) {
+      if (includeRegistry) registry = host.slice(host.length - length);
+      host = host.slice(0, host.length - length);
+    }
+    const existing = seen.find(([name]) => name === host);
+    if (!existing) seen.push([host, registry]);
+    else if (includeRegistry && betterRegistry(registry, existing[1])) existing[1] = registry;
+  }
+  return [...new Set(seen.map(([host, registry]) => host + registry))].sort();
+}
+
+function hostWarning(requested: RequestedPermissions): string | null {
+  const labels = distinctHosts(effectivePatterns(requested), true, true).map((host) =>
+    host.startsWith("*.") ? `all ${host.slice(2)} sites` : host,
+  );
+  if (labels.length === 1) return `Read and change your data on ${labels[0]}`;
+  if (labels.length === 2) return `Read and change your data on ${labels[0]} and ${labels[1]}`;
+  if (labels.length === 3) return `Read and change your data on ${labels[0]}, ${labels[1]}, and ${labels[2]}`;
+  if (labels.length > 3) return "Read and change your data on a number of websites";
+  return null;
 }
 
 export function permissionWarnings(requested: RequestedPermissions): string[] {
   const warnings: string[] = [];
-  const hosts = new PatternSet(requested.hosts);
-  const allHosts = hosts.coversAllHosts() || requested.api.some((p) => ["debugger", "pageCapture", "proxy", "tabCapture"].includes(p));
-  if (allHosts) {
-    warnings.push("Read and change all your data on all websites");
-  } else if (requested.hosts.length > 0) {
-    const labels = [...new Set(requested.hosts.map(hostLabel).filter((l): l is string => l !== null))];
-    if (labels.length === 1) warnings.push(`Read and change your data on ${labels[0]}`);
-    else if (labels.length === 2) warnings.push(`Read and change your data on ${labels[0]} and ${labels[1]}`);
-    else if (labels.length === 3) warnings.push(`Read and change your data on ${labels[0]}, ${labels[1]}, and ${labels[2]}`);
-    else if (labels.length > 3) warnings.push("Read and change your data on a number of websites");
-  }
+  const allHosts = warnsAllHosts(requested);
+  const hosts = allHosts ? "Read and change all your data on all websites" : hostWarning(requested);
+  if (hosts) warnings.push(hosts);
   for (const permission of requested.api) {
     const warning = API_WARNINGS[permission];
     if (!warning) continue;
-    if (allHosts && warning === "Read and change all your data on all websites") continue;
     if (allHosts && warning === "Read your browsing history") continue;
     if (!warnings.includes(warning)) warnings.push(warning);
   }
   return warnings;
+}
+
+const HOSTS_ALL = "<hosts-all>";
+
+// Chrome's IsAPIOrManifestPrivilegeIncrease: new API ids only count when they
+// bring a warning the user hasn't seen.
+function apiIncrease(granted: RequestedPermissions, requested: RequestedPermissions): boolean {
+  const grantedIds = new Set([...granted.api, ...(warnsAllHosts(granted) ? [HOSTS_ALL] : [])]);
+  const totalIds = new Set([...grantedIds, ...requested.api, ...(warnsAllHosts(requested) ? [HOSTS_ALL] : [])]);
+  if ([...totalIds].every((id) => grantedIds.has(id))) return false;
+  const messages = (ids: Set<string>) =>
+    permissionWarnings({ api: [...ids].filter((id) => id !== HOSTS_ALL), hosts: ids.has(HOSTS_ALL) ? ["<all_urls>"] : [] });
+  const seen = new Set(messages(grantedIds));
+  return messages(totalIds).some((message) => !seen.has(message));
+}
+
+// Chrome's IsHostPrivilegeIncrease: moving from *.example.com to
+// a.example.com is not an increase.
+function hostIncrease(granted: RequestedPermissions, requested: RequestedPermissions): boolean {
+  if (hasAccessToAllHosts(granted)) return false;
+  if (hasAccessToAllHosts(requested)) return true;
+  const grantedHosts = distinctHosts(effectivePatterns(granted), false, false);
+  const newHosts = distinctHosts(effectivePatterns(requested), false, false).filter((host) => !grantedHosts.includes(host));
+  return newHosts.some(
+    (host) =>
+      !grantedHosts.some((owned) => {
+        if (owned.length <= 2 || !owned.startsWith("*.")) return false;
+        const suffix = owned.slice(1);
+        return host.endsWith(suffix) || host === suffix.slice(1);
+      }),
+  );
+}
+
+// Chrome's ChromePermissionMessageProvider::IsPrivilegeIncrease.
+export function isPrivilegeIncrease(granted: RequestedPermissions, requested: RequestedPermissions): boolean {
+  return hostIncrease(granted, requested) || apiIncrease(granted, requested);
 }
 
 export function resolveExtensionPath(root: string, relative: string): string | null {

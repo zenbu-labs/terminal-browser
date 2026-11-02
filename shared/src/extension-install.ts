@@ -5,7 +5,8 @@ import { CrxError, checkStoreUpdates, downloadStoreCrx, downloadUpdate, readZipF
 import type { VerifyOptions } from "./crx";
 import { EXTENSIONS_DIR, deleteExtension, getExtension, saveExtension, updateExtension } from "./extensions";
 import type { ExtensionRecord, ExtensionSource } from "./extensions";
-import { asManifest, permissionWarnings, requiredPermissions } from "./manifest";
+import { asManifest, grantedByInstall, isPrivilegeIncrease, permissionWarnings } from "./manifest";
+import type { RequestedPermissions } from "./manifest";
 
 // A verified CRX that hasn't been unpacked yet: enough to show the install
 // prompt before anything touches the profile.
@@ -111,18 +112,27 @@ export function readCrxFile(file: string): ExtensionPackage {
 }
 
 export function installWarnings(manifest: Record<string, unknown>): string[] {
-  return permissionWarnings(requiredPermissions(asManifest(manifest)));
+  return permissionWarnings(grantedByInstall(asManifest(manifest)));
 }
 
-// An update needs the user's OK again when it asks for anything new, like Chrome.
-export function permissionsIncreased(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
-  const old = requiredPermissions(asManifest(before));
-  const next = requiredPermissions(asManifest(after));
-  const oldWarnings = new Set(permissionWarnings(old));
-  if (permissionWarnings(next).some((warning) => !oldWarnings.has(warning))) return true;
-  const oldApis = new Set(old.api);
-  const oldHosts = new Set(old.hosts);
-  return next.api.some((api) => !oldApis.has(api)) || next.hosts.some((host) => !oldHosts.has(host));
+// What the user already accepted for an installed version: everything it
+// asked for at install, plus the optional permissions they granted since.
+export function acceptedPermissions(
+  manifest: Record<string, unknown>,
+  record: Pick<ExtensionRecord, "grantedPermissions" | "grantedOrigins">,
+): RequestedPermissions {
+  const installed = grantedByInstall(asManifest(manifest));
+  return {
+    api: [...installed.api, ...record.grantedPermissions],
+    hosts: [...installed.hosts, ...record.grantedOrigins],
+    scriptableHosts: installed.scriptableHosts,
+  };
+}
+
+// A new version needs the user's OK again when it asks for more than they
+// accepted, like Chrome.
+export function permissionsIncreased(accepted: RequestedPermissions, after: Record<string, unknown>): boolean {
+  return isPrivilegeIncrease(accepted, grantedByInstall(asManifest(after)));
 }
 
 export function sourceFor(pkg: ExtensionPackage): ExtensionSource {
@@ -220,9 +230,9 @@ export async function downloadStoreUpdates(records: ExtensionRecord[], prodversi
     const base = { id: current.id, name: current.name, previousVersion: current.version, version: update.version };
     try {
       const pkg = packageFromCrx(await downloadUpdate(update), { expectedId: current.id, requireWebStore: true });
-      const before = readInstalledManifest(current) ?? {};
+      const accepted = acceptedPermissions(readInstalledManifest(current) ?? {}, current);
       const dir = unpackPackage(pkg);
-      const increased = permissionsIncreased(before, pkg.manifest);
+      const increased = current.disabledReason === "permissions_increase" || permissionsIncreased(accepted, pkg.manifest);
       const record = recordForPackage(pkg, dir, {
         enabled: current.enabled && !increased,
         disabledReason: increased ? "permissions_increase" : current.disabledReason,
