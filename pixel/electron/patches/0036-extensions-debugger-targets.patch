@@ -1,0 +1,137 @@
+diff --git a/shell/browser/api/electron_api_extensions.cc b/shell/browser/api/electron_api_extensions.cc
+--- a/shell/browser/api/electron_api_extensions.cc
++++ b/shell/browser/api/electron_api_extensions.cc
+@@ -8,12 +8,14 @@
+ #include "base/containers/fixed_flat_map.h"
+ #include "base/containers/map_util.h"
+ #include "chrome/browser/browser_process.h"
++#include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_registry.h"
+ #include "extensions/browser/extension_util.h"
+ #include "extensions/browser/permissions/active_tab_permission_granter.h"
+ #include "extensions/browser/permissions/permissions_updater.h"
+ #include "extensions/browser/user_script_manager.h"
++#include "extensions/common/constants.h"
+ #include "extensions/common/manifest_handlers/permissions_parser.h"
+ #include "extensions/common/mojom/view_type.mojom.h"
+ #include "extensions/common/permissions/permission_set.h"
+@@ -27,6 +29,7 @@
+ #include "shell/browser/electron_browser_context.h"
+ #include "shell/browser/extensions/electron_extension_web_contents_observer.h"
+ #include "shell/browser/extensions/electron_extension_system.h"
++#include "shell/browser/extensions/electron_extension_tab_util.h"
+ #include "shell/browser/javascript_environment.h"
+ #include "shell/common/gin_converters/content_converter.h"
+ #include "shell/common/gin_converters/extension_converter.h"
+@@ -301,6 +304,46 @@ bool Extensions::SetUserScriptsAllowed(const std::string& extension_id,
+   return true;
+ }
+ 
++// The targets chrome.debugger.getTargets() lists, described the same way.
++base::ListValue Extensions::GetDebuggerTargets() {
++  base::ListValue targets;
++  for (const auto& host : content::DevToolsAgentHost::GetOrCreateAll()) {
++    const std::string& type = host->GetType();
++    if (type == content::DevToolsAgentHost::kTypeTab ||
++        (host->GetBrowserContext() &&
++         host->GetBrowserContext() != browser_context())) {
++      continue;
++    }
++    base::DictValue target;
++    target.Set("id", host->GetId());
++    target.Set("title", host->GetTitle());
++    target.Set("attached", host->IsAttached());
++    target.Set("url", host->GetURL().spec());
++    std::string target_type = "other";
++    // Like Chrome, a page is a tab or an extension page; other pages, such as
++    // DevTools windows, are "other".
++    int tab_id = type == content::DevToolsAgentHost::kTypePage
++                     ? extensions::GetElectronTabId(host->GetWebContents())
++                     : extension_misc::kUnknownTabId;
++    if (tab_id != extension_misc::kUnknownTabId) {
++      target.Set("tabId", tab_id);
++      target_type = "page";
++    } else if (type == content::DevToolsAgentHost::kTypePage &&
++               host->GetURL().SchemeIs(extensions::kExtensionScheme)) {
++      target.Set("extensionId", host->GetURL().GetHost());
++      target_type = "page";
++    } else if (type == content::DevToolsAgentHost::kTypeServiceWorker ||
++               type == content::DevToolsAgentHost::kTypeSharedWorker) {
++      target_type = "worker";
++    }
++    target.Set("type", target_type);
++    if (host->GetFaviconURL().is_valid())
++      target.Set("faviconUrl", host->GetFaviconURL().spec());
++    targets.Append(std::move(target));
++  }
++  return targets;
++}
++
+ bool Extensions::SetViewType(content::WebContents* web_contents,
+                              const std::string& view_type) {
+   static constexpr auto kViewTypes =
+@@ -353,7 +396,8 @@ gin::ObjectTemplateBuilder Extensions::GetObjectTemplateBuilder(
+       .SetMethod("setRuntimePermissions", &Extensions::SetRuntimePermissions)
+       .SetMethod("getActivePermissions", &Extensions::GetActivePermissions)
+       .SetMethod("setUserScriptsAllowed", &Extensions::SetUserScriptsAllowed)
+-      .SetMethod("setViewType", &Extensions::SetViewType);
++      .SetMethod("setViewType", &Extensions::SetViewType)
++      .SetMethod("getDebuggerTargets", &Extensions::GetDebuggerTargets);
+ }
+ 
+ const gin::WrapperInfo* Extensions::wrapper_info() const {
+diff --git a/shell/browser/api/electron_api_extensions.h b/shell/browser/api/electron_api_extensions.h
+--- a/shell/browser/api/electron_api_extensions.h
++++ b/shell/browser/api/electron_api_extensions.h
+@@ -6,6 +6,7 @@
+ #define ELECTRON_SHELL_BROWSER_API_ELECTRON_API_EXTENSIONS_H_
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/values.h"
+ #include "extensions/browser/extension_registry_observer.h"
+ #include "gin/wrappable.h"
+ #include "shell/browser/event_emitter_mixin.h"
+@@ -51,6 +52,7 @@ class Extensions final : public gin::Wrappable<Extensions>,
+                       content::WebContents* web_contents);
+   void RevokeActiveTab(const std::string& extension_id,
+                        content::WebContents* web_contents);
++  base::ListValue GetDebuggerTargets();
+   bool SetViewType(content::WebContents* web_contents,
+                    const std::string& view_type);
+   v8::Local<v8::Promise> SetRuntimePermissions(
+diff --git a/shell/browser/extensions/electron_extension_tab_util.cc b/shell/browser/extensions/electron_extension_tab_util.cc
+--- a/shell/browser/extensions/electron_extension_tab_util.cc
++++ b/shell/browser/extensions/electron_extension_tab_util.cc
+@@ -5,6 +5,7 @@
+ #include "shell/browser/extensions/electron_extension_tab_util.h"
+ 
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/url_constants.h"
+ #include "extensions/browser/view_type_utils.h"
+ #include "extensions/common/constants.h"
+ #include "shell/browser/api/electron_api_web_contents.h"
+@@ -27,7 +28,9 @@ int GetElectronTabId(content::WebContents* web_contents) {
+       web_contents ? electron::api::WebContents::From(web_contents) : nullptr;
+   if (!contents ||
+       contents->type() == electron::api::WebContents::Type::kRemote ||
+-      contents->type() == electron::api::WebContents::Type::kBackgroundPage)
++      contents->type() == electron::api::WebContents::Type::kBackgroundPage ||
++      web_contents->GetLastCommittedURL().SchemeIs(
++          content::kChromeDevToolsScheme))
+     return extension_misc::kUnknownTabId;
+   switch (GetViewType(web_contents)) {
+     case mojom::ViewType::kInvalid:
+diff --git a/shell/browser/extensions/electron_extension_tab_util.h b/shell/browser/extensions/electron_extension_tab_util.h
+--- a/shell/browser/extensions/electron_extension_tab_util.h
++++ b/shell/browser/extensions/electron_extension_tab_util.h
+@@ -27,7 +27,8 @@ electron::api::WebContents* GetElectronTabById(
+ 
+ // Returns the tab id extensions see for |web_contents|: its
+ // electron::api::WebContents id, or -1 when it is not a tab, such as an
+-// extension's background page, popup, side panel or offscreen document.
++// extension's background page, popup, side panel or offscreen document, or a
++// DevTools window.
+ int GetElectronTabId(content::WebContents* web_contents);
+ 
+ }  // namespace extensions

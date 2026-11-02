@@ -1,6 +1,7 @@
 import type { WebContents } from "electron";
 
 import type { LoadedExtension } from "../loaded";
+import { nativeDebuggerTargets } from "../native";
 import type { ExtensionService } from "../service";
 
 const permission = "debugger";
@@ -116,7 +117,11 @@ export function installDebugger(service: ExtensionService) {
       const target = (value ?? {}) as Debuggee;
       if (!supportedVersion(version)) throw new Error(`Requested protocol version is not supported: ${version}.`);
       const { tabId, contents } = tabOf(target);
-      if (!mayDebugUrl(extension, contents.getURL())) throw new Error("Cannot attach to this target.");
+      const url = contents.getURL();
+      if (url.startsWith("chrome-extension://") && !url.startsWith(extension.baseUrl)) {
+        throw new Error("Cannot access a chrome-extension:// URL of different extension");
+      }
+      if (!mayDebugUrl(extension, url)) throw new Error("Cannot attach to this target.");
       if (attachments.has(key(extension.id, tabId))) throw new Error(`Another debugger is already attached to the tab with id: ${tabId}.`);
       const cdp = contents.debugger;
       if (!cdp.isAttached()) cdp.attach("1.3");
@@ -190,8 +195,8 @@ export function installDebugger(service: ExtensionService) {
 
   router.handle(
     "debugger.getTargets",
-    (caller) =>
-      service.allTabs().map((ref) => {
+    (caller) => [
+      ...service.allTabs().map((ref) => {
         const info = service.tabInfo(caller.extension, ref);
         const tabId = ref.tab.contentsId!;
         const target: Record<string, unknown> = {
@@ -205,6 +210,9 @@ export function installDebugger(service: ExtensionService) {
         if (info.favIconUrl) target.faviconUrl = info.favIconUrl;
         return target;
       }),
+      // Chromium's other targets: extension pages outside tabs, workers and the rest.
+      ...nativeDebuggerTargets(service.session).filter((target) => target.tabId === undefined),
+    ],
     { permission },
   );
 

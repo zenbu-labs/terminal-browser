@@ -1,0 +1,24 @@
+diff --git a/shell/browser/electron_browser_main_parts.cc b/shell/browser/electron_browser_main_parts.cc
+--- a/shell/browser/electron_browser_main_parts.cc
++++ b/shell/browser/electron_browser_main_parts.cc
+@@ -120,6 +120,7 @@
+ #include "components/keyed_service/content/browser_context_dependency_manager.h"
+ #include "extensions/browser/browser_context_keyed_service_factories.h"
+ #include "extensions/common/extension_api.h"
++#include "extensions/common/extension_l10n_util.h"
+ #include "shell/browser/extensions/electron_browser_context_keyed_service_factories.h"
+ #include "shell/browser/extensions/electron_extensions_browser_client.h"
+ #include "shell/common/extensions/electron_extensions_client.h"
+@@ -460,6 +461,12 @@ int ElectronBrowserMainParts::PreCreateThreads() {
+   std::string app_locale = l10n_util::GetApplicationLocale(loaded_locale);
+   ElectronBrowserClient::SetApplicationLocale(app_locale);
+   fake_browser_process_->SetApplicationLocale(app_locale);
++#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
++  // Extensions read the UI locale (@@ui_locale) and pick their messages from
++  // these, as in Chrome; unset, they fall back to "en".
++  extension_l10n_util::SetProcessLocale(app_locale);
++  extension_l10n_util::SetPreferredLocale(app_locale);
++#endif
+ 
+ #if BUILDFLAG(IS_LINUX)
+   // Reset to the original LC_ALL since we should not be changing it.

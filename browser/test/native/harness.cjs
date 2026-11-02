@@ -20,7 +20,8 @@ function report(key, value) {
   waiters.delete(key);
 }
 
-function waitReport(key, ms = 15000) {
+// Generous: the first launch of a freshly copied or signed Electron.app waits for macOS to scan its helpers.
+function waitReport(key, ms = 60000) {
   if (reports.has(key)) return Promise.resolve(reports.get(key));
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`no report "${key}" within ${ms}ms`)), ms);
@@ -64,6 +65,7 @@ function writeExtension(name, port, files) {
     ...files,
   };
   for (const [file, content] of Object.entries(all)) {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
     fs.writeFileSync(path.join(dir, file), typeof content === "string" ? content : JSON.stringify(content, null, 1));
   }
   return dir;

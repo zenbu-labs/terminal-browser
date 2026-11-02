@@ -3,7 +3,7 @@ import { session as electronSession } from "electron";
 import type { ClearDataOptions, Session } from "electron";
 
 import { browsing } from "../browsing";
-import { clearSessionData } from "../extensions/native";
+import { clearSessionData, type NativeClearDataType } from "../extensions/native";
 
 export const BROWSING_DATA_KINDS = ["history", "siteData", "cache"] as const;
 
@@ -20,9 +20,15 @@ export function browsingSession(partition: string | null): Session {
   return electronSession.fromPartition(partition.startsWith("persist:") ? partition : `persist:${partition}`);
 }
 
-type ElectronDataType = NonNullable<ClearDataOptions["dataTypes"]>[number];
-
-const SITE_DATA_TYPES: ElectronDataType[] = ["cookies", "localStorage", "indexedDB", "serviceWorkers", "fileSystems", "backgroundFetch"];
+const SITE_DATA_TYPES: NativeClearDataType[] = [
+  "cookies",
+  "localStorage",
+  "indexedDB",
+  "serviceWorkers",
+  "fileSystems",
+  "backgroundFetch",
+  "cacheStorage",
+];
 
 export async function clearBrowsingData(session: Session, kinds: readonly BrowsingDataKind[], since = 0): Promise<void> {
   if (kinds.includes("history")) {
@@ -30,9 +36,9 @@ export async function clearBrowsingData(session: Session, kinds: readonly Browsi
     else browsing().history.deleteAll();
   }
   if (since > 0) {
-    const dataTypes: ElectronDataType[] = [
+    const dataTypes: NativeClearDataType[] = [
       ...(kinds.includes("siteData") ? SITE_DATA_TYPES : []),
-      ...(kinds.includes("cache") ? (["cache"] as const) : []),
+      ...(kinds.includes("cache") ? (["httpCache"] as const) : []),
     ];
     if (dataTypes.length) await clearSessionData(session, { dataTypes }, since);
     return;

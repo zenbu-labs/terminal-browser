@@ -3,6 +3,7 @@ import type { Cookie, CookiesSetDetails } from "electron";
 import type { LoadedExtension } from "../loaded";
 import type { ExtensionService } from "../service";
 import { frameForDocument, frameForId, frameIdOf } from "./web-navigation";
+import { type NativePartitionKey, nativeCookies } from "../native";
 
 const STORE_ID = "0";
 const permission = "cookies";
@@ -53,6 +54,8 @@ function chromeCookie(cookie: Cookie): chrome.cookies.Cookie {
     storeId: STORE_ID,
   };
   if (!result.session && cookie.expirationDate !== undefined) result.expirationDate = cookie.expirationDate;
+  const partitionKey = (cookie as { partitionKey?: NativePartitionKey }).partitionKey;
+  if (partitionKey) result.partitionKey = partitionKey;
   return result;
 }
 
@@ -87,12 +90,19 @@ function site(url: URL): string {
   return `${url.protocol}//${labels.slice(short ? -3 : -2).join(".")}`;
 }
 
+// Chrome reads unpartitioned cookies when no partitionKey is given, the given partition's when it has a
+// topLevelSite, and every partition's for a partitionKey without one.
+function partitionFilter(partitionKey: CookieDetails["partitionKey"]): NativePartitionKey | null | undefined {
+  if (!partitionKey) return null;
+  return partitionKey.topLevelSite ? partitionKey : undefined;
+}
+
 export function installCookies(service: ExtensionService) {
   const { router } = service;
-  const cookies = service.session.cookies;
+  const cookies = nativeCookies(service.session);
 
-  const matching = async (url: URL, name: string) => {
-    const found = await cookies.get({ url: url.href, name });
+  const matching = async (url: URL, name: string, partitionKey: CookieDetails["partitionKey"]) => {
+    const found = await cookies.get({ url: url.href, name, partitionKey: partitionFilter(partitionKey) });
     return found.sort((a, b) => (b.path ?? "").length - (a.path ?? "").length);
   };
 
@@ -103,8 +113,7 @@ export function installCookies(service: ExtensionService) {
       const url = parseUrl(details.url);
       checkHost(caller.extension, url);
       checkStore(details.storeId);
-      if (details.partitionKey?.topLevelSite) return null;
-      const [cookie] = await matching(url, String(details.name ?? ""));
+      const [cookie] = await matching(url, String(details.name ?? ""), details.partitionKey);
       return cookie ? chromeCookie(cookie) : null;
     },
     { permission },
@@ -116,8 +125,7 @@ export function installCookies(service: ExtensionService) {
       const details = (value ?? {}) as CookieDetails;
       const url = details.url !== undefined ? parseUrl(details.url) : null;
       checkStore(details.storeId);
-      if (details.partitionKey?.topLevelSite) return [];
-      const filter: Electron.CookiesGetFilter = {};
+      const filter: Parameters<typeof cookies.get>[0] = { partitionKey: partitionFilter(details.partitionKey) };
       if (url) filter.url = url.href;
       if (details.name !== undefined) filter.name = details.name;
       if (details.path !== undefined) filter.path = details.path;
@@ -140,11 +148,8 @@ export function installCookies(service: ExtensionService) {
       checkHost(caller.extension, url);
       checkStore(details.storeId);
       const name = details.name ?? "";
-      // Electron's cookie store can't hold partitioned cookies yet; storing it
-      // unpartitioned would share it across every site, so it fails instead.
-      if (details.partitionKey?.topLevelSite) throw new Error(`Failed to parse or set cookie named "${name}".`);
       // Unlike Electron's defaults, Chrome leaves sameSite unspecified and secure off.
-      const set: CookiesSetDetails = {
+      const set: CookiesSetDetails & { partitionKey?: NativePartitionKey } = {
         url: url.href,
         name,
         value: details.value ?? "",
@@ -155,12 +160,13 @@ export function installCookies(service: ExtensionService) {
       if (details.path !== undefined) set.path = details.path;
       if (details.httpOnly !== undefined) set.httpOnly = details.httpOnly;
       if (details.expirationDate !== undefined) set.expirationDate = details.expirationDate;
+      if (details.partitionKey?.topLevelSite) set.partitionKey = details.partitionKey;
       try {
         await cookies.set(set);
       } catch {
         throw new Error(`Failed to parse or set cookie named "${name}".`);
       }
-      const found = await cookies.get({ url: url.href, name });
+      const found = await cookies.get({ url: url.href, name, partitionKey: set.partitionKey ?? null });
       const wantedPath = details.path;
       const cookie =
         found.find((c) => (wantedPath === undefined || c.path === wantedPath) && (details.domain === undefined || domainMatches(c.domain ?? "", details.domain))) ??
@@ -178,7 +184,7 @@ export function installCookies(service: ExtensionService) {
       checkHost(caller.extension, url);
       checkStore(details.storeId);
       const name = String(details.name ?? "");
-      if (!details.partitionKey?.topLevelSite) await cookies.remove(url.href, name);
+      await cookies.remove(url.href, name, partitionFilter(details.partitionKey));
       const result: Record<string, unknown> = { url: url.href, name, storeId: STORE_ID };
       if (details.partitionKey) result.partitionKey = details.partitionKey;
       return result;

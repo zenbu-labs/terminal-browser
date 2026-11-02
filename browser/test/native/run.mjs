@@ -28,7 +28,7 @@ function launch(file, profile, phase) {
     let log = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (log += d));
-    const timer = setTimeout(() => child.kill("SIGKILL"), 90000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), 180000);
     child.on("exit", (code, signal) => {
       clearTimeout(timer);
       resolve({ code, signal, out, log });

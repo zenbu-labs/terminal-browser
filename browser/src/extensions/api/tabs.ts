@@ -5,6 +5,7 @@ import type { Caller } from "../router";
 import { WINDOW_ID_CURRENT } from "../service";
 import type { ExtensionService } from "../service";
 import type { ExtensionWindow, TabRef } from "../window";
+import { loadURLFromOrigin, setNativeZoomMode } from "../native";
 import { nativeZoomMode, zoomSettings } from "../zoom";
 import type { ZoomSettings } from "../zoom";
 
@@ -58,7 +59,19 @@ function webAccessibleTo(target: LoadedExtension, pathname: string, callerId: st
   });
 }
 
-export function extensionNavigableUrl(service: ExtensionService, extension: LoadedExtension, raw: string): string {
+// A page of another extension that it doesn't make web accessible to `extension`.
+function otherExtensionPage(service: ExtensionService, extension: LoadedExtension, resolved: string): boolean {
+  if (!resolved.startsWith("chrome-extension://") || resolved.startsWith(extension.baseUrl)) return false;
+  const target = service.get(/^chrome-extension:\/\/([a-p]{32})\//.exec(resolved)?.[1] ?? "");
+  return !target || !webAccessibleTo(target, new URL(resolved).pathname, extension.id);
+}
+
+export function extensionNavigableUrl(
+  service: ExtensionService,
+  extension: LoadedExtension,
+  raw: string,
+  { allowOtherExtensionPages = false } = {},
+): string {
   if (extension.manifest.manifest_version >= 3 && /^\s*javascript:/i.test(raw)) {
     throw new Error("JavaScript URLs are not allowed in API based extension navigations. Use chrome.scripting.executeScript instead.");
   }
@@ -67,11 +80,8 @@ export function extensionNavigableUrl(service: ExtensionService, extension: Load
   if (BLOCKED_SCHEMES.some((scheme) => resolved.toLowerCase().startsWith(scheme))) {
     throw new Error(`Cannot navigate to ${raw}.`);
   }
-  if (resolved.startsWith("chrome-extension://") && !resolved.startsWith(extension.baseUrl)) {
-    const target = service.get(/^chrome-extension:\/\/([a-p]{32})\//.exec(resolved)?.[1] ?? "");
-    if (!target || !webAccessibleTo(target, new URL(resolved).pathname, extension.id)) {
-      throw new Error(`Cannot navigate to ${raw}.`);
-    }
+  if (!allowOtherExtensionPages && otherExtensionPage(service, extension, resolved)) {
+    throw new Error(`Cannot navigate to ${raw}.`);
   }
   return resolved;
 }
@@ -167,14 +177,21 @@ export function installTabs(service: ExtensionService) {
     const props = (properties ?? {}) as chrome.tabs.CreateProperties;
     const window = service.resolveWindowId(caller, props.windowId);
     if (!window) throw new Error(`No window with id: ${props.windowId}.`);
-    const url = props.url ? extensionNavigableUrl(service, caller.extension, props.url) : window.host.resolveUrl("");
+    const url = props.url
+      ? extensionNavigableUrl(service, caller.extension, props.url, { allowOtherExtensionPages: true })
+      : window.host.resolveUrl("");
     const opener = props.openerTabId !== undefined ? service.tabRef(props.openerTabId) : null;
     const active = (props.active ?? props.selected ?? true) && !service.importer.justImported(caller.extension.id);
-    const tab = window.host.tabs.create(url, active, {
+    // Like Chrome, the tab opens and the extension's navigation to the other extension's page is blocked there.
+    const blocked = otherExtensionPage(service, caller.extension, url);
+    const tab = window.host.tabs.create(blocked ? "about:blank" : url, active, {
       index: props.index,
       openerId: opener?.window === window ? opener.tab.id : null,
     });
-    return info(caller.extension, await waitForReady(window, tab));
+    const ready = await waitForReady(window, tab);
+    const contents = service.contentsOf(tab);
+    if (blocked && contents) await loadURLFromOrigin(contents, url, caller.extension.baseUrl).catch(() => {});
+    return info(caller.extension, ready);
   });
 
   router.handle("tabs.duplicate", async (caller, tabId) => {
@@ -191,7 +208,9 @@ export function installTabs(service: ExtensionService) {
     if (props.url !== undefined) {
       const url = extensionNavigableUrl(service, caller.extension, props.url);
       if (ref.tab.contentsId !== null) service.tabStates.get(ref.tab.contentsId).navigatingFromExtension = true;
-      ref.tab.ref.current?.loadURL(url);
+      const contents = service.contentsOf(ref.tab);
+      if (contents) void loadURLFromOrigin(contents, url, caller.extension.baseUrl).catch(() => {});
+      else ref.tab.ref.current?.loadURL(url);
     }
     if (props.active || props.highlighted || props.selected) {
       ref.window.host.tabs.activate(ref.tab.id);
@@ -354,7 +373,8 @@ export function installTabs(service: ExtensionService) {
       throw new Error('Can only set scope to "per-origin" in "automatic" mode.');
     }
     const scope = mode === "automatic" && requested.scope !== "per-tab" ? "per-origin" : "per-tab";
-    service.contentsOf(ref.tab)?.setZoomMode(nativeZoomMode({ mode, scope }));
+    const contents = service.contentsOf(ref.tab);
+    if (contents) setNativeZoomMode(contents, nativeZoomMode({ mode, scope }), false);
   });
 
   router.handle("tabs.detectLanguage", async (caller, tabId) => {

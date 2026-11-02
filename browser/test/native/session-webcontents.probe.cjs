@@ -1,4 +1,5 @@
-// session.clearData({ since }) (patch 0029) and webContents "zoom-level-changed" (0030).
+// session.clearData({ since }) (patch 0029) with the httpCache/cacheStorage types (0037), webContents
+// "zoom-level-changed" (0030) and setZoomMode(mode, { persist }) (0038).
 const { BrowserWindow } = require("electron");
 
 require("./harness.cjs").run("session-webcontents", async ({ ses, port, eq, sleep }) => {
@@ -20,4 +21,21 @@ require("./harness.cjs").run("session-webcontents", async ({ ses, port, eq, slee
   page.webContents.setZoomMode("disabled");
   await sleep(300);
   eq(changes, [{ oldZoomFactor: 1, newZoomFactor: 1.5 }, { oldZoomFactor: 1.5, newZoomFactor: 1 }], "zoom-level-changed");
+
+  page.webContents.setZoomMode("isolated", { persist: false });
+  await page.loadURL(`${url}page?next`);
+  eq(page.webContents.getZoomMode(), "default", "per-tab zoom mode after navigating with persist: false");
+  page.webContents.setZoomMode("isolated");
+  await page.loadURL(`${url}page?again`);
+  eq(page.webContents.getZoomMode(), "isolated", "per-tab zoom mode after navigating by default");
+
+  const cached = () =>
+    page.webContents.executeJavaScript(`caches.open("probe").then((c) => c.keys()).then((k) => k.length)`);
+  await page.webContents.executeJavaScript(`caches.open("probe").then((c) => c.put("/x", new Response("x"))).then(() => 1)`);
+  await ses.clearData({ dataTypes: ["httpCache"] });
+  eq(await cached(), 1, "Cache Storage after clearing the HTTP cache");
+  await ses.clearData({ dataTypes: ["cacheStorage"], since: Date.now() + 60000 });
+  eq(await cached(), 1, "Cache Storage after clearing only newer Cache Storage");
+  await ses.clearData({ dataTypes: ["cacheStorage"] });
+  eq(await cached(), 0, "Cache Storage after clearing it");
 });

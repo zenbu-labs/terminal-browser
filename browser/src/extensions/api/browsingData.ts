@@ -100,15 +100,9 @@ export function installBrowsingData(service: ExtensionService) {
     ];
     const scope: ClearDataOptions = removal.origins ? { origins: removal.origins } : excludeOrigins.length ? { excludeOrigins } : {};
     if (dataTypes.length) await clearSessionData(session, { ...scope, dataTypes }, since);
-    if (types.includes("cacheStorage")) {
-      if (removal.origins) {
-        for (const origin of removal.origins) await session.clearStorageData({ origin, storages: ["cachestorage"] });
-      } else {
-        await session.clearStorageData({ storages: ["cachestorage"] });
-      }
-    }
+    if (types.includes("cacheStorage")) await clearSessionData(session, { ...scope, dataTypes: ["cacheStorage"] }, since);
     if (types.includes("cache")) {
-      if (filtered) await clearSessionData(session, { ...scope, dataTypes: ["cache"] }, since);
+      if (filtered) await clearSessionData(session, { ...scope, dataTypes: ["httpCache"] }, since);
       else await clearBrowsingData(session, ["cache"], since);
     }
   };

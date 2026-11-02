@@ -1,0 +1,253 @@
+diff --git a/docs/api/cookies.md b/docs/api/cookies.md
+--- a/docs/api/cookies.md
++++ b/docs/api/cookies.md
+@@ -90,6 +90,9 @@ The following methods are available on instances of `Cookies`:
+   * `secure` boolean (optional) - Filters cookies by their Secure property.
+   * `session` boolean (optional) - Filters out session or persistent cookies.
+   * `httpOnly` boolean (optional) - Filters cookies by httpOnly.
++  * `partitionKey` [CookiePartitionKey](structures/cookie-partition-key.md) | null (optional) - Retrieves only the
++    cookies of this partition, or only unpartitioned cookies when `null`. A key without `topLevelSite`, like an
++    omitted one, matches every cookie.
+ 
+ Returns `Promise<Cookie[]>` - A promise which resolves an array of cookie objects.
+ 
+@@ -112,15 +115,21 @@ the response.
+     seconds since the UNIX epoch. If omitted then the cookie becomes a session
+     cookie and will not be retained between sessions.
+   * `sameSite` string (optional) - The [Same Site](https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies#SameSite_cookies) policy to apply to this cookie.  Can be `unspecified`, `no_restriction`, `lax` or `strict`.  Default is `lax`.
++  * `partitionKey` [CookiePartitionKey](structures/cookie-partition-key.md) (optional) - Sets a partitioned
++    ([CHIPS](https://developer.mozilla.org/en-US/docs/Web/Privacy/Privacy_sandbox/Partitioned_cookies)) cookie in
++    this partition. The cookie must be `secure`.
+ 
+ Returns `Promise<void>` - A promise which resolves when the cookie has been set.
+ 
+ Sets a cookie with `details`.
+ 
+-#### `cookies.remove(url, name)`
++#### `cookies.remove(url, name[, partitionKey])`
+ 
+ * `url` string - The URL associated with the cookie.
+ * `name` string - The name of cookie to remove.
++* `partitionKey` [CookiePartitionKey](structures/cookie-partition-key.md) | null (optional) - Removes only the
++  cookie of this partition, or only the unpartitioned cookie when `null`. Omitted, cookies of every partition are
++  removed.
+ 
+ Returns `Promise<void>` - A promise which resolves when the cookie has been removed.
+ 
+diff --git a/docs/api/structures/cookie-partition-key.md b/docs/api/structures/cookie-partition-key.md
+new file mode 100644
+--- /dev/null
++++ b/docs/api/structures/cookie-partition-key.md
+@@ -0,0 +1,6 @@
++# CookiePartitionKey Object
++
++* `topLevelSite` string (optional) - The site of the top-level frame the partition belongs to, e.g.
++  `https://example.com`.
++* `hasCrossSiteAncestor` boolean (optional) - Whether the cookie was set in a frame with a cross-site ancestor.
++  When setting or looking up a cookie, defaults to whether its URL is cross-site to `topLevelSite`.
+diff --git a/docs/api/structures/cookie.md b/docs/api/structures/cookie.md
+--- a/docs/api/structures/cookie.md
++++ b/docs/api/structures/cookie.md
+@@ -13,3 +13,4 @@
+   the number of seconds since the UNIX epoch. Not provided for session
+   cookies.
+ * `sameSite` string - The [Same Site](https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies#SameSite_cookies) policy applied to this cookie.  Can be `unspecified`, `no_restriction`, `lax` or `strict`.
++* `partitionKey` [CookiePartitionKey](cookie-partition-key.md) (optional) - The partition of a partitioned cookie.
+diff --git a/filenames.auto.gni b/filenames.auto.gni
+--- a/filenames.auto.gni
++++ b/filenames.auto.gni
+@@ -88,6 +88,7 @@ auto_filenames = {
+     "docs/api/structures/certificate.md",
+     "docs/api/structures/clipboard-bookmark.md",
+     "docs/api/structures/color-space.md",
++    "docs/api/structures/cookie-partition-key.md",
+     "docs/api/structures/cookie.md",
+     "docs/api/structures/cpu-usage.md",
+     "docs/api/structures/crash-report.md",
+diff --git a/shell/browser/api/electron_api_cookies.cc b/shell/browser/api/electron_api_cookies.cc
+--- a/shell/browser/api/electron_api_cookies.cc
++++ b/shell/browser/api/electron_api_cookies.cc
+@@ -11,16 +11,21 @@
+ 
+ #include "base/containers/fixed_flat_map.h"
+ #include "base/time/time.h"
++#include "base/types/expected.h"
+ #include "base/values.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/storage_partition.h"
++#include "gin/arguments.h"
+ #include "gin/dictionary.h"
+ #include "gin/object_template_builder.h"
++#include "net/base/schemeful_site.h"
+ #include "net/cookies/canonical_cookie.h"
+ #include "net/cookies/cookie_change_dispatcher.h"
+ #include "net/cookies/cookie_inclusion_status.h"
++#include "net/cookies/cookie_partition_key.h"
++#include "net/cookies/cookie_partition_key_collection.h"
+ #include "net/cookies/cookie_store.h"
+ #include "net/cookies/cookie_util.h"
+ #include "shell/browser/cookie_change_notifier.h"
+@@ -71,6 +76,16 @@ struct Converter<net::CanonicalCookie> {
+     if (val.IsPersistent())
+       dict.Set("expirationDate", val.ExpiryDate().InSecondsFSinceUnixEpoch());
+     dict.Set("sameSite", val.SameSite());
++    if (val.IsPartitioned()) {
++      if (auto key = net::CookiePartitionKey::Serialize(val.PartitionKey());
++          key.has_value()) {
++        gin::Dictionary partition_key(isolate, v8::Object::New(isolate));
++        partition_key.Set("topLevelSite", key->TopLevelSite());
++        partition_key.Set("hasCrossSiteAncestor",
++                          key->has_cross_site_ancestor());
++        dict.Set("partitionKey", partition_key);
++      }
++    }
+     return ConvertToV8(isolate, dict).As<v8::Object>();
+   }
+ };
+@@ -108,9 +123,49 @@ namespace electron::api {
+ 
+ namespace {
+ 
++// Reads a {topLevelSite, hasCrossSiteAncestor} partition key. Without
++// hasCrossSiteAncestor, it is whether |url| is cross-site to the top-level
++// site, as in Chrome's cookies extension API.
++base::expected<net::CookiePartitionKey, std::string> ParsePartitionKey(
++    const base::DictValue& dict,
++    const std::string& top_level_site,
++    const GURL& url) {
++  bool has_cross_site_ancestor =
++      dict.FindBool("hasCrossSiteAncestor")
++          .value_or(url.is_valid() && net::SchemefulSite(url) !=
++                                          net::SchemefulSite(
++                                              GURL(top_level_site)));
++  return net::CookiePartitionKey::FromUntrustedInput(top_level_site,
++                                                     has_cross_site_ancestor);
++}
++
++// A partitionKey filter of null matches unpartitioned cookies only, one with
++// a topLevelSite matches the cookies of that partition only, and one without
++// a topLevelSite (or no partitionKey at all) matches every cookie.
++bool MatchesPartitionKey(const base::DictValue& filter,
++                         const net::CanonicalCookie& cookie) {
++  const base::Value* value = filter.Find("partitionKey");
++  if (!value)
++    return true;
++  if (value->is_none())
++    return !cookie.IsPartitioned();
++  if (!value->is_dict())
++    return false;
++  const std::string* top_level_site =
++      value->GetDict().FindString("topLevelSite");
++  if (!top_level_site)
++    return true;
++  const std::string* url = filter.FindString("url");
++  auto key = ParsePartitionKey(value->GetDict(), *top_level_site,
++                               GURL(url ? *url : ""));
++  return key.has_value() && cookie.PartitionKey() == *key;
++}
++
+ // Returns whether |cookie| matches |filter|.
+ bool MatchesCookie(const base::DictValue& filter,
+                    const net::CanonicalCookie& cookie) {
++  if (!MatchesPartitionKey(filter, cookie))
++    return false;
+   const std::string* str;
+   if ((str = filter.FindString("name")) && *str != cookie.Name())
+     return false;
+@@ -343,7 +398,8 @@ v8::Local<v8::Promise> Cookies::Get(v8::Isolate* isolate,
+ 
+ v8::Local<v8::Promise> Cookies::Remove(v8::Isolate* isolate,
+                                        const GURL& url,
+-                                       const std::string& name) {
++                                       const std::string& name,
++                                       gin::Arguments* args) {
+   gin_helper::Promise<void> promise(isolate);
+   v8::Local<v8::Promise> handle = promise.GetHandle();
+ 
+@@ -351,6 +407,31 @@ v8::Local<v8::Promise> Cookies::Remove(v8::Isolate* isolate,
+   cookie_deletion_filter->url = url;
+   cookie_deletion_filter->cookie_name = name;
+ 
++  // A partitionKey of null removes only the unpartitioned cookie, and one with
++  // a topLevelSite only the cookie of that partition.
++  v8::Local<v8::Value> partition_key_arg;
++  if (args->GetNext(&partition_key_arg)) {
++    base::Value partition_key;
++    gin::ConvertFromV8(isolate, partition_key_arg, &partition_key);
++    if (partition_key.is_none()) {
++      cookie_deletion_filter->cookie_partition_key_collection =
++          net::CookiePartitionKeyCollection();
++    } else if (const std::string* top_level_site =
++                   partition_key.is_dict()
++                       ? partition_key.GetDict().FindString("topLevelSite")
++                       : nullptr) {
++      auto key =
++          ParsePartitionKey(partition_key.GetDict(), *top_level_site, url);
++      if (!key.has_value()) {
++        promise.RejectWithErrorMessage(key.error());
++        return handle;
++      }
++      cookie_deletion_filter->cookie_partition_key_collection =
++          net::CookiePartitionKeyCollection(*key);
++      cookie_deletion_filter->partitioned_state_only = true;
++    }
++  }
++
+   auto* storage_partition = browser_context_->GetDefaultStoragePartition();
+   auto* manager = storage_partition->GetCookieManagerForBrowserProcess();
+ 
+@@ -400,13 +481,27 @@ v8::Local<v8::Promise> Cookies::Set(v8::Isolate* isolate,
+     return handle;
+   }
+ 
++  std::optional<net::CookiePartitionKey> partition_key;
++  if (const base::DictValue* partition_key_dict =
++          details.FindDict("partitionKey")) {
++    if (const std::string* top_level_site =
++            partition_key_dict->FindString("topLevelSite")) {
++      auto key = ParsePartitionKey(*partition_key_dict, *top_level_site, url);
++      if (!key.has_value()) {
++        promise.RejectWithErrorMessage(key.error());
++        return handle;
++      }
++      partition_key = *key;
++    }
++  }
++
+   net::CookieInclusionStatus status;
+   auto canonical_cookie = net::CanonicalCookie::CreateSanitizedCookie(
+       url, name ? *name : "", value ? *value : "", domain ? *domain : "",
+       path ? *path : "", ParseTimeProperty(details.FindDouble("creationDate")),
+       ParseTimeProperty(details.FindDouble("expirationDate")),
+       ParseTimeProperty(details.FindDouble("lastAccessDate")), secure,
+-      http_only, same_site, net::COOKIE_PRIORITY_DEFAULT, std::nullopt,
++      http_only, same_site, net::COOKIE_PRIORITY_DEFAULT, partition_key,
+       &status);
+ 
+   if (!canonical_cookie || !canonical_cookie->IsCanonical()) {
+diff --git a/shell/browser/api/electron_api_cookies.h b/shell/browser/api/electron_api_cookies.h
+--- a/shell/browser/api/electron_api_cookies.h
++++ b/shell/browser/api/electron_api_cookies.h
+@@ -15,6 +15,10 @@
+ 
+ class GURL;
+ 
++namespace gin {
++class Arguments;
++}  // namespace gin
++
+ namespace gin_helper {
+ class Dictionary;
+ }  // namespace gin_helper
+@@ -57,7 +61,8 @@ class Cookies final : public gin::Wrappable<Cookies>,
+   v8::Local<v8::Promise> Set(v8::Isolate*, base::DictValue details);
+   v8::Local<v8::Promise> Remove(v8::Isolate*,
+                                 const GURL& url,
+-                                const std::string& name);
++                                const std::string& name,
++                                gin::Arguments* args);
+   v8::Local<v8::Promise> FlushStore(v8::Isolate*);
+ 
+   // CookieChangeNotifier subscription:
