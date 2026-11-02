@@ -526,15 +526,13 @@ export class ExtensionService {
     return info;
   }
 
-  // `asCreated` describes the tab as it was when it opened, before its first page
-  // committed: the pane only reports a new tab once it's running, often after that.
-  tabInfo(extension: LoadedExtension, { window, tab }: TabRef, asCreated = false): chrome.tabs.Tab {
+  tabInfo(extension: LoadedExtension, { window, tab }: TabRef): chrome.tabs.Tab {
     const tabs = window.host.tabs;
     const active = tabs.active === tab;
     const contents = this.contentsOf(tab);
     const extras = tab.contentsId !== null ? this.tabStates.peek(tab.contentsId) : null;
-    const committed = asCreated || (extras && !extras.committed) ? "" : tab.state.url;
-    const pending = asCreated ? tab.url : extras?.pendingUrl;
+    const committed = extras && !extras.committed ? "" : tab.state.url;
+    const pending = extras?.pendingUrl;
     const url = this.chromeUrlFor(tab.contentsId, committed);
     const pendingUrl = pending && pending !== committed ? this.chromeUrlFor(tab.contentsId, pending) : undefined;
     const info: chrome.tabs.Tab = {
@@ -552,12 +550,12 @@ export class ExtensionService {
       groupId: -1,
       incognito: false,
       mutedInfo: { muted: tab.state.muted, ...extras?.muted } as chrome.tabs.MutedInfo,
-      status: extras?.discarded ? "unloaded" : asCreated || tab.state.loading ? "loading" : "complete",
+      status: extras?.discarded ? "unloaded" : tab.state.loading ? "loading" : "complete",
       width: contents ? window.host.size().width : 0,
       height: contents ? window.host.size().height : 0,
       lastAccessed: tab.lastAccessed,
       url,
-      title: (asCreated ? "" : tab.state.title) || url || pendingUrl || "",
+      title: tab.state.title || url || pendingUrl || "",
     };
     if (pendingUrl) info.pendingUrl = pendingUrl;
     if (extras?.favIconUrl) info.favIconUrl = extras.favIconUrl;
@@ -568,6 +566,23 @@ export class ExtensionService {
 
   overridePage(contentsId: number, chromeUrl: string, url: string) {
     this.overriddenPages.set(contentsId, { chromeUrl, url });
+  }
+
+  // Resolves once the tab's first page has committed (or finished loading).
+  whenCommitted(tab: Tab): Promise<void> {
+    const contents = this.contentsOf(tab);
+    if (!contents || tab.contentsId === null || this.tabStates.peek(tab.contentsId)?.committed) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        contents.off("did-navigate", done);
+        contents.off("did-stop-loading", done);
+        contents.off("destroyed", done);
+        resolve();
+      };
+      contents.on("did-navigate", done);
+      contents.on("did-stop-loading", done);
+      contents.once("destroyed", done);
+    });
   }
 
   tabGone(contentsId: number) {
@@ -669,6 +684,14 @@ function committedUrl(contents: WebContents): string {
   }
 }
 
+function canonicalUrl(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
 // Turns tab changes in one pane into chrome.tabs events for every extension.
 class TabEvents {
   constructor(
@@ -686,12 +709,12 @@ class TabEvents {
       const committed = committedUrl(contents);
       extras.reportedUrl = committed;
       extras.committed = committed !== "";
-      extras.pendingUrl = committed ? null : tab.url;
+      extras.pendingUrl = committed ? null : canonicalUrl(tab.url);
       extras.zoomFactor = contents.getZoomFactor();
       this.watchContents(contents, tab);
       this.service.tabContentsReady(contents, ref);
     }
-    this.service.broadcast("tabs.onCreated", (extension) => [this.service.tabInfo(extension, ref, true)]);
+    this.service.broadcast("tabs.onCreated", (extension) => [this.service.tabInfo(extension, ref)]);
     if (this.window.host.tabs.active === tab) {
       this.service.sidePanels.tabActivated(this.window);
       this.announceActivated(tab);
@@ -825,7 +848,7 @@ class TabEvents {
     });
     contents.prependListener("did-stop-loading", () => {
       const state = extras();
-      if (state && committedUrl(contents)) state.committed = true;
+      if (state) state.committed = true;
       settled();
     });
     contents.on("page-favicon-updated", (_event, favicons) => {

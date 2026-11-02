@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Box, Image, Input, Text } from "@zenbu-labs/pixel";
-import type { NodeHandle } from "@zenbu-labs/pixel";
+import type { NodeHandle, TextSpan } from "@zenbu-labs/pixel";
 import { Icon } from "./icons";
 import { mix } from "./theme";
 import type { Theme } from "./theme";
@@ -176,6 +176,22 @@ function KeywordChip({ keyword, rem, theme }: { keyword: KeywordView; rem: numbe
   );
 }
 
+function descriptionSpans(runs: KeywordView["rows"][number]["runs"], selected: boolean, theme: Theme): TextSpan[] {
+  let at = 0;
+  return runs.map((run) => {
+    const start = at;
+    at += run.text.length;
+    const color = run.styles.includes("url")
+      ? theme.accent
+      : run.styles.includes("dim")
+        ? theme.disabled
+        : selected || run.styles.includes("match")
+          ? theme.fg
+          : theme.muted;
+    return { start, end: at, color, bold: run.styles.includes("match") };
+  });
+}
+
 function KeywordRows({
   keyword,
   actions,
@@ -206,30 +222,30 @@ function KeywordRows({
             }}
             onClick={() => actions.keywordPick(i)}
           >
-            <Icon icon="puzzle" size={rem * 0.8} color={theme.disabled} />
-            <Box style={{ flexGrow: 1, flexBasis: 0, flexShrink: 1, overflow: "hidden" }}>
-              {row.runs.map((run, j) => (
-                <Text
-                  key={j}
-                  style={{
-                    fontSize: rem * 0.95,
-                    wrap: false,
-                    selectable: false,
-                    flexShrink: 0,
-                    fontWeight: run.styles.includes("match") ? "bold" : "normal",
-                    color: run.styles.includes("url")
-                      ? theme.accent
-                      : run.styles.includes("dim")
-                        ? theme.disabled
-                        : selected || run.styles.includes("match")
-                          ? theme.fg
-                          : theme.muted,
-                  }}
-                >
-                  {run.text}
-                </Text>
-              ))}
-            </Box>
+            {keyword.icon ? (
+              <Image
+                src={keyword.icon}
+                error={<Icon icon="puzzle" size={rem * 0.8} color={theme.disabled} />}
+                style={{ width: rem * 0.8, height: rem * 0.8, flexShrink: 0 }}
+              />
+            ) : (
+              <Icon icon="puzzle" size={rem * 0.8} color={theme.disabled} />
+            )}
+            <Text
+              style={{
+                flexGrow: 1,
+                flexBasis: 0,
+                flexShrink: 1,
+                fontSize: rem * 0.95,
+                color: selected ? theme.fg : theme.muted,
+                wrap: false,
+                selectable: false,
+                overflow: "hidden",
+              }}
+              spans={descriptionSpans(row.runs, selected, theme)}
+            >
+              {row.runs.map((run) => run.text).join("")}
+            </Text>
             {row.deletable && (
               <Box
                 style={{ padding: rem * 0.2, cornerRadius: rem * 0.3, hoverBackground: theme.hover, flexShrink: 0 }}

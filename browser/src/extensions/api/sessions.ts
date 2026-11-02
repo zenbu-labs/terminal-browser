@@ -65,6 +65,7 @@ export function installSessions(service: ExtensionService) {
       const tabs = window.host.tabs;
       const tab = tabs.create(entry.url, true, { index: Math.min(entry.index, tabs.count) });
       await tabs.whenReady(tab);
+      await service.whenCommitted(tab);
       return { lastModified: Math.floor(Date.now() / 1000), tab: service.tabInfo(caller.extension, { window, tab }) };
     },
     options,

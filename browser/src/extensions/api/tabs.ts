@@ -173,7 +173,7 @@ export function installTabs(service: ExtensionService) {
       index: props.index,
       openerId: opener?.window === window ? opener.tab.id : null,
     });
-    return service.tabInfo(caller.extension, await waitForReady(window, tab), true);
+    return info(caller.extension, await waitForReady(window, tab));
   });
 
   router.handle("tabs.duplicate", async (caller, tabId) => {

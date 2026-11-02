@@ -115,6 +115,10 @@ export class TabManager {
     if (activate) this.activate(tab.id);
     this.host.onTabsChanged();
     this.host.requestRender();
+    // The page exists once the render above has run, well before its first navigation commits.
+    setImmediate(() => {
+      if (this.tabs.includes(tab)) this.noticeContents(tab);
+    });
     return tab;
   }
 
