@@ -16,6 +16,8 @@ export interface TabExtras {
   requestedMute: MuteChange | null;
   autoDiscardable: boolean;
   discarded: boolean;
+  // Set by tabs.update; Chrome reports such navigations as links, not typed.
+  navigatingFromExtension: boolean;
 }
 
 export class TabStates {
@@ -34,6 +36,7 @@ export class TabStates {
         requestedMute: null,
         autoDiscardable: true,
         discarded: false,
+        navigatingFromExtension: false,
       };
       this.entries.set(contentsId, entry);
     }

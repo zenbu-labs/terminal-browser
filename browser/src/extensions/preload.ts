@@ -444,7 +444,7 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
   namespace("tabs", {
     methods: spec.tabs.methods,
     events: spec.tabs.events,
-    constants: { TAB_ID_NONE: -1, TAB_INDEX_NONE: -1, MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND: 2 },
+    constants: { TAB_ID_NONE: -1, TAB_INDEX_NONE: -1, MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND: 2, SPLIT_VIEW_ID_NONE: -1 },
   });
 
   namespace("windows", {

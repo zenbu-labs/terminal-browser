@@ -154,7 +154,9 @@ class TabNavigation {
     if (!frame || details.isSameDocument || !reportsNavigation(details.url)) return;
     const state = this.state(frame);
     state.redirected = false;
-    state.rendererInitiated = Boolean(details.initiator);
+    const extras = frame.parent ? null : this.service.tabStates.peek(this.contents.id);
+    state.rendererInitiated = Boolean(details.initiator) || Boolean(extras?.navigatingFromExtension);
+    if (extras) extras.navigatingFromExtension = false;
     const url = details.url;
     const { documentId: _documentId, ...rest } = this.frameDetails(frame, false);
     this.emit("onBeforeNavigate", url, { ...rest, url, processId: -1 });

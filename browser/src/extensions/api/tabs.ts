@@ -190,6 +190,7 @@ export function installTabs(service: ExtensionService) {
     const props = (properties ?? {}) as chrome.tabs.UpdateProperties;
     if (props.url !== undefined) {
       const url = extensionNavigableUrl(service, caller.extension, props.url);
+      if (ref.tab.contentsId !== null) service.tabStates.get(ref.tab.contentsId).navigatingFromExtension = true;
       ref.tab.ref.current?.loadURL(url);
     }
     if (props.active || props.highlighted || props.selected) {
@@ -294,13 +295,15 @@ export function installTabs(service: ExtensionService) {
   router.handle("tabs.discard", async (caller, tabId) => {
     const ref = tabId === undefined ? leastRecentlyUsed() : find(tabId);
     const extras = service.tabStates.get(ref.tab.contentsId ?? -1);
+    const active = ref.window.host.tabs.active === ref.tab;
     if (!extras.discarded) {
-      await ref.tab.ref.current?.cdp("Page.setWebLifecycleState", { state: "frozen" }).catch(() => {});
+      // The active tab is reloaded right away, and a page that is still shown can't be frozen.
+      if (!active) await ref.tab.ref.current?.cdp("Page.setWebLifecycleState", { state: "frozen" }).catch(() => {});
       extras.discarded = true;
       service.tabChanged(ref, { discarded: true });
     }
     const discarded = info(caller.extension, ref);
-    if (ref.window.host.tabs.active === ref.tab) service.reloadDiscarded(ref);
+    if (active) service.reloadDiscarded(ref);
     return discarded;
   });
 

@@ -596,6 +596,7 @@ export class ExtensionService {
       autoDiscardable: extras?.autoDiscardable ?? true,
       frozen: false,
       groupId: -1,
+      ...NOT_SPLIT,
       incognito: false,
       mutedInfo: { muted: tab.state.muted, ...extras?.muted } as chrome.tabs.MutedInfo,
       status: extras?.discarded ? "unloaded" : tab.state.loading ? "loading" : "complete",
@@ -670,6 +671,7 @@ export class ExtensionService {
       autoDiscardable: true,
       frozen: false,
       groupId: -1,
+      ...NOT_SPLIT,
       incognito: false,
       status: !contents.isDestroyed() && contents.isLoading() ? "loading" : "complete",
       url,
@@ -703,6 +705,9 @@ export class ExtensionService {
 }
 
 // WebContents.getURL() already shows a navigation that hasn't committed yet; the frame doesn't.
+// Chrome's tabs also say which split view they're in (missing from @types/chrome); terminal-browser has none.
+const NOT_SPLIT: object = { splitViewId: -1 };
+
 function committedUrl(contents: WebContents): string {
   try {
     return contents.mainFrame.url;

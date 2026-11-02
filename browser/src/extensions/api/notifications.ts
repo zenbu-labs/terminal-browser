@@ -94,7 +94,7 @@ export function installNotifications(service: ExtensionService) {
   };
 
   const show = async (extension: LoadedExtension, id: string, options: NotificationOptions) => {
-    const icon = await loadImage(extension, options.iconUrl!);
+    const icon = options.iconUrl ? await loadImage(extension, options.iconUrl) : undefined;
     if (options.imageUrl) await loadImage(extension, options.imageUrl);
     const entry: Shown = { options, native: null };
     of(extension.id).set(id, entry);
@@ -145,7 +145,7 @@ export function installNotifications(service: ExtensionService) {
     "notifications.create",
     async (caller, ...args) => {
       const { id: requested, options } = split(args);
-      if (!options.type || !options.iconUrl || options.title === undefined || options.message === undefined) {
+      if (!options.type || options.title === undefined) {
         throw new Error("Some of the required properties are missing: type, iconUrl, title and message.");
       }
       validate(options);

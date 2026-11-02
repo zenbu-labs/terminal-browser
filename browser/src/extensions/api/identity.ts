@@ -11,7 +11,7 @@ const ABORTED = -3;
 
 const USER_REJECTED = "The user did not approve access.";
 const INTERACTION_REQUIRED =
-  "User interaction required. Try setting `abortOnLoadForNonInteractive` and `timeoutMsForNonInteractive` if multiple navigations are required, or if the authorization page requires user interaction.";
+  "User interaction required. Try setting `abortOnLoadForNonInteractive` and `timeoutMsForNonInteractive` if multiple navigations are required, or if code is used for redirects in the authorization page after it's loaded.";
 const PAGE_LOAD_FAILURE = "Authorization page could not be loaded.";
 const PAGE_LOAD_TIMED_OUT = "Authorization page load timed out.";
 
