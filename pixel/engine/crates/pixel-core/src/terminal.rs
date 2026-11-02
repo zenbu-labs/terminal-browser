@@ -286,6 +286,7 @@ pub struct Terminal {
     pending: Vec<u8>,
     lone_escape_since: Option<Instant>,
     transport: FrameTransport,
+    transport_retry: TransportRetry,
     herdr: Option<crate::herdr::Herdr>,
     herdr_target: Option<crate::herdr::HerdrTarget>,
     herdr_retry: Option<(Instant, Duration)>,
@@ -556,6 +557,7 @@ impl Terminal {
             pending: Vec::new(),
             lone_escape_since: None,
             transport: FrameTransport::Inline,
+            transport_retry: TransportRetry::Settled,
             herdr: None,
             herdr_target,
             herdr_retry: None,
@@ -629,13 +631,12 @@ impl Terminal {
             crate::logging::info("terminal", format!("frame transport forced to {forced:?}"));
             return Ok(forced);
         }
-        if self.probe_shared_memory()? {
-            crate::logging::info("terminal", "frames go through shared memory");
-            return Ok(FrameTransport::Shared);
+        let probe = self.probe_frames()?;
+        if probe == FrameProbe::Unanswered && self.wrapper.relayed() && !present::over_ssh(env) {
+            self.transport_retry = TransportRetry::Ready;
         }
-        if self.probe_frame_file()? {
-            crate::logging::info("terminal", "frames go through a file the terminal re-reads");
-            return Ok(FrameTransport::File);
+        if let FrameProbe::Accepted(transport) = probe {
+            return Ok(transport);
         }
         // bad
         crate::logging::warn(
@@ -650,10 +651,49 @@ impl Terminal {
         Ok(FrameTransport::Inline)
     }
 
-    fn probe_frame_file(&mut self) -> io::Result<bool> {
+    fn probe_frames(&mut self) -> io::Result<FrameProbe> {
+        let shared = self.probe_shared_memory()?;
+        if shared == Some(true) {
+            crate::logging::info("terminal", "frames go through shared memory");
+            return Ok(FrameProbe::Accepted(FrameTransport::Shared));
+        }
+        let file = self.probe_frame_file()?;
+        if file == Some(true) {
+            crate::logging::info("terminal", "frames go through a file the terminal re-reads");
+            return Ok(FrameProbe::Accepted(FrameTransport::File));
+        }
+        if shared.is_none() && file.is_none() {
+            return Ok(FrameProbe::Unanswered);
+        }
+        Ok(FrameProbe::Refused)
+    }
+
+    pub(crate) fn retry_frame_transport(&mut self, client_present: bool) -> io::Result<()> {
+        let due = match self.transport_retry {
+            TransportRetry::Settled => false,
+            TransportRetry::Ready => true,
+            TransportRetry::NotBefore(at) => client_present || Instant::now() >= at,
+        };
+        if !due {
+            return Ok(());
+        }
+        self.transport_retry = match self.probe_frames()? {
+            FrameProbe::Accepted(transport) => {
+                self.transport = transport;
+                TransportRetry::Settled
+            }
+            FrameProbe::Unanswered if !client_present => {
+                TransportRetry::NotBefore(Instant::now() + TRANSPORT_RETRY_GAP)
+            }
+            FrameProbe::Unanswered | FrameProbe::Refused => TransportRetry::Settled,
+        };
+        Ok(())
+    }
+
+    fn probe_frame_file(&mut self) -> io::Result<Option<bool>> {
         let path = self.frame_path(FRAME_SLOTS, 0);
         if std::fs::write(&path, [0u8, 0, 0, 255]).is_err() {
-            return Ok(false);
+            return Ok(Some(false));
         }
         let name = path.to_string_lossy().into_owned();
         self.io.out().write_all(&crate::kitty::kitty_query_medium(
@@ -665,17 +705,17 @@ impl Terminal {
             self.wrapper,
         ))?;
         self.io.out().flush()?;
-        let reply = self.read_report(FRAME_PROBE_TIMEOUT_MS, |buf| {
+        let reply = self.read_report_keeping_input(FRAME_PROBE_TIMEOUT_MS, |buf| {
             parse_probe_reply(buf, b"Gi=300;")
         })?;
         let _ = std::fs::remove_file(&path);
-        Ok(reply.unwrap_or(false))
+        Ok(reply)
     }
 
-    fn probe_shared_memory(&mut self) -> io::Result<bool> {
-        let name = format!("/px-{}-q", std::process::id());
+    fn probe_shared_memory(&mut self) -> io::Result<Option<bool>> {
+        let name = self.shm_probe_name();
         if write_shm(&name, &[0, 0, 0, 255]).is_err() {
-            return Ok(false);
+            return Ok(Some(false));
         }
         self.io.out().write_all(&crate::kitty::kitty_query_medium(
             SHM_PROBE_ID,
@@ -686,11 +726,11 @@ impl Terminal {
             self.wrapper,
         ))?;
         self.io.out().flush()?;
-        let reply = self.read_report(FRAME_PROBE_TIMEOUT_MS, |buf| {
+        let reply = self.read_report_keeping_input(FRAME_PROBE_TIMEOUT_MS, |buf| {
             parse_probe_reply(buf, b"Gi=299;")
         })?;
         let _ = rustix::shm::unlink(&name);
-        Ok(reply.unwrap_or(false))
+        Ok(reply)
     }
 
 
@@ -953,6 +993,9 @@ impl Terminal {
                     RawEvent::Paste(text) => Event::Paste(text),
                     RawEvent::Focus(focused) => {
                         self.focused = focused;
+                        if focused {
+                            self.retry_frame_transport(true)?;
+                        }
                         Event::Focus(focused)
                     }
                     RawEvent::WindowSize(ws) => Event::WindowSize(ws),
@@ -1351,11 +1394,28 @@ impl Terminal {
         timeout_ms: u64,
         parse: impl Fn(&[u8]) -> Option<T>,
     ) -> io::Result<Option<T>> {
+        let start = self.pending.len();
+        let report = self.read_report_keeping_input(timeout_ms, |buf| {
+            parse(buf).map(|value| (value, 0..buf.len()))
+        })?;
+        self.pending.truncate(start);
+        Ok(report)
+    }
+
+    fn read_report_keeping_input<T>(
+        &mut self,
+        timeout_ms: u64,
+        find: impl Fn(&[u8]) -> Option<(T, std::ops::Range<usize>)>,
+    ) -> io::Result<Option<T>> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-        let mut buf = Vec::new();
+        let start = self.pending.len();
         loop {
+            if let Some((value, report)) = find(&self.pending[start..]) {
+                self.pending.drain(start + report.start..start + report.end);
+                return Ok(Some(value));
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() || buf.len() > 4096 {
+            if remaining.is_zero() || self.pending.len() - start > 4096 {
                 return Ok(None);
             }
             if !self.wait_for_input(Some(remaining))? {
@@ -1370,10 +1430,7 @@ impl Terminal {
             if n == 0 {
                 return Ok(None);
             }
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(value) = parse(&buf) {
-                return Ok(Some(value));
-            }
+            self.pending.extend_from_slice(&chunk[..n]);
         }
     }
 
@@ -1501,6 +1558,7 @@ impl Terminal {
 const SHM_PROBE_ID: u32 = 299;
 const FILE_PROBE_ID: u32 = 300;
 const FRAME_PROBE_TIMEOUT_MS: u64 = 300;
+const TRANSPORT_RETRY_GAP: Duration = Duration::from_secs(1);
 
 const FRAME_SLOTS: u64 = 8;
 pub(crate) const DEFAULT_CELL: (u32, u32) = (16, 34);
@@ -1566,6 +1624,20 @@ enum FrameTransport {
     Host,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameProbe {
+    Accepted(FrameTransport),
+    Refused,
+    Unanswered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportRetry {
+    Settled,
+    Ready,
+    NotBefore(Instant),
+}
+
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 
@@ -1581,13 +1653,21 @@ fn frame_image_id(relayed: bool) -> u32 {
 
 
 
-fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
-    let pos = buf.windows(needle.len()).position(|w| w == needle)?;
-    let rest = &buf[pos + needle.len()..];
-    if rest.len() < 2 {
-        return None;
-    }
-    Some(rest.starts_with(b"OK"))
+// tmux with extended-keys on re-encodes the reply's closing ESC \ as an alt+\ key
+const PROBE_REPLY_ENDS: [&[u8]; 3] = [b"\x1b\\", b"\x1b[27;3;92~", b"\x1b[92;3u"];
+
+fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<(bool, std::ops::Range<usize>)> {
+    let at = buf.windows(needle.len()).position(|w| w == needle)?;
+    let start = buf[..at].iter().rposition(|&b| b == 0x1b)?;
+    let body = &buf[at + needle.len()..];
+    let end = PROBE_REPLY_ENDS
+        .iter()
+        .filter_map(|close| {
+            let pos = body.windows(close.len()).position(|w| w == *close)?;
+            Some(pos + close.len())
+        })
+        .min()?;
+    Some((body.starts_with(b"OK"), start..at + needle.len() + end))
 }
 
 #[allow(unsafe_code)]
@@ -2410,8 +2490,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn probe_replies_span_only_the_reply() {
+        for reply in [
+            b"\x1b_Gi=299;OK\x1b\\".as_slice(),
+            b"\x1b[27;3;95~Gi=299;OK\x1b[27;3;92~".as_slice(),
+            b"\x1b[95;3uGi=299;OK\x1b[92;3u".as_slice(),
+        ] {
+            for end in 0..reply.len() {
+                assert!(parse_probe_reply(&reply[..end], b"Gi=299;").is_none());
+            }
+            let mut input = [b"before".as_slice(), reply, b"after"].concat();
+            let (answer, range) = parse_probe_reply(&input, b"Gi=299;").unwrap();
+            assert!(answer);
+            input.drain(range);
+            assert_eq!(input, b"beforeafter");
+        }
+    }
+
+    #[test]
     fn parses_probe_replies() {
-        let parse = |buf: &[u8]| parse_probe_reply(buf, b"Gi=299;");
+        let parse = |buf: &[u8]| parse_probe_reply(buf, b"Gi=299;").map(|(answer, _)| answer);
         assert_eq!(parse(b"\x1b_Gi=299;OK\x1b\\"), Some(true));
         assert_eq!(
             parse(b"noise\x1b_Gi=299;ENOENT:not found\x1b\\"),
@@ -2928,6 +3026,140 @@ mod tty_tests {
 
     fn open(path: &str, wrapper: Wrapper) -> Terminal {
         Terminal::open(path, wrapper, SessionEnv::of_session(Default::default())).unwrap()
+    }
+
+    struct FakeTmuxClient {
+        master: std::fs::File,
+        attached: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        probes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    fn transport_terminal(
+        wrapper: Wrapper,
+        attached: bool,
+        shared: bool,
+        file: bool,
+    ) -> (Terminal, FakeTmuxClient) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let (master, slave, _) = open_pty();
+        let mut raw = rustix::termios::tcgetattr(&slave).unwrap();
+        raw.make_raw();
+        rustix::termios::tcsetattr(&slave, rustix::termios::OptionalActions::Now, &raw).unwrap();
+        let term = Terminal::blank(TtyHandle::File(slave), None, wrapper, None);
+        let client = FakeTmuxClient {
+            master: master.try_clone().unwrap(),
+            attached: Arc::new(AtomicBool::new(attached)),
+            probes: Arc::new(AtomicUsize::new(0)),
+        };
+        let attached = client.attached.clone();
+        let probes = client.probes.clone();
+        let mut reader = master;
+        std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            let mut byte = [0u8; 1];
+            while reader.read_exact(&mut byte).is_ok() {
+                seen.push(byte[0]);
+                if !seen.ends_with(b"\x1b\\") {
+                    continue;
+                }
+                if let Some(error) = graphics_error(&seen) {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    if attached.load(Ordering::SeqCst) {
+                        let (id, supported) = if parse_probe_reply(&error, b"Gi=299;").is_some() {
+                            (299, shared)
+                        } else {
+                            (300, file)
+                        };
+                        let answer = if supported { "OK" } else { "ENOENT:not found" };
+                        if reader
+                            .write_all(format!("x\x1b_Gi={id};{answer}\x1b\\").as_bytes())
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+                seen.clear();
+            }
+        });
+        (term, client)
+    }
+
+    #[test]
+    fn unanswered_tmux_transport_is_retried_on_focus() {
+        for (shared, expected) in [(true, FrameTransport::Shared), (false, FrameTransport::File)] {
+            let (mut term, mut client) = transport_terminal(Wrapper::Tmux, false, shared, true);
+            term.transport = term
+                .probe_transport(&SessionEnv::of_session(Default::default()))
+                .unwrap();
+            assert!(term.frames_are_inline());
+            assert_eq!(term.transport_retry, TransportRetry::Ready);
+            client.attached.store(true, std::sync::atomic::Ordering::SeqCst);
+            client.master.write_all(b"\x1b[I").unwrap();
+            assert_eq!(
+                term.poll_event(Some(Duration::from_secs(2))).unwrap(),
+                Some(Event::Focus(true))
+            );
+            assert_eq!(term.transport, expected);
+            assert_eq!(term.transport_retry, TransportRetry::Settled);
+            assert_eq!(
+                term.poll_event(Some(Duration::ZERO)).unwrap(),
+                Some(Event::Key(KeyEvent::plain(Key::Char('x')))),
+                "a key typed beside the reply still arrives"
+            );
+        }
+    }
+
+    #[test]
+    fn settled_transports_are_not_retried() {
+        for (wrapper, attached, setting, expected) in [
+            (Wrapper::Tmux, true, None, FrameTransport::Inline),
+            (Wrapper::None, false, None, FrameTransport::Inline),
+            (Wrapper::Tmux, false, Some(("SSH_CONNECTION", "remote")), FrameTransport::Inline),
+            (Wrapper::Tmux, false, Some(("TERMINAL_BROWSER_FRAMES", "inline")), FrameTransport::Inline),
+            (Wrapper::Tmux, false, Some(("TERMINAL_BROWSER_FRAMES", "shm")), FrameTransport::Shared),
+            (Wrapper::Tmux, false, Some(("TERMINAL_BROWSER_FRAMES", "file")), FrameTransport::File),
+        ] {
+            let (mut term, client) = transport_terminal(wrapper, attached, false, false);
+            let env = SessionEnv::of_session(
+                setting
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), value.into()))
+                    .collect(),
+            );
+            term.transport = term.probe_transport(&env).unwrap();
+            assert_eq!(term.transport, expected, "{wrapper:?} {setting:?}");
+            assert_eq!(term.transport_retry, TransportRetry::Settled, "{wrapper:?} {setting:?}");
+            let probes = client.probes.load(std::sync::atomic::Ordering::SeqCst);
+            term.retry_frame_transport(true).unwrap();
+            term.retry_frame_transport(false).unwrap();
+            assert_eq!(client.probes.load(std::sync::atomic::Ordering::SeqCst), probes);
+            assert_eq!(term.transport, expected);
+        }
+    }
+
+    #[test]
+    fn unanswered_retries_are_bounded() {
+        use std::sync::atomic::Ordering;
+        let (mut term, client) = transport_terminal(Wrapper::Tmux, false, false, false);
+        term.transport = term
+            .probe_transport(&SessionEnv::of_session(Default::default()))
+            .unwrap();
+        assert_eq!(client.probes.load(Ordering::SeqCst), 2);
+
+        term.retry_frame_transport(false).unwrap();
+        assert_eq!(client.probes.load(Ordering::SeqCst), 4, "the first resize asks again");
+        term.retry_frame_transport(false).unwrap();
+        assert_eq!(client.probes.load(Ordering::SeqCst), 4, "a resize within a second does not");
+
+        term.retry_frame_transport(true).unwrap();
+        assert_eq!(client.probes.load(Ordering::SeqCst), 6, "a focus-in asks right away");
+        assert_eq!(term.transport_retry, TransportRetry::Settled);
+        term.retry_frame_transport(true).unwrap();
+        term.retry_frame_transport(false).unwrap();
+        assert_eq!(client.probes.load(Ordering::SeqCst), 6, "a silent focus-in ends the retries");
+        assert!(term.frames_are_inline());
     }
 
     #[test]

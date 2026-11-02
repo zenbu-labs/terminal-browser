@@ -68,6 +68,10 @@ impl Terminal {
         format!("/px-{}-{}-{seq}", std::process::id(), self.terminal_id)
     }
 
+    pub(super) fn shm_probe_name(&self) -> String {
+        format!("/px-{}-{}-probe", std::process::id(), self.terminal_id)
+    }
+
     fn temp_payload_path(&self, seq: u64) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "tty-graphics-protocol-px-{}-{}-{seq}.rgba",
