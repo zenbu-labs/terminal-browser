@@ -441,14 +441,15 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
     }
   };
 
+  const MV2_TAB_EVENTS = ["onActiveChanged", "onHighlightChanged", "onSelectionChanged"];
   namespace("tabs", {
     methods: spec.tabs.methods,
-    events: spec.tabs.events,
+    events: (manifest.manifest_version as number) >= 3 ? spec.tabs.events.filter((event) => !MV2_TAB_EVENTS.includes(event)) : spec.tabs.events,
     constants: { TAB_ID_NONE: -1, TAB_INDEX_NONE: -1, MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND: 2, SPLIT_VIEW_ID_NONE: -1 },
   });
 
   namespace("windows", {
-    methods: spec.windows.methods,
+    methods: spec.windows.methods.filter((method) => method !== "closeSelf"),
     events: spec.windows.events,
     constants: {
       WINDOW_ID_NONE: -1,
