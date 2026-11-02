@@ -22,7 +22,7 @@ const { Router, hasUserGesture, hadRecentInput } = require("../dist/extensions/r
 const extension = (gesture) => ({ id: "x", hadRecentUserGesture: () => gesture });
 
 test("a page only counts as acting for the user right after a click or key press in it", () => {
-  new Router({}, () => null);
+  new Router({}, () => null).listen();
   const caller = { kind: "frame", extension: extension(false), contents: page };
   assert.equal(hasUserGesture(caller), false);
   page.emit("input-event", {}, { type: "mouseMove" });
