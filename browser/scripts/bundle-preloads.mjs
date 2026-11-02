@@ -7,7 +7,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const preloads = [
   ["src/extensions/preload.ts", "extension-preload.js"],
   ["src/extensions/webstore-preload.ts", "chrome-web-store-preload.js"],
-  ["src/extensions/activation-preload.ts", "frame-activation-preload.js"],
   ["src/pages/internal-preload.ts", "internal-preload.js"],
   ["src/extensions/regex-worker.ts", "regex-worker.js"],
 ];

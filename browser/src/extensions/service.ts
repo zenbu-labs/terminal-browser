@@ -139,7 +139,6 @@ export class ExtensionService {
     this.declarativeContent = new DeclarativeContentStore(this);
     this.contentSettings = new ContentSettingsStore(this);
     session.registerPreloadScript({ type: "frame", filePath: preloadPath("chrome-web-store-preload.js") });
-    session.registerPreloadScript({ type: "frame", filePath: preloadPath("frame-activation-preload.js") });
     listenForUserActivation();
     this.ready = this.loadAll();
   }

@@ -10,14 +10,15 @@ process.env.XDG_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "tb-webstore
 const electron = require("./fake-electron.js");
 
 const shared = require("shared");
-const { Router } = require("../dist/extensions/router.js");
 const { WebStore, WEBSTORE_ORIGIN } = require("../dist/extensions/webstore.js");
 
 const ID = "e".repeat(32);
 const OTHER = "f".repeat(32);
 
 const store = Object.assign(new EventEmitter(), { id: 7 });
-const frame = { parent: null, origin: WEBSTORE_ORIGIN };
+// Chromium's per-frame activation, which WebFrameMain reports in pixel's Electron.
+let activated = false;
+const frame = { parent: null, origin: WEBSTORE_ORIGIN, isDestroyed: () => false, hasTransientUserActivation: () => activated };
 store.mainFrame = frame;
 
 function setup() {
@@ -53,9 +54,7 @@ function setup() {
 const call = (method, ...args) =>
   electron.invokeHandlers.get(`tb-webstore:${method}`)({ sender: store, senderFrame: frame }, ...args);
 
-test("the Web Store only installs and uninstalls right after the user clicked or typed in it", async () => {
-  new Router({}, () => null).listen();
-  electron.app.emit("web-contents-created", {}, store);
+test("the Web Store only installs and uninstalls while its page has the user's activation", async () => {
   shared.saveExtension({ id: OTHER, path: "/x", version: "1", name: "x", source: "webstore", enabled: true, disabledReason: null, pinned: false, grantedPermissions: [], grantedOrigins: [], shortcuts: {}, installedAt: 1, updatedAt: 1, lastUpdateCheck: null, userScriptsAllowed: false });
   const { prompts, installs } = setup();
 
@@ -69,6 +68,11 @@ test("the Web Store only installs and uninstalls right after the user clicked or
   assert.deepEqual(prompts, []);
 
   store.emit("input-event", {}, { type: "mouseDown" });
+  assert.deepEqual(await call("begin-install", { id: ID }), {
+    result: "user_gesture_required",
+    error: "This function must be called during a user gesture",
+  });
+  activated = true;
   assert.deepEqual(await call("begin-install", { id: ID }), { result: "" });
   await call("management-uninstall", OTHER);
   assert.deepEqual(installs, [ID]);

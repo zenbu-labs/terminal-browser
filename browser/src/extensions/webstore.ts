@@ -5,7 +5,7 @@ import { CrxError, ManifestError, getExtension, isExtensionId, listExtensions } 
 import type { ExtensionPackage, ExtensionRecord } from "shared";
 
 import { AlreadyInstalledError, InstallInProgressError } from "./install";
-import { hadRecentInput } from "./router";
+import { hasTransientUserActivation } from "./user-activation";
 import type { ExtensionService } from "./service";
 import type { TabRef } from "./window";
 
@@ -66,7 +66,7 @@ export class WebStore {
   private async beginInstall(ref: TabRef, contents: WebContents, details: unknown): Promise<BeginResult> {
     const id = typeof details === "object" && details !== null ? (details as { id?: unknown }).id : undefined;
     if (typeof id !== "string" || !isExtensionId(id)) return { result: "invalid_id", error: INVALID_ID };
-    if (!hadRecentInput(contents)) return { result: "user_gesture_required", error: GESTURE_REQUIRED };
+    if (!hasTransientUserActivation(contents.mainFrame)) return { result: "user_gesture_required", error: GESTURE_REQUIRED };
     if (getExtension(id)) return { result: "already_installed", error: ALREADY_INSTALLED };
     try {
       const pkg = await this.service.installer.prepareFromStore(id, ref.window);
@@ -89,7 +89,7 @@ export class WebStore {
 
   private async legacyInstall(ref: TabRef, contents: WebContents, id: unknown): Promise<void> {
     if (typeof id !== "string" || !isExtensionId(id)) throw new Error(INVALID_ID);
-    if (!hadRecentInput(contents)) throw new Error(GESTURE_REQUIRED);
+    if (!hasTransientUserActivation(contents.mainFrame)) throw new Error(GESTURE_REQUIRED);
     const result = await this.service.installer.installFromStore(id, ref.window);
     if (!result) throw new Error(USER_CANCELLED);
   }
@@ -121,7 +121,7 @@ export class WebStore {
     const record = typeof id === "string" ? getExtension(id) : null;
     if (!record) throw new Error(`Failed to find extension with id ${String(id)}.`);
     if (enabled && record.disabledReason === "permissions_increase") {
-      if (!hadRecentInput(contents)) throw new Error(ESCALATION_GESTURE);
+      if (!hasTransientUserActivation(contents.mainFrame)) throw new Error(ESCALATION_GESTURE);
       const summary = this.service.manager.summary(record);
       const accepted = await ref.window.host.prompt({
         kind: "update",
@@ -139,7 +139,7 @@ export class WebStore {
   private async uninstall(ref: TabRef, contents: WebContents, id: unknown) {
     const record = typeof id === "string" ? getExtension(id) : null;
     if (!record) throw new Error(`Failed to find extension with id ${String(id)}.`);
-    if (!hadRecentInput(contents)) throw new Error(UNINSTALL_GESTURE);
+    if (!hasTransientUserActivation(contents.mainFrame)) throw new Error(UNINSTALL_GESTURE);
     const summary = this.service.manager.summary(record);
     const accepted = await ref.window.host.prompt({
       kind: "remove",

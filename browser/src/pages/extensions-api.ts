@@ -6,7 +6,7 @@ import { extensionsDeveloperMode, getExtension, listExtensions, readManifestFile
 
 import type { ExtensionSummary } from "../extensions/manage";
 import { asManifest, manifestAction, pickIcon, resolveExtensionPath } from "../extensions/manifest";
-import { nextUserInput } from "../extensions/router";
+import { nextUserInput } from "../extensions/user-activation";
 import { extensionService } from "../extensions/service";
 import type { InternalHandlers } from "./internal";
 import { pageOpenedByExtension } from "./opened-by";
