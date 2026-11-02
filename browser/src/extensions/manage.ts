@@ -241,7 +241,7 @@ export class ExtensionManager {
       enabled: record.enabled,
       type: "extension",
       offlineEnabled: false,
-      optionsUrl: options ? extension.url(options) : "",
+      optionsUrl: (options && extension.url(options)) || "",
       homepageUrl: extension.manifest.homepage_url,
       hostPermissions: extension.hosts,
       permissions: extension.apis,
@@ -249,7 +249,7 @@ export class ExtensionManager {
       isApp: false,
       icons: Object.entries(extension.manifest.icons ?? {}).map(([size, file]) => ({
         size: Number(size),
-        url: extension.url(file),
+        url: extension.url(file) ?? "",
       })),
     } as chrome.management.ExtensionInfo;
   }

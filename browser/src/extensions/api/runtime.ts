@@ -8,9 +8,9 @@ export function installRuntime(service: ExtensionService) {
 
   router.handle("runtime.openOptionsPage", (caller) => {
     const page = optionsPage(caller.extension.manifest);
+    const url = page ? caller.extension.url(page) : null;
     const window = service.currentWindow(caller);
-    if (!page || !window) throw new Error("Could not create an options page.");
-    const url = caller.extension.url(page);
+    if (!url || !window) throw new Error("Could not create an options page.");
     const strip = (value: string) => value.replace(/#.*$/, "");
     const open = window.host.tabs.all().find((tab) => strip(tab.state.url || tab.url) === strip(url));
     if (open) window.host.tabs.activate(open.id);

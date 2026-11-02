@@ -46,8 +46,16 @@ export class LoadedExtension {
     return `chrome-extension://${this.id}/`;
   }
 
-  url(relative: string): string {
-    return new URL(relative.replace(/^\//, ""), this.baseUrl).href;
+  // Chrome's Extension::ResolveExtensionURL: a path that resolves outside this
+  // extension (another site, scheme or extension) gives nothing.
+  url(relative: string): string | null {
+    let resolved: URL;
+    try {
+      resolved = new URL(relative, this.baseUrl);
+    } catch {
+      return null;
+    }
+    return resolved.protocol === "chrome-extension:" && resolved.host === this.id ? resolved.href : null;
   }
 
   hasAction(): boolean {

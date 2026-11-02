@@ -162,8 +162,10 @@ export class SidePanelStore {
     }
   }
 
+  // Chrome lets a side panel show a web page by its http(s) URL; any other
+  // path must stay inside the extension, or the panel stays empty.
   private urlFor(extension: LoadedExtension, path: string): string {
-    return /^https?:\/\//i.test(path) ? path : extension.url(path);
+    return /^https?:\/\//i.test(path.trim()) ? path : (extension.url(path) ?? "about:blank");
   }
 
   // The entry Chrome picks for an extension on a tab: its tab-specific panel

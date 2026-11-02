@@ -14,7 +14,7 @@ export function urlOverride(page: OverridablePage): string | null {
   let found: string | null = null;
   for (const extension of extensionService().loaded.values()) {
     const file = extension.manifest.chrome_url_overrides?.[page];
-    if (file) found = extension.url(file);
+    if (file) found = extension.url(file) ?? found;
   }
   return found;
 }

@@ -114,7 +114,7 @@ export class ActionStore {
       defaults: {
         title: action?.default_title ?? extension.name,
         icon: extensionIcon(extension, TOOLBAR_ICON_PX),
-        popup: action?.default_popup ? extension.url(action.default_popup) : "",
+        popup: (action?.default_popup && extension.url(action.default_popup)) || "",
         badgeText: "",
         badgeBackground: null,
         badgeColor: null,
@@ -286,7 +286,7 @@ export class ActionStore {
     router.handle("action.setPopup", (caller, details) => {
       const { popup, tabId } = details as { popup: string; tabId?: number };
       const url = popup ? caller.extension.url(String(popup)) : "";
-      if (url && !url.startsWith(caller.extension.baseUrl)) throw new Error("Invalid popup url.");
+      if (url === null) throw new Error("The specified popup path is invalid. Ensure it is a path to a file in this extension.");
       this.set(caller, tabId, { popup: url });
     });
     router.handle("action.getPopup", (caller, details) => this.resolved(caller.extension.id, tabArg(details) ?? null).popup);
