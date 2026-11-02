@@ -5,6 +5,7 @@ import { CrxError, ManifestError, getExtension, isExtensionId, listExtensions } 
 import type { ExtensionPackage, ExtensionRecord } from "shared";
 
 import { AlreadyInstalledError, InstallInProgressError } from "./install";
+import { hadRecentInput } from "./router";
 import type { ExtensionService } from "./service";
 import type { TabRef } from "./window";
 
@@ -22,6 +23,10 @@ const ALREADY_INSTALLED = "This item is already installed";
 const USER_CANCELLED = "User cancelled install";
 const INVALID_ID = "Invalid id";
 const NO_BEGIN = "* does not match a previous call to beginInstallWithManifest3";
+// Chrome's strings for the webstorePrivate and chrome.management gesture checks.
+const GESTURE_REQUIRED = "This function must be called during a user gesture";
+const UNINSTALL_GESTURE = "chrome.management.uninstall requires a user gesture.";
+const ESCALATION_GESTURE = "Re-enabling an extension disabled due to permissions increase requires a user gesture.";
 
 // Answers the Chrome Web Store page's chrome.webstorePrivate and
 // chrome.management calls. Only the store's own top frame, in one of our tabs,
@@ -33,12 +38,12 @@ export class WebStore {
   constructor(private readonly service: ExtensionService) {
     this.handle("begin-install", (ref, contents, details) => this.beginInstall(ref, contents, details));
     this.handle("complete-install", (_ref, contents, id) => this.completeInstall(contents, id));
-    this.handle("install", (ref, _contents, id) => this.legacyInstall(ref, id));
+    this.handle("install", (ref, contents, id) => this.legacyInstall(ref, contents, id));
     this.handle("extension-status", (_ref, _contents, id, manifest) => this.status(id, manifest));
     this.handle("management-get-all", () => listExtensions().map((record) => this.info(record)));
     this.handle("management-get", (_ref, _contents, id) => this.get(id));
-    this.handle("management-set-enabled", (ref, _contents, id, enabled) => this.setEnabled(ref, id, enabled === true));
-    this.handle("management-uninstall", (ref, _contents, id) => this.uninstall(ref, id));
+    this.handle("management-set-enabled", (ref, contents, id, enabled) => this.setEnabled(ref, contents, id, enabled === true));
+    this.handle("management-uninstall", (ref, contents, id) => this.uninstall(ref, contents, id));
     this.lastState = this.snapshot();
     service.onChange(() => this.announceChanges());
   }
@@ -61,6 +66,7 @@ export class WebStore {
   private async beginInstall(ref: TabRef, contents: WebContents, details: unknown): Promise<BeginResult> {
     const id = typeof details === "object" && details !== null ? (details as { id?: unknown }).id : undefined;
     if (typeof id !== "string" || !isExtensionId(id)) return { result: "invalid_id", error: INVALID_ID };
+    if (!hadRecentInput(contents)) return { result: "user_gesture_required", error: GESTURE_REQUIRED };
     if (getExtension(id)) return { result: "already_installed", error: ALREADY_INSTALLED };
     try {
       const pkg = await this.service.installer.prepareFromStore(id, ref.window);
@@ -81,8 +87,9 @@ export class WebStore {
     await this.service.installer.commit(pkg);
   }
 
-  private async legacyInstall(ref: TabRef, id: unknown): Promise<void> {
+  private async legacyInstall(ref: TabRef, contents: WebContents, id: unknown): Promise<void> {
     if (typeof id !== "string" || !isExtensionId(id)) throw new Error(INVALID_ID);
+    if (!hadRecentInput(contents)) throw new Error(GESTURE_REQUIRED);
     const result = await this.service.installer.installFromStore(id, ref.window);
     if (!result) throw new Error(USER_CANCELLED);
   }
@@ -110,10 +117,11 @@ export class WebStore {
     return this.info(record);
   }
 
-  private async setEnabled(ref: TabRef, id: unknown, enabled: boolean) {
+  private async setEnabled(ref: TabRef, contents: WebContents, id: unknown, enabled: boolean) {
     const record = typeof id === "string" ? getExtension(id) : null;
     if (!record) throw new Error(`Failed to find extension with id ${String(id)}.`);
     if (enabled && record.disabledReason === "permissions_increase") {
+      if (!hadRecentInput(contents)) throw new Error(ESCALATION_GESTURE);
       const summary = this.service.manager.summary(record);
       const accepted = await ref.window.host.prompt({
         kind: "update",
@@ -128,9 +136,10 @@ export class WebStore {
     await this.service.manager.setEnabled(record.id, enabled);
   }
 
-  private async uninstall(ref: TabRef, id: unknown) {
+  private async uninstall(ref: TabRef, contents: WebContents, id: unknown) {
     const record = typeof id === "string" ? getExtension(id) : null;
     if (!record) throw new Error(`Failed to find extension with id ${String(id)}.`);
+    if (!hadRecentInput(contents)) throw new Error(UNINSTALL_GESTURE);
     const summary = this.service.manager.summary(record);
     const accepted = await ref.window.host.prompt({
       kind: "remove",
