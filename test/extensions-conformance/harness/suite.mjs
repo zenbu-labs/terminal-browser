@@ -40,7 +40,7 @@ export async function runSuite({ which, binary, out, only, video = false, notRun
         extensions: DIRS,
         nativeHost,
         prefs: { download: { default_directory: downloads, prompt_for_download: false } },
-        extraArgs: ["--disable-features=NativeNotifications", OFFLINE],
+        extraArgs: ["--disable-features=NativeNotifications", "--force-dark-mode", OFFLINE],
         godId: ids.god,
       });
       extras.version = (await d.cdp.send("Browser.getVersion")).result.product.split("/")[1];
@@ -52,6 +52,7 @@ export async function runSuite({ which, binary, out, only, video = false, notRun
         const electron = req("electron");
         electron.app.setPath("downloads", ${JSON.stringify(downloads)});
         electron.Notification.isSupported = () => false;
+        electron.nativeTheme.themeSource = "dark";
         electron.shell.openPath = async () => "";
         electron.shell.showItemInFolder = () => {};
         electron.shell.openExternal = async () => {};
