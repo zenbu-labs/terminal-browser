@@ -9,7 +9,7 @@ import {
   startRecording,
   stopRecording,
 } from "./controller";
-import { exportProfile } from "./export-profile";
+import { exportCurrentProfile } from "./profile-exporter";
 import { createStore, useStore } from "./store";
 import { devtoolsStore, ProfileSession, profilerStore, TimeSpan } from "./stores";
 import { MONO, theme } from "./theme";
@@ -506,7 +506,7 @@ export function ProfilerPanel(props: { rem: number }) {
           />
         )}
         {session && (
-          <Button rem={rem} label="Export" onClick={() => setExportedTo(exportProfile())} />
+          <Button rem={rem} label="Export" onClick={() => setExportedTo(exportCurrentProfile())} />
         )}
         <Button
           rem={rem}

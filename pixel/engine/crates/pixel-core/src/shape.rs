@@ -136,6 +136,29 @@ pub fn build_path(cmds: &[PathCmd]) -> Option<tiny_skia::Path> {
     pb.finish()
 }
 
+pub fn placed_path(props: &ShapeProps, rect: crate::tree::PxRect) -> Option<(tiny_skia::Path, f32)> {
+    let scale = match props.view_box {
+        Some(view_box) if view_box > 0.0 => rect.w.min(rect.h) / view_box,
+        _ => 1.0,
+    };
+    if scale <= 0.0 {
+        return None;
+    }
+    let to_screen = tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, rect.x, rect.y);
+    Some((build_path(&props.cmds)?.transform(to_screen)?, scale))
+}
+
+pub fn stroked_bounds(props: &ShapeProps, rect: crate::tree::PxRect) -> Option<crate::tree::PxRect> {
+    let (path, scale) = placed_path(props, rect)?;
+    let stroke = skia_stroke(&props.stroke, scale);
+    let reach = match stroke.line_join {
+        tiny_skia::LineJoin::Miter | tiny_skia::LineJoin::MiterClip => stroke.width * stroke.miter_limit.max(1.0) / 2.0,
+        _ => stroke.width,
+    };
+    let b = path.bounds();
+    Some(crate::tree::PxRect { x: b.left() - reach, y: b.top() - reach, w: b.width() + reach * 2.0, h: b.height() + reach * 2.0 })
+}
+
 pub fn skia_stroke(stroke: &ShapeStroke, scale: f32) -> tiny_skia::Stroke {
     tiny_skia::Stroke {
         width: (stroke.width * scale).max(0.1),

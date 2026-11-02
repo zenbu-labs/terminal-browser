@@ -1,12 +1,6 @@
 mod capture;
-mod diff;
-mod events;
-mod highlight;
 #[cfg(target_os = "macos")]
 mod iosurface;
-mod markdown;
-mod mend;
-mod ops;
 mod record;
 mod shm;
 mod surface;
@@ -22,11 +16,10 @@ use napi::threadsafe_function::{
 };
 use napi::{JsFunction, Result};
 use napi_derive::napi;
-use pixel_core::{Engine, EngineConfig, TerminalColors, Waker, fontdue};
+use pixel_core::{Engine, EngineConfig, Waker};
 use serde_json::json;
 
-use crate::events::event_json;
-use crate::ops::{IdMap, apply_ops};
+use pixel_bridge::{Bridge, engine_info};
 use crate::surface::{SurfaceCommand, SurfaceMailbox, SurfacePixels};
 
 pub struct EncodeRecordingTask {
@@ -241,29 +234,6 @@ impl DamageRect {
     }
 }
 
-static UI_FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/InterVariable.ttf");
-static MONO_FONT_BYTES: &[u8] =
-    include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
-
-const SYSTEM_UI_FONTS: &[&str] = &[
-    "/System/Library/Fonts/SFNSRounded.ttf",
-    "/System/Library/Fonts/SFNS.ttf",
-];
-
-fn load_font(candidates: &[&str], fallback: &'static [u8]) -> fontdue::Font {
-    let parse = |bytes: &[u8]| fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default());
-    if cfg!(target_os = "macos") {
-        for path in candidates {
-            if let Ok(bytes) = std::fs::read(path)
-                && let Ok(font) = parse(&bytes)
-            {
-                return font;
-            }
-        }
-    }
-    parse(fallback).expect("bundled font parses")
-}
-
 fn err(e: impl std::fmt::Display) -> Error {
     Error::from_reason(e.to_string())
 }
@@ -272,30 +242,6 @@ struct SendEngine(Engine);
 
 #[allow(unsafe_code)]
 unsafe impl Send for SendEngine {}
-
-pub(crate) fn engine_info(engine: &Engine) -> serde_json::Value {
-    let (width, height) = engine.comp.window;
-    let (cell_w, cell_h) = engine.cell;
-    json!({
-        "width": width,
-        "height": height,
-        "cellWidth": cell_w,
-        "cellHeight": cell_h,
-        "basePx": engine.base_px,
-        "kittyKeyboard": engine.term.kitty_keyboard(),
-        "hosted": engine.term.is_hosted(),
-        "colors": colors_json(&engine.colors),
-    })
-}
-
-pub(crate) fn colors_json(colors: &TerminalColors) -> serde_json::Value {
-    json!({
-        "foreground": colors.foreground,
-        "background": colors.background,
-        "palette": colors.palette,
-    })
-}
-
 
 #[napi]
 pub struct PixelEngine {
@@ -319,7 +265,7 @@ impl PixelEngine {
         session_env: Option<std::collections::HashMap<String, String>>,
         host: Option<HostOptions>,
     ) -> Result<Self> {
-        let fonts = pixel_core::fonts::FontRegistry::new(load_font(&[], MONO_FONT_BYTES), load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES));
+        let fonts = pixel_bridge::default_fonts();
         let session_env = match session_env {
             Some(env) => pixel_core::SessionEnv::of_session(env),
             None => pixel_core::SessionEnv::of_process(),
@@ -339,7 +285,7 @@ impl PixelEngine {
             session_env,
         })
         .map_err(err)?;
-        let waker = engine.term.waker().map_err(err)?;
+        let waker = engine.io.waker().map_err(err)?;
         engine.cpu_throttle.register_current_thread();
         let info = engine_info(&engine).to_string();
         let (tx, rx) = channel();
@@ -492,7 +438,10 @@ impl PixelEngine {
             .engine
             .as_mut()
             .ok_or_else(|| Error::from_reason("key reporting must be configured before start"))?;
-        engine.term.set_key_event_types(enabled).map_err(err)
+        match engine.io.tty_mut() {
+            Some(term) => term.set_key_event_types(enabled).map_err(err),
+            None => Ok(()),
+        }
     }
 
     #[napi]
@@ -516,9 +465,7 @@ impl PixelEngine {
             let cell = cell;
             let mut engine = cell.0;
             engine.set_default_menu(true);
-            let mut ids: Vec<IdMap> = (0..engine.comp.views.len())
-                .map(|view| IdMap::new(engine.comp.views[view].tree.root()))
-                .collect();
+            let mut bridge = Bridge::new(&engine);
             let mut autoprofile = Autoprofile::from_env(&mut engine);
             let (mut seen_carried, mut seen_lost) = (0u64, 0u64);
             // event loop
@@ -532,7 +479,7 @@ impl PixelEngine {
                     break None;
                 }
                 while let Ok(cmd) = rx.try_recv() {
-                    let outcome = apply_ops(&mut engine, &mut ids, &cmd);
+                    let outcome = bridge.apply(&mut engine, &cmd);
                     if let Some(message) = outcome.error {
                         pixel_core::logging::error("bridge", message.clone());
                         let error = json!({ "type": "error", "message": message });
@@ -546,7 +493,7 @@ impl PixelEngine {
                     }
                 }
                 for event in &events {
-                    if let Some(json) = event_json(event, &engine, &ids) {
+                    if let Some(json) = bridge.event(event, &engine) {
                         dispatch_to_node.call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
@@ -703,3 +650,22 @@ impl PixelEngine {
     }
 }
 
+#[napi]
+pub fn highlight(source: String, language: String) -> Vec<pixel_bridge::highlight::HighlightSpan> {
+    pixel_bridge::highlight::highlight(source, language)
+}
+
+#[napi]
+pub fn highlight_captures() -> Vec<String> {
+    pixel_bridge::highlight::highlight_captures()
+}
+
+#[napi]
+pub fn diff(old_source: String, new_source: String, context_lines: Option<u32>) -> Vec<pixel_bridge::diff::DiffRow> {
+    pixel_bridge::diff::diff(old_source, new_source, context_lines)
+}
+
+#[napi]
+pub fn parse_markdown(source: String, streaming: Option<bool>) -> Vec<pixel_bridge::markdown::MarkdownBlock> {
+    pixel_bridge::markdown::parse_markdown(source, streaming)
+}

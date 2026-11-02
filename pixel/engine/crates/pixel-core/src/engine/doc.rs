@@ -13,7 +13,7 @@ impl Engine {
         match action {
             InputAction::Copy => {
                 if let Some(text) = self.comp.views[view].tree.doc_selected_text() {
-                    self.term.set_clipboard(&text)?;
+                    self.io.set_clipboard(&text)?;
                 }
             }
             InputAction::SelectAll => {

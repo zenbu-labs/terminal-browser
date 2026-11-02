@@ -126,9 +126,33 @@ jobs:
             pixel/packages/native/${{ matrix.platform }}/native-scroll-helper
           if-no-files-found: error
 
+  ios:
+    needs: prepare
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+        working-directory: pixel/engine
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pixel/engine
+      - run: pixel/packages/pixel-ios/scripts/build-xcframework.sh
+      - name: The npm package stays under 60 MB
+        run: |
+          cd pixel/packages/pixel-ios
+          npm pack --dry-run --json | node -e 'const [p] = JSON.parse(require("fs").readFileSync(0, "utf8")); console.log(`${p.size} bytes packed`); if (p.size > 60e6) process.exit(1)'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixel-ios-engine
+          path: pixel/packages/pixel-ios/ios/Vendor/PixelEngine.xcframework
+          if-no-files-found: error
+
   publish:
     if: needs.prepare.outputs.release == 'true'
-    needs: [prepare, check, native]
+    needs: [prepare, check, native, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -155,12 +179,16 @@ jobs:
             cp "$dir"/* "pixel/packages/native/$platform/"
           done
           chmod +x pixel/packages/native/darwin-*/native-scroll-helper
+      - uses: actions/download-artifact@v4
+        with:
+          name: pixel-ios-engine
+          path: pixel/packages/pixel-ios/ios/Vendor/PixelEngine.xcframework
       - run: PIXEL_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile
       - run: pnpm --filter @zenbu-labs/pixel build
       - name: Stamp versions from the tag
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          for pkg in pixel/packages/native/* pixel/packages/pixel pixel/packages/create-pixel; do
+          for pkg in pixel/packages/native/* pixel/packages/pixel pixel/packages/pixel-ios pixel/packages/create-pixel; do
             (cd "$pkg" && npm version "$VERSION" --no-git-tag-version --allow-same-version)
           done
           node -e '
@@ -169,6 +197,10 @@ jobs:
             const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
             for (const name of Object.keys(pkg.optionalDependencies)) pkg.optionalDependencies[name] = process.argv[1];
             fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+            const ios = "pixel/packages/pixel-ios/package.json";
+            const host = JSON.parse(fs.readFileSync(ios, "utf8"));
+            host.peerDependencies["@zenbu-labs/pixel"] = process.argv[1];
+            fs.writeFileSync(ios, JSON.stringify(host, null, 2) + "\n");
           ' "$VERSION"
       - name: Publish
         run: |
@@ -183,10 +215,11 @@ jobs:
           }
           for pkg in pixel/packages/native/*; do publish "$pkg"; done
           publish pixel/packages/pixel
+          publish pixel/packages/pixel-ios
           publish pixel/packages/create-pixel
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "pixel-v${{ needs.prepare.outputs.version }}" -R "$GITHUB_REPOSITORY" \
-            --title "pixel v${{ needs.prepare.outputs.version }}" --notes "pixel ${{ needs.prepare.outputs.version }}, published to npm as @zenbu-labs/pixel"
+            --title "pixel v${{ needs.prepare.outputs.version }}" --notes "pixel ${{ needs.prepare.outputs.version }}, published to npm as @zenbu-labs/pixel and @zenbu-labs/pixel-ios"

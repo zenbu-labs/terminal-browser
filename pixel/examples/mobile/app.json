@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "pixel mobile",
+    "slug": "pixel-mobile-example",
+    "owner": "robzenbu",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#19191b",
+    "ios": {
+      "bundleIdentifier": "dev.zenbu.pixelmobile",
+      "supportsTablet": true,
+      "requireFullScreen": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "CADisableMinimumFrameDurationOnPhone": true,
+        "UIStatusBarHidden": true,
+        "UIViewControllerBasedStatusBarAppearance": false
+      }
+    },
+    "plugins": [["expo-build-properties", { "ios": { "deploymentTarget": "16.4" } }]]
+  }
+}

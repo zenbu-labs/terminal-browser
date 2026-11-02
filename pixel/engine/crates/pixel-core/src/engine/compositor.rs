@@ -18,6 +18,7 @@ pub struct View {
     pub origin_x: u32,
     pub size: (u32, u32),
     pub damage_parts: Vec<Rect>,
+    pub painted: bool,
     pub opaque: Vec<crate::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<Rect>,
 }
@@ -31,6 +32,7 @@ impl View {
             origin_x: 0,
             size: window,
             damage_parts: Vec::new(),
+            painted: false,
             opaque: Vec::new(),
             ui_over_surfaces: Vec::new(),
         }
@@ -57,6 +59,10 @@ pub struct Compositor {
     pub ui_over_surfaces: Vec<Rect>,
     changed: Vec<Rect>,
     repainted: Vec<Rect>,
+    moves: Vec<crate::canvas::Move>,
+    pub work_ms: f32,
+    pub kind: u8,
+    pub keeps_frames: bool,
     direct: Option<usize>,
     panes: [usize; 2],
     divider_hover: bool,
@@ -77,6 +83,10 @@ impl Compositor {
             ui_over_surfaces: Vec::new(),
             changed: Vec::new(),
             repainted: Vec::new(),
+            moves: Vec::new(),
+            work_ms: 0.0,
+            kind: 0,
+            keeps_frames: false,
             direct: None,
             panes: [0, 1],
             divider_hover: false,
@@ -208,6 +218,7 @@ impl Compositor {
         self.direct = alone.then(|| active[0]);
         self.changed.clear();
         self.repainted.clear();
+        self.moves.clear();
         let mut divider = None;
         if !alone {
             for &view in &active {
@@ -223,7 +234,7 @@ impl Compositor {
                     continue;
                 };
                 crate::profiler::count("compose.px", || p.parts.iter().map(|r| r.area()).sum());
-                for part in &p.parts {
+                for part in p.parts.iter().chain(p.moves.iter().map(|m| &m.rect)) {
                     blit(frame, canvas, origin, *part, straighten);
                 }
             }
@@ -243,6 +254,14 @@ impl Compositor {
                 self.repainted.push(moved(&Rect::sized(size.0, size.1)));
                 self.changed.extend(p.surface_parts.iter().map(moved).filter(|r| !r.is_empty()));
             } else {
+                for shift in &p.moves {
+                    let rect = moved(&shift.rect);
+                    if self.keeps_frames && alone {
+                        self.moves.push(crate::canvas::Move { rect, dy: shift.dy });
+                    } else {
+                        self.changed.push(rect);
+                    }
+                }
                 self.changed.extend(p.parts.iter().map(moved).filter(|r| !r.is_empty()));
             }
         }
@@ -253,10 +272,13 @@ impl Compositor {
         crate::canvas::Frame {
             canvas: self.direct.map_or(&self.frame, |view| &self.views[view].canvas),
             premultiplied: self.direct.is_some(),
+            moves: &self.moves,
             changed: &self.changed,
             repainted: &self.repainted,
             opaque: &self.opaque,
             ui_over_surfaces: &self.ui_over_surfaces,
+            work_ms: self.work_ms,
+            kind: self.kind,
         }
     }
 
@@ -320,6 +342,7 @@ pub(crate) struct Painted {
     pub parts: Vec<Rect>,
     pub whole: bool,
     pub surface_parts: Vec<Rect>,
+    pub moves: Vec<crate::canvas::Move>,
 }
 
 fn blit(dst: &mut Canvas, src: &Canvas, origin_x: u32, region: Rect, straighten: bool) {

@@ -1,0 +1,13 @@
+{
+  "platforms": [
+    "apple"
+  ],
+  "apple": {
+    "modules": [
+      "PixelModule",
+      "NativeViewsModule",
+      "ToolbarModule",
+      "CrashModule"
+    ]
+  }
+}

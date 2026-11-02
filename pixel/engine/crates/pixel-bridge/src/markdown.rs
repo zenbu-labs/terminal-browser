@@ -1,9 +1,10 @@
-use napi_derive::napi;
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::mend::{INCOMPLETE_LINK, fence_open, mend};
 
-#[napi(object)]
+#[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarkdownSpan {
     pub start: u32,
@@ -16,20 +17,26 @@ pub struct MarkdownSpan {
     pub incomplete_link: bool,
 }
 
-#[napi(object)]
+#[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug)]
 pub struct MarkdownCell {
     pub text: String,
     pub spans: Vec<MarkdownSpan>,
 }
 
-#[napi(object)]
+#[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug)]
 pub struct MarkdownRow {
     pub cells: Vec<MarkdownCell>,
 }
 
-#[napi(object)]
+#[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug)]
 pub struct MarkdownBlock {
     pub kind: String, // paragraph | heading | code | rule | image | table
@@ -216,7 +223,6 @@ fn heading_level(level: HeadingLevel) -> u32 {
     }
 }
 
-#[napi]
 pub fn parse_markdown(source: String, streaming: Option<bool>) -> Vec<MarkdownBlock> {
     let streaming = streaming.unwrap_or(false);
     let mended;

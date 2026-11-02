@@ -14,7 +14,7 @@ pub(crate) struct Glyph {
 enum FaceIn {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Index(u32),
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
     PostScriptName(String),
 }
 
@@ -125,6 +125,13 @@ pub(crate) fn rasterize(ch: char, px: f32) -> Option<Glyph> {
     let id = face.glyph_index(ch)?;
     let advance =
         f32::from(face.glyph_hor_advance(id).unwrap_or(0)) * px / f32::from(face.units_per_em());
+    let color = face.tables().sbix.is_some() || face.tables().cbdt.is_some();
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if color && let found @ Some(_) = color_glyph(face, id, px, advance).or_else(|| core_text::draw_color(ch, px, advance)) {
+        return found;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let _ = color;
     color_glyph(face, id, px, advance).or_else(|| outline_glyph(face, id, px, advance))
 }
 
@@ -251,7 +258,7 @@ fn color_glyph(face: &Face, id: ttf_parser::GlyphId, px: f32, advance: f32) -> O
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(unsafe_code)]
 mod core_text {
     use super::FaceIn;
@@ -278,6 +285,93 @@ mod core_text {
         fn CTFontCopyDefaultCascadeListForLanguages(font: Ref, languages: Ref) -> Ref;
         fn CTFontCopyAttribute(font: Ref, attribute: Ref) -> Ref;
         fn CTFontCopyPostScriptName(font: Ref) -> Ref;
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[link(name = "CoreText", kind = "framework")]
+    unsafe extern "C" {
+        fn CTFontCreateCopyWithAttributes(font: Ref, size: f64, matrix: Ref, attributes: Ref) -> Ref;
+        fn CTFontGetGlyphsForCharacters(font: Ref, characters: *const u16, glyphs: *mut u16, count: isize) -> bool;
+        fn CTFontGetBoundingRectsForGlyphs(font: Ref, orientation: u32, glyphs: *const u16, rects: *mut CGRect, count: isize) -> CGRect;
+        fn CTFontDrawGlyphs(font: Ref, glyphs: *const u16, positions: *const CGPoint, count: usize, context: Ref);
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGColorSpaceCreateDeviceRGB() -> Ref;
+        fn CGBitmapContextCreate(data: *mut c_void, width: usize, height: usize, bits: usize, row_bytes: usize, space: Ref, info: u32) -> Ref;
+    }
+
+    const RGBA_PREMULTIPLIED: u32 = 1 | (4 << 12);
+
+    pub(super) fn draw_color(ch: char, px: f32, advance: f32) -> Option<super::Glyph> {
+        let base = base_font()?;
+        let mut utf8 = [0u8; 4];
+        let text = cf_string(ch.encode_utf8(&mut utf8))?;
+        let range = CFRange { location: 0, length: ch.len_utf16() as isize };
+        // SAFETY: base and text are live, and the range covers exactly the string.
+        let found = Owned::new(unsafe { CTFontCreateForString(base.0, text.0, range) })?;
+        // SAFETY: found is a live font; null matrix and attributes keep its own.
+        let font = Owned::new(unsafe { CTFontCreateCopyWithAttributes(found.0, f64::from(px), std::ptr::null(), std::ptr::null()) })?;
+        let mut units = [0u16; 2];
+        let units = ch.encode_utf16(&mut units);
+        let mut glyphs = [0u16; 2];
+        // SAFETY: both buffers hold `units.len()` entries.
+        if !unsafe { CTFontGetGlyphsForCharacters(font.0, units.as_ptr(), glyphs.as_mut_ptr(), units.len() as isize) } || glyphs[0] == 0 {
+            return None;
+        }
+        let mut rect = CGRect::default();
+        // SAFETY: one glyph in, one rect out.
+        unsafe { CTFontGetBoundingRectsForGlyphs(font.0, 0, glyphs.as_ptr(), &mut rect, 1) };
+        let (left, bottom) = (rect.origin.x.floor(), rect.origin.y.floor());
+        let width = ((rect.origin.x + rect.size.width).ceil() - left) as usize;
+        let height = ((rect.origin.y + rect.size.height).ceil() - bottom) as usize;
+        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+            return None;
+        }
+        let mut pixels = vec![0u8; width * height * 4];
+        // SAFETY: a fresh colour space, released when `space` drops.
+        let space = Owned::new(unsafe { CGColorSpaceCreateDeviceRGB() })?;
+        // SAFETY: `pixels` is width * height * 4 bytes and outlives the context, which is released at the end of this function.
+        let context = Owned::new(unsafe {
+            CGBitmapContextCreate(pixels.as_mut_ptr().cast(), width, height, 8, width * 4, space.0, RGBA_PREMULTIPLIED)
+        })?;
+        let at = CGPoint { x: -left, y: -bottom };
+        // SAFETY: one glyph at one position into a live context.
+        unsafe { CTFontDrawGlyphs(font.0, glyphs.as_ptr(), &at, 1, context.0) };
+        drop(context);
+        Some(super::Glyph {
+            metrics: fontdue::Metrics {
+                xmin: left as i32,
+                ymin: bottom as i32,
+                width,
+                height,
+                advance_width: advance,
+                ..Default::default()
+            },
+            pixels,
+            color: true,
+        })
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -419,7 +513,7 @@ mod core_text {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use core_text::candidates;
 
 #[cfg(target_os = "linux")]
@@ -442,7 +536,7 @@ fn fontconfig_match(ch: char) -> Option<(PathBuf, FaceIn)> {
     ))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 fn candidates(_: char) -> std::iter::Empty<(PathBuf, FaceIn)> {
     std::iter::empty()
 }
@@ -471,5 +565,17 @@ mod tests {
             glyph.metrics.width * glyph.metrics.height * 4
         );
         assert!(glyph.metrics.width >= 18 && glyph.metrics.width <= 32);
+    }
+
+    #[test]
+    fn core_text_draws_colour_glyphs_itself() {
+        for ch in ['🎉', '🙂'] {
+            let glyph = core_text::draw_color(ch, 24.0, 24.0).unwrap_or_else(|| panic!("CoreText drew nothing for {ch}"));
+            assert!(glyph.color);
+            assert_eq!(glyph.pixels.len(), glyph.metrics.width * glyph.metrics.height * 4);
+            assert!(glyph.metrics.width >= 16 && glyph.metrics.width <= 36, "{ch} is {} wide", glyph.metrics.width);
+            let colourful = glyph.pixels.chunks_exact(4).any(|p| p[3] > 200 && (p[0].abs_diff(p[1]) > 40 || p[1].abs_diff(p[2]) > 40));
+            assert!(colourful, "{ch} drew without colour");
+        }
     }
 }

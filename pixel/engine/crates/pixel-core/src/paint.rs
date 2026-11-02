@@ -11,8 +11,11 @@ use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
 
 mod opaque;
+pub(crate) use opaque::painted_rects;
 
 pub use opaque::opaque_areas;
+#[cfg(feature = "device")]
+pub use opaque::native_view_covers;
 use opaque::collect_surface_occluders;
 
 #[derive(Default)]
@@ -209,6 +212,11 @@ fn paint_node(
         if let Some(at) = surface_occluders.iter().position(|(n, _)| *n == id) {
             let (_, token) = surface_occluders.swap_remove(at);
             canvas.remove_occluder(token);
+        }
+        #[cfg(feature = "device")]
+        if tree.native_views() && node.children.is_empty() && crate::surfaces::with(surface, |_| ()).is_none() {
+            let hole = crate::surfaces::Rect::covering(rect);
+            canvas.fill_rect(hole.x, hole.y, hole.w, hole.h, [0, 0, 0, 0]);
         }
         timed(stats.as_mut().map(|s| &mut s.surface), || {
             crate::surfaces::with(surface, |s| {
@@ -641,19 +649,7 @@ fn paint_shape(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
     let Some(props) = &node.shape else {
         return;
     };
-    let rect = node.abs;
-    let scale = match props.view_box {
-        Some(view_box) if view_box > 0.0 => rect.w.min(rect.h) / view_box,
-        _ => 1.0,
-    };
-    if scale <= 0.0 {
-        return;
-    }
-    let Some(path) = crate::shape::build_path(&props.cmds) else {
-        return;
-    };
-    let to_screen = tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, rect.x, rect.y);
-    let Some(path) = path.transform(to_screen) else {
+    let Some((path, scale)) = crate::shape::placed_path(props, node.abs) else {
         return;
     };
     canvas.stroke_path(

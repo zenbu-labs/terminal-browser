@@ -4,9 +4,11 @@ packages:
   - shared
   - monitor
   - pixel/packages/*
+  - '!pixel/packages/pixel-ios'
   - pixel/packages/create-pixel/template
   - pixel/packages/native/*
   - pixel/examples/*
+  - '!pixel/examples/mobile'
 linkWorkspacePackages: true
 onlyBuiltDependencies:
   - better-sqlite3

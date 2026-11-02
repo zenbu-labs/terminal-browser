@@ -38,6 +38,14 @@
       "types": "./dist/ssh/index.d.ts",
       "default": "./dist/ssh/index.js"
     },
+    "./device": {
+      "types": "./dist/device/index.d.ts",
+      "default": "./dist/device/index.js"
+    },
+    "./binding": {
+      "types": "./dist/react/binding.d.ts",
+      "default": "./dist/react/binding.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

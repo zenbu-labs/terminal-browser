@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pixel-core", "crates/pixel-node"]
+members = ["crates/pixel-core", "crates/pixel-bridge", "crates/pixel-node", "crates/pixel-ios"]
 
 [workspace.package]
 version = "0.1.0"
@@ -45,3 +45,7 @@ opt-level = 2
 [profile.dev]
 # Full debuginfo is rarely needed and slows linking; backtraces still work.
 debug = "line-tables-only"
+
+[profile.release-ios]
+inherits = "release"
+codegen-units = 1
