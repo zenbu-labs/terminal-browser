@@ -2956,8 +2956,8 @@
   ],
   "sw|system.storage.ejectDevice": [
    {
-    "ok": true,
-    "sig": "no_such_device"
+    "ok": false,
+    "sig": "assert: timeout"
    }
   ],
   "sw|system.storage.events": [
@@ -2968,14 +2968,14 @@
   ],
   "sw|system.storage.getAvailableCapacity": [
    {
-    "ok": true,
-    "sig": "rejects: Error occurred when querying available capacity."
+    "ok": false,
+    "sig": "assert: timeout"
    }
   ],
   "sw|system.storage.getInfo": [
    {
-    "ok": true,
-    "sig": "array"
+    "ok": false,
+    "sig": "assert: timeout"
    }
   ],
   "sw|tabCapture.getCapturedTabs": [
@@ -3189,6 +3189,10 @@
    }
   ],
   "sw|tabs.onUpdated#status-sequence": [
+   {
+    "ok": true,
+    "sig": "status+url:loading title status:complete status:loading"
+   },
    {
     "ok": true,
     "sig": "status+url:loading title status:complete"
@@ -4467,6 +4471,16 @@
    "ttsEngine.updateLanguage": "method",
    "ttsEngine.updateVoices": "method",
    "ttsEngine.VoiceGender": "enum",
+   "userScripts": "namespace",
+   "userScripts.configureWorld": "method",
+   "userScripts.execute": "method",
+   "userScripts.ExecutionWorld": "enum",
+   "userScripts.getScripts": "method",
+   "userScripts.getWorldConfigurations": "method",
+   "userScripts.register": "method",
+   "userScripts.resetWorldConfiguration": "method",
+   "userScripts.unregister": "method",
+   "userScripts.update": "method",
    "webAuthenticationProxy": "namespace",
    "webAuthenticationProxy.attach": "method",
    "webAuthenticationProxy.completeCreateRequest": "method",
@@ -5431,6 +5445,87 @@
    "windows.WindowState": "enum",
    "windows.WindowType": "enum"
   },
-  "cs": {}
+  "cs": {
+   "csi": "method",
+   "dom": "namespace",
+   "dom.openOrClosedShadowRoot": "method",
+   "extension": "namespace",
+   "extension.inIncognitoContext": "property:boolean",
+   "extension.ViewType": "enum",
+   "i18n": "namespace",
+   "i18n.detectLanguage": "method",
+   "i18n.getAcceptLanguages": "method",
+   "i18n.getMessage": "method",
+   "i18n.getUILanguage": "method",
+   "loadTimes": "method",
+   "runtime": "namespace",
+   "runtime.connect": "method",
+   "runtime.ContextType": "enum",
+   "runtime.dynamicId": "property:string",
+   "runtime.getManifest": "method",
+   "runtime.getURL": "method",
+   "runtime.getVersion": "method",
+   "runtime.id": "property:string",
+   "runtime.onConnect": "event",
+   "runtime.OnInstalledReason": "enum",
+   "runtime.onMessage": "event",
+   "runtime.OnRestartRequiredReason": "enum",
+   "runtime.PlatformArch": "enum",
+   "runtime.PlatformNaclArch": "enum",
+   "runtime.PlatformOs": "enum",
+   "runtime.RequestUpdateCheckStatus": "enum",
+   "runtime.sendMessage": "method",
+   "scripting": "namespace",
+   "scripting.ExecutionWorld": "enum",
+   "scripting.globalParams": "object",
+   "scripting.StyleOrigin": "enum",
+   "storage": "namespace",
+   "storage.AccessLevel": "enum",
+   "storage.local": "object",
+   "storage.local.clear": "method",
+   "storage.local.get": "method",
+   "storage.local.getBytesInUse": "method",
+   "storage.local.getKeys": "method",
+   "storage.local.onChanged": "event",
+   "storage.local.QUOTA_BYTES": "property:number",
+   "storage.local.remove": "method",
+   "storage.local.set": "method",
+   "storage.local.setAccessLevel": "method",
+   "storage.managed": "object",
+   "storage.managed.clear": "method",
+   "storage.managed.get": "method",
+   "storage.managed.getBytesInUse": "method",
+   "storage.managed.getKeys": "method",
+   "storage.managed.onChanged": "event",
+   "storage.managed.remove": "method",
+   "storage.managed.set": "method",
+   "storage.managed.setAccessLevel": "method",
+   "storage.onChanged": "event",
+   "storage.session": "object",
+   "storage.session.clear": "method",
+   "storage.session.get": "method",
+   "storage.session.getBytesInUse": "method",
+   "storage.session.getKeys": "method",
+   "storage.session.onChanged": "event",
+   "storage.session.QUOTA_BYTES": "property:number",
+   "storage.session.remove": "method",
+   "storage.session.set": "method",
+   "storage.session.setAccessLevel": "method",
+   "storage.sync": "object",
+   "storage.sync.clear": "method",
+   "storage.sync.get": "method",
+   "storage.sync.getBytesInUse": "method",
+   "storage.sync.getKeys": "method",
+   "storage.sync.MAX_ITEMS": "property:number",
+   "storage.sync.MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "storage.sync.MAX_WRITE_OPERATIONS_PER_HOUR": "property:number",
+   "storage.sync.MAX_WRITE_OPERATIONS_PER_MINUTE": "property:number",
+   "storage.sync.onChanged": "event",
+   "storage.sync.QUOTA_BYTES": "property:number",
+   "storage.sync.QUOTA_BYTES_PER_ITEM": "property:number",
+   "storage.sync.remove": "method",
+   "storage.sync.set": "method",
+   "storage.sync.setAccessLevel": "method"
+  }
  }
 }

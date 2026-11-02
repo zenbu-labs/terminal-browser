@@ -5,6 +5,7 @@ import path from "node:path";
 import { chromeDriver, tbDriver, sleep } from "./drivers.mjs";
 import { startServer } from "./server.mjs";
 import { interact } from "./interact.mjs";
+import { startFakeTerminal } from "./terminal.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const EXT = path.join(ROOT, "extensions");
@@ -31,7 +32,7 @@ export async function runSuite({ which, binary, out, only, video = false, notRun
   const results = [];
   const surfaces = {};
   const extras = {};
-  let d;
+  let d, terminal;
   try {
     if (which === "chrome") {
       d = await chromeDriver({
@@ -44,11 +45,16 @@ export async function runSuite({ which, binary, out, only, video = false, notRun
       });
       extras.version = (await d.cdp.send("Browser.getVersion")).result.product.split("/")[1];
     } else {
-      d = await tbDriver({ electron: binary, chromiumArgs: [OFFLINE], out: path.join(out, "tb"), extensions: DIRS, nativeHost, startUrl: `${site}/page.html`, label: "god", recordVideo: false });
+      terminal = await startFakeTerminal(path.join(fs.mkdtempSync("/tmp/tbc-term-"), "terminal.sock"));
+      d = await tbDriver({ electron: binary, chromiumArgs: [OFFLINE], out: path.join(out, "tb"), extensions: DIRS, nativeHost, startUrl: `${site}/page.html`, label: "god", recordVideo: false, env: { TERMINAL_BROWSER_TERMINAL_SOCKET: terminal.socket } });
+      terminal.attach(d.tb);
       extras.version = await d.tb.mainEval(`
         const electron = req("electron");
         electron.app.setPath("downloads", ${JSON.stringify(downloads)});
         electron.Notification.isSupported = () => false;
+        electron.shell.openPath = async () => "";
+        electron.shell.showItemInFolder = () => {};
+        electron.shell.openExternal = async () => {};
         return "electron " + process.versions.electron + ", chromium " + process.versions.chrome;`);
     }
     await d.evalIn(SW, "typeof god", 30000);
@@ -120,7 +126,7 @@ export async function runSuite({ which, binary, out, only, video = false, notRun
     const interactive = await interact(d, { which, site, ids, base, sleep, log }).catch((e) => [{ id: "interactive", ctx: "harness", ok: false, sig: `harness error: ${e.message}`, note: e.stack }]);
     results.push(...interactive);
 
-    surfaces.sw = await d.evalIn(SW, "JSON.stringify(SURFACE)").then(JSON.parse);
+    surfaces.sw = await d.evalIn(SW, "JSON.stringify(godSurface())").then(JSON.parse);
     const swResults = await d.evalIn(SW, "JSON.stringify(godAll())").then(JSON.parse);
     const seen = new Set(results.map((r) => `${r.ctx}|${r.id}`));
     for (const r of swResults) if (!seen.has(`${r.ctx}|${r.id}`)) results.push(r);
@@ -137,6 +143,7 @@ export async function runSuite({ which, binary, out, only, video = false, notRun
       extras.daemonLog = path.join(d.tb.out, "daemon.log");
     }
     await d?.stop().catch(() => {});
+    await terminal?.stop();
     await server.close();
     fs.rmSync(downloads, { recursive: true, force: true });
   }

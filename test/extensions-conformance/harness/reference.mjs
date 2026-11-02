@@ -37,7 +37,9 @@ export function buildReference(runs, chromeVersion) {
   }
   const surfaces = {};
   for (const ctx of ["sw", "page", "cs"]) {
-    const all = runs.map((run) => run.surfaces?.[ctx] ?? {});
+    const all = runs.map((run) => run.surfaces?.[ctx] ?? {}).filter((s) => Object.keys(s).length);
+    // fixme: placeholder copy
+    if (!all.length) throw new Error(`no Chrome run captured the ${ctx} surface`);
     surfaces[ctx] = Object.fromEntries(Object.entries(all[0]).filter(([member, kind]) => all.every((s) => s[member] === kind)).sort(([a], [b]) => a.localeCompare(b)));
   }
   const sorted = Object.fromEntries(Object.keys(checks).sort().map((k) => [k, checks[k]]));

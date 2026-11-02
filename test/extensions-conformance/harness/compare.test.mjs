@@ -3,7 +3,7 @@ import test from "node:test";
 import { compareRun } from "./compare.mjs";
 import { buildReference, normalize } from "./reference.mjs";
 
-const run = (results, surfaces = {}) => ({ results, surfaces, extras: {} });
+const run = (results, surfaces = {}) => ({ results, surfaces: { sw: { x: "method" }, page: { x: "method" }, cs: { x: "method" }, ...surfaces }, extras: {} });
 const reference = buildReference([run([
   { id: "tabs.get", ctx: "sw", ok: true, sig: `{"tabId":1834567890}` },
   { id: "tts.speak", ctx: "sw", ok: true, sig: "ok" },

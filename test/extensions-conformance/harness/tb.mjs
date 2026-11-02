@@ -273,7 +273,8 @@ export async function startBrowser(options = {}) {
   const mods = { shift: false, alt: false, ctrl: false, super: false };
   const mouse = (kind, x, y, button = "left") => guest.send({ type: "mouse", kind, button: kind === "move" ? "none" : button, mods, x: Math.round(x), y: Math.round(y) });
   const api = {
-    out, home, env, cdpPort, daemonSock, session: openReply.session, width, height, cell,
+    out, home, env, tty, cdpPort, daemonSock, session: openReply.session, width, height, cell,
+    setFocused: (focused) => guest.send({ type: "focus", focused }),
     control, daemonCommand, targets, waitTarget, evalIn, connect, mainEval,
     frame: () => latest,
     async nextFrame(timeout = 3000) {
