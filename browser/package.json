@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json && node scripts/bundle-preloads.mjs",
     "start": "pnpm build && pnpm --filter terminal-browser-cli build && exec node ../cli/dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\""
+    "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\"",
+    "test:native": "node test/native/run.mjs"
   },
   "dependencies": {
     "@zenbu-labs/pixel": "workspace:*",
