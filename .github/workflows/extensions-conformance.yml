@@ -87,7 +87,12 @@ jobs:
       - run: pnpm --filter @zenbu-labs/pixel build:native -- --release
       - run: pnpm -r --filter '!./pixel/**' build
 
+      - name: Native probes
+        timeout-minutes: 10
+        run: PIXEL_ELECTRON_APP="$TB_ELECTRON" node browser/test/native/run.mjs
+
       - name: Conformance
+        if: ${{ !cancelled() }}
         timeout-minutes: 15
         run: node test/extensions-conformance/conformance.mjs run --out "$RUNNER_TEMP/conformance"
 
