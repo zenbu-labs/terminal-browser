@@ -26,7 +26,7 @@ function nativeEvent() {
 
 // Runs the preload's chrome.* setup in a fake extension context and returns
 // what the extension's own code would see.
-function context({ manifest = {}, granted = null, isWorker = true, view = null, page = null } = {}) {
+function context({ manifest = {}, granted = null, notTabs = [], isWorker = true, view = null, page = null } = {}) {
   const invoked = [];
   const listened = [];
   let deliver = null;
@@ -52,7 +52,7 @@ function context({ manifest = {}, granted = null, isWorker = true, view = null, 
     onEvent: (listener) => (deliver = listener),
     ready() {},
     viewInfo: () => view,
-    grantedPermissions: () => granted,
+    startup: () => (granted ? { permissions: granted, notTabs } : null),
   };
   installChromeApis(bridge, isWorker, API_SPEC, API_SCHEMAS);
   return { chrome, invoked, listened, fire: (name, args) => deliver(name, args, undefined) };
@@ -138,6 +138,15 @@ test("messages from popups, side panels and offscreen documents carry no tab, fr
   assert.deepEqual(Object.keys(seen[0]).sort(), ["id", "origin", "url"]);
   assert.equal(seen[1].tab.windowId, 1);
   assert.equal(seen[1].frameId, 0);
+});
+
+test("a worker woken by a popup's message already knows the popup isn't a tab", () => {
+  const { chrome } = context({ granted: [], notTabs: [9] });
+  const seen = [];
+  chrome.runtime.onMessage.addListener((message, sender) => seen.push(sender));
+  const [wrapped] = chrome.runtime.onMessage.listeners;
+  wrapped("hi", { id: ID, url: "u", origin: "o", tab: { id: 9 }, frameId: 0, documentId: "d", documentLifecycle: "active" }, () => {});
+  assert.deepEqual(Object.keys(seen[0]).sort(), ["id", "origin", "url"]);
 });
 
 test("downloads.onDeterminingFilename listeners answer through suggest", () => {

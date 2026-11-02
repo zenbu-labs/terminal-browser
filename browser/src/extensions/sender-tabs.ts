@@ -57,7 +57,7 @@ export class SenderTabs {
     return this.snapshot(extensionId);
   }
 
-  private notTabs(): number[] {
+  notTabs(): number[] {
     const remote = allWebContents
       .getAllWebContents()
       .filter((contents) => !contents.isDestroyed() && contents.getType() === "remote")

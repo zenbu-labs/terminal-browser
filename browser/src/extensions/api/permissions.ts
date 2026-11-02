@@ -8,7 +8,8 @@ import type { LoadedExtension } from "../loaded";
 import { optionalPermissions, parseMatchPattern, permissionWarnings, requiredPermissions } from "../manifest";
 import type { MatchPattern } from "../manifest";
 import { isRecognizedPermission } from "../permission-names";
-import { GRANTED_CHANNEL } from "../protocol";
+import { STARTUP_CHANNEL } from "../protocol";
+import type { StartupInfo } from "../protocol";
 import { hasUserGesture } from "../router";
 import type { Caller } from "../router";
 import type { ExtensionService } from "../service";
@@ -83,17 +84,18 @@ export function installPermissions(service: ExtensionService) {
 
   // The preload asks synchronously which APIs to expose before the
   // extension's own scripts run.
-  const granted = (caller: Caller | null) => (caller ? caller.extension.apis : null);
-  ipcMain.on(GRANTED_CHANNEL, (event) => {
-    event.returnValue = granted(router.callerForFrame(event.sender, event.senderFrame));
+  const startup = (caller: Caller | null): StartupInfo | null =>
+    caller ? { permissions: caller.extension.apis, notTabs: service.senderTabs.notTabs() } : null;
+  ipcMain.on(STARTUP_CHANNEL, (event) => {
+    event.returnValue = startup(router.callerForFrame(event.sender, event.senderFrame));
   });
   // A worker's synchronous messages only reach ServiceWorkerMain.ipc once the
   // main process created that object, which can be after the worker asked;
   // Electron emits them on the session first.
   service.session.on("-ipc-message-sync" as never, ((event: IpcMainServiceWorkerEvent, channel: string) => {
-    if (event.type !== "service-worker" || channel !== GRANTED_CHANNEL) return;
+    if (event.type !== "service-worker" || channel !== STARTUP_CHANNEL) return;
     const worker = service.session.serviceWorkers.getWorkerFromVersionID(event.versionId);
-    event.returnValue = granted(worker ? router.callerForWorker(worker) : null);
+    event.returnValue = startup(worker ? router.callerForWorker(worker) : null);
   }) as never);
 
   router.handle("permissions.getAll", (caller) => {

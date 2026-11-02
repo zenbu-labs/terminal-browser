@@ -254,7 +254,14 @@ export const LISTEN_CHANNEL = "tb-ext:listen";
 export const UNLISTEN_CHANNEL = "tb-ext:unlisten";
 export const READY_CHANNEL = "tb-ext:ready";
 export const VIEW_INFO_CHANNEL = "tb-ext:view-info";
-export const GRANTED_CHANNEL = "tb-ext:granted";
+export const STARTUP_CHANNEL = "tb-ext:startup";
+
+// What an extension context needs before its own scripts run.
+export interface StartupInfo {
+  permissions: string[];
+  // Web contents that aren't tabs, see SenderTabs.
+  notTabs: number[];
+}
 
 // Where an extension page is shown, for chrome.extension.getViews.
 export interface ViewInfo {

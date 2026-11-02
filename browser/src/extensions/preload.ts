@@ -9,14 +9,14 @@ import {
   API_METHODS,
   API_SPEC,
   EVENT_CHANNEL,
-  GRANTED_CHANNEL,
   LISTEN_CHANNEL,
   READY_CHANNEL,
+  STARTUP_CHANNEL,
   UNLISTEN_CHANNEL,
   VIEW_INFO_CHANNEL,
   channelFor,
 } from "./protocol";
-import type { ApiSpec, ViewInfo } from "./protocol";
+import type { ApiSpec, StartupInfo, ViewInfo } from "./protocol";
 import { API_SCHEMAS } from "./api-schemas";
 import type { ApiSchemas, ArgSpec } from "./validate";
 
@@ -29,7 +29,7 @@ interface BridgeShape {
   onEvent(listener: Listener): void;
   ready(): void;
   viewInfo(): ViewInfo | null;
-  grantedPermissions(): string[] | null;
+  startup(): StartupInfo | null;
 }
 
 const ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
@@ -58,9 +58,9 @@ const bridge: BridgeShape = {
   viewInfo() {
     return (ipcRenderer.sendSync(VIEW_INFO_CHANNEL) as ViewInfo | null) ?? null;
   },
-  grantedPermissions() {
+  startup() {
     try {
-      return (ipcRenderer.sendSync(GRANTED_CHANNEL) as string[] | null) ?? null;
+      return (ipcRenderer.sendSync(STARTUP_CHANNEL) as StartupInfo | null) ?? null;
     } catch {
       return null;
     }
@@ -89,9 +89,10 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
   setTimeout(() => bridge.ready(), 0);
   const manifest = (chrome.runtime.getManifest as () => Record<string, unknown>)();
   const id = chrome.runtime.id as string;
+  const startup = bridge.startup();
   // Like Chrome, a namespace only exists while its permission is granted, so
   // optional permissions show up after permissions.request and go after remove.
-  const granted = new Set<string>(bridge.grantedPermissions() ?? ((manifest.permissions as string[] | undefined) ?? []));
+  const granted = new Set<string>(startup?.permissions ?? ((manifest.permissions as string[] | undefined) ?? []));
 
   // Chromium deletes chrome.runtime.lastError after each of its own failed
   // calls, so ours only exists while one of our callbacks runs, like Chrome's.
@@ -826,7 +827,8 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
 
   // Electron's sender.tab always says windowId 0, index 0, inactive; the main process keeps a correct copy here
   const senderTabs = new Map<number, Record<string, unknown>>();
-  const notTabs = new Set<number>();
+  // Known from the start, so a worker woken by a popup's message already knows the popup isn't a tab.
+  const notTabs = new Set<number>(startup?.notTabs ?? []);
   let watchingSenderTabs = false;
   const storeSenderTabs = (snapshot: unknown) => {
     const { tabs, notTabs: others } = snapshot as { tabs: Record<string, unknown>[]; notTabs: number[] };
