@@ -1671,7 +1671,6 @@ class Session {
     return true;
   }
 
-  // The address bar's own keys, plus the ones keyword mode needs.
   private refreshAddressCapture() {
     if (!this.newTab && !this.urlEditOpen) return;
     const base = this.newTab ? ["enter", "up", "down"] : [];

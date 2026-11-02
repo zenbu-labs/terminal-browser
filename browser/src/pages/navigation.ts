@@ -39,7 +39,6 @@ function followOverrides(contents: WebContents) {
   });
 }
 
-// Where a new tab starts: Chrome's new tab page, when an extension replaced it.
 export function overriddenNewTab(): string | null {
   return urlOverride("newtab") ? `${INTERNAL_SCHEME}://newtab/` : null;
 }

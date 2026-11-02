@@ -22,7 +22,6 @@ export class AddressKeyword {
     return this.input !== null;
   }
 
-  // What the field shows after the user typed `text`.
   type(text: string): string {
     if (this.input) {
       this.typed = text;
@@ -57,13 +56,11 @@ export class AddressKeyword {
     return { name, icon, rows, index: Math.min(this.index, Math.max(0, rows.length - 1)) };
   }
 
-  // Keys the address bar sends here first in keyword mode (and Tab, on a bare keyword).
   captureKeys(): string[] {
     if (this.input) return this.typed ? ["enter", "up", "down"] : ["enter", "up", "down", "backspace"];
     return this.candidate ? ["tab"] : [];
   }
 
-  // Returns the text the field should show, or null when the key wasn't ours.
   key(event: EngineKeyEvent, disposition: OmniboxDisposition): { text: string; done: boolean } | null {
     const store = this.store();
     if (!this.input) {
@@ -97,11 +94,6 @@ export class AddressKeyword {
 
   remove(index: number) {
     this.input?.delete(index);
-  }
-
-  pick(index: number) {
-    this.index = index;
-    this.changed();
   }
 
   cancel() {

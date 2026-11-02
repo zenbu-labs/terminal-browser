@@ -51,7 +51,6 @@ export interface NewTabView {
   query: string;
 }
 
-// An extension's omnibox keyword took over the address bar.
 export interface KeywordView {
   name: string;
   icon: string | null;

@@ -155,7 +155,6 @@ export class DeclarativeContentStore {
     this.save(extension.id, Array.isArray(ids) ? rules.filter((rule) => !ids.includes(rule.id)) : []);
   }
 
-  // Icons are turned into files once, when the rule is added.
   private prepareAction(extension: LoadedExtension, action: Action): Action {
     if (action.instanceType !== SET_ICON) return action;
     const { imageData, path: iconPath } = action;

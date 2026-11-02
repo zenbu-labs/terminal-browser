@@ -37,7 +37,6 @@ function suggestionArg(value: unknown): { content: string; description: string; 
   return { content, description, deletable: deletable === true };
 }
 
-// One round of the user typing after an extension's keyword in the address bar.
 export class OmniboxInput {
   private requestId = 0;
   private text = "";
@@ -67,7 +66,6 @@ export class OmniboxInput {
     this.onChange();
   }
 
-  // The first row is what Enter sends with nothing picked: the typed text.
   rows(): OmniboxRow[] {
     const typed = this.store.defaultRow(this.keyword.extensionId, this.text);
     return typed ? [typed, ...this.suggestions] : this.suggestions;
@@ -125,7 +123,6 @@ export class OmniboxStore {
     return found;
   }
 
-  // "god " or "god<tab>" at the start of the address bar picks the God extension.
   keywordFor(word: string): OmniboxKeyword | null {
     const wanted = word.toLowerCase();
     return this.keywords().find((entry) => entry.keyword.toLowerCase() === wanted) ?? null;

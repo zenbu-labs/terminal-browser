@@ -11,7 +11,6 @@ export interface MuteChange {
   extensionId?: string;
 }
 
-// What chrome.tabs reports about a tab beyond what the pane itself tracks.
 export interface TabExtras {
   reportedUrl: string;
   committed: boolean;

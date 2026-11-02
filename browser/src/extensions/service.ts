@@ -338,7 +338,6 @@ export class ExtensionService {
     this.broadcast("windows.onFocusChanged", () => [this.focusedPopups.get(window.id) ?? window.id]);
   }
 
-  // Inside a focused pane, focus moves between the pane's tabs and its popup windows.
   popupWindowFocused(window: ExtensionWindow, popupId: number | null) {
     if ((this.focusedPopups.get(window.id) ?? null) === popupId) return;
     if (popupId === null) this.focusedPopups.delete(window.id);
@@ -568,7 +567,6 @@ export class ExtensionService {
     this.overriddenPages.set(contentsId, { chromeUrl, url });
   }
 
-  // Resolves once the tab's first page has committed (or finished loading).
   whenCommitted(tab: Tab): Promise<void> {
     const contents = this.contentsOf(tab);
     if (!contents || tab.contentsId === null || this.tabStates.peek(tab.contentsId)?.committed) return Promise.resolve();
@@ -595,7 +593,6 @@ export class ExtensionService {
     return overridden?.url === url ? overridden.chromeUrl : url;
   }
 
-  // Chrome reloads a discarded tab once it is shown again.
   reloadDiscarded({ tab }: TabRef) {
     const extras = tab.contentsId !== null ? this.tabStates.peek(tab.contentsId) : null;
     if (!extras?.discarded) return;
