@@ -113,7 +113,7 @@ export function parseMatchPattern(source: string): MatchPattern | null {
   if (scheme !== "*" && !SCHEMES.includes(scheme)) return null;
   const schemes = scheme === "*" ? ["http", "https"] : [scheme];
   if (scheme === "file") {
-    return { all: false, schemes, host: "*", subdomains: true, port: "*", path: globToRegExp(rawPath ?? "/*"), source };
+    return { all: false, schemes, host: "", subdomains: false, port: "*", path: globToRegExp(rawPath ?? "/*"), source };
   }
   if (!hostAndPort || rawPath === undefined) return null;
   const ipv6 = /^(\[[^\]]*\])(?::(.*))?$/.exec(hostAndPort);
