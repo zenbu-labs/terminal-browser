@@ -188,6 +188,14 @@ test("extension.getViews returns this page when it matches the filter", () => {
   delete globalThis.window;
 });
 
+test("MV3 extensions don't see MV2-only tab events or internal window methods", () => {
+  const { chrome } = context({ granted: [] });
+  assert.equal(chrome.tabs.onActiveChanged, undefined);
+  assert.equal(chrome.tabs.SPLIT_VIEW_ID_NONE, -1);
+  assert.equal(chrome.windows.closeSelf, undefined);
+  assert.equal(typeof context({ manifest: { manifest_version: 2 }, granted: [] }).chrome.tabs.onActiveChanged.addListener, "function");
+});
+
 test("omnibox and declarativeContent calls are checked like Chrome checks them", () => {
   const { chrome, invoked } = context({ manifest: { omnibox: { keyword: "god" } }, granted: ["declarativeContent"] });
   assert.throws(() => chrome.omnibox.setDefaultSuggestion({ content: "x" }), {
