@@ -4,6 +4,7 @@ import { listExtensions } from "shared";
 
 import { browsing } from "../../browsing";
 import { clearBrowsingData } from "../../session/browsing-data";
+import { clearSessionData } from "../native";
 import type { ExtensionService } from "../service";
 
 type DataType = keyof chrome.browsingData.DataTypeSet;
@@ -98,7 +99,7 @@ export function installBrowsingData(service: ExtensionService) {
       ...(keepExtensions && !removal.origins ? listExtensions().map((record) => `chrome-extension://${record.id}`) : []),
     ];
     const scope: ClearDataOptions = removal.origins ? { origins: removal.origins } : excludeOrigins.length ? { excludeOrigins } : {};
-    if (dataTypes.length) await session.clearData({ ...scope, dataTypes });
+    if (dataTypes.length) await clearSessionData(session, { ...scope, dataTypes }, since);
     if (types.includes("cacheStorage")) {
       if (removal.origins) {
         for (const origin of removal.origins) await session.clearStorageData({ origin, storages: ["cachestorage"] });
@@ -107,8 +108,8 @@ export function installBrowsingData(service: ExtensionService) {
       }
     }
     if (types.includes("cache")) {
-      if (filtered) await session.clearData({ ...scope, dataTypes: ["cache"] });
-      else await clearBrowsingData(session, ["cache"]);
+      if (filtered) await clearSessionData(session, { ...scope, dataTypes: ["cache"] }, since);
+      else await clearBrowsingData(session, ["cache"], since);
     }
   };
 

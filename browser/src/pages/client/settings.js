@@ -35,7 +35,6 @@ const COPY = {
 };
 
 const RANGE_MS = { hour: 3600e3, day: 86400e3, week: 7 * 86400e3, month: 28 * 86400e3, all: 0 };
-const RANGED_KINDS = new Set(["history", "downloads"]);
 
 const route = location.pathname.startsWith("/clearBrowserData") ? "clear" : "main";
 const state = { rows: [], error: "", clear: { range: "all", kinds: new Set(["history", "downloads", "siteData", "cache"]), status: "" } };
@@ -119,7 +118,7 @@ async function clearData() {
   const clear = state.clear;
   clear.status = COPY.deleting;
   render();
-  const span = RANGE_MS[rangeFor(clear)];
+  const span = RANGE_MS[clear.range];
   try {
     await api.clearData({ kinds: [...clear.kinds], since: span ? Date.now() - span : 0 });
     clear.status = COPY.deleted;
@@ -129,18 +128,8 @@ async function clearData() {
   render();
 }
 
-// Site data and cache can only be cleared for all time, so they pin the range to "all".
-function rangeable(clear) {
-  return [...clear.kinds].every((kind) => RANGED_KINDS.has(kind));
-}
-
-function rangeFor(clear) {
-  return rangeable(clear) ? clear.range : "all";
-}
-
 function clearView() {
   const clear = state.clear;
-  const range = rangeFor(clear);
   return [
     h("p", null, backLink("terminal-browser://settings", COPY.back)),
     h("header", null, h("h1", null, COPY.clearData)),
@@ -150,8 +139,8 @@ function clearView() {
       h("span", { class: "grow" }, COPY.range),
       h(
         "select",
-        { disabled: !rangeable(clear), onchange: (event) => { clear.range = event.target.value; render(); } },
-        COPY.ranges.map(([value, label]) => h("option", { value, selected: value === range }, label)),
+        { onchange: (event) => { clear.range = event.target.value; } },
+        COPY.ranges.map(([value, label]) => h("option", { value, selected: value === clear.range }, label)),
       ),
     ),
     COPY.kinds.map(([kind, label]) =>

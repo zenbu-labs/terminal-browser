@@ -1,4 +1,4 @@
-import type { Session, WebContents, WebFrameMain } from "electron";
+import type { ClearDataOptions, Session, WebContents, WebFrameMain } from "electron";
 
 export interface NativePermissions {
   permissions: string[];
@@ -48,6 +48,11 @@ export function setNativeUserScriptsAllowed(session: Session, extensionId: strin
 export function setNativeViewType(session: Session, contents: WebContents, viewType: NativeViewType): boolean {
   if (contents.isDestroyed()) return false;
   return patched(session).setViewType(contents, viewType);
+}
+
+// pixel's Electron patches add `since` (ms since the epoch) to clearData; older data is kept.
+export function clearSessionData(session: Session, options: ClearDataOptions, since: number): Promise<void> {
+  return session.clearData({ ...options, ...(since > 0 ? { since } : {}) } as ClearDataOptions);
 }
 
 // Added to WebFrameMain by pixel's Electron patches: the id Chromium gives the frame's current document,
