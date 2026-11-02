@@ -960,6 +960,50 @@ export const API_SCHEMAS: ApiSchemas = {
         "type": "function"
       }
     ],
+    "declarativeContent.addRules": [
+      {
+        "items": {
+          "$ref": "declarativeContent.onPageChanged.Rule"
+        },
+        "name": "rules",
+        "type": "array"
+      },
+      {
+        "name": "callback",
+        "optional": true,
+        "type": "function"
+      }
+    ],
+    "declarativeContent.getRules": [
+      {
+        "items": {
+          "type": "string"
+        },
+        "name": "ruleIdentifiers",
+        "optional": true,
+        "type": "array"
+      },
+      {
+        "name": "callback",
+        "optional": false,
+        "type": "function"
+      }
+    ],
+    "declarativeContent.removeRules": [
+      {
+        "items": {
+          "type": "string"
+        },
+        "name": "ruleIdentifiers",
+        "optional": true,
+        "type": "array"
+      },
+      {
+        "name": "callback",
+        "optional": true,
+        "type": "function"
+      }
+    ],
     "downloads.acceptDanger": [
       {
         "name": "downloadId",
@@ -1473,6 +1517,30 @@ export const API_SCHEMAS: ApiSchemas = {
       {
         "$ref": "notifications.NotificationOptions",
         "name": "options"
+      },
+      {
+        "name": "callback",
+        "optional": true,
+        "type": "function"
+      }
+    ],
+    "omnibox.sendSuggestions": [
+      {
+        "name": "requestId",
+        "type": "integer"
+      },
+      {
+        "items": {
+          "$ref": "omnibox.SuggestResult"
+        },
+        "name": "suggestResults",
+        "type": "array"
+      }
+    ],
+    "omnibox.setDefaultSuggestion": [
+      {
+        "$ref": "omnibox.DefaultSuggestResult",
+        "name": "suggestion"
       },
       {
         "name": "callback",
@@ -2965,6 +3033,183 @@ export const API_SCHEMAS: ApiSchemas = {
       },
       "type": "object"
     },
+    "declarativeContent.ImageDataType": {
+      "additionalProperties": {
+        "type": "any"
+      },
+      "isInstanceOf": "ImageData",
+      "type": "binary"
+    },
+    "declarativeContent.PageStateMatcher": {
+      "properties": {
+        "css": {
+          "items": {
+            "type": "string"
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "instanceType": {
+          "$ref": "declarativeContent.PageStateMatcherInstanceType"
+        },
+        "isBookmarked": {
+          "optional": true,
+          "type": "boolean"
+        },
+        "pageUrl": {
+          "$ref": "events.UrlFilter",
+          "optional": true
+        }
+      },
+      "type": "object"
+    },
+    "declarativeContent.PageStateMatcherInstanceType": {
+      "enum": [
+        "declarativeContent.PageStateMatcher"
+      ],
+      "type": "string"
+    },
+    "declarativeContent.RequestContentScript": {
+      "properties": {
+        "allFrames": {
+          "optional": true,
+          "type": "boolean"
+        },
+        "css": {
+          "items": {
+            "type": "string"
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "instanceType": {
+          "$ref": "declarativeContent.RequestContentScriptInstanceType"
+        },
+        "js": {
+          "items": {
+            "type": "string"
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "matchAboutBlank": {
+          "optional": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "declarativeContent.RequestContentScriptInstanceType": {
+      "enum": [
+        "declarativeContent.RequestContentScript"
+      ],
+      "type": "string"
+    },
+    "declarativeContent.SetIcon": {
+      "properties": {
+        "imageData": {
+          "choices": [
+            {
+              "$ref": "declarativeContent.ImageDataType"
+            },
+            {
+              "additionalProperties": {
+                "type": "any"
+              },
+              "type": "object"
+            }
+          ],
+          "optional": true
+        },
+        "instanceType": {
+          "$ref": "declarativeContent.SetIconInstanceType"
+        }
+      },
+      "type": "object"
+    },
+    "declarativeContent.SetIconInstanceType": {
+      "enum": [
+        "declarativeContent.SetIcon"
+      ],
+      "type": "string"
+    },
+    "declarativeContent.ShowAction": {
+      "properties": {
+        "instanceType": {
+          "$ref": "declarativeContent.ShowActionInstanceType"
+        }
+      },
+      "type": "object"
+    },
+    "declarativeContent.ShowActionInstanceType": {
+      "enum": [
+        "declarativeContent.ShowAction"
+      ],
+      "type": "string"
+    },
+    "declarativeContent.ShowPageAction": {
+      "properties": {
+        "instanceType": {
+          "$ref": "declarativeContent.ShowPageActionInstanceType"
+        }
+      },
+      "type": "object"
+    },
+    "declarativeContent.ShowPageActionInstanceType": {
+      "enum": [
+        "declarativeContent.ShowPageAction"
+      ],
+      "type": "string"
+    },
+    "declarativeContent.onPageChanged.Rule": {
+      "properties": {
+        "actions": {
+          "items": {
+            "choices": [
+              {
+                "$ref": "declarativeContent.RequestContentScript"
+              },
+              {
+                "$ref": "declarativeContent.SetIcon"
+              },
+              {
+                "$ref": "declarativeContent.ShowPageAction"
+              },
+              {
+                "$ref": "declarativeContent.ShowAction"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "conditions": {
+          "items": {
+            "choices": [
+              {
+                "$ref": "declarativeContent.PageStateMatcher"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "id": {
+          "optional": true,
+          "type": "string"
+        },
+        "priority": {
+          "optional": true,
+          "type": "integer"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "optional": true,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "downloads.DangerType": {
       "enum": [
         "file",
@@ -3267,6 +3512,146 @@ export const API_SCHEMAS: ApiSchemas = {
         "enabled": {
           "name": "enabled",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "events.Rule": {
+      "properties": {
+        "actions": {
+          "items": {
+            "type": "any"
+          },
+          "type": "array"
+        },
+        "conditions": {
+          "items": {
+            "type": "any"
+          },
+          "type": "array"
+        },
+        "id": {
+          "optional": true,
+          "type": "string"
+        },
+        "priority": {
+          "optional": true,
+          "type": "integer"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "optional": true,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "events.UrlFilter": {
+      "properties": {
+        "cidrBlocks": {
+          "items": {
+            "type": "string"
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "hostContains": {
+          "optional": true,
+          "type": "string"
+        },
+        "hostEquals": {
+          "optional": true,
+          "type": "string"
+        },
+        "hostPrefix": {
+          "optional": true,
+          "type": "string"
+        },
+        "hostSuffix": {
+          "optional": true,
+          "type": "string"
+        },
+        "originAndPathMatches": {
+          "optional": true,
+          "type": "string"
+        },
+        "pathContains": {
+          "optional": true,
+          "type": "string"
+        },
+        "pathEquals": {
+          "optional": true,
+          "type": "string"
+        },
+        "pathPrefix": {
+          "optional": true,
+          "type": "string"
+        },
+        "pathSuffix": {
+          "optional": true,
+          "type": "string"
+        },
+        "ports": {
+          "items": {
+            "choices": [
+              {
+                "type": "integer"
+              },
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "queryContains": {
+          "optional": true,
+          "type": "string"
+        },
+        "queryEquals": {
+          "optional": true,
+          "type": "string"
+        },
+        "queryPrefix": {
+          "optional": true,
+          "type": "string"
+        },
+        "querySuffix": {
+          "optional": true,
+          "type": "string"
+        },
+        "schemes": {
+          "items": {
+            "type": "string"
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "urlContains": {
+          "optional": true,
+          "type": "string"
+        },
+        "urlEquals": {
+          "optional": true,
+          "type": "string"
+        },
+        "urlMatches": {
+          "optional": true,
+          "type": "string"
+        },
+        "urlPrefix": {
+          "optional": true,
+          "type": "string"
+        },
+        "urlSuffix": {
+          "optional": true,
+          "type": "string"
         }
       },
       "type": "object"
@@ -3618,6 +4003,106 @@ export const API_SCHEMAS: ApiSchemas = {
         "progress"
       ],
       "type": "string"
+    },
+    "omnibox.Action": {
+      "properties": {
+        "icon": {
+          "additionalProperties": {
+            "type": "any"
+          },
+          "optional": true,
+          "type": "object"
+        },
+        "label": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tooltipText": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "omnibox.DefaultSuggestResult": {
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "descriptionStyles": {
+          "items": {
+            "$ref": "omnibox.MatchClassification",
+            "name": "matchClassification"
+          },
+          "optional": true,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "omnibox.DescriptionStyleType": {
+      "enum": [
+        "url",
+        "match",
+        "dim"
+      ],
+      "type": "string"
+    },
+    "omnibox.MatchClassification": {
+      "properties": {
+        "length": {
+          "optional": true,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "omnibox.DescriptionStyleType"
+        }
+      },
+      "type": "object"
+    },
+    "omnibox.SuggestResult": {
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "omnibox.Action"
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "content": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "deletable": {
+          "optional": true,
+          "type": "boolean"
+        },
+        "description": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "descriptionStyles": {
+          "items": {
+            "$ref": "omnibox.MatchClassification",
+            "name": "matchClassification"
+          },
+          "optional": true,
+          "type": "array"
+        },
+        "iconUrl": {
+          "optional": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "permissions.Permissions": {
       "properties": {

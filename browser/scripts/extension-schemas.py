@@ -83,6 +83,31 @@ def signature(fn, ns):
     return params
 
 
+# Events with rules (declarativeContent.onPageChanged) are flattened into namespace methods in API_SPEC.
+# Chromium checks them with events.Event's signatures, minus the event name and webview id it fills in,
+# and a Rule whose conditions and actions are the event's own types (declarative_event.cc).
+RULE_METHODS = ("addRules", "getRules", "removeRules")
+EVENT_FUNCTIONS = {fn["name"]: fn for fn in next(t for t in namespaces["events"]["types"] if t["id"] == "Event")["functions"]}
+
+
+def rule_signature(method, event, ns):
+    params = signature(dict(EVENT_FUNCTIONS[method], parameters=EVENT_FUNCTIONS[method]["parameters"][2:]), "events")
+    if method != "addRules":
+        return params
+    rule = "%s.%s.Rule" % (ns, event["name"])
+    choices = lambda refs: {"choices": [{"$ref": ref} for ref in refs]}
+    types[rule] = {"type": "object", "properties": {
+        "id": {"type": "string", "optional": True},
+        "tags": {"type": "array", "items": {"type": "string"}, "optional": True},
+        "conditions": {"type": "array", "items": choices(event["options"]["conditions"])},
+        "actions": {"type": "array", "items": choices(event["options"]["actions"])},
+        "priority": {"type": "integer", "optional": True},
+    }}
+    pending.extend(event["options"]["conditions"] + event["options"]["actions"])
+    params[0] = {"name": "rules", "type": "array", "items": {"$ref": rule}}
+    return params
+
+
 functions = {}
 for name, api in spec.items():
     ns = namespaces.get(name)
@@ -90,8 +115,12 @@ for name, api in spec.items():
         print("no schema for", name, file=sys.stderr)
         continue
     by_name = {fn["name"]: fn for fn in ns.get("functions", [])}
+    rule_events = [e for e in ns.get("events", []) if e.get("options", {}).get("supportsRules")]
     for method in api["methods"]:
         fn = by_name.get(method)
+        if fn is None and rule_events and method in RULE_METHODS:
+            functions["%s.%s" % (name, method)] = rule_signature(method, rule_events[0], name)
+            continue
         if fn is None:
             print("no schema for %s.%s" % (name, method), file=sys.stderr)
             continue

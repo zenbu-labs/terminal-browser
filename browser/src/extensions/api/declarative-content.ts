@@ -100,8 +100,10 @@ export class DeclarativeContentStore {
       service.actions.clearDeclarative(id);
       if (!getExtension(id)) fs.rmSync(rulesFile(id), { force: true });
     });
-    service.onTabContents((contents) => this.watch(contents));
-    app.whenReady().then(() => browsing().bookmarks.any.add(() => this.evaluateAll()));
+    service.onActivate(() => {
+      service.onTabContents((contents) => this.watch(contents));
+      browsing().bookmarks.any.add(() => this.evaluateAll());
+    });
   }
 
   private load(extensionId: string): ContentRule[] {

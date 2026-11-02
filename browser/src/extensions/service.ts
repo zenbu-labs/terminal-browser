@@ -39,6 +39,7 @@ import { OmniboxStore } from "./api/omnibox";
 import { DeclarativeContentStore } from "./api/declarative-content";
 import type { Caller } from "./router";
 import type { ExtensionWindow, TabRef, WindowHost } from "./window";
+import { onZoomLevelChanged, zoomSettings } from "./zoom";
 
 export interface PopupWindowEntry {
   id: number;
@@ -111,6 +112,7 @@ export class ExtensionService {
   private readonly activateListeners: (() => void)[] = [];
   private readonly unloadListeners = new Set<(id: string) => void>();
   private readonly contentsListeners = new Set<(contents: WebContents, ref: TabRef) => void>();
+  private readonly readyContents = new Map<WebContents, TabRef>();
   readonly debugging = new Map<number, Set<string>>();
   readonly tabStates = new TabStates();
   private readonly tabEvents = new Map<number, TabEvents>();
@@ -154,7 +156,12 @@ export class ExtensionService {
     this.session.registerPreloadScript({ type: "service-worker", filePath: preload });
     this.router.listen();
     this.events.listen();
+    for (const events of this.tabEvents.values()) events.trackOpenTabs();
     for (const listener of this.activateListeners.splice(0)) listener();
+  }
+
+  get active(): boolean {
+    return this.activated;
   }
 
   onChange(listener: ServiceListener): () => void {
@@ -167,13 +174,22 @@ export class ExtensionService {
     return () => this.unloadListeners.delete(listener);
   }
 
-  // Runs for every tab's web contents once the tab is ready.
+  // Runs for every tab's web contents once the tab is ready, and right away for tabs that already are.
   onTabContents(listener: (contents: WebContents, ref: TabRef) => void): () => void {
     this.contentsListeners.add(listener);
+    for (const [contents, ref] of [...this.readyContents]) {
+      try {
+        listener(contents, ref);
+      } catch (error) {
+        console.error(error);
+      }
+    }
     return () => this.contentsListeners.delete(listener);
   }
 
   tabContentsReady(contents: WebContents, ref: TabRef) {
+    this.readyContents.set(contents, ref);
+    contents.once("destroyed", () => this.readyContents.delete(contents));
     for (const listener of [...this.contentsListeners]) {
       try {
         listener(contents, ref);
@@ -434,7 +450,6 @@ export class ExtensionService {
   registerSurface(contents: WebContents, window: ExtensionWindow, kind: SurfaceKind, extensionId: string) {
     this.surfaces.set(contents.id, { window, kind, extensionId });
     setNativeViewType(this.session, contents, kind === "side-panel" ? "sidePanel" : "popup");
-    this.senderTabs.changed();
     contents.once("destroyed", () => {
       if (this.surfaces.get(contents.id)?.window === window) this.surfaces.delete(contents.id);
     });
@@ -442,10 +457,6 @@ export class ExtensionService {
 
   surface(contentsId: number): Surface | null {
     return this.surfaces.get(contentsId) ?? null;
-  }
-
-  surfaceContentsIds(): number[] {
-    return [...this.surfaces.keys()];
   }
 
   reservePopupWindowId(): number {
@@ -638,25 +649,6 @@ export class ExtensionService {
     this.contentsOf(tab)?.reload();
   }
 
-  // Zoom can change for many tabs at once (one origin shares a zoom level), so every tab is checked.
-  zoomMayHaveChanged() {
-    for (const { tab } of this.allTabs()) {
-      const contents = this.contentsOf(tab);
-      if (!contents || tab.contentsId === null) continue;
-      const extras = this.tabStates.get(tab.contentsId);
-      const factor = contents.getZoomFactor();
-      if (Math.abs(factor - extras.zoomFactor) < 1e-6) continue;
-      const change = {
-        tabId: tab.contentsId,
-        oldZoomFactor: extras.zoomFactor,
-        newZoomFactor: factor,
-        zoomSettings: { mode: extras.zoom.mode, scope: extras.zoom.scope },
-      };
-      extras.zoomFactor = factor;
-      this.broadcast("tabs.onZoomChange", () => [change]);
-    }
-  }
-
   tabChanged({ window, tab }: TabRef, change: chrome.tabs.OnUpdatedInfo) {
     this.tabEvents.get(window.id)?.announce(tab, change);
   }
@@ -729,6 +721,8 @@ function canonicalUrl(url: string): string {
 
 // Turns tab changes in one pane into chrome.tabs events for every extension.
 class TabEvents {
+  private readonly tracked = new WeakSet<WebContents>();
+
   constructor(
     private readonly service: ExtensionService,
     private readonly window: ExtensionWindow,
@@ -737,18 +731,9 @@ class TabEvents {
   created() {}
 
   ready(tab: Tab) {
-    const contents = this.service.contentsOf(tab);
+    if (!this.service.active) return;
     const ref = { window: this.window, tab };
-    if (contents) {
-      const extras = this.service.tabStates.get(contents.id);
-      const committed = committedUrl(contents);
-      extras.reportedUrl = committed;
-      extras.committed = committed !== "";
-      extras.pendingUrl = committed ? null : canonicalUrl(tab.url);
-      extras.zoomFactor = contents.getZoomFactor();
-      this.watchContents(contents, tab);
-      this.service.tabContentsReady(contents, ref);
-    }
+    this.track(tab);
     this.service.broadcast("tabs.onCreated", (extension) => [this.service.tabInfo(extension, ref)]);
     if (this.window.host.tabs.active === tab) {
       this.service.sidePanels.tabActivated(this.window);
@@ -756,8 +741,26 @@ class TabEvents {
     }
   }
 
+  // Tabs are only watched once an extension is installed; the ones open by then start being watched here.
+  trackOpenTabs() {
+    for (const tab of this.window.host.tabs.all()) this.track(tab);
+  }
+
+  private track(tab: Tab) {
+    const contents = this.service.contentsOf(tab);
+    if (!contents || this.tracked.has(contents)) return;
+    this.tracked.add(contents);
+    const extras = this.service.tabStates.get(contents.id);
+    const committed = committedUrl(contents);
+    extras.reportedUrl = committed;
+    extras.committed = committed !== "";
+    extras.pendingUrl = committed ? null : canonicalUrl(tab.url);
+    this.watchContents(contents, tab);
+    this.service.tabContentsReady(contents, { window: this.window, tab });
+  }
+
   updated(tab: Tab, previous: WebViewState) {
-    if (tab.contentsId === null) return;
+    if (tab.contentsId === null || !this.service.active) return;
     const next = tab.state;
     const extras = this.service.tabStates.get(tab.contentsId);
     const change: chrome.tabs.OnUpdatedInfo = {};
@@ -781,7 +784,6 @@ class TabEvents {
         if (url) change.favIconUrl = url;
       }
     }
-    if (next.zoom !== previous.zoom || next.url !== previous.url) this.service.zoomMayHaveChanged();
     if (Object.keys(change).length === 0) return;
     if (change.url) {
       for (const extension of this.service.loaded.values()) {
@@ -892,6 +894,14 @@ class TabEvents {
     });
     contents.on("page-title-updated", (_event, title) => {
       if (extras()) this.announce(tab, { title: title || tab.state.url });
+    });
+    onZoomLevelChanged(contents, ({ oldZoomFactor, newZoomFactor }) => {
+      // A zoom mode change reports the level before the new mode is in place, so the settings are read after it.
+      queueMicrotask(() => {
+        if (!extras() || contents.isDestroyed()) return;
+        const change = { tabId: contents.id, oldZoomFactor, newZoomFactor, zoomSettings: zoomSettings(contents) };
+        this.service.broadcast("tabs.onZoomChange", () => [change]);
+      });
     });
   }
 }

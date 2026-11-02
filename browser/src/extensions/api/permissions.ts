@@ -84,8 +84,7 @@ export function installPermissions(service: ExtensionService) {
 
   // The preload asks synchronously which APIs to expose before the
   // extension's own scripts run.
-  const startup = (caller: Caller | null): StartupInfo | null =>
-    caller ? { permissions: caller.extension.apis, notTabs: service.senderTabs.notTabs() } : null;
+  const startup = (caller: Caller | null): StartupInfo | null => (caller ? { permissions: caller.extension.apis } : null);
   ipcMain.on(STARTUP_CHANNEL, (event) => {
     event.returnValue = startup(router.callerForFrame(event.sender, event.senderFrame));
   });

@@ -267,8 +267,6 @@ export const STARTUP_CHANNEL = "tb-ext:startup";
 // What an extension context needs before its own scripts run.
 export interface StartupInfo {
   permissions: string[];
-  // Web contents that aren't tabs, see SenderTabs.
-  notTabs: number[];
 }
 
 // Where an extension page is shown, for chrome.extension.getViews.

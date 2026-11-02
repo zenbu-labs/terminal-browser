@@ -26,7 +26,7 @@ function nativeEvent() {
 
 // Runs the preload's chrome.* setup in a fake extension context and returns
 // what the extension's own code would see.
-function context({ manifest = {}, granted = null, notTabs = [], isWorker = true, view = null, page = null } = {}) {
+function context({ manifest = {}, granted = null, isWorker = true, view = null, page = null } = {}) {
   const invoked = [];
   const listened = [];
   let deliver = null;
@@ -45,14 +45,14 @@ function context({ manifest = {}, granted = null, notTabs = [], isWorker = true,
   const bridge = {
     invoke: (method, args) => {
       invoked.push([method, args]);
-      return Promise.resolve(method === "runtime.watchSenderTabs" ? { tabs: [], notTabs: [] } : undefined);
+      return Promise.resolve(method === "runtime.watchSenderTabs" ? { tabs: [] } : undefined);
     },
     listen: (event) => listened.push(event),
     unlisten() {},
     onEvent: (listener) => (deliver = listener),
     ready() {},
     viewInfo: () => view,
-    startup: () => (granted ? { permissions: granted, notTabs } : null),
+    startup: () => (granted ? { permissions: granted } : null),
   };
   installChromeApis(bridge, isWorker, API_SPEC, API_SCHEMAS);
   return { chrome, invoked, listened, fire: (name, args) => deliver(name, args, undefined) };
@@ -124,29 +124,18 @@ test("chrome.action only exists with an action manifest key", () => {
   assert.equal(typeof context({ manifest: { action: {} } }).chrome.action.setTitle, "function");
 });
 
-test("messages from popups, side panels and offscreen documents carry no tab, frame or document", async () => {
+test("message senders get the tab chrome.tabs reports, and senders that aren't tabs stay as they are", async () => {
   const { chrome, fire } = context();
   const seen = [];
   chrome.runtime.onMessage.addListener((message, sender) => seen.push(sender));
   await new Promise((resolve) => setImmediate(resolve));
-  fire("runtime.senderTabs", [{ tabs: [{ id: 3, windowId: 1, index: 0 }], notTabs: [9] }]);
+  fire("runtime.senderTabs", [{ tabs: [{ id: 3, windowId: 1, index: 0 }] }]);
   const [wrapped] = chrome.runtime.onMessage.listeners;
-  const popup = { id: ID, url: "u", origin: "o", tab: { id: 9 }, frameId: 0, documentId: "d", documentLifecycle: "active" };
-  wrapped("hi", popup, () => {});
-  const tab = { id: ID, url: "u", origin: "o", tab: { id: 3 }, frameId: 0, documentId: "d", documentLifecycle: "active" };
-  wrapped("hi", tab, () => {});
+  wrapped("hi", { id: ID, url: "u", origin: "o" }, () => {});
+  wrapped("hi", { id: ID, url: "u", origin: "o", tab: { id: 3 }, frameId: 0, documentId: "d", documentLifecycle: "active" }, () => {});
   assert.deepEqual(Object.keys(seen[0]).sort(), ["id", "origin", "url"]);
   assert.equal(seen[1].tab.windowId, 1);
   assert.equal(seen[1].frameId, 0);
-});
-
-test("a worker woken by a popup's message already knows the popup isn't a tab", () => {
-  const { chrome } = context({ granted: [], notTabs: [9] });
-  const seen = [];
-  chrome.runtime.onMessage.addListener((message, sender) => seen.push(sender));
-  const [wrapped] = chrome.runtime.onMessage.listeners;
-  wrapped("hi", { id: ID, url: "u", origin: "o", tab: { id: 9 }, frameId: 0, documentId: "d", documentLifecycle: "active" }, () => {});
-  assert.deepEqual(Object.keys(seen[0]).sort(), ["id", "origin", "url"]);
 });
 
 test("downloads.onDeterminingFilename listeners answer through suggest", () => {
@@ -197,4 +186,24 @@ test("extension.getViews returns this page when it matches the filter", () => {
   assert.deepEqual(chrome.extension.getViews({ windowId: 5 }), []);
   assert.deepEqual(chrome.extension.getViews({ windowId: -2 }), [page]);
   delete globalThis.window;
+});
+
+test("omnibox and declarativeContent calls are checked like Chrome checks them", () => {
+  const { chrome, invoked } = context({ manifest: { omnibox: { keyword: "god" } }, granted: ["declarativeContent"] });
+  assert.throws(() => chrome.omnibox.setDefaultSuggestion({ content: "x" }), {
+    message:
+      "Error in invocation of omnibox.setDefaultSuggestion(omnibox.DefaultSuggestResult suggestion, optional function callback): Error at parameter 'suggestion': Unexpected property: 'content'.",
+  });
+  const d = chrome.declarativeContent;
+  assert.throws(() => d.onPageChanged.addRules([{ conditions: [{ pageUrl: { hostEquals: 1 } }], actions: [] }]), {
+    name: "TypeError",
+    message: "Invalid invocation",
+  });
+  assert.throws(() => d.onPageChanged.getRules(), { message: "Invalid invocation" });
+  const sent = () => invoked.filter(([method]) => method.startsWith("declarativeContent.") || method.startsWith("omnibox.")).map(([method]) => method);
+  assert.deepEqual(sent(), []);
+  const rule = { id: "r", conditions: [new d.PageStateMatcher({ pageUrl: { hostEquals: "example.com" } })], actions: [new d.ShowAction()] };
+  d.onPageChanged.addRules([rule]);
+  d.onPageChanged.getRules(["r"], () => {});
+  assert.deepEqual(sent(), ["declarativeContent.addRules", "declarativeContent.getRules"]);
 });

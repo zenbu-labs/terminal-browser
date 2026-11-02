@@ -764,14 +764,28 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
           : Object.fromEntries(Object.entries(imageData).map(([size, image]) => [size, encode(image)]));
       return { ...action, imageData: encoded };
     };
-    const callbackStyle = (name: string) => {
-      const run = method(`declarativeContent.${name}`);
+    // Like Chrome's declarative events, which check their arguments without saying what was wrong.
+    const checkRuleCall = (name: string, args: unknown[]) => {
+      try {
+        validate(`declarativeContent.${name}`, args);
+      } catch {
+        throw new TypeError("Invalid invocation");
+      }
+    };
+    const callbackStyle = (name: string, prepare = (args: unknown[]) => args) => {
+      const run = method(`declarativeContent.${name}`, false);
       return (...args: unknown[]) => {
+        checkRuleCall(name, args);
         const callback = typeof args[args.length - 1] === "function" ? (args.pop() as Fn) : () => void chrome.runtime.lastError;
-        run(...args, callback);
+        run(...prepare(args), callback);
       };
     };
-    const addRules = callbackStyle("addRules");
+    const plainRules = (rules: Record<string, unknown>[]) =>
+      rules.map((rule) => ({
+        ...rule,
+        conditions: ((rule.conditions as Record<string, unknown>[]) ?? []).map((condition) => ({ ...condition })),
+        actions: ((rule.actions as Record<string, unknown>[]) ?? []).map(plainAction),
+      }));
     namespace("declarativeContent", {
       extra: {
         PageStateMatcher: declarative("PageStateMatcher"),
@@ -780,14 +794,7 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
         SetIcon: declarative("SetIcon"),
         RequestContentScript: declarative("RequestContentScript"),
         onPageChanged: {
-          addRules(rules: Record<string, unknown>[], callback?: Fn) {
-            const plain = (rules ?? []).map((rule) => ({
-              ...rule,
-              conditions: ((rule.conditions as Record<string, unknown>[]) ?? []).map((condition) => ({ ...condition })),
-              actions: ((rule.actions as Record<string, unknown>[]) ?? []).map(plainAction),
-            }));
-            addRules(plain, ...(callback ? [callback] : []));
-          },
+          addRules: callbackStyle("addRules", ([rules]) => [plainRules(rules as Record<string, unknown>[])]),
           getRules: callbackStyle("getRules"),
           removeRules: callbackStyle("removeRules"),
         },
@@ -934,25 +941,15 @@ export function installChromeApis(bridge: BridgeShape, isWorker: boolean, spec: 
 
   // Electron's sender.tab always says windowId 0, index 0, inactive; the main process keeps a correct copy here
   const senderTabs = new Map<number, Record<string, unknown>>();
-  // Known from the start, so a worker woken by a popup's message already knows the popup isn't a tab.
-  const notTabs = new Set<number>(startup?.notTabs ?? []);
   let watchingSenderTabs = false;
   const storeSenderTabs = (snapshot: unknown) => {
-    const { tabs, notTabs: others } = snapshot as { tabs: Record<string, unknown>[]; notTabs: number[] };
     senderTabs.clear();
-    for (const tab of tabs) senderTabs.set(tab.id as number, tab);
-    notTabs.clear();
-    for (const id of others) notTabs.add(id);
+    for (const tab of (snapshot as { tabs: Record<string, unknown>[] }).tabs) senderTabs.set(tab.id as number, tab);
   };
   localHandlers.set("runtime.senderTabs", ([snapshot]) => storeSenderTabs(snapshot));
   const fixSender = (sender: Record<string, unknown> | undefined) => {
     const tab = sender?.tab as Record<string, unknown> | undefined;
     if (!tab) return;
-    // Chrome only describes the tab, frame and document of senders that are tabs.
-    if (notTabs.has(tab.id as number)) {
-      for (const key of ["tab", "frameId", "documentId", "documentLifecycle"]) delete sender![key];
-      return;
-    }
     const known = senderTabs.get(tab.id as number);
     sender!.tab = known ? { ...known, url: tab.url ?? known.url, title: tab.title ?? known.title } : { ...tab, windowId: -2, groupId: -1 };
   };

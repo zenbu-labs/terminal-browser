@@ -1,4 +1,3 @@
-import { app, webContents as allWebContents } from "electron";
 import type { ServiceWorkerMain } from "electron";
 import type { Caller } from "./router";
 import type { ExtensionService } from "./service";
@@ -9,15 +8,11 @@ type Subscriber =
 
 export interface SenderTabsSnapshot {
   tabs: chrome.tabs.Tab[];
-  // Web contents that are not tabs (action popups, side panels, offscreen
-  // documents), whose messages Chrome sends without tab, frameId or document.
-  notTabs: number[];
 }
 
-// Electron fills `sender.tab` itself with windowId 0, index 0 and active false,
-// and for every web contents, tab or not. Extension contexts keep this copy of
-// what chrome.tabs.query would return them, so the preload can hand listeners
-// the real tab, or none.
+// Electron fills `sender.tab` itself with windowId 0, index 0 and active false.
+// Extension contexts keep this copy of what chrome.tabs.query would return them,
+// so the preload can hand listeners the real tab.
 export class SenderTabs {
   private readonly subscribers = new Map<string, Subscriber>();
   private pending = false;
@@ -26,11 +21,6 @@ export class SenderTabs {
     service.router.handle("runtime.watchSenderTabs", (caller) => this.watch(caller));
     service.onUnload((id) => {
       for (const [key, subscriber] of this.subscribers) if (subscriber.extensionId === id) this.subscribers.delete(key);
-    });
-    app.on("web-contents-created", (_event, contents) => {
-      if (contents.getType() !== "remote") return;
-      this.changed();
-      contents.once("destroyed", () => this.changed());
     });
   }
 
@@ -57,18 +47,10 @@ export class SenderTabs {
     return this.snapshot(extensionId);
   }
 
-  notTabs(): number[] {
-    const remote = allWebContents
-      .getAllWebContents()
-      .filter((contents) => !contents.isDestroyed() && contents.getType() === "remote")
-      .map((contents) => contents.id);
-    return [...this.service.surfaceContentsIds(), ...remote].filter((id) => !this.service.tabRef(id));
-  }
-
   private snapshot(extensionId: string): SenderTabsSnapshot {
     const extension = this.service.get(extensionId);
-    if (!extension) return { tabs: [], notTabs: [] };
-    return { tabs: this.service.allTabs().map((ref) => this.service.tabInfo(extension, ref)), notTabs: this.notTabs() };
+    if (!extension) return { tabs: [] };
+    return { tabs: this.service.allTabs().map((ref) => this.service.tabInfo(extension, ref)) };
   }
 
   private push() {
