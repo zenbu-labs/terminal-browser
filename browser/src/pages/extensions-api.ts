@@ -7,7 +7,7 @@ import { extensionsDeveloperMode, getExtension, listExtensions, readManifestFile
 
 import type { ExtensionSummary } from "../extensions/manage";
 import { asManifest, manifestAction, pickIcon, resolveExtensionPath } from "../extensions/manifest";
-import { hasTransientUserActivation, nextUserActivation } from "../extensions/user-activation";
+import { nextUserActivation } from "../extensions/user-activation";
 import { extensionService } from "../extensions/service";
 import { WEBSTORE_ORIGIN } from "../extensions/webstore";
 import { canonicalUrl, extensionIdOfUrl } from "../canonical-url";
@@ -207,11 +207,10 @@ export function extensionsHandlers(): InternalHandlers["extensions"] {
         })),
       }));
     },
-    // The click on Import picks what may be installed, so on a page the browser itself didn't open that click must be real.
+    // The user's click on Import picks what importInstall may install.
     importStart: (sender, browser, profile, ids) => {
       // fixme: placeholder copy
       if (typeof browser !== "string" || typeof profile !== "string" || !Array.isArray(ids)) throw new Error("Invalid source");
-      if (!pageOpenedByBrowser(sender) && !hasTransientUserActivation(sender.mainFrame)) throw new Error("Not allowed");
       startImport(sender, browser, profile, ids.map(asId));
     },
     importInstall: (sender, browser, profile, id) => {

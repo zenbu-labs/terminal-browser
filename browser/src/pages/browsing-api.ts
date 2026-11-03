@@ -5,7 +5,6 @@ import { recentVisits } from "shared";
 import { browsing } from "../browsing";
 import type { BookmarkNode } from "../browsing/bookmarks";
 import { extensionService } from "../extensions/service";
-import { hasTransientUserActivation } from "../extensions/user-activation";
 import { isInternalUrl } from "./internal";
 import type { InternalHandlers } from "./internal";
 import { openFromPage } from "./open";
@@ -52,14 +51,8 @@ export function downloadsHandlers(): InternalHandlers["downloads"] {
         canResume: downloads.canResume(record.id),
         exists: record.state !== "complete" || fs.existsSync(record.filename),
       })),
-    open: (sender, download) => {
-      if (!hasTransientUserActivation(sender.mainFrame)) throw new Error("Not allowed");
-      downloads.open(id(download));
-    },
-    keep: (sender, download) => {
-      if (!hasTransientUserActivation(sender.mainFrame)) throw new Error("Not allowed");
-      downloads.accept(id(download));
-    },
+    open: (_sender, download) => downloads.open(id(download)),
+    keep: (_sender, download) => downloads.accept(id(download)),
     discard: (_sender, download) => downloads.discard(id(download)),
     show: (_sender, download) => downloads.show(id(download)),
     cancel: (_sender, download) => downloads.cancel(id(download)),

@@ -6,7 +6,7 @@ const vm = require("node:vm");
 const { test } = require("node:test");
 
 const electron = require("./fake-electron.js");
-const { PAGE_NOTIFY_MS, allowedInternalCall, installInternalApi, internalHostOf, isInternalUrl, pageNotifier } = require("../dist/pages/internal.js");
+const { CALLS_WITHOUT_USER_ACTIVATION, PAGE_NOTIFY_MS, allowedInternalCall, installInternalApi, internalHostOf, isInternalUrl, pageNotifier } = require("../dist/pages/internal.js");
 const { servePages } = require("../dist/pages/scheme.js");
 const { guardInternalNavigation } = require("../dist/pages/navigation.js");
 const { INTERNAL_API, internalChannel } = require("../dist/pages/internal-api.js");
@@ -14,9 +14,17 @@ const { INTERNAL_API, internalChannel } = require("../dist/pages/internal-api.js
 const tabs = new Set();
 const isTab = (contents) => tabs.has(contents);
 
-function call(origin, { session = electron.session.defaultSession, top = true, tab = true } = {}) {
-  const mainFrame = { origin, parent: null };
-  const frame = top ? mainFrame : { origin, parent: mainFrame };
+function call(origin, { session = electron.session.defaultSession, top = true, tab = true, activated = false, documentLifecycle = "active" } = {}) {
+  const frameOf = (parent) => ({
+    origin,
+    parent,
+    detached: false,
+    documentLifecycle,
+    isDestroyed: () => false,
+    hasTransientUserActivation: () => activated,
+  });
+  const mainFrame = frameOf(null);
+  const frame = top ? mainFrame : frameOf(mainFrame);
   const sender = { session, mainFrame };
   if (tab) tabs.add(sender);
   return { sender, senderFrame: frame };
@@ -32,19 +40,19 @@ const ssh = electron.session.fromPartition("persist:ssh-host");
 
 test("only the exact page's top frame in one of our tabs may call its API", () => {
   const served = () => true;
-  assert.equal(allowedInternalCall(call("terminal-browser://settings"), "settings", served, isTab), true);
-  assert.equal(allowedInternalCall(call("terminal-browser://history"), "settings", served, isTab), false);
-  assert.equal(allowedInternalCall(call("https://evil.example"), "settings", served, isTab), false);
-  assert.equal(allowedInternalCall(call("terminal-browser://settings.evil"), "settings", served, isTab), false);
-  assert.equal(allowedInternalCall(call("terminal-browser://settings", { top: false }), "settings", served, isTab), false);
-  assert.equal(allowedInternalCall(call("terminal-browser://settings", { tab: false }), "settings", served, isTab), false);
-  assert.equal(allowedInternalCall({ ...call("terminal-browser://settings"), senderFrame: null }, "settings", served, isTab), false);
+  assert.equal(allowedInternalCall(call("terminal-browser://settings"), "settings", "get", served, isTab), true);
+  assert.equal(allowedInternalCall(call("terminal-browser://history"), "settings", "get", served, isTab), false);
+  assert.equal(allowedInternalCall(call("https://evil.example"), "settings", "get", served, isTab), false);
+  assert.equal(allowedInternalCall(call("terminal-browser://settings.evil"), "settings", "get", served, isTab), false);
+  assert.equal(allowedInternalCall(call("terminal-browser://settings", { top: false }), "settings", "get", served, isTab), false);
+  assert.equal(allowedInternalCall(call("terminal-browser://settings", { tab: false }), "settings", "get", served, isTab), false);
+  assert.equal(allowedInternalCall({ ...call("terminal-browser://settings"), senderFrame: null }, "settings", "get", served, isTab), false);
 });
 
 test("a frame origin only matches an internal page when it is Chromium's exact spelling", () => {
   const served = () => true;
   for (const origin of ["TERMINAL-BROWSER://settings", "terminal-browser://SETTINGS", "terminal-browser://settings/", " terminal-browser://settings", "terminal-browser:settings"]) {
-    assert.equal(allowedInternalCall(call(origin), "settings", served, isTab), false, origin);
+    assert.equal(allowedInternalCall(call(origin), "settings", "get", served, isTab), false, origin);
   }
 });
 
@@ -66,6 +74,49 @@ test("the API answers internal pages in SSH panes too, with the same guards", as
   assert.equal(await invoke(call("terminal-browser://settings", { session: ssh })), "settings.get");
   assert.throws(() => invoke(call("https://evil.example", { session: ssh })), /Not allowed/);
   assert.throws(() => invoke(call("terminal-browser://settings", { session: ssh, top: false })), /Not allowed/);
+});
+
+const MUTATING = {
+  start: [],
+  newtab: [],
+  extensions: [
+    "setEnabled",
+    "remove",
+    "setPinned",
+    "setUserScriptsAllowed",
+    "setShortcut",
+    "loadUnpacked",
+    "reload",
+    "update",
+    "clearErrors",
+    "setErrorCollection",
+    "openUrl",
+    "setDeveloperMode",
+    "importStart",
+  ],
+  history: ["remove", "open"],
+  downloads: ["open", "keep", "discard", "show", "cancel", "pause", "resume", "remove", "clear", "openUrl"],
+  bookmarks: ["add", "addFolder", "remove", "open"],
+  settings: ["set", "reset", "clearData"],
+};
+
+test("every call that changes something needs the user's input in the page, reads don't", async () => {
+  for (const [host, methods] of Object.entries(INTERNAL_API)) {
+    const gated = methods.filter((method) => !CALLS_WITHOUT_USER_ACTIVATION[host].includes(method));
+    assert.deepEqual(gated, MUTATING[host], host);
+    for (const method of methods) {
+      const invoke = electron.invokeHandlers.get(internalChannel(host, method));
+      const page = `terminal-browser://${host}`;
+      if (gated.includes(method)) {
+        assert.throws(() => invoke(call(page)), /Not allowed/, `${host}.${method} without input`);
+        assert.throws(() => invoke(call(page, { activated: true, documentLifecycle: "pending_deletion" })), /Not allowed/, `${host}.${method} from a page being replaced`);
+      } else {
+        assert.equal(await invoke(call(page)), `${host}.${method}`, `${host}.${method} without input`);
+      }
+      assert.equal(await invoke(call(page, { activated: true })), `${host}.${method}`, `${host}.${method} after a click`);
+      assert.throws(() => invoke(call("https://evil.example", { activated: true })), /Not allowed/, `${host}.${method} from the web`);
+    }
+  }
 });
 
 test("every session gets the internal page preload and the terminal-browser:// handler", () => {

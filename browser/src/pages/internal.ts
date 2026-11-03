@@ -5,6 +5,7 @@ import { ipcMain, webContents as allWebContents } from "electron";
 import type { IpcMainInvokeEvent, Session, WebContents } from "electron";
 
 import { canonicalUrl } from "../canonical-url";
+import { hasTransientUserActivation } from "../extensions/user-activation";
 import { INTERNAL_API, INTERNAL_CHANGED_CHANNEL, internalChannel } from "./internal-api";
 import type { InternalHost } from "./internal-api";
 import { forEverySession } from "./sessions";
@@ -14,6 +15,21 @@ export type InternalHandler = (sender: WebContents, ...args: unknown[]) => unkno
 export type InternalHandlers = { [H in InternalHost]: Record<(typeof INTERNAL_API)[H][number], InternalHandler> };
 
 export const INTERNAL_SCHEME = "terminal-browser";
+
+type InternalMethod<H extends InternalHost> = (typeof INTERNAL_API)[H][number];
+
+// The calls a page may make on its own, e.g. as it loads: reads, and installing what an import the user started
+// chose. Every other call changes something, so it needs the user's click or keypress in the page first, which
+// script that DevTools runs in the page doesn't have.
+export const CALLS_WITHOUT_USER_ACTIVATION: { [H in InternalHost]: readonly InternalMethod<H>[] } = {
+  start: ["data"],
+  newtab: ["data"],
+  extensions: ["list", "developerMode", "completePath", "importFind", "importInstall"],
+  history: ["list"],
+  downloads: ["list"],
+  bookmarks: ["tree"],
+  settings: ["get"],
+};
 
 function preloadPath(): string {
   const candidates = [path.join(__dirname, "..", "internal-preload.js"), path.join(__dirname, "internal-preload.js")];
@@ -32,10 +48,12 @@ export function internalHostOf(url: string): string | null {
 }
 
 // Like Chrome's WebUI: a call is answered only for the top frame of one of our
-// tabs whose committed origin is exactly the page that owns the method.
-export function allowedInternalCall(
+// tabs whose committed origin is exactly the page that owns the method, and a
+// call that changes something only right after the user's input in that frame.
+export function allowedInternalCall<H extends InternalHost>(
   event: Pick<IpcMainInvokeEvent, "sender" | "senderFrame">,
-  host: InternalHost,
+  host: H,
+  method: InternalMethod<H>,
   servedSession: (session: Session) => boolean,
   isTab: (contents: WebContents) => boolean,
 ): boolean {
@@ -46,7 +64,8 @@ export function allowedInternalCall(
     frame === event.sender.mainFrame &&
     frame.origin === `${INTERNAL_SCHEME}://${host}` &&
     servedSession(event.sender.session) &&
-    isTab(event.sender)
+    isTab(event.sender) &&
+    ((CALLS_WITHOUT_USER_ACTIVATION[host] as readonly string[]).includes(method) || hasTransientUserActivation(frame))
   );
 }
 
@@ -57,7 +76,7 @@ export function installInternalApi(handlers: InternalHandlers, isTab: (contents:
     const pageHandlers = handlers[host] as Record<string, InternalHandler>;
     for (const method of INTERNAL_API[host]) {
       ipcMain.handle(internalChannel(host, method), (event, ...args) => {
-        if (!allowedInternalCall(event, host, servedSession, isTab)) throw new Error("Not allowed");
+        if (!allowedInternalCall(event, host, method, servedSession, isTab)) throw new Error("Not allowed");
         return pageHandlers[method](event.sender, ...args);
       });
     }

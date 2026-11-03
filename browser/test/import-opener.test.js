@@ -30,6 +30,7 @@ Module._load = function (request, parent, ...rest) {
 
 const { startBrowsing } = require("../dist/browsing/index.js");
 const { extensionsHandlers } = require("../dist/pages/extensions-api.js");
+const { allowedInternalCall } = require("../dist/pages/internal.js");
 const { guardInternalNavigation } = require("../dist/pages/navigation.js");
 const { TabManager } = require("../dist/session/tabs.js");
 const { ExtensionService } = require("../dist/extensions/service.js");
@@ -48,12 +49,20 @@ startBrowsing();
 guardInternalNavigation();
 const handlers = extensionsHandlers();
 
+// The call as the page makes it, through the same gate.
+function importStart(contents, ...args) {
+  const call = { sender: contents, senderFrame: contents.mainFrame };
+  if (!allowedInternalCall(call, "extensions", "importStart", () => true, () => true)) throw new Error("Not allowed");
+  return handlers.importStart(contents, ...args);
+}
+
 let nextContentsId = 500;
 let nextDocument = 1;
 
 function frame(contents, url) {
   return {
     url,
+    parent: null,
     origin: url.startsWith("terminal-browser:") ? `terminal-browser://${new URL(url).host}` : new URL(url).origin,
     documentId: `doc${nextDocument++}`,
     documentLifecycle: "active",
@@ -181,7 +190,7 @@ async function assertWaitsForTheUser(contents, label) {
   lookups = 0;
   assert.equal(await settled(handlers.importFind(contents)), "waiting", label);
   assert.equal(lookups, 0, label);
-  assert.throws(() => handlers.importStart(contents, "chrome", "Default", []), { message: "Not allowed" }, label);
+  assert.throws(() => importStart(contents, "chrome", "Default", []), { message: "Not allowed" }, label);
 }
 
 async function assertLooksUpRightAway(contents, label) {
@@ -285,11 +294,14 @@ const A = "a".repeat(32);
 const B = "b".repeat(32);
 const C = "c".repeat(32);
 
-test("an import installs only what the click on Import chose", async () => {
+test("an import installs only what the user's click on Import chose", async () => {
   installed.length = 0;
   const contents = await openedByBrowser(IMPORT);
   await assert.rejects(async () => handlers.importInstall(contents, "chrome", "Default", A), { message: "Not allowed" });
-  handlers.importStart(contents, "chrome", "Default", [A, B]);
+  assert.throws(() => importStart(contents, "chrome", "Default", [A, B]), { message: "Not allowed" }, "without the user's click");
+  contents.mainFrame.activated = true;
+  importStart(contents, "chrome", "Default", [A, B]);
+  contents.mainFrame.activated = false;
   await handlers.importInstall(contents, "chrome", "Default", A);
   await assert.rejects(async () => handlers.importInstall(contents, "chrome", "Default", A), { message: "Not allowed" });
   await assert.rejects(async () => handlers.importInstall(contents, "chrome", "Default", C), { message: "Not allowed" });
@@ -303,10 +315,10 @@ test("an import installs only what the click on Import chose", async () => {
 test("on the import page an extension opened, only the user's own click on Import starts an import", async () => {
   installed.length = 0;
   const contents = await openedByExtension(IMPORT);
-  assert.throws(() => handlers.importStart(contents, "chrome", "Default", [A]), { message: "Not allowed" });
+  assert.throws(() => importStart(contents, "chrome", "Default", [A]), { message: "Not allowed" });
   await assert.rejects(async () => handlers.importInstall(contents, "chrome", "Default", A), { message: "Not allowed" });
   contents.mainFrame.activated = true;
-  handlers.importStart(contents, "chrome", "Default", [A]);
+  importStart(contents, "chrome", "Default", [A]);
   contents.mainFrame.activated = false;
   await handlers.importInstall(contents, "chrome", "Default", A);
   assert.deepEqual(installed, [`chrome/Default/${A}`]);
@@ -316,8 +328,8 @@ test("on the import page an extension opened, a click on the page that replaced 
   const contents = await openedByExtension(IMPORT);
   contents.mainFrame.activated = true;
   contents.mainFrame.documentLifecycle = "pending_deletion";
-  assert.throws(() => handlers.importStart(contents, "chrome", "Default", [A]), { message: "Not allowed" });
+  assert.throws(() => importStart(contents, "chrome", "Default", [A]), { message: "Not allowed" });
   contents.mainFrame.documentLifecycle = "active";
   contents.mainFrame.detached = true;
-  assert.throws(() => handlers.importStart(contents, "chrome", "Default", [A]), { message: "Not allowed" });
+  assert.throws(() => importStart(contents, "chrome", "Default", [A]), { message: "Not allowed" });
 });
