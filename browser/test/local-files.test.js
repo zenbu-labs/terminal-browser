@@ -65,7 +65,8 @@ function closeLocalPage(contents) {
 }
 
 test("web content of any origin, opaque or local included, gets the same network error for existing and missing files", async () => {
-  for (const initiator of ["null", "https://evil.example", "chrome-extension://abc", "file://", "data:", "terminal-browser-file://file"]) {
+  const initiators = ["null", "https://evil.example", "chrome-extension://abc", "file://", "data:", "blob:", "about:srcdoc", "terminal-browser-file://file"];
+  for (const initiator of initiators) {
     assert.equal(statusOf(await request(existing, initiator)), "refused", initiator);
     assert.equal(statusOf(await request(missing, initiator)), "refused", initiator);
   }
@@ -96,6 +97,10 @@ test("while a sandboxed local page is open, its own requests get a one-time gran
   const evilTop = frame("https://evil.example/");
   const srcdocInEvil = frame("about:srcdoc", evilTop);
   const dataFrame = frame("data:text/html,x", local);
+  const blobFrame = frame("blob:null/6a1f0c1e-0d8b-4c39-9d47-1c2f3b4a5d6e", local);
+  const blankInLocal = frame("about:blank", local);
+  const blankInEvil = frame("about:blank", evilTop);
+  const srcdocInData = frame("about:srcdoc", dataFrame);
   const redeem = (url, token, initiatorOrigin = "null") =>
     access.redeem({ url, headers: new Headers(token ? { [GRANT]: token } : {}), initiatorOrigin });
 
@@ -107,7 +112,9 @@ test("while a sandboxed local page is open, its own requests get a one-time gran
   assert.deepEqual(redeem(existing, second), { url: existing, page: path.join(dir, "page.html") });
   assert.equal(redeem(existing, second), null);
 
-  for (const sender of [srcdocInEvil, dataFrame, evilTop, null]) {
+  assert.ok(grantOf(vet(webRequest, { url: existing, initiatorOrigin: "null", frame: blankInLocal })));
+
+  for (const sender of [srcdocInEvil, dataFrame, blobFrame, blankInEvil, srcdocInData, evilTop, null]) {
     assert.deepEqual(vet(webRequest, { url: missing, initiatorOrigin: "null", frame: sender }), { cancel: true });
     assert.deepEqual(vet(webRequest, { url: existing, initiatorOrigin: "null", frame: sender }), { cancel: true });
   }

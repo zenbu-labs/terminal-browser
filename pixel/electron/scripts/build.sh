@@ -79,15 +79,7 @@ for patch in "$REPO_DIR"/patches/*.patch; do
   git apply "$patch"
 done
 
-# gclient sync already applied electron's own chromium patches, so the ones our
-# series adds to patches/chromium/.patches have to be applied here
-for name in $(git show HEAD:patches/chromium/.patches | grep -vxFf - patches/chromium/.patches); do
-  echo "applying chromium/$name"
-  if git -C .. apply --reverse --check "electron/patches/chromium/$name" 2>/dev/null; then
-    continue
-  fi
-  git -C .. apply "electron/patches/chromium/$name"
-done
+"$REPO_DIR/scripts/apply-added-patches.sh" "$WORK/electron/src" HEAD
 
 echo "== typescript definitions =="
 # electron generates its types from docs/api, so the patched docs yield types
