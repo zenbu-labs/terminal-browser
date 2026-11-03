@@ -80,6 +80,21 @@ pub enum Position {
     #[default]
     Flow,
     Absolute,
+    Sticky,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    #[default]
+    Flex,
+    List,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollAnchor {
+    #[default]
+    Auto,
+    End,
 }
 
 /**
@@ -200,6 +215,8 @@ pub struct Style {
     pub position: Position,
     pub inset: Inset,
     pub overflow: Overflow,
+    pub layout: Layout,
+    pub scroll_anchor: ScrollAnchor,
     pub justify_content: Option<Justify>,
     pub align_items: Option<Align>,
     pub background: Option<Paint>,
@@ -240,6 +257,8 @@ impl Default for Style {
             position: Position::default(),
             inset: Inset::default(),
             overflow: Overflow::default(),
+            layout: Layout::default(),
+            scroll_anchor: ScrollAnchor::default(),
             justify_content: None,
             align_items: None,
             background: None,

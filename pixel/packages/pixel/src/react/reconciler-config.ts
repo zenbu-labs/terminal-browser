@@ -82,6 +82,7 @@ export interface BoxProps {
   onClick?: (event: ClickEvent) => void;
   onClickOutside?: (event: ClickEvent) => void;
   onScroll?: (event: ScrollEvent) => void;
+  onStick?: (stuck: boolean) => void;
   onWheel?: (event: WheelEvent) => void;
   onPointer?: (event: PointerEvent) => void;
   onMouseEnter?: () => void;
@@ -341,6 +342,7 @@ function serializeProps(
     hidden: hidden || !!props.hidden,
     contentHeight: props.contentHeight,
     scrollEvents: !!props.onScroll,
+    stickEvents: !!props.onStick,
     wheelEvents: !!props.onWheel,
     pointerEvents: !!props.onPointer,
     hoverEvents: !!(props.onMouseEnter || props.onMouseLeave),

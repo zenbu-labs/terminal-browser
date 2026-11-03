@@ -38,6 +38,10 @@ fn canonical(language: &str) -> Option<&'static str> {
     })
 }
 
+pub(crate) fn prepare() {
+    std::thread::spawn(configs);
+}
+
 fn configs() -> &'static HashMap<&'static str, HighlightConfiguration> {
     static CONFIGS: OnceLock<HashMap<&'static str, HighlightConfiguration>> = OnceLock::new();
     CONFIGS.get_or_init(|| {

@@ -13,6 +13,8 @@ use crate::wrap::wrap_lines;
 mod opaque;
 
 pub use opaque::opaque_areas;
+pub use layer::{LayerCanvases, render_layer, scroll_layer};
+mod layer;
 use opaque::collect_surface_occluders;
 
 #[derive(Default)]
@@ -80,6 +82,22 @@ pub fn paint(
     cursor: Option<(f32, f32)>,
     clear: Option<(crate::surfaces::Rect, crate::style::Color)>,
 ) {
+    paint_skipping(tree, canvas, fonts, cursor, clear, None);
+}
+
+pub(crate) struct Skip<'a> {
+    pub nodes: &'a std::collections::HashSet<NodeId>,
+    pub bar_of: NodeId,
+}
+
+pub(crate) fn paint_skipping(
+    tree: &Tree,
+    canvas: &mut Canvas,
+    fonts: &[crate::fonts::Font],
+    cursor: Option<(f32, f32)>,
+    clear: Option<(crate::surfaces::Rect, crate::style::Color)>,
+    skip: Option<&Skip<'_>>,
+) {
     assert!(!fonts.is_empty());
     crate::profiler::span("tree.paint", || {
         let start_ms = crate::profiler::now_ms();
@@ -109,6 +127,7 @@ pub fn paint(
             None,
             &mut surface_occluders,
             &mut stats,
+            skip,
         );
         canvas.clear_occluders();
         if let (Some(stats), Some(start_ms)) = (stats, start_ms) {
@@ -129,6 +148,7 @@ fn paint_node(
     enclosing_block: Option<(&[PxRect], Color)>,
     surface_occluders: &mut Vec<(NodeId, u32)>,
     stats: &mut Option<PaintStats>,
+    skip: Option<&Skip<'_>>,
 ) {
     let Some(node) = tree.get(id) else {
         return;
@@ -593,10 +613,11 @@ fn paint_node(
     }
 
     // recursively applying to children
-    for &child in &node.children {
+    for child in tree.paint_children(id) {
         if tree.get(child).is_some_and(|n| {
-            (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
-        }) {
+            n.offscreen || (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
+        }) || skip.is_some_and(|s| s.nodes.contains(&child))
+        {
             continue;
         }
         if tree.get(child).is_some_and(|n| n.shape.is_some()) {
@@ -615,11 +636,14 @@ fn paint_node(
             enclosing_block,
             surface_occluders,
             stats,
+            skip,
         );
     }
-    timed(stats.as_mut().map(|s| &mut s.bars), || {
-        paint_scrollbar(tree, id, canvas)
-    });
+    if !skip.is_some_and(|s| s.bar_of == id) {
+        timed(stats.as_mut().map(|s| &mut s.bars), || {
+            paint_scrollbar(tree, id, canvas)
+        });
+    }
     if clips_children {
         canvas.pop_clip();
     }
@@ -730,7 +754,22 @@ fn split_by_spans(
     out
 }
 
-fn paint_scrollbar(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
+pub(crate) fn paint_subtree(tree: &Tree, id: NodeId, canvas: &mut Canvas, fonts: &[crate::fonts::Font], cursor: Option<(f32, f32)>) {
+    let blocks = tree.doc_selection_blocks(fonts);
+    paint_node(tree, id, canvas, fonts, cursor, &blocks, None, &mut Vec::new(), &mut None, None);
+    canvas.clear_occluders();
+}
+
+pub(crate) fn paint_thumb(tree: &Tree, id: NodeId, canvas: &mut Canvas, offset: (f32, f32)) {
+    let (Some(node), Some(rects), Some(bar)) = (tree.get(id), tree.scrollbar_rects(id), tree.scrollbar_style(id)) else {
+        return;
+    };
+    let thumb = fade(lerp_color(bar.thumb_color, bar.thumb_hover_color, node.bar.expand), node.bar.opacity);
+    let r = rects.thumb;
+    canvas.fill_rounded_rect(r.x + offset.0, r.y + offset.1, r.w, r.h, [r.w / 2.0; 4], thumb);
+}
+
+pub(crate) fn paint_scrollbar(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
     let Some(node) = tree.get(id) else {
         return;
     };

@@ -30,6 +30,8 @@ pub(crate) trait DocLayout {
     fn unified_ancestor(&self, id: NodeId) -> Option<NodeId>;
     fn selection_scope(&self, id: NodeId) -> Option<NodeId>;
     fn scope_at(&self, point: (f32, f32)) -> Option<NodeId>;
+    fn nodes_at(&self, point: (f32, f32)) -> Vec<NodeId>;
+    fn text_leaves_on_screen(&self) -> Vec<NodeId>;
     fn selection_color_of(&self, id: NodeId) -> Option<Color>;
 }
 
@@ -43,6 +45,10 @@ pub(crate) struct DocSelectionState {
 }
 
 impl DocSelectionState {
+    pub(crate) fn has_selection(&self) -> bool {
+        self.selection.is_some_and(|s| s.anchor != s.focus)
+    }
+
     pub(crate) fn scope(&self) -> Option<NodeId> {
         self.scope
     }
@@ -504,12 +510,8 @@ fn pos_hit(
     fonts: &[crate::fonts::Font],
     scope: Option<NodeId>,
 ) -> Option<DocPos> {
-    let id = doc.paint_order().iter().rev().copied().find(|&id| {
-        doc.is_text_leaf(id)
-            && (scope.is_none() || doc.selection_scope(id) == scope)
-            && doc
-                .visible_rect(id)
-                .is_some_and(|v| v.contains(point.0, point.1))
+    let id = doc.nodes_at(point).into_iter().find(|&id| {
+        doc.is_text_leaf(id) && (scope.is_none() || doc.selection_scope(id) == scope)
     })?;
     Some(DocPos {
         node: id,
@@ -528,10 +530,7 @@ fn pos_near(
         return Some(pos);
     }
     let mut best: Option<(f32, f32, NodeId)> = None;
-    for &id in doc.paint_order() {
-        if !doc.is_text_leaf(id) {
-            continue;
-        }
+    for id in doc.text_leaves_on_screen() {
         if scope.is_some() && doc.selection_scope(id) != scope {
             continue;
         }

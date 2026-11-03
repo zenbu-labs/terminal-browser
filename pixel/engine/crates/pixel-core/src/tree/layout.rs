@@ -169,14 +169,18 @@ pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool) -> taffy::Style
             taffy::Display::Flex
         },
         position: match style.position {
-            Position::Flow => taffy::Position::Relative,
+            Position::Flow | Position::Sticky => taffy::Position::Relative,
             Position::Absolute => taffy::Position::Absolute,
         },
-        inset: taffy::Rect {
-            left: inset_edge(style.inset.left),
-            right: inset_edge(style.inset.right),
-            top: inset_edge(style.inset.top),
-            bottom: inset_edge(style.inset.bottom),
+        inset: if style.position == Position::Sticky {
+            taffy::Rect { left: auto(), right: auto(), top: auto(), bottom: auto() }
+        } else {
+            taffy::Rect {
+                left: inset_edge(style.inset.left),
+                right: inset_edge(style.inset.right),
+                top: inset_edge(style.inset.top),
+                bottom: inset_edge(style.inset.bottom),
+            }
         },
         overflow: taffy::Point {
             x: overflow,

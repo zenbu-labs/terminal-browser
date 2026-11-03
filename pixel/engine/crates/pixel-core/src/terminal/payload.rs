@@ -81,6 +81,14 @@ impl Terminal {
     }
 
     fn hand_off_shm_with(&mut self, len: usize, fill: impl FnOnce(&mut [u8])) -> io::Result<String> {
+        let prefix = self.shm_name(0);
+        let pool = self.shm_pool.get_or_insert_with(|| super::shm_pool::ShmPool::new(prefix));
+        if let Some(mut region) = pool.take(len) {
+            fill(&mut region.bytes()[..len]);
+            let name = region.name.clone();
+            self.payloads.track(Payload::Shm(name.clone()));
+            return Ok(name);
+        }
         let seq = self.payloads.next_seq();
         let name = self.shm_name(seq);
         let fd = match open_shm(&name, len) {
@@ -129,6 +137,10 @@ impl Terminal {
                 self.hand_off_temp_file(&data)
             }
         }
+    }
+
+    pub(crate) fn has_ready_payload(&self, medium: crate::kitty::Medium, len: usize) -> bool {
+        medium != crate::kitty::Medium::Shared || self.shm_pool.as_ref().is_some_and(|pool| pool.has_ready(len))
     }
 
     pub(crate) fn hand_off_frame(&mut self, pixels: &[u8]) -> io::Result<Option<(crate::kitty::Medium, String)>> {

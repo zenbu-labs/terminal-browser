@@ -145,6 +145,22 @@ export function requestClipboardImage(): void {
   bridge.flush();
 }
 
+export interface Idle {
+  applyMs: number;
+}
+
+const idleCallbacks = new Map<number, (idle: Idle) => void>();
+let nextIdleRequest = 0;
+
+export function requestIdle(callback: (idle: Idle) => void): () => void {
+  const request = nextIdleRequest++;
+  idleCallbacks.set(request, callback);
+  const bridge = getBridge();
+  bridge.push(APP_VIEW, { op: "requestIdle", request });
+  bridge.flush();
+  return () => idleCallbacks.delete(request);
+}
+
 export function setClipboard(text: string): void {
   const bridge = getBridge();
   bridge.push(APP_VIEW, { op: "setClipboard", text });
@@ -177,6 +193,7 @@ export interface RootOptions {
   onResize?: (size: { width: number; height: number; basePx: number }) => void;
   onColors?: (colors: TerminalColors) => void;
   onLayout?: (snapshot: LayoutSnapshot) => void;
+  layoutIds?: () => number[];
   onHostClosed?: () => void;
   onHandoff?: (handoff: { tty?: string; socket?: string }) => void;
   keyEventTypes?: boolean;
@@ -213,7 +230,7 @@ export interface PixelRoot {
   highlightTransmits(): boolean;
   // nudge resize is a ridiculous api
   nudgeResize(): void;
-  queryLayout(): void;
+  queryLayout(ids?: number[]): void;
   setClearColor(color: Rgba): void;
   setKeyCapture(keys: string[]): void;
   requestClipboardImage(): void;
@@ -246,6 +263,7 @@ interface EngineEventJson {
   mods?: KeyMods;
   offset?: number | null;
   max?: number;
+  stuck?: boolean;
   width?: number;
   height?: number;
   cellWidth?: number;
@@ -264,6 +282,7 @@ interface EngineEventJson {
   caret?: { x: number; y: number; w: number; h: number };
   source?: string;
   request?: number;
+  applyMs?: number;
   seq?: number;
   token?: number;
   epochMs?: number;
@@ -282,6 +301,7 @@ interface EngineEventJson {
   target?: string;
   stats?: { frameMs: number; fps: number };
   nodes?: LayoutRect[];
+  partial?: boolean;
   spans?: Array<{
     name: string;
     start: number;
@@ -336,11 +356,20 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
   const info = JSON.parse(bridge.engine.info()) as EngineInfo;
   applyColors(info.colors);
   bridge.engine.setKeyEventTypes(!!options.keyEventTypes);
+  const queryLayout = (ids?: number[]) => {
+    if (ids?.length === 0) return;
+    bridge.push(APP_VIEW, { op: "queryLayout", ids });
+    bridge.flush();
+  };
   if (options.onLayout) {
+    let queued = false;
     bridge.afterCommit = (view) => {
-      if (view !== APP_VIEW) return;
-      bridge.push(APP_VIEW, { op: "queryLayout" });
-      bridge.flush();
+      if (view !== APP_VIEW || queued) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        queryLayout(options.layoutIds?.());
+      });
     };
   }
   const container: Container = { bridge, view: APP_VIEW, children: [] };
@@ -439,6 +468,11 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
       case "scroll": {
         const props = bridge.propsById[view]?.get(event.node!);
         props?.onScroll?.({ offset: event.offset!, max: event.max! });
+        break;
+      }
+      case "stick": {
+        const props = bridge.propsById[view]?.get(event.node!);
+        props?.onStick?.(!!event.stuck);
         break;
       }
       case "selection": {
@@ -583,7 +617,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           height: event.height ?? 0,
           at: Date.now(),
         };
-        layoutStore.set(snapshot);
+        if (!event.partial) layoutStore.set(snapshot);
         options.onLayout?.(snapshot);
         break;
       }
@@ -619,6 +653,12 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         } else {
           waiting?.reject(new Error(event.error ?? "retarget failed"));
         }
+        break;
+      }
+      case "idle": {
+        const callback = idleCallbacks.get(event.request!);
+        idleCallbacks.delete(event.request!);
+        callback?.({ applyMs: event.applyMs ?? 0 });
         break;
       }
       case "fontRegistered": {
@@ -778,10 +818,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     nudgeResize() {
       forwardResize();
     },
-    queryLayout() {
-      bridge.push(APP_VIEW, { op: "queryLayout" });
-      bridge.flush();
-    },
+    queryLayout,
     setClearColor(color: Rgba) {
       bridge.push(APP_VIEW, { op: "setClearColor", color });
       bridge.flush();

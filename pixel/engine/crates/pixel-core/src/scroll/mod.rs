@@ -10,6 +10,7 @@ pub struct ScrollState {
     pub position: f32,
     pub target: f32,
     pub velocity: f32,
+    pub anchored: i64,
     idle: f32,
 }
 
@@ -23,6 +24,10 @@ impl ScrollState {
     pub fn set_target(&mut self, pos: f32) {
         self.target = pos.max(0.0);
         self.velocity = 0.0;
+    }
+
+    pub fn shown(&self) -> f32 {
+        self.position.round()
     }
 
     pub fn settled(&self) -> bool {

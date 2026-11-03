@@ -55,7 +55,6 @@ fn window_from(ws: &crate::terminal::WindowSize, cell: (u32, u32), cell_is_exact
     (width, height)
 }
 
-const PAINT_INTERVAL_WITH_INPUT_PENDING: Duration = Duration::from_millis(16);
 const CELL_REPLY_WAIT: Duration = Duration::from_millis(150);
 
 static DEFAULT_PROFILE: Smooth = Smooth {
@@ -165,6 +164,12 @@ pub enum EngineEvent {
         key: Option<String>,
         offset: f32,
         max: f32,
+    },
+    Stick {
+        view: usize,
+        node: NodeId,
+        key: Option<String>,
+        stuck: bool,
     },
     Resize {
         view: usize,
@@ -298,14 +303,10 @@ pub struct Engine {
     term_focused: bool,
     pub native: Option<NativeScroll>,
     pub use_native: bool,
-    pixel_mouse: bool,
     last_native_scroll: Option<Instant>,
     pairing: NativePairing,
     hover_oracle: HoverOracle,
     pub profile: &'static dyn ScrollProfile,
-    pub(super) last_wheel_tick:
-        Option<(Instant, crate::terminal::MouseKind, u32, u32, crate::terminal::Mods)>,
-    pub(super) wheel_echo_consumed: bool,
     default_menu: bool,
     menu: MenuController,
     inspect_mode: bool,
@@ -347,16 +348,26 @@ pub struct Engine {
     last_color_request: Option<Instant>,
     last_step: Instant,
     last_frame: Instant,
+    last_input: Instant,
+    frame_slot: Instant,
+    present_after: Duration,
+    ready_times: std::collections::VecDeque<Duration>,
     last_frame_bytes: usize,
     frame_deferred: bool,
     max_fps: f32,
     frame_due: Option<Instant>,
+    scroll_requests: Vec<(usize, scroll::ScrollRequest, bool)>,
     pub stats: FrameStats,
 }
 
 const COLOR_SETTLE_DELAY: Duration = Duration::from_millis(50);
 const COLOR_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const RELAYED_RESIZE_POLL: Duration = Duration::from_millis(500);
+const PRECISE_WAIT_TAIL: Duration = Duration::from_micros(1500);
+const PRECISE_WAIT_STEP: Duration = Duration::from_micros(250);
+const ROW_CATCH_UP_POLL: Duration = Duration::from_millis(8);
+const ROW_CATCH_UP_BUDGET: Duration = Duration::from_millis(4);
+const ROW_CATCH_UP_MARGIN: Duration = Duration::from_millis(3);
 
 impl Engine {
     pub fn new(config: EngineConfig) -> io::Result<Self> {
@@ -386,7 +397,6 @@ impl Engine {
             NativeScroll::spawn(term.waker().ok())
         };
         let use_native = native.is_some();
-        let pixel_mouse = term.reports_pixel_mouse();
         logging::info(
             "engine",
             format!(
@@ -420,13 +430,10 @@ impl Engine {
             term_focused: true,
             native,
             use_native,
-            pixel_mouse,
             last_native_scroll: None,
             pairing: NativePairing::new(),
             hover_oracle: HoverOracle::new(),
             profile: &DEFAULT_PROFILE,
-            last_wheel_tick: None,
-            wheel_echo_consumed: false,
             default_menu: false,
             menu: MenuController::default(),
             inspect_mode: false,
@@ -462,10 +469,15 @@ impl Engine {
             last_color_request: None,
             last_step: Instant::now(),
             last_frame: Instant::now(),
+            last_input: Instant::now(),
+            frame_slot: Instant::now(),
+            present_after: frame::PRESENT_AFTER_MAX,
+            ready_times: std::collections::VecDeque::new(),
             last_frame_bytes: 0,
             frame_deferred: false,
             max_fps,
             frame_due: None,
+            scroll_requests: Vec::new(),
             stats: FrameStats::default(),
         };
         Ok(engine)
@@ -644,7 +656,7 @@ impl Engine {
         let mut first_wait = if self.frame_deferred && let Some(due) = self.frame_due {
             Some(due.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)))
         } else if self.animating() || self.frame_deferred {
-            Some(Duration::from_millis(6))
+            Some(self.until_next_animation_frame())
         } else if !out_empty {
             Some(Duration::ZERO)
         } else {
@@ -665,13 +677,38 @@ impl Engine {
         if self.term.relayed() {
             first_wait = Some(first_wait.map_or(RELAYED_RESIZE_POLL, |w| w.min(RELAYED_RESIZE_POLL)));
         }
-        self.term.poll_event(first_wait)
+        if self.rows_pending() {
+            first_wait = Some(first_wait.map_or(ROW_CATCH_UP_POLL, |w| w.min(ROW_CATCH_UP_POLL)));
+        }
+        match first_wait {
+            Some(wait) => self.wait_precisely(wait),
+            None => self.term.poll_event(None),
+        }
+    }
+
+    fn wait_precisely(&mut self, wait: Duration) -> io::Result<Option<crate::terminal::Event>> {
+        let deadline = Instant::now() + wait;
+        let coarse_end = deadline - wait.min(PRECISE_WAIT_TAIL);
+        if let Some(event) = self.term.poll_event(Some(coarse_end.saturating_duration_since(Instant::now())))? {
+            return Ok(Some(event));
+        }
+        if Instant::now() + PRECISE_WAIT_STEP < coarse_end {
+            return Ok(None);
+        }
+        while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()) {
+            if let Some(event) = self.term.poll_event(Some(Duration::ZERO))? {
+                return Ok(Some(event));
+            }
+            std::thread::sleep(left.min(PRECISE_WAIT_STEP));
+        }
+        Ok(None)
     }
 
     pub fn pump(&mut self, wait: Option<Duration>) -> io::Result<Vec<EngineEvent>> {
         if !self.throttle_registered {
             self.throttle_registered = true;
             self.cpu_throttle.register_current_thread();
+            crate::throttle::prefer_current_thread();
             if let Ok(waker) = self.term.waker() {
                 crate::image_cache::set_waker(move || waker.wake());
             }
@@ -726,8 +763,14 @@ impl Engine {
         self.emit_scroll_events(&mut out);
         self.drain_images();
         out.append(&mut self.pending);
-        if !input_pending || self.last_frame.elapsed() >= PAINT_INTERVAL_WITH_INPUT_PENDING {
+        if !input_pending || self.frame_slot.elapsed() >= self.paint_interval_with_input_pending() {
             self.frame()?;
+        }
+        if self.rows_pending() {
+            self.catch_up_rows(input_pending || self.animating());
+        }
+        if crate::canvas::glyphs_to_warm() {
+            self.warm_glyphs(input_pending || self.animating());
         }
         self.sync_pointer_shape();
         self.drain_logs(&mut out);
@@ -912,7 +955,6 @@ impl Engine {
             NativeScroll::spawn(self.term.waker().ok())
         };
         self.use_native = self.native.is_some();
-        self.pixel_mouse = self.term.reports_pixel_mouse();
         let colors = self.term.query_colors()?;
         let mut out = Vec::new();
         self.apply_colors(colors, &mut out);
@@ -925,6 +967,9 @@ impl Engine {
     }
 
     fn handle_event(&mut self, event: Event, out: &mut Vec<EngineEvent>) -> io::Result<()> {
+        if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_) | Event::Wheel { .. }) {
+            self.last_input = Instant::now();
+        }
         match event {
             Event::HostClosed => out.push(EngineEvent::HostClosed),
             Event::Wheel {
@@ -942,7 +987,7 @@ impl Engine {
                 tty: None,
                 socket: Some(socket),
             }),
-            Event::Key(key) => self.handle_key(key, out)?,
+            Event::Key(key) => crate::profiler::span("input.key", || self.handle_key(key, out))?,
             Event::Paste(text) => {
                 crate::profiler::mark("paste", self.active_view as u32, || {
                     format!("paste ({} chars)", text.chars().count())
@@ -1019,7 +1064,7 @@ impl Engine {
                 self.cell_exact = true;
                 self.resize_to(&ws, cell, "cell size report")?;
             }
-            Event::Mouse(mouse) => self.handle_mouse(mouse, out)?,
+            Event::Mouse(mouse) => crate::profiler::span("input.mouse", || self.handle_mouse(mouse, out))?,
             Event::ClipboardData { items, ok } => {
                 self.clipboard
                     .handle_clipboard_data(&mut self.term, items, ok)

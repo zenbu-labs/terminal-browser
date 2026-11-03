@@ -9,6 +9,13 @@ use crate::paint::paint;
 use crate::surfaces::Rect;
 
 const INLINE_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
+const PAINT_INTERVAL_WITH_INPUT_PENDING: Duration = Duration::from_millis(16);
+const UNCAPPED_ANIMATION_STEP: Duration = Duration::from_millis(6);
+pub(super) const PRESENT_AFTER_MAX: Duration = Duration::from_micros(7300);
+const PRESENT_AFTER_MIN: Duration = Duration::from_micros(2500);
+const PRESENT_MARGIN: Duration = Duration::from_millis(1);
+const PRESENT_RELAX_PER_FRAME: Duration = Duration::from_micros(50);
+const RECENT_FRAMES: usize = 120;
 pub(super) const DEFAULT_MAX_FPS: f32 = 0.0;
 
 impl Engine {
@@ -30,12 +37,36 @@ impl Engine {
         self.term.note(text);
     }
 
-    pub(super) fn frame_debt(&self) -> Duration {
-        let interval = if self.max_fps > 0.0 {
+    pub(super) fn frame_interval(&self) -> Duration {
+        if self.max_fps > 0.0 {
             Duration::from_secs_f32(1.0 / self.max_fps)
         } else {
             Duration::ZERO
-        };
+        }
+    }
+
+    pub(super) fn paint_interval_with_input_pending(&self) -> Duration {
+        let interval = self.frame_interval();
+        if interval.is_zero() {
+            PAINT_INTERVAL_WITH_INPUT_PENDING
+        } else {
+            interval.min(PAINT_INTERVAL_WITH_INPUT_PENDING)
+        }
+    }
+
+    pub(super) fn until_next_animation_frame(&self) -> Duration {
+        let interval = self.frame_interval();
+        if interval.is_zero() {
+            return UNCAPPED_ANIMATION_STEP;
+        }
+        (self.frame_slot + interval)
+            .checked_duration_since(Instant::now())
+            .filter(|wait| !wait.is_zero())
+            .unwrap_or(interval)
+    }
+
+    pub(super) fn frame_debt(&self) -> Duration {
+        let interval = self.frame_interval();
         if !self.term.frames_are_inline() {
             return interval;
         }
@@ -43,8 +74,17 @@ impl Engine {
         interval.max(Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2)))
     }
 
+    pub fn since_input(&self) -> Duration {
+        self.last_input.elapsed()
+    }
+
+    pub fn idle(&self) -> bool {
+        !self.frame_deferred && !self.draws_something()
+    }
+
     pub(super) fn draws_something(&self) -> bool {
         self.comp.dirty
+            || self.term.holds_a_frame()
             || self.comp.active_views().iter().any(|&i| {
                 let view = &self.comp.views[i];
                 view.tree.dirty()
@@ -54,12 +94,14 @@ impl Engine {
     }
 
     pub(super) fn frame(&mut self) -> io::Result<()> {
+        self.apply_scroll_requests();
         let debt = self.frame_debt();
         let now = Instant::now();
-        if !debt.is_zero() && now.duration_since(self.last_frame) < debt {
+        if !debt.is_zero() && now.duration_since(self.frame_slot) < debt {
             self.frame_deferred = self.draws_something();
             if self.frame_deferred {
-                self.frame_due = Some(self.last_frame + debt);
+                self.frame_due = Some(self.frame_slot + debt);
+                self.note_frame_wanted();
                 return Ok(());
             }
         } else {
@@ -85,13 +127,21 @@ impl Engine {
                 }
             })
             .collect();
+        if self.term.holds_a_frame() {
+            self.comp.dirty = true;
+        }
         if work.is_empty() && !self.comp.dirty {
             return Ok(());
         }
         let cpu = crate::profiler::cpu_us();
         crate::profiler::span("frame", || -> io::Result<()> {
             let start = Instant::now();
+            let interval = self.frame_interval();
+            let next_slot = self.frame_slot + interval;
+            let slot = if !interval.is_zero() && start >= next_slot && start < next_slot + interval { next_slot } else { start };
+            self.term.present_at((!interval.is_zero()).then(|| slot + self.present_after));
             let mut painted: Vec<Painted> = Vec::new();
+            let draws_layers = self.term.draws_layers();
             for (i, whole) in work {
                 let size = self.comp.views[i].size;
                 if size.0 == 0 || size.1 == 0 {
@@ -142,6 +192,15 @@ impl Engine {
                 let opaque = crate::paint::opaque_areas(&view.tree);
                 view.opaque = opaque.areas;
                 view.ui_over_surfaces = opaque.ui_over_surfaces;
+                view.layer = draws_layers.then(|| crate::paint::scroll_layer(&view.tree)).flatten().map(|plan| {
+                    crate::profiler::span("paint.layer", || {
+                        let canvases = view.layer_canvases.get_or_insert_with(|| crate::paint::LayerCanvases::new(size.0, size.1));
+                        if canvases.size() != size {
+                            *canvases = crate::paint::LayerCanvases::new(size.0, size.1);
+                        }
+                        crate::paint::render_layer(&view.tree, &plan, canvases, fonts, cursor, view.clear_color)
+                    })
+                });
                 painted.push(Painted {
                     view: i,
                     parts,
@@ -168,6 +227,10 @@ impl Engine {
 
             let gap = start.duration_since(self.last_frame).as_secs_f32();
             self.last_frame = start;
+            self.frame_slot = slot;
+            if let Some(ready) = self.term.take_ready_at() {
+                self.note_ready(ready.saturating_duration_since(slot));
+            }
             let ema = |old: f32, new: f32| {
                 if old == 0.0 {
                     new
@@ -179,8 +242,27 @@ impl Engine {
             if gap < 0.25 {
                 self.stats.fps = ema(self.stats.fps, 1.0 / gap);
             }
+            if self.moving() {
+                self.note_frame_wanted();
+            }
             Ok(())
         })
+    }
+
+    fn note_ready(&mut self, took: Duration) {
+        if self.ready_times.len() == RECENT_FRAMES {
+            self.ready_times.pop_front();
+        }
+        self.ready_times.push_back(took);
+        let slowest = self.ready_times.iter().max().copied().unwrap_or_default();
+        let target = (slowest + PRESENT_MARGIN).clamp(PRESENT_AFTER_MIN, PRESENT_AFTER_MAX);
+        self.present_after = target.max(self.present_after.saturating_sub(PRESENT_RELAX_PER_FRAME));
+    }
+
+    fn note_frame_wanted(&self) {
+        if let Some(now) = crate::profiler::now_ms() {
+            crate::profiler::emit("frame.wanted", now, 0.0, None);
+        }
     }
 
     pub(super) fn compose(&mut self, painted: &[Painted], direct: bool) {

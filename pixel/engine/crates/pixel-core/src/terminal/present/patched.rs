@@ -17,6 +17,7 @@ pub(crate) struct Patched {
     pub(super) opaque_shape_changed: bool,
     pub(super) ui_over_surfaces: Vec<Rect>,
     pub(super) tiles: Vec<Tile>,
+    pub(super) layer: Option<super::layer::Layer>,
     pub(super) last_draw: Option<std::time::Instant>,
     pub(super) last_flatten: Option<std::time::Instant>,
     pub(super) stats: Stats,
@@ -28,8 +29,16 @@ const IDLE_COMPACT_KEEP: usize = 12;
 const IDLE_COMPACT_MAX_UNION_PX: u64 = 400 * 400;
 
 impl Patched {
+    pub(crate) fn holds_a_frame(&self) -> bool {
+        self.layer.as_ref().is_some_and(super::layer::Layer::holding)
+    }
+
     pub(super) fn opaque_rects(&self) -> Vec<Rect> {
         self.opaque.iter().map(|area| area.rect).collect()
+    }
+
+    fn tile_holes(&self) -> Vec<Rect> {
+        self.opaque_rects().into_iter().chain(self.layer.as_ref().map(|layer| layer.area)).collect()
     }
 }
 
@@ -68,6 +77,16 @@ impl Terminal {
             &mut self.patches.ui_over_surfaces,
             frame.ui_over_surfaces.iter().map(|r| r.clamped(size.0, size.1)).filter(|r| !r.is_empty()).collect(),
         );
+        let layer = frame.layer.filter(|_| self.patches.opaque.is_empty() && self.patch_medium().is_some());
+        if layer.map(|l| l.area) != self.patches.layer.as_ref().map(|l| l.area) {
+            crate::profiler::span("present.new_layer", || {
+                if let Some(old) = self.patches.layer.take() {
+                    old.delete_all(out);
+                }
+                self.patches.layer = layer.map(|l| super::layer::Layer::new(l.area));
+            });
+            self.patches.opaque_shape_changed = true;
+        }
         let damage = self.patches.refine_damage(frame, &previous_ui);
         let opaque_rects = self.patches.opaque_rects();
         let mut opaque_damage = Vec::new();
@@ -102,7 +121,7 @@ impl Terminal {
         });
         let mut written = match strategy {
             TransmitStrategy::Skip => 0,
-            TransmitStrategy::Flatten(reason) => self.flatten(frame, reason, out)?,
+            TransmitStrategy::Flatten(reason) => crate::profiler::span("present.flatten", || self.flatten(frame, reason, out))?,
             TransmitStrategy::Patches { send, retire, folded } => {
                 if folded > 0 {
                     self.note(format!("folded {folded} patches to free an id"));
@@ -110,8 +129,13 @@ impl Terminal {
                 self.send_patches(frame, send, retire, out)?
             }
         };
-        let (tile_bytes, tiles) = self.send_dirty_tiles(frame, &damage, out)?;
+        let (tile_bytes, tiles) = crate::profiler::span("present.tiles", || self.send_dirty_tiles(frame, &damage, out))?;
         written += tile_bytes;
+        if let Some(layer) = layer {
+            let start = out.len();
+            crate::profiler::span("present.layer", || self.draw_layer(frame, layer, out))?;
+            written += out.len() - start;
+        }
         if let Some(strategy_line) = strategy_line {
             let area = |rs: &[Rect]| rs.iter().map(|r| r.area()).sum::<u64>();
             crate::logging::debug(
@@ -163,15 +187,14 @@ impl Terminal {
                 report.unchanged += 1;
             }
             if !rect.is_empty() && !unchanged {
-                let data = super::copy_rect(canvas, rect, frame.premultiplied);
-                if data.chunks_exact(4).all(|px| px[3] == 0) {
+                if super::transparent(canvas, rect) {
                     if tile.sent {
                         out.extend_from_slice(&crate::kitty::kitty_delete_one(tile.id));
                         now_sent = false;
                         report.cleared += 1;
                     }
                 } else {
-                    self.place_image(out, tile.id, rect, TILE_Z, tile.sent, |buf| buf.copy_from_slice(&data))?;
+                    self.place_image(out, tile.id, rect, TILE_Z, tile.sent, |buf| super::copy_rect_into(canvas, rect, frame.premultiplied, buf))?;
                     now_sent = true;
                     report.sent.push(rect);
                 }
@@ -268,7 +291,7 @@ impl Terminal {
             for tile in self.patches.tiles.iter().filter(|t| t.sent) {
                 prelude.extend_from_slice(&crate::kitty::kitty_delete_one(tile.id));
             }
-            self.patches.tiles = tiles_for(size, &self.patches.opaque_rects());
+            self.patches.tiles = tiles_for(size, &self.patches.tile_holes());
             self.patches.opaque_shape_changed = false;
         } else {
             for tile in &mut self.patches.tiles {

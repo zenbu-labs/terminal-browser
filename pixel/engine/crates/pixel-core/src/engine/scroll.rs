@@ -17,7 +17,17 @@ impl Engine {
                 .iter()
                 .any(|&id| tree.scroll_state(id).is_some_and(|s| !s.settled()))
         });
-        scrolling || self.bars_animating() || self.term.highlight_active()
+        scrolling || self.bars_animating() || self.term.highlight_active() || self.term.holds_a_frame()
+    }
+
+    pub(super) fn moving(&self) -> bool {
+        self.comp.active_views().into_iter().any(|view| {
+            let tree = &self.comp.views[view].tree;
+            tree.scroll_nodes().iter().any(|&id| {
+                let fading = tree.bar_opacity(id) > 0.0 && tree.bar_opacity(id) < 1.0;
+                fading || tree.scroll_state(id).is_some_and(|s| !s.settled())
+            })
+        }) || self.term.highlight_active()
     }
 
     pub(super) fn bar_at(&self, view: usize, point: (f32, f32)) -> Option<NodeId> {
@@ -92,7 +102,46 @@ impl Engine {
         })
     }
 
+    pub(super) fn rows_pending(&self) -> bool {
+        self.comp.active_views().into_iter().any(|view| self.comp.views[view].tree.rows_pending())
+    }
+
+    pub(super) fn catch_up_rows(&mut self, busy: bool) {
+        let until = if busy {
+            self.frame_slot + self.frame_interval().saturating_sub(super::ROW_CATCH_UP_MARGIN)
+        } else {
+            Instant::now() + super::ROW_CATCH_UP_BUDGET
+        };
+        if until <= Instant::now() {
+            return;
+        }
+        for view in self.comp.active_views() {
+            let tree = &mut self.comp.views[view].tree;
+            if tree.rows_pending() {
+                tree.catch_up_rows(&self.fonts, until);
+            }
+        }
+    }
+
+    pub(super) fn warm_glyphs(&mut self, busy: bool) {
+        let until = if busy {
+            self.frame_slot + self.frame_interval().saturating_sub(super::ROW_CATCH_UP_MARGIN)
+        } else {
+            Instant::now() + super::ROW_CATCH_UP_BUDGET
+        };
+        if until > Instant::now() {
+            crate::canvas::warm_glyphs(&self.fonts, until);
+        }
+    }
+
     pub(super) fn emit_scroll_events(&mut self, out: &mut Vec<EngineEvent>) {
+        for view in self.comp.active_views() {
+            let tree = &mut self.comp.views[view].tree;
+            for (node, stuck) in tree.take_stick_changes() {
+                let key = tree.key_of(node).map(str::to_string);
+                out.push(EngineEvent::Stick { view, node, key, stuck });
+            }
+        }
         for view in self.comp.active_views() {
             for id in self.comp.views[view].tree.scroll_nodes() {
                 let tree = &mut self.comp.views[view].tree;
@@ -111,51 +160,30 @@ impl Engine {
     }
 
     pub fn scroll_into_view(&mut self, view: usize, id: NodeId, smooth: bool) {
-        if view >= self.comp.views.len() {
-            return;
-        }
-        let fonts = &mut self.fonts;
-        let base_px = self.base_px;
-        self.comp.views[view].tree.flush_layout(fonts, base_px);
-        let tree = &self.comp.views[view].tree;
-        let Some(child) = tree.rect(id) else {
-            return;
-        };
-        let mut current = tree.parent(id);
-        while let Some(ancestor) = current {
-            current = tree.parent(ancestor);
-            let (Some(rect), Some(scroll)) = (tree.rect(ancestor), tree.scroll_state(ancestor))
-            else {
-                continue;
-            };
-            if tree.scroll_max(ancestor) <= 0.0 {
-                continue;
-            }
-            let offset = scroll.position + child.y - rect.y - base_px * 0.5;
-            self.scroll_to(view, ancestor, offset, smooth);
-            return;
-        }
+        self.scroll_requests.push((view, ScrollRequest::IntoView(id), smooth));
     }
 
     pub fn scroll_to(&mut self, view: usize, id: NodeId, offset: f32, smooth: bool) {
-        if view >= self.comp.views.len() {
-            return;
-        }
-        let fonts = &mut self.fonts;
-        let base_px = self.base_px;
-        let tree = &mut self.comp.views[view].tree;
-        tree.flush_layout(fonts, base_px);
-        let max = tree.scroll_max(id);
-        let offset = offset.clamp(0.0, max);
-        if let Some(state) = tree.scroll_state_mut(id) {
-            if smooth {
-                state.set_target(offset);
-            } else {
-                state.position = offset;
-                state.set_target(offset);
-                tree.mark_place();
+        self.scroll_requests.push((view, ScrollRequest::To(id, offset), smooth));
+    }
+
+    pub(super) fn apply_scroll_requests(&mut self) {
+        for (view, request, smooth) in std::mem::take(&mut self.scroll_requests) {
+            if view >= self.comp.views.len() {
+                continue;
             }
-            tree.touch_bar(id);
+            let fonts = &mut self.fonts;
+            let base_px = self.base_px;
+            let tree = &mut self.comp.views[view].tree;
+            tree.flush_layout(fonts, base_px);
+            match request {
+                ScrollRequest::IntoView(id) => {
+                    if let Some((ancestor, y)) = scroll_ancestor_offset(tree, id) {
+                        set_scroll(tree, ancestor, y - base_px * 0.5, smooth);
+                    }
+                }
+                ScrollRequest::To(id, offset) => set_scroll(tree, id, offset, smooth),
+            }
         }
     }
 
@@ -189,7 +217,7 @@ impl Engine {
         let (pane, pad) = self.pane_extent();
         self.pairing
             .ingest(events, scale, now, &mut self.hover_oracle, pane, pad);
-        let wants_cursor = self.pixel_mouse && self.hover_oracle.wants_cursor(now);
+        let wants_cursor = self.term.reports_pixel_mouse() && self.hover_oracle.wants_cursor(now);
         if let Some(native) = &mut self.native {
             native.request_positions(wants_cursor);
         }
@@ -238,18 +266,13 @@ impl Engine {
             logging::info("engine", "native scroll delivering");
         }
         self.last_native_scroll = Some(Instant::now());
-        if self.comp.views[view]
-            .tree
-            .hit_wheel(local.0, local.1)
-            .is_some()
-        {
-            let mut delta_x = 0.0;
-            let mut delta_y = 0.0;
-            for (dx, dy) in &scrolls {
-                delta_x -= dx;
-                delta_y -= dy;
-            }
-            self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out);
+        let mut delta_x = 0.0;
+        let mut delta_y = 0.0;
+        for (dx, dy) in &scrolls {
+            delta_x -= dx;
+            delta_y -= dy;
+        }
+        if self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out) {
             return;
         }
         let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) else {
@@ -321,5 +344,72 @@ impl Engine {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ScrollRequest {
+    IntoView(NodeId),
+    To(NodeId, f32),
+}
+
+fn scroll_ancestor_offset(tree: &crate::tree::Tree, id: NodeId) -> Option<(NodeId, f32)> {
+    let mut current = tree.parent(id);
+    while let Some(ancestor) = current {
+        current = tree.parent(ancestor);
+        if tree.scroll_max(ancestor) > 0.0 {
+            return Some((ancestor, tree.content_y(id, ancestor)?));
+        }
+    }
+    None
+}
+
+fn set_scroll(tree: &mut crate::tree::Tree, id: NodeId, offset: f32, smooth: bool) {
+    let offset = offset.clamp(0.0, tree.scroll_max(id));
+    let view = tree.rect(id).map_or(0.0, |r| r.h);
+    if let Some(state) = tree.scroll_state_mut(id) {
+        if smooth {
+            if (offset - state.position).abs() > view {
+                state.position = offset - view.copysign(offset - state.position);
+                tree.mark_place();
+            }
+            let Some(state) = tree.scroll_state_mut(id) else { return };
+            state.set_target(offset);
+        } else {
+            state.position = offset;
+            state.set_target(offset);
+            tree.mark_place();
+        }
+        tree.touch_bar(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::desc::Desc;
+    use crate::style::{Dimension, Layout, Overflow, Style};
+
+    #[test]
+    fn a_smooth_scroll_to_a_far_target_starts_a_viewport_away_from_it() {
+        let mut tree = crate::tree::Tree::new((40.0, 100.0));
+        let row = |i: usize| Desc { style: Style { height: Dimension::Px(20.0), ..Style::default() }, key: Some(format!("row{i}")), ..Desc::default() };
+        tree.reconcile(Desc {
+            children: vec![Desc {
+                style: Style { width: Dimension::Px(40.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, layout: Layout::List, ..Style::default() },
+                key: Some("list".into()),
+                children: (0..100).map(row).collect(),
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        });
+        let mut fonts = crate::fonts::FontRegistry::bundled();
+        tree.flush_layout(&mut fonts, 16.0);
+        let list = tree.find("list").unwrap();
+        set_scroll(&mut tree, list, 1900.0, true);
+        let state = tree.scroll_state(list).unwrap();
+        assert_eq!((state.position, state.target), (1800.0, 1900.0));
+        set_scroll(&mut tree, list, 1850.0, true);
+        assert_eq!(tree.scroll_state(list).unwrap().position, 1800.0, "near targets animate the whole way");
     }
 }

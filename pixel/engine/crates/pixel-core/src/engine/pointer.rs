@@ -6,8 +6,6 @@ use crate::menu::MenuClick;
 use crate::terminal::{Mods, Mouse, MouseButton, MouseKind};
 use crate::tree::{HitTarget, NodeId};
 
-const WHEEL_ECHO_WINDOW: std::time::Duration = std::time::Duration::from_millis(2);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DragTarget {
     Input(NodeId),
@@ -36,29 +34,9 @@ impl Engine {
                 | MouseKind::ScrollLeft
                 | MouseKind::ScrollRight
         );
-        // this is a weird case that I observed where inside kitty 2 scroll events
-        // were being emitted per scroll tick. This is very suspicious and makes me
-        // suspicious that something else was the casue of this, but this is a temporary
-        // work around for now
-        if scrolling {
-            let echo = !self.wheel_echo_consumed
-                && self.last_wheel_tick.is_some_and(|(at, kind, x, y, mods)| {
-                    kind == mouse.kind
-                        && x == mouse.x
-                        && y == mouse.y
-                        && mods == mouse.mods
-                        && now.duration_since(at) < WHEEL_ECHO_WINDOW
-                });
-            if echo {
-                self.wheel_echo_consumed = true;
-                return Ok(());
-            }
-            self.wheel_echo_consumed = false;
-            self.last_wheel_tick = Some((now, mouse.kind, mouse.x, mouse.y, mouse.mods));
-        }
         if self.use_native && self.native.is_some() {
             self.ingest_native();
-            let located = self.pixel_mouse.then_some(point);
+            let located = self.term.reports_pixel_mouse().then_some(point);
             if scrolling && mouse.mods == Mods::default() {
                 if self
                     .pairing
@@ -125,11 +103,8 @@ impl Engine {
                     .hit_drag(local.0, local.1)
                     .filter(|&id| {
                         let tree = &self.comp.views[view].tree;
-                        let drag_order = tree.paint_order_of(id).unwrap_or(0);
                         let covered = match tree.hit_target(local.0, local.1) {
-                            Some(HitTarget::Input(t)) | Some(HitTarget::Click(t)) => {
-                                tree.paint_order_of(t).unwrap_or(0) > drag_order
-                            }
+                            Some(HitTarget::Input(t)) | Some(HitTarget::Click(t)) => tree.drawn_after(t, id),
                             _ => false,
                         };
                         !covered
@@ -438,7 +413,7 @@ impl Engine {
             precise,
             mods,
         });
-        true
+        tree.scroll_area(node).is_none()
     }
 
     fn mark_pointer(&mut self, name: &'static str, point: (f32, f32)) {
