@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Prints a short key for "this Electron version with exactly these patches", so
-# CI can find a patched build made from the same inputs.
+# Prints a short key for "this Electron version with exactly these patches and
+# build scripts", so CI can find a patched build made from the same inputs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="${1:-$(node -p 'require("../packages/pixel/package.json").config.electron')}"
-{ echo "$version"; cat patches/*.patch; } | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16
+{ echo "$version"; cat patches/*.patch scripts/*; } | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16

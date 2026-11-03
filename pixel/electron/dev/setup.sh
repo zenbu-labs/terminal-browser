@@ -31,10 +31,7 @@ e use "$CONFIG" >/dev/null
 SRC="$ROOT/src/electron"
 if [ ! -d "$SRC/.git" ]; then
   say "fetching electron $TAG and its chromium (30 GB or so, no history)"
-  e sync --no-history --revision "src/electron@$TAG"
-else
-  say "source already present, syncing"
-  e sync --no-history
+  e sync --no-history --nohooks --revision "src/electron@$TAG"
 fi
 
 if ! git -C "$SRC" rev-parse --verify --quiet "$TAG" >/dev/null; then
@@ -56,15 +53,10 @@ else
   done
 fi
 
-# the sync above applied electron's own chromium patches before our series was on the branch, so
-# apply the ones the series adds to patches/chromium/.patches
-for name in $(git -C "$SRC" show "$TAG:patches/chromium/.patches" | grep -vxFf - "$SRC/patches/chromium/.patches"); do
-  if git -C "$ROOT/src" apply --reverse --check "electron/patches/chromium/$name" 2>/dev/null; then
-    continue
-  fi
-  echo "applying chromium/$name"
-  git -C "$ROOT/src" apply "electron/patches/chromium/$name"
-done
+# syncing with the series checked out lets electron's own patch hook apply the patches the series
+# adds to every repo in patches/config.json
+say "syncing and applying electron's patches"
+e sync --no-history
 
 # gn derives the version from .git/packed-refs, which a history-less clone never writes
 git -C "$SRC" pack-refs --all

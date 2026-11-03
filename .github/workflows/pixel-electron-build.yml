@@ -75,12 +75,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo xcode-select -p 2>/dev/null || true
+          echo "PATCHES_KEY=$(bash pixel/electron/scripts/patches-key.sh "${{ inputs.version }}")" >> "$GITHUB_ENV"
           export ELECTRON_BUILD_DIR="$RUNNER_TEMP/electron-build"
           bash pixel/electron/scripts/build.sh "${{ inputs.version }}" \
             "$RUNNER_TEMP/out" "${{ matrix.platform }}"
           mv "$RUNNER_TEMP/out/SHASUMS256.txt" \
             "$RUNNER_TEMP/out/sha-${{ matrix.platform }}.txt"
-          echo "PATCHES_KEY=$(bash pixel/electron/scripts/patches-key.sh "${{ inputs.version }}")" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:

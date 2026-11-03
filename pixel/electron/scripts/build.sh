@@ -49,7 +49,9 @@ if [ ! -f .gclient ]; then
 fi
 
 echo "== gclient sync v$VERSION =="
-gclient sync -f --with_branch_heads --with_tags --no-history -j8 \
+# hooks run after our series is applied, so electron's own patch hook applies
+# every patch the series adds to any repo in electron's patches/config.json
+gclient sync -f --with_branch_heads --with_tags --no-history --nohooks -j8 \
   --revision "src/electron@v$VERSION"
 
 if [ "$HOST" = linux-x64 ] && [ "${SKIP_BUILD_DEPS:-0}" != "1" ]; then
@@ -79,15 +81,8 @@ for patch in "$REPO_DIR"/patches/*.patch; do
   git apply "$patch"
 done
 
-# gclient sync already applied electron's own chromium patches, so the ones our
-# series adds to patches/chromium/.patches have to be applied here
-for name in $(git show HEAD:patches/chromium/.patches | grep -vxFf - patches/chromium/.patches); do
-  echo "applying chromium/$name"
-  if git -C .. apply --reverse --check "electron/patches/chromium/$name" 2>/dev/null; then
-    continue
-  fi
-  git -C .. apply "electron/patches/chromium/$name"
-done
+echo "== gclient runhooks =="
+(cd "$WORK/electron" && gclient runhooks)
 
 echo "== typescript definitions =="
 # electron generates its types from docs/api, so the patched docs yield types
