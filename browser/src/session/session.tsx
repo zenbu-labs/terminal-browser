@@ -42,7 +42,7 @@ import type {
   RegisteredApp,
 } from "shared";
 import { bundledAsset } from "../assets";
-import { CopyOnSelect, Grab, reactGrabPreloadPath } from "../grab/grab";
+import { Grab, reactGrabPreloadPath } from "../grab/grab";
 import type { GrabRegion } from "../grab/grab";
 import { grabScreenshot } from "../grab/screenshot";
 import { AgentPaneFinder } from "../grab/target";
@@ -75,6 +75,7 @@ import type { PageContext } from "../pages/scheme";
 import { makeTheme } from "../ui/theme";
 import { BROWSING_DATA_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
 import type { BrowsingDataKind } from "./browsing-data";
+import { PageClipboard } from "./clipboard";
 import { fuzzyScore } from "./fuzzy";
 import { PermissionPrompts } from "./permissions";
 import type { MediaDevice } from "./permissions";
@@ -174,7 +175,7 @@ interface ClearDataState {
   clearing: boolean;
 }
 
-class Session {
+export class Session {
   private readonly ctx: SessionContext;
   private readonly terminal: Terminal | null;
   private readonly marker: string;
@@ -258,7 +259,7 @@ class Session {
   });
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();
-  private copyWatchers = new Map<number, CopyOnSelect>();
+  private copyWatchers = new Map<number, PageClipboard>();
   private readonly copyOnSelect: boolean;
   private readonly agentPanes: AgentPaneFinder;
   private shownRecord: RecordSession | null = null;
@@ -1318,18 +1319,21 @@ class Session {
   }
 
   private ensureCopyWatcher(): void {
-    if (!this.copyOnSelect) return;
     const tab = this.tabs.active;
     const handle = tab?.ref.current;
     if (!tab || !handle || this.copyWatchers.has(tab.id)) return;
-    const watcher = new CopyOnSelect(handle, {
+    const watcher = new PageClipboard(handle, {
+      active: () => this.tabs.active?.id === tab.id,
       copied: (text) => {
         this.root?.setClipboard(text);
         this.showToast("Copied to clipboard", "done");
       },
     });
     this.copyWatchers.set(tab.id, watcher);
-    void watcher.enable();
+    void watcher.enable().catch((error) => {
+      if (this.copyWatchers.get(tab.id) === watcher) this.copyWatchers.delete(tab.id);
+      process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+    });
   }
 
   private grabFor(tab: Tab, handle: WebViewHandle): Grab {
