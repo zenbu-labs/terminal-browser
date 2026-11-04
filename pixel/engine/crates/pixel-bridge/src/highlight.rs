@@ -123,6 +123,8 @@ fn configs() -> &'static HashMap<&'static str, HighlightConfiguration> {
 }
 
 #[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HighlightSpan {
     pub start: u32,
     pub end: u32,

@@ -3,6 +3,8 @@ use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Par
 use crate::mend::{INCOMPLETE_LINK, fence_open, mend};
 
 #[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarkdownSpan {
     pub start: u32,
@@ -11,11 +13,14 @@ pub struct MarkdownSpan {
     pub italic: bool,
     pub strikethrough: bool,
     pub code: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
     pub incomplete_link: bool,
 }
 
 #[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug)]
 pub struct MarkdownCell {
     pub text: String,
@@ -23,12 +28,16 @@ pub struct MarkdownCell {
 }
 
 #[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug)]
 pub struct MarkdownRow {
     pub cells: Vec<MarkdownCell>,
 }
 
 #[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug)]
 pub struct MarkdownBlock {
     pub kind: String, // paragraph | heading | code | rule | image | table
@@ -38,8 +47,11 @@ pub struct MarkdownBlock {
     pub language: String, 
     pub closed: bool,     
     pub quote: u32,       
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub list_depth: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ordinal: Option<u32>, 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<bool>,   
     pub item_start: bool,     
     pub src: String,          

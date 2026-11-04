@@ -3,19 +3,26 @@ use std::time::Duration;
 use similar::{Algorithm, ChangeTag, DiffTag, InlineChangeOptions, TextDiff};
 
 #[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffEmphasis {
     pub start: u32,
     pub end: u32,
 }
 
 #[cfg_attr(feature = "napi", napi_derive::napi(object))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffRow {
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub old_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub new_line: Option<u32>,
     pub text: String,
     pub side_start: u32,
     pub emphasis: Vec<DiffEmphasis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<u32>,
 }
 

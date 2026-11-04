@@ -52,6 +52,12 @@ pub(crate) enum WorkerPaste {
     },
 }
 
+#[cfg(target_os = "ios")]
+pub(crate) fn read_for_worker() -> Option<WorkerPaste> {
+    None
+}
+
+#[cfg(not(target_os = "ios"))]
 pub(crate) fn read_for_worker() -> Option<WorkerPaste> {
     let mut clipboard = arboard::Clipboard::new().ok()?;
     if let Ok(files) = clipboard.get().file_list()
