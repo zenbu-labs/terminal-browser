@@ -6,6 +6,7 @@ interface CommandHelp {
 }
 
 const COMMANDS: Record<string, CommandHelp> = {
+  // fixme: placeholder copy (the --remote-debugging-port lines)
   open: {
     summary: "Open the browser in a terminal pane",
     usage: "terminal-browser open [url] [options]",
@@ -25,6 +26,10 @@ Options:
   --transparent         [placeholder copy: Let the terminal show through pages that do not paint
                         a background. Persist it with terminal-browser config set window.transparent on]
   --no-merge            Do not open the terminal-browser instance as a tab in a neighbor terminal-browser
+  --remote-debugging-port[=<port>]
+                        Also serve CDP on 127.0.0.1 (any free port without a number), for
+                        Playwright, Puppeteer and other CDP tools; terminal-browser ls --json
+                        shows the port. Anything on this machine can then drive the browser
 
 
 Examples:
@@ -83,6 +88,7 @@ Examples:
   terminal-browser new-tab --browser 90107-1 localhost:3000
 `,
   },
+  // fixme: placeholder copy
   "clear-browsing-data": {
     summary: "Clear cookies, site data and cache, like a browser's Clear browsing data",
     usage: "terminal-browser clear-browsing-data [options]",
@@ -95,6 +101,7 @@ Options:
   -y, --yes           Clear without asking
   --cookies           Only clear cookies and site data
   --cache             Only clear cached images and files
+  --history           Only clear browsing history
   --browser <key>     A browser key from terminal-browser ls
 
 Examples:
@@ -163,6 +170,38 @@ Examples:
   terminal-browser config path
 `,
   },
+  extensions: {
+    summary: "Install and manage Chrome extensions",
+    usage: "terminal-browser extensions <command> [args]",
+    body: `
+Works whether or not a browser is open. Changes show up in open browsers right
+away. install, import and remove ask first when run in a terminal; otherwise
+they need --yes.
+
+Commands:
+  list [--json]              Installed extensions and their errors
+  install <id|url|file.crx>  Install from the Chrome Web Store or a .crx file
+  import                     Add another Chromium browser's extensions
+  load <dir>                 Load an unpacked extension (reloads on change)
+  remove <id>                Remove an extension
+  enable <id>                Turn an extension on
+  disable <id>               Turn an extension off
+  update [<id>]              Update Chrome Web Store extensions now
+  reload [<id>]              Reload unpacked extensions
+  pin <id>, unpin <id>       Show or hide the toolbar icon
+
+Options:
+  -y, --yes                  Do not ask first
+
+terminal-browser extensions import --help for import's options
+
+Examples:
+  terminal-browser extensions install https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh
+  terminal-browser extensions load ./my-extension
+  terminal-browser extensions list --json
+`,
+  },
+  // fixme: placeholder copy (the --stdin lines and the secret examples)
   action: {
     summary: "Use the open browser through the agent-browser CLI",
     usage: "terminal-browser action [selectors] -- <command>",
@@ -176,13 +215,34 @@ Selectors:
   --tab <id>          A tab id from terminal-browser ls
   --target <id>       A CDP target id
   --follow            Bring the tab to the front before running the command
+  --stdin             Read the command from stdin as a JSON array of words, so
+                      secrets like passwords stay out of the process list.
+                      Use it for fill, type, keyboard type, set credentials and
+                      cookies set whenever the words are secret
 
 Examples:
   terminal-browser action -- snapshot
   terminal-browser action -- click @e14
   terminal-browser action -- eval "document.title"
-  terminal-browser action --browser 90107-1 --tab 2 -- fill @e3 "hello"
+  terminal-browser action --browser 90107-1 --tab 2 -- screenshot shot.png
+  echo '["fill", "@e3", "hunter2"]' | terminal-browser action --stdin
   terminal-browser action done
+`,
+  },
+};
+
+// Commands with options of their own, keyed by "<command> <subcommand>".
+const SUBCOMMANDS: Record<string, Omit<CommandHelp, "summary">> = {
+  "extensions import": {
+    usage: "terminal-browser extensions import [options]",
+    body: `
+Import your chrome extensions from another browser
+
+Options:
+  --from <browser>   Browser to import from
+  --profile <name>   Profile to import from
+  --all              Every browser and profile
+  -y, --yes          Do not ask first
 `,
   },
 };
@@ -207,7 +267,9 @@ terminal-browser --version prints the installed version
 `);
 }
 
-export function commandHelp(name: string): string | null {
+export function commandHelp(name: string, subcommand?: string): string | null {
+  const sub = subcommand ? SUBCOMMANDS[`${name} ${subcommand}`] : undefined;
+  if (sub) return block(`Usage: ${sub.usage}\n${sub.body}`);
   const help = COMMANDS[name];
   if (!help) return null;
   return block(`Usage: ${help.usage}\n${help.body}`);

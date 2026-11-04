@@ -1,0 +1,52 @@
+diff --git a/docs/api/web-frame-main.md b/docs/api/web-frame-main.md
+--- a/docs/api/web-frame-main.md
++++ b/docs/api/web-frame-main.md
+@@ -107,6 +107,12 @@ this limitation.
+ 
+ Returns `boolean` - Whether the reload was initiated successfully. Only results in `false` when the frame has no history.
+ 
++#### `frame.hasTransientUserActivation()`
++
++Returns `boolean` - Whether the frame has [transient user activation](https://html.spec.whatwg.org/multipage/interaction.html#transient-activation):
++the user clicked, tapped or pressed a key in it, or in a frame inside it, within the last few seconds. This is
++Chromium's own activation state, which a page's script can't fake.
++
+ #### `frame.isDestroyed()`
+ 
+ Returns `boolean` - Whether the frame is destroyed.
+diff --git a/shell/browser/api/electron_api_web_frame_main.cc b/shell/browser/api/electron_api_web_frame_main.cc
+--- a/shell/browser/api/electron_api_web_frame_main.cc
++++ b/shell/browser/api/electron_api_web_frame_main.cc
+@@ -540,6 +540,12 @@ std::string WebFrameMain::DocumentId() const {
+       .ToString();
+ }
+ 
++bool WebFrameMain::HasTransientUserActivation() const {
++  if (!CheckRenderFrame())
++    return false;
++  return render_frame_host()->HasTransientUserActivation();
++}
++
+ std::string WebFrameMain::DocumentLifecycle() const {
+   if (!CheckRenderFrame())
+     return "";
+@@ -742,6 +748,8 @@ void WebFrameMain::FillObjectTemplate(v8::Isolate* isolate,
+       .SetMethod("saveVideoFrameAs", &WebFrameMain::SaveVideoFrameAs)
+       .SetMethod("reload", &WebFrameMain::Reload)
+       .SetMethod("isDestroyed", &WebFrameMain::IsDestroyed)
++      .SetMethod("hasTransientUserActivation",
++                 &WebFrameMain::HasTransientUserActivation)
+       .SetMethod("_send", &WebFrameMain::Send)
+       .SetMethod("_postMessage", &WebFrameMain::PostMessage)
+       .SetProperty("detached", &WebFrameMain::Detached)
+diff --git a/shell/browser/api/electron_api_web_frame_main.h b/shell/browser/api/electron_api_web_frame_main.h
+--- a/shell/browser/api/electron_api_web_frame_main.h
++++ b/shell/browser/api/electron_api_web_frame_main.h
+@@ -145,6 +145,7 @@ class WebFrameMain final : public gin::Wrappable<WebFrameMain>,
+   blink::mojom::PageVisibilityState VisibilityState() const;
+ #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
+   std::string DocumentId() const;
++  bool HasTransientUserActivation() const;
+   std::string DocumentLifecycle() const;
+ #endif
+ 

@@ -1,0 +1,48 @@
+diff --git a/shell/browser/extensions/electron_extensions_api_client.cc b/shell/browser/extensions/electron_extensions_api_client.cc
+--- a/shell/browser/extensions/electron_extensions_api_client.cc
++++ b/shell/browser/extensions/electron_extensions_api_client.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "components/value_store/value_store_factory.h"
+ #include "electron/buildflags/buildflags.h"
++#include "extensions/browser/display_info_provider_base.h"
+ #include "extensions/browser/guest_view/extensions_guest_view_manager_delegate.h"
+ #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest_delegate.h"
+ #include "printing/buildflags/buildflags.h"
+@@ -80,6 +81,14 @@ class ElectronMimeHandlerViewGuestDelegate
+                         content::BrowserContext* browser_context) override {}
+ };
+ 
++// Reports the displays display::Screen knows about, like Chrome does on
++// Windows, Mac and desktop Linux.
++class ElectronDisplayInfoProvider : public DisplayInfoProviderBase {
++ public:
++  ElectronDisplayInfoProvider() = default;
++  ~ElectronDisplayInfoProvider() override = default;
++};
++
+ ElectronExtensionsAPIClient::ElectronExtensionsAPIClient() = default;
+ ElectronExtensionsAPIClient::~ElectronExtensionsAPIClient() = default;
+ 
+@@ -126,4 +135,9 @@ ElectronExtensionsAPIClient::CreateGuestViewManagerDelegate() const {
+   return std::make_unique<ElectronGuestViewManagerDelegate>();
+ }
+ 
++std::unique_ptr<DisplayInfoProvider>
++ElectronExtensionsAPIClient::CreateDisplayInfoProvider() const {
++  return std::make_unique<ElectronDisplayInfoProvider>();
++}
++
+ }  // namespace extensions
+diff --git a/shell/browser/extensions/electron_extensions_api_client.h b/shell/browser/extensions/electron_extensions_api_client.h
+--- a/shell/browser/extensions/electron_extensions_api_client.h
++++ b/shell/browser/extensions/electron_extensions_api_client.h
+@@ -34,6 +34,8 @@ class ElectronExtensionsAPIClient : public ExtensionsAPIClient {
+                raw_ptr<ValueStoreCache, CtnExperimental>>* caches) override;
+   std::unique_ptr<guest_view::GuestViewManagerDelegate>
+   CreateGuestViewManagerDelegate() const override;
++  std::unique_ptr<DisplayInfoProvider> CreateDisplayInfoProvider()
++      const override;
+ 
+  private:
+   std::unique_ptr<ElectronMessagingDelegate> messaging_delegate_;

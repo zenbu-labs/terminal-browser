@@ -1,0 +1,122 @@
+name: extensions conformance
+
+# Runs the God extension self-test in terminal-browser on the patched Electron
+# and compares every check with the checked-in Chrome for Testing reference.
+on:
+  pull_request:
+    paths:
+      - "browser/**"
+      - "shared/**"
+      - "pixel/**"
+      - "test/extensions-conformance/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/extensions-conformance.yml"
+  push:
+    branches: [main, "ci/extensions-conformance"]
+  workflow_dispatch:
+    inputs:
+      electron-artifact:
+        # fixme: placeholder copy
+        description: "Use this patched Electron artifact instead of the one built for the current patches"
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: extensions-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  electron:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run-id: ${{ steps.find.outputs.run-id }}
+      artifact: ${{ steps.find.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ELECTRON_ARTIFACT: ${{ inputs.electron-artifact }}
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./pixel/packages/pixel/package.json").config.electron')
+          key=$(bash pixel/electron/scripts/patches-key.sh "$version")
+          artifact="${ELECTRON_ARTIFACT:-patched-electron-darwin-arm64-$key}"
+          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact&per_page=20" \
+            --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+          if [ -z "$run_id" ]; then
+            # fixme: placeholder copy
+            echo "::error::No patched Electron $version build for these patches (artifact $artifact). Build it with: gh workflow run pixel-electron-build.yml --ref $GITHUB_HEAD_REF$GITHUB_REF_NAME -f version=$version -f platforms=darwin-arm64 -f publish=false"
+            exit 1
+          fi
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "using $artifact from run $run_id"
+
+  conformance:
+    needs: electron
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: node --test test/extensions-conformance/harness/compare.test.mjs
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pixel/engine
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.electron.outputs.artifact }}
+          run-id: ${{ needs.electron.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/electron-zip
+      - name: Unpack patched Electron
+        run: |
+          set -euo pipefail
+          unzip -q "$RUNNER_TEMP"/electron-zip/*.zip -d "$RUNNER_TEMP/electron"
+          echo "TB_ELECTRON=$RUNNER_TEMP/electron/Electron.app/Contents/MacOS/pixel" >> "$GITHUB_ENV"
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          PIXEL_SKIP_DOWNLOAD: "1"
+      - run: pnpm --filter @zenbu-labs/pixel build
+      - run: pnpm --filter @zenbu-labs/pixel build:native -- --release
+      - run: pnpm -r --filter '!./pixel/**' build
+
+      - name: Native probes
+        timeout-minutes: 10
+        run: PIXEL_ELECTRON_APP="$TB_ELECTRON" node browser/test/native/run.mjs
+
+      - name: Menus and popups open in place
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: node test/first-frame/run.mjs --out "$RUNNER_TEMP/first-frame"
+
+      - name: Extension answers sign-in
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: node test/extension-sign-in/run.mjs
+
+      - name: Conformance
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: node test/extensions-conformance/conformance.mjs run --out "$RUNNER_TEMP/conformance"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: extensions-conformance-report
+          path: |
+            ${{ runner.temp }}/conformance
+            ${{ runner.temp }}/first-frame
+          if-no-files-found: ignore

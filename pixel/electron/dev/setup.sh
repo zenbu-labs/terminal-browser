@@ -56,6 +56,8 @@ else
   done
 fi
 
+"$(dirname "$0")/../scripts/apply-added-patches.sh" "$ROOT/src" "$TAG"
+
 # gn derives the version from .git/packed-refs, which a history-less clone never writes
 git -C "$SRC" pack-refs --all
 

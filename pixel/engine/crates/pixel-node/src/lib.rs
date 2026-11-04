@@ -1,3 +1,4 @@
+mod acl;
 mod capture;
 mod diff;
 mod events;
@@ -7,9 +8,11 @@ mod iosurface;
 mod markdown;
 mod mend;
 mod ops;
+mod quarantine;
 mod record;
 mod shm;
 mod surface;
+mod unix;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

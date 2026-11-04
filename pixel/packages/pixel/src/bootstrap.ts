@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 
 import { app } from "electron";
@@ -27,17 +26,6 @@ function appName(): string {
   }
 }
 
-function freePort(): Promise<number | null> {
-  return new Promise((resolve) => {
-    const probe = net.createServer();
-    probe.once("error", () => resolve(null));
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      probe.close(() => resolve(address && typeof address === "object" ? address.port : null));
-    });
-  });
-}
-
 process.on("uncaughtException", (error) => {
   process.stderr.write(`pixel: uncaught exception: ${error instanceof Error ? error.stack : String(error)}\n`);
   app.exit(1);
@@ -46,6 +34,8 @@ process.on("unhandledRejection", (reason) => {
   process.stderr.write(`pixel: unhandled rejection: ${reason instanceof Error ? reason.stack : String(reason)}\n`);
 });
 
+// Node starts a debugger listening on a TCP port when it gets SIGUSR1, unless something handles the signal.
+process.on("SIGUSR1", () => {});
 app.setName(appName());
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
@@ -60,8 +50,6 @@ try {
 } catch {}
 
 void (async () => {
-  const port = await freePort();
-  if (port != null) app.commandLine.appendSwitch("remote-debugging-port", String(port));
   await app.whenReady();
   debug("bootstrap", { entry, tty: process.env.PIXEL_TTY ?? null });
   if (process.platform === "darwin") app.dock?.hide();

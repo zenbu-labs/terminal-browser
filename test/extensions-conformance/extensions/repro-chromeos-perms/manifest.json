@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Repro: ChromeOS-only permissions",
+  "version": "1.0",
+  "permissions": [
+    "loginState",
+    "printing",
+    "printingMetrics"
+  ],
+  "background": {
+    "service_worker": "sw.js"
+  }
+}

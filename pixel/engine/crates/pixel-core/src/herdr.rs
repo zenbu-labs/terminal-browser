@@ -67,7 +67,7 @@ impl Herdr {
         }
         let bgra = !info.contains("\"rgba\"") && info.contains("\"bgra\"");
 
-        let stream = UnixStream::connect(socket).ok()?;
+        let stream = crate::own_socket::connect_own(socket).ok()?;
         stream.set_read_timeout(Some(OPEN_TIMEOUT)).ok()?;
         let mut frames = BufReader::new(stream);
         write_line(
@@ -188,7 +188,7 @@ fn within_grid(ws: &crate::terminal::WindowSize, x: u32, y: u32) -> bool {
 }
 
 fn request(socket: &str, line: &str) -> io::Result<String> {
-    let stream = UnixStream::connect(socket)?;
+    let stream = crate::own_socket::connect_own(socket)?;
     stream.set_read_timeout(Some(OPEN_TIMEOUT))?;
     let mut reader = BufReader::new(stream);
     write_line(reader.get_mut(), line)?;

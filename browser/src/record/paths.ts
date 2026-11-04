@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ensureOwnedDir } from "shared";
 import { urlHost } from "../url";
 
 const OUTPUT_ROOT = "/tmp/recordings";
@@ -13,6 +14,7 @@ export function stampedName(pageUrl: string): string {
 }
 
 export function newRecordingDir(pageUrl: string): string {
+  ensureOwnedDir(OUTPUT_ROOT);
   const base = path.join(OUTPUT_ROOT, stampedName(pageUrl));
   for (let i = 0; ; i++) {
     const dir = i === 0 ? base : `${base}-${i + 1}`;

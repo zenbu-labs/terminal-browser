@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { debug } from "../debug";
+import { ensurePrivateDir } from "../private-dir";
+import { socketPeerUid } from "../react/native";
 import type { EngineKeyEvent, TerminalColors } from "../react";
+import { listenPrivately, privateServer, type PeerUidReader } from "./private-socket";
 export interface GuestFrame {
   path: string;
   width: number;
@@ -146,9 +149,11 @@ export class Guest {
 }
 
 
-function frameDirectory(): string {
-  const root = path.join(os.tmpdir(), "pixel-frames");
-  fs.mkdirSync(root, { recursive: true });
+// Frames live in a per-user folder only we can enter, not the shared temp dir.
+function frameDirectory(env: NodeJS.ProcessEnv = process.env): string {
+  const absolute = (value: string | undefined) => (value && path.isAbsolute(value) ? value : null);
+  const base = absolute(env.XDG_RUNTIME_DIR) ?? absolute(env.XDG_STATE_HOME) ?? path.join(os.homedir(), ".local", "state");
+  const root = ensurePrivateDir(path.join(base, "pixel", "frames"));
   for (const entry of fs.readdirSync(root)) {
     const pid = Number(entry);
     if (!Number.isInteger(pid) || pid === process.pid) continue;
@@ -160,8 +165,7 @@ function frameDirectory(): string {
   }
   const dir = path.join(root, String(process.pid));
   fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { mode: 0o700 });
-  return dir;
+  return ensurePrivateDir(dir);
 }
 
 export class OwnerServer {
@@ -173,13 +177,12 @@ export class OwnerServer {
   constructor(
     readonly socketPath: string,
     private readonly cell: () => { width: number; height: number },
+    readPeerUid: PeerUidReader = socketPeerUid,
   ) {
     this.frameDir = frameDirectory();
-    fs.rmSync(socketPath, { force: true });
-    fs.mkdirSync(path.dirname(socketPath), { recursive: true });
-    this.server = net.createServer((connection) => this.serve(connection));
+    this.server = privateServer((connection) => this.serve(connection), readPeerUid);
     this.server.on("error", (error) => debug("owner server error", error.message));
-    this.server.listen(socketPath);
+    listenPrivately(this.server, socketPath);
   }
 
   stop() {

@@ -90,13 +90,34 @@ fn helper_path() -> Option<String> {
         .or_else(|| option_env!("NATIVE_SCROLL_HELPER").map(String::from))
 }
 
+// The helper gets stdin, stdout and stderr and nothing else the engine has
+// open (logs, caches, Chromium's pipes): every other descriptor is marked
+// close-on-exec in the child just before it runs the helper.
+#[allow(unsafe_code)]
+fn keep_only_stdio(command: &mut Command) {
+    use std::os::unix::process::CommandExt as _;
+    // SAFETY: the closure only calls fcntl, which is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            let limit = libc::sysconf(libc::_SC_OPEN_MAX);
+            let limit = if limit <= 0 { 65_536 } else { limit.min(65_536) } as libc::c_int;
+            for fd in 3..limit {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags >= 0 {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
 fn spawn_helper() -> Option<SharedHelper> {
     let path = helper_path()?;
-    let mut child = match Command::new(&path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+    let mut command = Command::new(&path);
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    keep_only_stdio(&mut command);
+    let mut child = match command.spawn()
     {
         Ok(child) => child,
         Err(error) => {
@@ -360,5 +381,34 @@ mod tests {
         assert!(!Msg::Event(NativeEvent::Window { rect: None }).wakes());
         assert!(Msg::Scale(2.0).wakes());
         assert!(Msg::Event(scroll("s 1 0 0 1")).wakes());
+    }
+}
+
+#[cfg(test)]
+mod keep_only_stdio_tests {
+    use super::keep_only_stdio;
+    use std::os::fd::AsRawFd as _;
+    use std::process::{Command, Stdio};
+
+    fn child_sees(fd: i32, keep: bool) -> bool {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &format!("[ -e /dev/fd/{fd} ] && echo open; true")]);
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        if keep {
+            keep_only_stdio(&mut command);
+        }
+        String::from_utf8_lossy(&command.output().unwrap().stdout).contains("open")
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn a_descriptor_left_inheritable_does_not_reach_the_helper() {
+        let log = std::fs::File::create(std::env::temp_dir().join(format!("pixel-fd-{}", std::process::id()))).unwrap();
+        // SAFETY: dup of a valid descriptor; dup does not set close-on-exec, like the descriptors Chromium leaves.
+        let leaky = unsafe { libc::dup(log.as_raw_fd()) };
+        assert!(child_sees(leaky, false), "the test descriptor should be inheritable");
+        assert!(!child_sees(leaky, true));
+        // SAFETY: closing the descriptor dup returned.
+        unsafe { libc::close(leaky) };
     }
 }

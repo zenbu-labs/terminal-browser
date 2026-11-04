@@ -12,6 +12,8 @@
     "release:patch": "scripts/tag-release.sh patch",
     "release:minor": "scripts/tag-release.sh minor",
     "release:major": "scripts/tag-release.sh major",
+    "conformance": "node test/extensions-conformance/conformance.mjs run",
+    "conformance:chrome-reference": "node test/extensions-conformance/conformance.mjs chrome-reference",
     "monitor": "pnpm --filter terminal-browser-monitor start",
     "pixel:build": "pnpm --filter @zenbu-labs/pixel build",
     "pixel:build:native": "pnpm --filter @zenbu-labs/pixel build:native --",
@@ -25,6 +27,7 @@
   },
   "packageManager": "pnpm@10.13.1",
   "devDependencies": {
+    "@electron/fuses": "2.1.3",
     "@electron/osx-sign": "^1.3.3",
     "esbuild": "^0.25.0"
   }

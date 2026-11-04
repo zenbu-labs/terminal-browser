@@ -15,8 +15,9 @@ import type { InstanceRow } from "shared";
 
 import type { WebViewState } from "@zenbu-labs/pixel";
 import { INSTANCES_DIR } from "shared";
-import { BROWSING_DATA_KINDS, isBrowsingDataKind } from "./session/browsing-data";
+import { BROWSING_DATA_KINDS, DEFAULT_CLEAR_KINDS, isBrowsingDataKind } from "./session/browsing-data";
 import type { BrowsingDataKind } from "./session/browsing-data";
+import { listenPrivately, privateServer } from "@zenbu-labs/pixel/private-socket";
 
 export interface Where {
   terminal: string | null;
@@ -26,6 +27,7 @@ export interface Where {
 
 export interface ControlHost {
   key: string;
+  cdpPort: number | null;
   tty: string | null;
   where(): Promise<Where>;
   splitDir: InstanceRow["splitDir"];
@@ -56,26 +58,18 @@ export class Registry {
   readonly socketPath: string;
   private readonly tty: string | null;
   private readonly startedAt = Date.now();
-  private cdpPort: number | null = null;
   private server: net.Server | null = null;
   private disposed = false;
 
   constructor(host: ControlHost) {
     this.host = host;
     this.tty = host.tty ?? callerTty().path;
-    this.socketPath = path.join(INSTANCES_DIR, `${host.key}.sock`);
-    fs.mkdirSync(INSTANCES_DIR, { recursive: true });
-    fs.rmSync(this.socketPath, { force: true });
-    this.server = net.createServer((connection) => this.serve(connection));
+    const requested = path.join(INSTANCES_DIR, `${host.key}.sock`);
+    this.server = privateServer((connection) => this.serve(connection));
     this.server.on("error", () => {});
-    this.server.listen(this.socketPath);
+    this.socketPath = listenPrivately(this.server, requested);
     this.write();
     this.advertise();
-  }
-
-  setCdpPort(port: number | null) {
-    this.cdpPort = port;
-    this.write();
   }
 
   update() {
@@ -93,7 +87,7 @@ export class Registry {
       splitDir: this.host.splitDir,
       parentTty: this.host.parentTty,
       socket: this.socketPath,
-      cdpPort: this.cdpPort,
+      cdpPort: this.host.cdpPort,
       startedAt: this.startedAt,
     };
   }
@@ -194,7 +188,7 @@ export class Registry {
         return { ...this.record(), tabs: await this.host.targets() };
       }
       case "clear-browsing-data": {
-        const kinds = request.kinds ?? BROWSING_DATA_KINDS;
+        const kinds = request.kinds ?? DEFAULT_CLEAR_KINDS;
         if (!Array.isArray(kinds) || kinds.length === 0 || !kinds.every(isBrowsingDataKind)) {
           throw new Error(`clear-browsing-data kinds must be some of: ${BROWSING_DATA_KINDS.join(", ")}`);
         }

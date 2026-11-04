@@ -8,6 +8,8 @@ OUT="$ROOT/skill/build"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# The bundled CLI loads pixel's native addon, which only pixel's own dependencies hold.
+export NODE_PATH="$(node -p 'require("path").join(require("path").dirname(require.resolve("@zenbu-labs/pixel/package.json", { paths: [process.argv[1]] })), "node_modules")' "$ROOT/cli")"
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/main.ts" "$TMP/cli.js"
 "$ROOT/scripts/bundle.sh" "$ROOT/cli/src/help.ts" "$TMP/help.js"
 

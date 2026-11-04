@@ -12,6 +12,8 @@ import {
 } from "shared";
 import type { CommandId, LoadedConfig, SettingKey, Settings } from "shared";
 
+import { err, out } from "./output";
+
 const SHORTCUT_PREFIX = "shortcuts.";
 const UNBOUND = "none";
 
@@ -20,7 +22,7 @@ type Target = { kind: "setting"; key: SettingKey } | { kind: "shortcut"; id: Com
 const USAGE = "usage: terminal-browser config <list|get|set|unset|path> [key] [value]";
 
 function complain(message: string): number {
-  process.stderr.write(`error: ${message}\n`);
+  err(`error: ${message}\n`);
   return 1;
 }
 
@@ -45,15 +47,15 @@ function shortcutValue(loaded: LoadedConfig, id: CommandId): string {
 function load(store: ConfigStore): LoadedConfig | null {
   const loaded = store.load();
   if (loaded.errors.length === 0) return loaded;
-  for (const error of loaded.errors) process.stderr.write(`terminal-browser:${error}\n`);
+  for (const error of loaded.errors) err(`terminal-browser:${error}\n`);
   return null;
 }
 
 function list(store: ConfigStore): number {
   const loaded = load(store);
   if (!loaded) return 1;
-  for (const key of SETTING_KEYS) process.stdout.write(`${key}=${loaded.settings?.[key] ?? SETTINGS[key].default}\n`);
-  for (const id of COMMAND_IDS) process.stdout.write(`${SHORTCUT_PREFIX}${id}=${shortcutValue(loaded, id)}\n`);
+  for (const key of SETTING_KEYS) out(`${key}=${loaded.settings?.[key] ?? SETTINGS[key].default}\n`);
+  for (const id of COMMAND_IDS) out(`${SHORTCUT_PREFIX}${id}=${shortcutValue(loaded, id)}\n`);
   return 0;
 }
 
@@ -66,7 +68,7 @@ function get(store: ConfigStore, key: string): number {
     target.kind === "setting"
       ? String(loaded.settings?.[target.key] ?? SETTINGS[target.key].default)
       : shortcutValue(loaded, target.id);
-  process.stdout.write(`${value}\n`);
+  out(`${value}\n`);
   return 0;
 }
 
@@ -115,7 +117,7 @@ function run(args: string[]): number {
     case "list":
       return list(store);
     case "path":
-      process.stdout.write(`${SETTINGS_FILE}\n${SHORTCUTS_FILE}\n`);
+      out(`${SETTINGS_FILE}\n${SHORTCUTS_FILE}\n`);
       return 0;
     case "get":
       if (!key) return complain("wrong number of arguments, should be 1");
@@ -127,7 +129,7 @@ function run(args: string[]): number {
       if (!key) return complain("wrong number of arguments, should be 1");
       return unset(store, key);
     default:
-      process.stderr.write(`${USAGE}\n`);
+      err(`${USAGE}\n`);
       return complain(action ? `unknown subcommand: ${action}` : "wrong number of arguments, should be at least 1");
   }
 }

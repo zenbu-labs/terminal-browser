@@ -79,6 +79,8 @@ for patch in "$REPO_DIR"/patches/*.patch; do
   git apply "$patch"
 done
 
+"$REPO_DIR/scripts/apply-added-patches.sh" "$WORK/electron/src" HEAD
+
 echo "== typescript definitions =="
 # electron generates its types from docs/api, so the patched docs yield types
 # that describe the patched binary; the checkout's yarn install already ran

@@ -9,7 +9,7 @@ const { test } = require("node:test");
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), "pixel-permissions-"));
 const load = Module._load;
 Module._load = function (request, ...rest) {
-  return request === "electron" ? { app: { getPath: () => userData } } : load.call(this, request, ...rest);
+  return request === "electron" ? { app: { getPath: () => userData, on: () => {} } } : load.call(this, request, ...rest);
 };
 
 const { configureBrowserSession, onPermissionFor } = require("../dist/web/browser-session.js");

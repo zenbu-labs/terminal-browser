@@ -1,0 +1,7 @@
+{
+  "manifest_version": 3,
+  "name": "Repro: system.storage.getInfo",
+  "version": "1.0",
+  "permissions": ["system.storage"],
+  "background": { "service_worker": "sw.js" }
+}

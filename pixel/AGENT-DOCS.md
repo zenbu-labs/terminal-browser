@@ -270,7 +270,8 @@ KeyMods        { shift: boolean; alt: boolean; ctrl: boolean; super: boolean }
 | `onChange(state: WebViewState)` | navigation and page state changes |
 | `onPointer(event)` | pointer events over the page |
 | `onContextMenu(params)` | right click in the page, Electron `ContextMenuParams` |
-| `onOpenWindow: OpenWindowPolicy` | `"popup" \| "deny" \| "navigate"` or a function returning one |
+| `onOpenWindow: OpenWindowPolicy` | `"popup" \| "deny" \| "navigate"` or a function of `(details, opener)` returning one; `opener` is the webContents that asked |
+| `initiatorOrigin` | the first load of `src` runs as if a page of this origin started it (pixel's Electron patches) |
 | `onDownload(progress: DownloadProgress)` | `{ name, savePath, received, total, state }` |
 
 Defaults: `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`. `defaultOpenWindow` (`web/host.ts:25`) returns `"popup"` for new windows, else `"navigate"`.

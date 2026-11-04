@@ -5,14 +5,16 @@
   "main": "dist/main.js",
   "scripts": {
     "postinstall": "bash ../scripts/copy-react-grab.sh",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/bundle-preloads.mjs",
     "start": "pnpm build && pnpm --filter terminal-browser-cli build && exec node ../cli/dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\""
+    "test": "tsc -p tsconfig.json && node --test \"test/*.test.js\"",
+    "test:native": "node test/native/run.mjs"
   },
   "dependencies": {
     "@zenbu-labs/pixel": "workspace:*",
     "pele": "1.12.0",
+    "re2js": "2.9.1",
     "react": "^18.3.1",
     "react-grab": "0.2.0",
     "rehype-highlight": "7.0.2",
@@ -27,13 +29,16 @@
     "remark-parse": "11.0.0",
     "remark-rehype": "11.1.2",
     "shared": "workspace:*",
+    "tldts": "7.4.19",
     "unified": "11.0.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/chrome": "0.1.24",
     "@types/hast": "3.0.5",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "esbuild": "^0.25.0"
   }
 }

@@ -5,13 +5,38 @@ export {
   FAVICONS_DIR,
   INSTANCES_DIR,
   AGENT_SOCKETS_DIR,
+  BRIDGE_SOCKETS_DIR,
+  CDP_SOCKET,
   DAEMON_SOCKET,
   DB_FILE,
   CONFIG_DIR,
   SETTINGS_FILE,
   SHORTCUTS_FILE,
   ensureDataDir,
+  ensurePrivateState,
 } from "./paths";
+export {
+  UnsafeFileError,
+  appendPrivateFile,
+  createPrivateFile,
+  ensurePrivateFile,
+  openPrivateLog,
+  replacePrivateFile,
+  tightenPrivateFile,
+  tightenPrivateFiles,
+  writePrivateFile,
+} from "./private-files";
+export {
+  UnsafeDirectoryError,
+  ancestorProblem,
+  ensureOwnedDir,
+  ensurePrivateDir,
+  ownUid,
+  privateDirProblem,
+  reclaimPrivateDir,
+  tightenOwnedDir,
+} from "@zenbu-labs/pixel/private-dir";
+export type { Ownership } from "@zenbu-labs/pixel/private-dir";
 export { openStore, store } from "./client";
 export type { Store } from "./client";
 export { appState, instances, settings, sitePermissions } from "./schema";
@@ -21,10 +46,18 @@ export type { SitePermission } from "./site-permissions";
 export { listInstances, removeInstance, upsertInstance } from "./instances";
 export {
   anonymousId,
+  extensionAcceptedPermissions,
+  extensionErrorCollection,
+  extensionTtsVoices,
+  extensionsDeveloperMode,
   lastActiveDay,
   lastLaunchDay,
   lastSeenVersion,
   lastUrl,
+  setExtensionAcceptedPermissions,
+  setExtensionErrorCollection,
+  setExtensionTtsVoices,
+  setExtensionsDeveloperMode,
   setLastActiveDay,
   setLastLaunchDay,
   setLastSeenVersion,
@@ -48,6 +81,7 @@ export {
 } from "./interop";
 export type { InteropInstance, OpenResult, OpenSpec, RegisteredApp } from "./interop";
 export { TERMINAL_SOCKET_ENV, TERMINAL_SOCKET_PROTOCOL, socketTerminal } from "./terminal-socket";
+export { LAUNCH_ENV, isLaunchToken, paneLaunchCommand } from "./pane-launch";
 export { fetchLatestRelease, installedByHomebrew, installedChannel, installedVersion, upgradeCommand } from "./release";
 export type { LatestRelease } from "./release";
 export * from "./config/commands";
@@ -58,3 +92,71 @@ export * from "./config/render";
 export * from "./config/search";
 export * from "./config/settings";
 export * from "./config/telemetry";
+export { DAEMON_PORT_SWITCH, DEBUGGING_PORT_FLAG, debuggingPortRefusal, requestedDebuggingPort } from "./debugging-port";
+export { bookmarks, downloads, extensionEvents, extensions, historyUrls, historyVisits } from "./schema";
+export type { BookmarkRow, DownloadRow, ExtensionRow, HistoryUrlRow } from "./schema";
+export {
+  EXTENSIONS_DIR,
+  addLazyEvent,
+  clearLazyEvents,
+  deleteExtension,
+  extensionIdForDirectory,
+  extensionIdFromBytes,
+  getExtension,
+  isExtensionId,
+  lazyEvents,
+  listExtensions,
+  opensSidePanelOnActionClick,
+  readManifestFile,
+  removeLazyEvent,
+  saveExtension,
+  setOpensSidePanelOnActionClick,
+  updateExtension,
+} from "./extensions";
+export type { DisabledReason, ExtensionRecord, ExtensionSource } from "./extensions";
+export * from "./manifest";
+export { matchesGlob, matchesUrlPatternPath } from "./glob";
+export * from "./crx";
+export * from "./extension-install";
+export * from "./extension-import";
+export {
+  addHistoryVisit,
+  deleteAllHistory,
+  deleteHistoryRange,
+  deleteHistoryUrl,
+  deleteHistoryUrlInRange,
+  firstVisitToOrigin,
+  historyEntry,
+  visitsForUrl,
+  recentVisits,
+  searchHistory,
+  setHistoryTitle,
+  topHistorySites,
+} from "./history";
+export type { HistoryEntry, HistorySearch, HistoryVisit } from "./history";
+export {
+  createDownload,
+  deleteDownload,
+  getDownload,
+  interruptStaleDownloads,
+  setDownloadStaging,
+  staleDownloadStaging,
+  listDownloads,
+  updateDownload,
+} from "./downloads";
+export type { DownloadDanger, DownloadRecord, DownloadState } from "./downloads";
+export {
+  BOOKMARK_ROOT_ID,
+  BOOKMARKS_BAR_ID,
+  OTHER_BOOKMARKS_ID,
+  allBookmarks,
+  bookmarkChildren,
+  createBookmark,
+  ensureBookmarkRoots,
+  getBookmark,
+  hasBookmarkChildren,
+  moveBookmark,
+  removeBookmark,
+  updateBookmark,
+} from "./bookmarks";
+export type { BookmarkRecord } from "./bookmarks";

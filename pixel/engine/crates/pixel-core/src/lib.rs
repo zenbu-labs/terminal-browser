@@ -10,6 +10,7 @@ mod kitty;
 pub mod logging;
 mod menu;
 mod native;
+mod own_socket;
 mod paint;
 pub(crate) mod parallel;
 pub mod profiler;

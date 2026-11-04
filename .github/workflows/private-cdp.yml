@@ -1,0 +1,56 @@
+name: private cdp
+
+# Fails if anything in the browser daemon's or agent-browser's process tree listens on a
+# TCP port, at startup or while `terminal-browser action` runs, or if the relay, socket
+# and ssh hardening tests regress.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-cdp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  private-cdp:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pixel/engine
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/terminal-browser/agent-browser
+          key: agent-browser-${{ runner.os }}-${{ hashFiles('scripts/agent-browser.sh', 'scripts/agent-browser.patch') }}
+
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @zenbu-labs/pixel build
+      - run: pnpm --filter @zenbu-labs/pixel build:native -- --release
+      - run: pnpm -r --filter '!./pixel/**' build
+      - run: scripts/agent-browser.sh --path
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          (cd browser && node --test "test/*.test.js")
+          (cd pixel/packages/pixel && node --test "test/*.test.js")
+          (cd shared && node --test "test/*.test.js")
+          (cd cli && node --test "test/*.test.js")
+          (cd pixel/engine && cargo test -p pixel-core -- own_socket keep_only_stdio)
+
+      - name: No TCP listener in the daemon or agent-browser
+        timeout-minutes: 10
+        run: node --test cli/test/private-cdp.e2e.mjs

@@ -1,0 +1,979 @@
+diff --git a/cli/src/commands.rs b/cli/src/commands.rs
+index db5154a..8aeb131 100644
+--- a/cli/src/commands.rs
++++ b/cli/src/commands.rs
+@@ -1285,6 +1285,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
+             })?;
+             // Check if it's a URL (ws://, wss://, http://, https://)
+             if endpoint.starts_with("ws://")
++                || endpoint.starts_with("ws+unix:")
+                 || endpoint.starts_with("wss://")
+                 || endpoint.starts_with("http://")
+                 || endpoint.starts_with("https://")
+diff --git a/cli/src/main.rs b/cli/src/main.rs
+index 9878fc1..b1de589 100644
+--- a/cli/src/main.rs
++++ b/cli/src/main.rs
+@@ -1328,6 +1328,28 @@ fn run_close_all(flags: &Flags) {
+     }
+ }
+ 
++// terminal-browser passes the command on a pipe instead of argv, so what an
++// agent types (passwords in `fill`) never shows in the process list.
++#[cfg(unix)]
++fn read_args_from_fd(fd: &str) -> Result<Vec<String>, String> {
++    use std::io::Read as _;
++    use std::os::fd::FromRawFd as _;
++    let fd: i32 = fd.parse().map_err(|_| "AGENT_BROWSER_ARGS_FD is not a descriptor".to_string())?;
++    if fd < 3 {
++        return Err("AGENT_BROWSER_ARGS_FD must be above stdio".to_string());
++    }
++    // SAFETY: the descriptor was handed to us by terminal-browser for this read and is closed when the file drops.
++    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
++    let mut text = String::new();
++    file.read_to_string(&mut text).map_err(|e| format!("reading the command: {}", e))?;
++    serde_json::from_str::<Vec<String>>(&text).map_err(|e| format!("reading the command: {}", e))
++}
++
++#[cfg(not(unix))]
++fn read_args_from_fd(_fd: &str) -> Result<Vec<String>, String> {
++    Err("AGENT_BROWSER_ARGS_FD needs a Unix system".to_string())
++}
++
+ fn main() {
+     // Rust ignores SIGPIPE by default, causing println! to panic on broken pipes.
+     // Reset to SIG_DFL so the OS terminates the process cleanly instead.
+@@ -1368,7 +1390,19 @@ fn main() {
+         return;
+     }
+ 
+-    let args: Vec<String> = env::args().skip(1).collect();
++    let args: Vec<String> = match env::var("AGENT_BROWSER_ARGS_FD") {
++        Ok(fd) if native::stream::NO_TCP_LISTENERS => {
++            env::remove_var("AGENT_BROWSER_ARGS_FD");
++            match read_args_from_fd(&fd) {
++                Ok(args) => args,
++                Err(error) => {
++                    eprintln!("{} {}", color::error_indicator(), error);
++                    exit(1);
++                }
++            }
++        }
++        _ => env::args().skip(1).collect(),
++    };
+     let mut flags = parse_flags(&args);
+     if flags.restore_uses_session {
+         flags.restore = Some(flags.session.clone());
+@@ -1401,6 +1435,19 @@ fn main() {
+         return;
+     }
+ 
++    if native::stream::NO_TCP_LISTENERS {
++        let command = clean.first().map(|s| s.as_str()).unwrap_or("");
++        if !native::stream::command_allowed(command) {
++            let msg = format!("{} {}", command, native::stream::COMMAND_NOT_ALLOWED_ERROR);
++            if flags.json {
++                print_json_error(msg);
++            } else {
++                eprintln!("{} {}", color::error_indicator(), msg);
++            }
++            exit(1);
++        }
++    }
++
+     // Handle install separately
+     if clean.first().map(|s| s.as_str()) == Some("install") {
+         let with_deps = args.iter().any(|a| a == "--with-deps" || a == "-d");
+@@ -1435,6 +1482,14 @@ fn main() {
+     }
+ 
+     // Handle dashboard subcommand
++    if clean.first().map(|s| s.as_str()) == Some("dashboard") && native::stream::NO_TCP_LISTENERS {
++        if flags.json {
++            print_json_error(native::stream::NO_TCP_LISTENERS_ERROR);
++        } else {
++            eprintln!("{} {}", color::error_indicator(), native::stream::NO_TCP_LISTENERS_ERROR);
++        }
++        exit(1);
++    }
+     if clean.first().map(|s| s.as_str()) == Some("dashboard") {
+         let dashboard_args = &clean[1..];
+         let command = match parse_dashboard_command(dashboard_args) {
+@@ -1557,6 +1612,9 @@ fn main() {
+         }
+     };
+     attach_input_mode(&mut cmd, &flags);
++    if native::stream::NO_TCP_LISTENERS {
++        native::local_paths::absolutize_paths(&mut cmd);
++    }
+     // Handle --password-stdin for auth save
+     if cmd.get("action").and_then(|v| v.as_str()) == Some("auth_save") {
+         if cmd.get("password").is_some() {
+@@ -1795,6 +1853,7 @@ fn main() {
+         // Validate CDP value eagerly (even when daemon is already running) so
+         // the user gets an immediate error for bad input instead of a silent no-op.
+         let launch_cmd = if cdp_value.starts_with("ws://")
++            || cdp_value.starts_with("ws+unix:")
+             || cdp_value.starts_with("wss://")
+             || cdp_value.starts_with("http://")
+             || cdp_value.starts_with("https://")
+@@ -2183,6 +2242,21 @@ fn run_batch(
+     let mut results: Vec<serde_json::Value> = Vec::new();
+     let mut had_error = false;
+ 
++    if native::stream::NO_TCP_LISTENERS {
++        for cmd_args in commands.iter().filter(|args| !args.is_empty()) {
++            let command = clean_args(cmd_args).first().cloned().unwrap_or_default();
++            if command == "batch" || !native::stream::command_allowed(&command) {
++                let msg = format!("{} {}", command, native::stream::COMMAND_NOT_ALLOWED_ERROR);
++                if flags.json {
++                    print_json_error(msg);
++                } else {
++                    eprintln!("{} {}", color::error_indicator(), msg);
++                }
++                exit(1);
++            }
++        }
++    }
++
+     for (i, cmd_args) in commands.iter().enumerate() {
+         if cmd_args.is_empty() {
+             continue;
+@@ -2216,6 +2290,9 @@ fn run_batch(
+             }
+         };
+         attach_input_mode(&mut parsed, flags);
++        if native::stream::NO_TCP_LISTENERS {
++            native::local_paths::absolutize_paths(&mut parsed);
++        }
+ 
+         let action = parsed
+             .get("action")
+diff --git a/cli/src/native/actions.rs b/cli/src/native/actions.rs
+index 7342a11..c881c31 100644
+--- a/cli/src/native/actions.rs
++++ b/cli/src/native/actions.rs
+@@ -2597,6 +2597,12 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
+         .unwrap_or("")
+         .to_string();
+ 
++    if super::stream::NO_TCP_LISTENERS {
++        if let Err(error) = super::local_paths::check_command_paths(cmd) {
++            return error_response(&id, &error);
++        }
++    }
++
+     let cmd_start = std::time::Instant::now();
+ 
+     if let Err(err) = validate_restore_config_from_command(cmd) {
+@@ -3911,6 +3917,16 @@ async fn auto_launch(
+     state: &mut DaemonState,
+     plugins: Vec<crate::plugins::PluginConfig>,
+ ) -> Result<(), String> {
++    if super::stream::NO_TCP_LISTENERS {
++        let private_target = env::var("AGENT_BROWSER_CDP")
++            .is_ok_and(|cdp| super::stream::is_private_cdp_target(&cdp));
++        let other_target = env::var("AGENT_BROWSER_AUTO_CONNECT").is_ok()
++            || env::var("AGENT_BROWSER_PROVIDER").is_ok()
++            || env::var("AGENT_BROWSER_ENGINE").is_ok();
++        if !private_target || other_target {
++            return Err(super::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++        }
++    }
+     let mut options = launch_options_from_env();
+     let effective_ca_cert = state.effective_ca_cert.clone();
+     apply_effective_ca_cert(&mut options, &effective_ca_cert);
+@@ -4695,6 +4711,23 @@ async fn try_load_storage_state(state: &mut DaemonState, path: &Option<String>)
+ // ---------------------------------------------------------------------------
+ 
+ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if super::stream::NO_TCP_LISTENERS {
++        let private_target = cmd
++            .get("cdpUrl")
++            .and_then(|v| v.as_str())
++            .is_some_and(super::stream::is_private_cdp_target);
++        let other_target = ["cdpPort", "provider", "engine", "autoConnect", "port", "deviceName", "udid"]
++            .iter()
++            .any(|key| cmd.get(*key).is_some_and(|v| !v.is_null() && *v != Value::Bool(false)));
++        if !private_target || other_target {
++            return Err(super::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++        }
++        // The daemon stays on the socket it was started for.
++        let started_for = env::var("AGENT_BROWSER_CDP").ok();
++        if started_for.as_deref() != cmd.get("cdpUrl").and_then(|v| v.as_str()) {
++            return Err(super::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++        }
++    }
+     let effective_ca_cert = resolve_effective_ca_cert(cmd, state)?;
+     // Absent field falls back to the daemon's spawn-time env (mirrors
+     // hideScrollbars/webgpu), keeping the launch hash stable when follow-up
+@@ -5140,6 +5173,9 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
+ }
+ 
+ async fn launch_ios(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if super::stream::NO_TCP_LISTENERS {
++        return Err(super::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++    }
+     let device_name = cmd.get("deviceName").and_then(|v| v.as_str());
+     let device_udid = cmd.get("udid").and_then(|v| v.as_str());
+     let platform_version = cmd.get("platformVersion").and_then(|v| v.as_str());
+@@ -5184,6 +5220,9 @@ async fn launch_ios(cmd: &Value, state: &mut DaemonState) -> Result<Value, Strin
+ }
+ 
+ async fn launch_safari(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if super::stream::NO_TCP_LISTENERS {
++        return Err(super::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++    }
+     let port: u16 = cmd
+         .get("port")
+         .and_then(|v| v.as_u64())
+@@ -7603,117 +7642,135 @@ async fn handle_download(cmd: &Value, state: &mut DaemonState) -> Result<Value,
+     // Set download behavior to save to the parent directory
+     mgr.set_download_behavior(download_dir_str).await?;
+ 
+-    // Subscribe to CDP events before clicking so we don't miss the download event
+-    let mut rx = mgr.client.subscribe();
++    let outcome = async {
+ 
+-    // Click the element to trigger the download
+-    let result = interaction::click(
+-        &mgr.client,
+-        &session_id,
+-        &state.ref_map,
+-        selector,
+-        "left",
+-        1,
+-        &state.iframe_sessions,
+-    )
+-    .await?;
+-    record_click_animation(
+-        &result,
+-        &mut state.mouse_state,
+-        &state.recording_state.shared_cursor,
+-    );
++        // Subscribe to CDP events before clicking so we don't miss the download event
++        let mut rx = mgr.client.subscribe();
+ 
+-    // Wait for download to complete
+-    const DOWNLOAD_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
+-    let deadline = tokio::time::Instant::now() + DOWNLOAD_TIMEOUT;
+-    let mut downloaded_guid: Option<String> = None;
++        // Click the element to trigger the download
++        let result = interaction::click(
++            &mgr.client,
++            &session_id,
++            &state.ref_map,
++            selector,
++            "left",
++            1,
++            &state.iframe_sessions,
++        )
++        .await?;
++        record_click_animation(
++            &result,
++            &mut state.mouse_state,
++            &state.recording_state.shared_cursor,
++        );
+ 
+-    loop {
+-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+-        if remaining.is_zero() {
+-            return Err("Timeout waiting for download to complete".to_string());
+-        }
++        // Wait for download to complete
++        const DOWNLOAD_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
++        let deadline = tokio::time::Instant::now() + DOWNLOAD_TIMEOUT;
++        let mut downloaded_guid: Option<String> = None;
+ 
+-        match tokio::time::timeout(remaining, rx.recv()).await {
+-            Ok(Ok(event)) => {
+-                // Browser-domain download events may arrive without a sessionId
+-                // or with a different sessionId than the page session, so we
+-                // accept them regardless. Page-domain events are matched by
+-                // session to avoid cross-tab confusion.
+-                let is_page_session = event.session_id.as_deref() == Some(&session_id);
+-                let is_download_event = |method: &str, browser_method: &str, page_method: &str| {
+-                    method == browser_method || (method == page_method && is_page_session)
+-                };
++        loop {
++            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
++            if remaining.is_zero() {
++                return Err("Timeout waiting for download to complete".to_string());
++            }
++
++            match tokio::time::timeout(remaining, rx.recv()).await {
++                Ok(Ok(event)) => {
++                    // Browser-domain download events may arrive without a sessionId
++                    // or with a different sessionId than the page session, so we
++                    // accept them regardless. Page-domain events are matched by
++                    // session to avoid cross-tab confusion.
++                    let is_page_session = event.session_id.as_deref() == Some(&session_id);
++                    let is_download_event = |method: &str, browser_method: &str, page_method: &str| {
++                        method == browser_method || (method == page_method && is_page_session)
++                    };
+ 
+-                // Capture the GUID from downloadWillBegin
+-                if is_download_event(
+-                    &event.method,
+-                    "Browser.downloadWillBegin",
+-                    "Page.downloadWillBegin",
+-                ) {
+-                    if let Some(guid) = event.params.get("guid").and_then(|v| v.as_str()) {
+-                        downloaded_guid = Some(guid.to_string());
++                    // Capture the GUID from downloadWillBegin
++                    if is_download_event(
++                        &event.method,
++                        "Browser.downloadWillBegin",
++                        "Page.downloadWillBegin",
++                    ) {
++                        if let Some(guid) = event.params.get("guid").and_then(|v| v.as_str()) {
++                            downloaded_guid = Some(guid.to_string());
++                        }
+                     }
+-                }
+-                // Check for download completion or cancellation
+-                if is_download_event(
+-                    &event.method,
+-                    "Browser.downloadProgress",
+-                    "Page.downloadProgress",
+-                ) {
+-                    match event.params.get("state").and_then(|v| v.as_str()) {
+-                        Some("completed") => break,
+-                        Some("canceled") => {
+-                            return Err("Download was canceled".to_string());
++                    // Check for download completion or cancellation
++                    if is_download_event(
++                        &event.method,
++                        "Browser.downloadProgress",
++                        "Page.downloadProgress",
++                    ) {
++                        match event.params.get("state").and_then(|v| v.as_str()) {
++                            Some("completed") => break,
++                            Some("canceled") => {
++                                return Err("Download was canceled".to_string());
++                            }
++                            _ => {}
+                         }
+-                        _ => {}
+                     }
+                 }
++                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
++                Ok(Err(_)) => return Err("Event stream closed".to_string()),
++                Err(_) => return Err("Timeout waiting for download to complete".to_string()),
+             }
+-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+-            Ok(Err(_)) => return Err("Event stream closed".to_string()),
+-            Err(_) => return Err("Timeout waiting for download to complete".to_string()),
+         }
+-    }
+ 
+-    // With "allowAndName" behavior, Chrome saves the file using the GUID as filename.
+-    // Rename it to the user-requested filename.
+-    if let Some(guid) = downloaded_guid {
+-        let guid_path = download_dir.join(&guid);
+-        // Chrome may still be flushing the file to disk after signalling
+-        // completion; wait briefly for it to appear.
+-        for _ in 0..10 {
++        // With "allowAndName" behavior, Chrome saves the file using the GUID as filename.
++        // Rename it to the user-requested filename.
++        if let Some(guid) = downloaded_guid {
++            let guid_path = download_dir.join(&guid);
++            // Chrome may still be flushing the file to disk after signalling
++            // completion; wait briefly for it to appear.
++            for _ in 0..10 {
++                if guid_path.exists() {
++                    break;
++                }
++                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
++            }
+             if guid_path.exists() {
+-                break;
++                std::fs::rename(&guid_path, &dest)
++                    .map_err(|e| format!("Failed to rename downloaded file: {}", e))?;
++            } else {
++                // The file might have been saved under its original name instead
++                // of the GUID (e.g. when Chrome falls back to "allow" behavior).
++                if !dest.exists() {
++                    return Err(format!(
++                        "Downloaded file not found at expected path (GUID: {})",
++                        guid
++                    ));
++                }
+             }
+-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+-        }
+-        if guid_path.exists() {
+-            std::fs::rename(&guid_path, &dest)
+-                .map_err(|e| format!("Failed to rename downloaded file: {}", e))?;
+         } else {
+-            // The file might have been saved under its original name instead
+-            // of the GUID (e.g. when Chrome falls back to "allow" behavior).
++            // GUID capture failed -- the file may have been saved under its original name
++            // by Chrome. Only return success if dest already exists (avoid touching
++            // unrelated files in the directory).
+             if !dest.exists() {
+-                return Err(format!(
+-                    "Downloaded file not found at expected path (GUID: {})",
+-                    guid
+-                ));
++                return Err(
++                    "Download completed but could not determine the downloaded file name".to_string(),
++                );
+             }
+         }
+-    } else {
+-        // GUID capture failed -- the file may have been saved under its original name
+-        // by Chrome. Only return success if dest already exists (avoid touching
+-        // unrelated files in the directory).
+-        if !dest.exists() {
+-            return Err(
+-                "Download completed but could not determine the downloaded file name".to_string(),
+-            );
+-        }
++
++        let dest_str = dest.to_string_lossy().to_string();
++        Ok(json!({ "path": dest_str }))
+     }
++    .await;
+ 
+-    let dest_str = dest.to_string_lossy().to_string();
+-    Ok(json!({ "path": dest_str }))
++    // Later downloads a page starts go back to the browser's own handling
++    // instead of being saved silently into this folder.
++    if let Some(mgr) = state.browser.as_ref() {
++        let _ = mgr
++            .client
++            .send_command(
++                "Browser.setDownloadBehavior",
++                Some(json!({ "behavior": "default" })),
++                Some(&session_id),
++            )
++            .await;
++    }
++    outcome
+ }
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/cli/src/native/browser.rs b/cli/src/native/browser.rs
+index 5952b19..fb9506c 100644
+--- a/cli/src/native/browser.rs
++++ b/cli/src/native/browser.rs
+@@ -462,6 +462,9 @@ impl BrowserManager {
+     }
+ 
+     pub async fn launch(options: LaunchOptions, engine: Option<&str>) -> Result<Self, String> {
++        if super::stream::NO_TCP_LISTENERS {
++            return Err(super::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++        }
+         let engine = engine.unwrap_or("chrome");
+ 
+         match engine {
+@@ -2422,7 +2425,7 @@ fn lightpanda_target_init_timeout(last_error: Option<&str>) -> String {
+ }
+ 
+ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
+-    if input.starts_with("ws://") || input.starts_with("wss://") {
++    if input.starts_with("ws://") || input.starts_with("ws+unix:") || input.starts_with("wss://") {
+         return Ok(input.to_string());
+     }
+ 
+diff --git a/cli/src/native/cdp/chrome.rs b/cli/src/native/cdp/chrome.rs
+index 6e1b9ec..9d5ded2 100644
+--- a/cli/src/native/cdp/chrome.rs
++++ b/cli/src/native/cdp/chrome.rs
+@@ -709,6 +709,9 @@ fn terminate_launched_chrome(child: &mut Child) {
+ }
+ 
+ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
++    if crate::native::stream::NO_TCP_LISTENERS {
++        return Err(crate::native::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++    }
+     let chrome_path = match &options.executable_path {
+         Some(p) => PathBuf::from(p),
+         None => find_chrome().ok_or_else(|| {
+diff --git a/cli/src/native/cdp/client.rs b/cli/src/native/cdp/client.rs
+index 97885a4..5a4de3d 100644
+--- a/cli/src/native/cdp/client.rs
++++ b/cli/src/native/cdp/client.rs
+@@ -20,16 +20,13 @@ use tokio_tungstenite::Connector;
+ use super::types::{CdpCommand, CdpError, CdpEvent, CdpMessage};
+ 
+ type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<CdpMessage>>>>;
+-type WsTx = Arc<
+-    Mutex<
+-        futures_util::stream::SplitSink<
+-            tokio_tungstenite::WebSocketStream<
+-                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+-            >,
+-            Message,
+-        >,
+-    >,
++type WsSink = std::pin::Pin<
++    Box<dyn futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Send>,
+ >;
++type WsTx = Arc<Mutex<WsSink>>;
++
++// `ws+unix:/path/to.sock` speaks the WebSocket protocol over a Unix socket.
++const UNIX_SOCKET_SCHEME: &str = "ws+unix:";
+ 
+ /// Sessions whose events go to one private receiver instead of the broadcast.
+ type PrivateSessions = Arc<std::sync::Mutex<HashMap<String, mpsc::Sender<CdpEvent>>>>;
+@@ -199,6 +196,12 @@ impl CdpClient {
+         url: &str,
+         headers: Option<Vec<(String, String)>>,
+     ) -> Result<Self, String> {
++        if let Some(path) = url.strip_prefix(UNIX_SOCKET_SCHEME) {
++            return Self::connect_unix(path).await;
++        }
++        if crate::native::stream::NO_TCP_LISTENERS {
++            return Err(crate::native::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++        }
+         let normalized_url = normalize_websocket_root_path(url);
+         let mut request = normalized_url
+             .as_str()
+@@ -226,6 +229,42 @@ impl CdpClient {
+         Self::connect_request(request, ws_config, None).await
+     }
+ 
++    #[cfg(unix)]
++    async fn connect_unix(path: &str) -> Result<Self, String> {
++        let stream = tokio::net::UnixStream::connect(path)
++            .await
++            .map_err(|e| format!("CDP socket connect failed: {}", e))?;
++        let peer = stream
++            .peer_cred()
++            .map_err(|e| format!("CDP socket peer credentials: {}", e))?;
++        // SAFETY: geteuid has no preconditions and cannot fail.
++        if peer.uid() != unsafe { libc::geteuid() } {
++            // fixme: placeholder copy
++            return Err("CDP socket is owned by another user".to_string());
++        }
++        let socket = socket2::SockRef::from(&stream)
++            .try_clone()
++            .map_err(|error| format!("Failed to duplicate CDP socket: {}", error))?;
++        let request = "ws://localhost/"
++            .into_client_request()
++            .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
++        let ws_config = WebSocketConfig {
++            max_message_size: None,
++            max_frame_size: None,
++            ..Default::default()
++        };
++        let (ws_stream, _) =
++            tokio_tungstenite::client_async_with_config(request, stream, Some(ws_config))
++                .await
++                .map_err(|e| format!("CDP WebSocket connect failed: {}", e))?;
++        Ok(Self::from_websocket(ws_stream, socket))
++    }
++
++    #[cfg(not(unix))]
++    async fn connect_unix(_path: &str) -> Result<Self, String> {
++        Err("CDP over a Unix socket is not supported on this platform".to_string())
++    }
++
+     async fn connect_request(
+         request: Request<()>,
+         ws_config: WebSocketConfig,
+@@ -246,9 +285,18 @@ impl CdpClient {
+         let socket = socket2::SockRef::from(tcp_stream)
+             .try_clone()
+             .map_err(|error| format!("Failed to duplicate CDP socket: {}", error))?;
++        Ok(Self::from_websocket(ws_stream, socket))
++    }
+ 
++    fn from_websocket<S>(
++        ws_stream: tokio_tungstenite::WebSocketStream<S>,
++        socket: socket2::Socket,
++    ) -> Self
++    where
++        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
++    {
+         let (ws_tx, mut ws_rx) = ws_stream.split();
+-        let ws_tx = Arc::new(Mutex::new(ws_tx));
++        let ws_tx: WsTx = Arc::new(Mutex::new(Box::pin(ws_tx)));
+ 
+         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+         let (event_tx, _) = broadcast::channel(4096);
+@@ -409,7 +457,7 @@ impl CdpClient {
+             }
+         });
+ 
+-        Ok(Self {
++        Self {
+             ws_tx,
+             socket,
+             closed,
+@@ -423,7 +471,7 @@ impl CdpClient {
+             reader_handle: Mutex::new(Some(reader_handle)),
+             keepalive_handle: Mutex::new(Some(keepalive_handle)),
+             private_sessions,
+-        })
++        }
+     }
+ 
+     fn ensure_open(&self) -> Result<(), String> {
+diff --git a/cli/src/native/cdp/lightpanda.rs b/cli/src/native/cdp/lightpanda.rs
+index c8c6f9b..81b8f38 100644
+--- a/cli/src/native/cdp/lightpanda.rs
++++ b/cli/src/native/cdp/lightpanda.rs
+@@ -146,6 +146,9 @@ pub fn find_lightpanda() -> Option<PathBuf> {
+ pub async fn launch_lightpanda(
+     options: &LightpandaLaunchOptions,
+ ) -> Result<LightpandaProcess, String> {
++    if crate::native::stream::NO_TCP_LISTENERS {
++        return Err(crate::native::stream::PRIVATE_CDP_ONLY_ERROR.to_string());
++    }
+     let binary_path = match &options.executable_path {
+         Some(p) => PathBuf::from(p),
+         None => find_lightpanda().ok_or(
+diff --git a/cli/src/native/daemon.rs b/cli/src/native/daemon.rs
+index 28689d2..66312ae 100644
+--- a/cli/src/native/daemon.rs
++++ b/cli/src/native/daemon.rs
+@@ -21,6 +21,11 @@ use super::stream::{IdleActivity, StreamServer};
+ use crate::connection::INTERNAL_DAEMON_SHUTDOWN_ACTION;
+ 
+ pub async fn run_daemon(session: &str) {
++    if super::stream::NO_TCP_LISTENERS {
++        // Screenshots, saved state (cookies) and recordings must not be readable by other users.
++        // SAFETY: umask has no preconditions and cannot fail.
++        unsafe { libc::umask(0o077) };
++    }
+     let socket_dir = get_daemon_socket_dir();
+     if !socket_dir.exists() {
+         let _ = fs::create_dir_all(&socket_dir);
+diff --git a/cli/src/native/inspect_server.rs b/cli/src/native/inspect_server.rs
+index 1c151a4..d046cf6 100644
+--- a/cli/src/native/inspect_server.rs
++++ b/cli/src/native/inspect_server.rs
+@@ -36,6 +36,9 @@ impl InspectServer {
+         target_id: String,
+         chrome_host_port: String,
+     ) -> Result<Self, String> {
++        if super::stream::NO_TCP_LISTENERS {
++            return Err(super::stream::NO_TCP_LISTENERS_ERROR.to_string());
++        }
+         let listener = TcpListener::bind("127.0.0.1:0")
+             .await
+             .map_err(|e| format!("Failed to bind inspect server: {}", e))?;
+diff --git a/cli/src/native/local_paths.rs b/cli/src/native/local_paths.rs
+new file mode 100644
+index 0000000..d427c8e
+--- /dev/null
++++ b/cli/src/native/local_paths.rs
+@@ -0,0 +1,213 @@
++//! In terminal-browser builds, files agent-browser writes can't be redirected by
++//! another user: a link or file they planted on the way (in /tmp, say) is refused.
++//! Relative paths mean the caller's working folder.
++
++use std::os::unix::fs::MetadataExt;
++use std::path::{Path, PathBuf};
++
++use serde_json::Value;
++
++const PATH_KEYS: &[&str] = &[
++    "path",
++    "output",
++    "file",
++    "baseline",
++    "screenshotDir",
++    "downloadPath",
++    "storageState",
++    "caCert",
++    "profile",
++    "executablePath",
++];
++const PATH_LIST_KEYS: &[&str] = &["files", "extensions", "initScripts"];
++
++fn paths_mut(cmd: &mut Value) -> Vec<&mut Value> {
++    let mut found = Vec::new();
++    let Some(object) = cmd.as_object_mut() else {
++        return found;
++    };
++    for (key, value) in object.iter_mut() {
++        if PATH_KEYS.contains(&key.as_str()) && value.is_string() {
++            found.push(value);
++        } else if PATH_LIST_KEYS.contains(&key.as_str()) {
++            if let Some(list) = value.as_array_mut() {
++                found.extend(list.iter_mut().filter(|item| item.is_string()));
++            }
++        }
++    }
++    found
++}
++
++/// Run by the command line before a command is sent, so relative paths mean the
++/// caller's working folder rather than wherever the daemon was started.
++pub fn absolutize_paths(cmd: &mut Value) {
++    let Ok(cwd) = std::env::current_dir() else {
++        return;
++    };
++    for value in paths_mut(cmd) {
++        let raw = value.as_str().unwrap_or_default();
++        if !raw.is_empty() && Path::new(raw).is_relative() {
++            *value = Value::String(cwd.join(raw).to_string_lossy().into_owned());
++        }
++    }
++}
++
++// fixme: placeholder copy
++const PLANTED: &str = "another user owns a link or file on this path";
++
++// A link on the way to `path`, or the file at its end, that belongs to someone
++// other than us or root, so writing there would go where that user chose.
++fn planted_by_another_user(path: &Path, uid: u32) -> bool {
++    let mut at = PathBuf::new();
++    for component in path.components() {
++        at.push(component);
++        let Ok(meta) = std::fs::symlink_metadata(&at) else {
++            return false;
++        };
++        let foreign = meta.uid() != uid && meta.uid() != 0;
++        if meta.file_type().is_symlink() && foreign {
++            return true;
++        }
++        if at.as_path() == path && !meta.is_dir() && foreign {
++            return true;
++        }
++    }
++    false
++}
++
++/// Run by the daemon on every command.
++pub fn check_command_paths(cmd: &Value) -> Result<(), String> {
++    let uid = unsafe { libc::geteuid() };
++    let mut owned = cmd.clone();
++    for value in paths_mut(&mut owned) {
++        let raw = value.as_str().unwrap_or_default();
++        if Path::new(raw).is_absolute() && planted_by_another_user(Path::new(raw), uid) {
++            return Err(format!("{}: {}", PLANTED, raw));
++        }
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn scratch(name: &str) -> PathBuf {
++        let root = std::env::temp_dir()
++            .canonicalize()
++            .unwrap()
++            .join(format!("ab-local-paths-{}-{}", name, std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        std::fs::create_dir_all(&root).unwrap();
++        root
++    }
++
++    #[test]
++    fn relative_paths_mean_the_callers_working_folder() {
++        let cwd = std::env::current_dir().unwrap();
++        let mut cmd = serde_json::json!({
++            "action": "upload", "selector": "#f", "files": ["a.txt", "/abs/b.txt"], "path": "shot.png", "url": "x"
++        });
++        absolutize_paths(&mut cmd);
++        assert_eq!(cmd["files"][0], cwd.join("a.txt").to_string_lossy().as_ref());
++        assert_eq!(cmd["files"][1], "/abs/b.txt");
++        assert_eq!(cmd["path"], cwd.join("shot.png").to_string_lossy().as_ref());
++        assert_eq!(cmd["url"], "x");
++    }
++
++    #[test]
++    fn links_and_files_another_user_planted_are_refused() {
++        let root = scratch("planted");
++        let ours = unsafe { libc::geteuid() };
++        let someone_else = ours + 1;
++        std::os::unix::fs::symlink(root.join("victim"), root.join("link.png")).unwrap();
++        std::fs::write(root.join("existing.json"), b"{}").unwrap();
++        std::os::unix::fs::symlink(&root, root.join("dir")).unwrap();
++
++        assert!(planted_by_another_user(&root.join("link.png"), someone_else));
++        assert!(planted_by_another_user(&root.join("existing.json"), someone_else));
++        assert!(planted_by_another_user(&root.join("dir/new.png"), someone_else));
++        assert!(!planted_by_another_user(&root.join("new.png"), someone_else));
++
++        assert!(!planted_by_another_user(&root.join("link.png"), ours));
++        assert!(!planted_by_another_user(&root.join("existing.json"), ours));
++        assert!(check_command_paths(&serde_json::json!({ "action": "screenshot", "path": root.join("link.png") })).is_ok());
++        let _ = std::fs::remove_dir_all(&root);
++    }
++
++    // Every key a command carries into the daemon is either checked as a path here,
++    // or listed as not naming a file. A new upstream key fails this until it is sorted.
++    const NOT_PATHS: &[&str] = &[
++        "abort", "accept", "accuracy", "action", "allowFileAccess", "allowedDomains", "amount",
++        "annotate", "args", "attribute", "autoConnect", "body", "button", "buttons", "categories",
++        "cdpPort", "cdpUrl", "clear", "clearCaCert", "clickCount", "code", "colorScheme", "compact",
++        "contactSheet", "contactSheetThreshold", "content", "cookies", "credentialItem",
++        "credentialProvider", "css", "cursor", "days", "defaultInputMode", "delay", "delta", "deltaX",
++        "deltaY", "detach", "device", "deviceName", "deviceScaleFactor", "direction", "distance",
++        "duration", "endX", "endY", "engine", "event", "eventInit", "eventType", "exact", "expression",
++        "features", "fiberId", "filter", "format", "fps", "frameId", "full", "fullPage", "function",
++        "headers", "headless", "height", "hideScrollbars", "html", "id", "identifier", "ifChanged",
++        "ignoreHTTPSErrors", "index", "inputMode", "interactive", "invocationId", "json", "key", "label",
++        "landscape", "latitude", "llms", "loadState", "locale", "longitude", "maxDepth", "maxHeight",
++        "maxWidth", "media", "method", "mobile", "modifiers", "name", "newTab", "noNavigate", "noXvfb",
++        "offline", "onlyDynamic", "operation", "params", "password", "passwordSelector", "permissions",
++        "pinTab", "platformVersion", "plugins", "port", "preferCSSPageSize", "printBackground",
++        "promptText", "properties", "provider", "proxy", "quality", "reducedMotion", "requestId",
++        "requireMd", "resourceType", "resourceTypes", "response", "restoreCheckFn", "restoreCheckText",
++        "restoreCheckUrl", "restoreKey", "restoreSave", "role", "script", "seed", "selector", "source",
++        "startX", "startY", "state", "status", "steps", "subAction", "subaction", "submitSelector",
++        "tabId", "tags", "target", "text", "threshold", "timeout", "timezone", "timezoneId", "tool",
++        "touchPoints", "type", "udid", "url", "url1", "url2", "urls", "userAgent", "username",
++        "usernameSelector", "value", "values", "viewport", "waitUntil", "webgpu", "webmcp", "width",
++        "x", "y",
++    ];
++
++    fn sources(dir: &Path) -> Vec<(PathBuf, String)> {
++        let mut out = Vec::new();
++        for entry in std::fs::read_dir(dir).unwrap().flatten() {
++            let path = entry.path();
++            if path.is_dir() {
++                out.extend(sources(&path));
++            } else if path.extension().is_some_and(|e| e == "rs") {
++                let text = std::fs::read_to_string(&path).unwrap();
++                out.push((path, text.split("#[cfg(test)]").next().unwrap().to_string()));
++            }
++        }
++        out
++    }
++
++    fn command_keys(text: &str) -> Vec<String> {
++        let mut keys = Vec::new();
++        let mut rest = text;
++        while let Some(at) = rest.find("cmd") {
++            let after = rest[at + 3..].trim_start();
++            if let Some(tail) = after.strip_prefix(".get(\"") {
++                if let Some(end) = tail.find('"') {
++                    let key = &tail[..end];
++                    if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
++                        keys.push(key.to_string());
++                    }
++                }
++            }
++            rest = &rest[at + 3..];
++        }
++        keys
++    }
++
++    #[test]
++    fn every_key_a_command_carries_is_sorted_into_paths_or_not() {
++        let native = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
++        let mut unsorted = Vec::new();
++        for (path, text) in sources(&native) {
++            for key in command_keys(&text) {
++                let known = PATH_KEYS.contains(&key.as_str())
++                    || PATH_LIST_KEYS.contains(&key.as_str())
++                    || NOT_PATHS.contains(&key.as_str());
++                if !known {
++                    unsorted.push(format!("{}: {}", path.display(), key));
++                }
++            }
++        }
++        assert!(unsorted.is_empty(), "command keys nobody has sorted: {:?}", unsorted);
++    }
++}
+diff --git a/cli/src/native/mod.rs b/cli/src/native/mod.rs
+index abdc7ef..a5530b8 100644
+--- a/cli/src/native/mod.rs
++++ b/cli/src/native/mod.rs
+@@ -18,6 +18,8 @@ pub mod diff;
+ pub mod element;
+ #[allow(dead_code)]
+ pub mod inspect_server;
++
++pub mod local_paths;
+ #[allow(dead_code)]
+ pub mod interaction;
+ #[allow(dead_code)]
+diff --git a/cli/src/native/stream/dashboard.rs b/cli/src/native/stream/dashboard.rs
+index fbe3c69..a3199a9 100644
+--- a/cli/src/native/stream/dashboard.rs
++++ b/cli/src/native/stream/dashboard.rs
+@@ -613,6 +613,10 @@ async fn proxy_session_stream(mut stream: tokio::net::TcpStream, port: u16) {
+ }
+ 
+ pub async fn run_dashboard_server(port: u16) {
++    if super::NO_TCP_LISTENERS {
++        eprintln!("{}", super::NO_TCP_LISTENERS_ERROR);
++        return;
++    }
+     let ipv4_addr = (Ipv4Addr::LOCALHOST, port);
+     let ipv4_listener = match TcpListener::bind(ipv4_addr).await {
+         Ok(l) => l,
+diff --git a/cli/src/native/stream/mod.rs b/cli/src/native/stream/mod.rs
+index dea9606..96083cd 100644
+--- a/cli/src/native/stream/mod.rs
++++ b/cli/src/native/stream/mod.rs
+@@ -312,6 +312,9 @@ impl StreamServer {
+         allow_port_fallback: bool,
+         idle_activity: Arc<IdleActivity>,
+     ) -> Result<(Self, Arc<RwLock<Option<Arc<CdpClient>>>>), String> {
++        if NO_TCP_LISTENERS {
++            return Err(NO_TCP_LISTENERS_ERROR.to_string());
++        }
+         let addr = format!("127.0.0.1:{}", preferred_port);
+         let listener = match TcpListener::bind(&addr).await {
+             Ok(l) => l,
+@@ -621,6 +624,42 @@ pub(crate) fn timestamp_ms() -> u64 {
+         .unwrap_or(0)
+ }
+ 
++// terminal-browser drives a browser whose debugging access is restricted to
++// the user's own processes, so nothing here may open a loopback port.
++pub const NO_TCP_LISTENERS: bool = true;
++// fixme: placeholder copy
++pub const NO_TCP_LISTENERS_ERROR: &str = "terminal-browser builds of agent-browser never listen on a TCP port";
++// fixme: placeholder copy
++pub const PRIVATE_CDP_ONLY_ERROR: &str =
++    "terminal-browser builds of agent-browser only attach to a ws+unix: CDP socket and never launch a browser";
++
++// `terminal-browser action` refuses an agent-browser whose --version lacks this.
++pub const PRIVATE_CDP_BUILD: &str = "terminal-browser private-cdp build";
++
++// The only commands a terminal-browser build runs: driving the attached browser.
++// Plugins, installers, upgrades, servers and reconnecting elsewhere are not here.
++pub const ALLOWED_COMMANDS: &[&str] = &[
++    "open", "goto", "navigate", "back", "forward", "reload", "read", "click", "dblclick", "fill",
++    "type", "hover", "focus", "check", "uncheck", "select", "drag", "upload", "download", "press",
++    "key", "keydown", "keyup", "keyboard", "scroll", "scrollintoview", "scrollinto", "wait",
++    "screenshot", "pdf", "snapshot", "eval", "close", "quit", "exit", "confirm", "deny", "get",
++    "is", "find", "mouse", "set", "network", "storage", "cookies", "tab", "window", "frame",
++    "dialog", "trace", "profiler", "record", "console", "errors", "highlight", "clipboard",
++    "state", "diff", "batch", "react", "vitals", "web-vitals", "a11y", "pushstate",
++    "removeinitscript", "webmcp",
++];
++
++// fixme: placeholder copy
++pub const COMMAND_NOT_ALLOWED_ERROR: &str = "is not available in terminal-browser builds of agent-browser";
++
++pub fn command_allowed(command: &str) -> bool {
++    ALLOWED_COMMANDS.contains(&command)
++}
++
++pub fn is_private_cdp_target(url: &str) -> bool {
++    url.starts_with("ws+unix:/")
++}
++
+ pub fn is_allowed_origin(origin: Option<&str>) -> bool {
+     match origin {
+         None => true,
+diff --git a/cli/src/output.rs b/cli/src/output.rs
+index 421216d..a365523 100644
+--- a/cli/src/output.rs
++++ b/cli/src/output.rs
+@@ -4291,7 +4291,11 @@ fn print_screenshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
+ }
+ 
+ pub fn print_version() {
+-    println!("agent-browser {}", env!("CARGO_PKG_VERSION"));
++    println!(
++        "agent-browser {} ({})",
++        env!("CARGO_PKG_VERSION"),
++        crate::native::stream::PRIVATE_CDP_BUILD
++    );
+ }
+ 
+ #[cfg(test)]

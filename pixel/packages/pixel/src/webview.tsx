@@ -42,6 +42,7 @@ import type {
   PermissionCheckAnswer,
   PermissionRequest,
 } from "./web/browser-session";
+import type { AuthGate } from "./web/auth";
 import { PageHost, decideOpenWindow } from "./web/host";
 import type { BrowserWindowOptions, OpenWindowDecision, OpenWindowPolicy } from "./web/host";
 import { persistentPartition } from "./web/browser-session";
@@ -77,9 +78,12 @@ export interface WebViewProps {
   onPointer?(event: PointerEvent): void;
   onContextMenu?(params: Electron.ContextMenuParams): void;
   onOpenWindow?: OpenWindowPolicy;
+  initiatorOrigin?: string;
   onDownload?(progress: DownloadProgress): void;
   onPermissionRequest?(request: PermissionRequest): Promise<boolean>;
   onPermissionCheck?(check: PermissionCheck): PermissionCheckAnswer;
+  onClose?(): void;
+  auth?: AuthGate;
 }
 
 export interface WebViewHandle {
@@ -261,6 +265,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
         clipboardRead: !!initial.clipboardRead,
         proxy: initial.proxy ?? null,
         browserWindowOptions,
+        initiatorOrigin: initial.initiatorOrigin,
       },
       (state) => {
         debug("state", state);
@@ -296,12 +301,19 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
       if (custom) custom(params);
       else openMenu(params);
     };
-    host.onOpenWindow = (details) => decideOpenWindow(propsRef.current.onOpenWindow, details);
+    host.onOpenWindow = (details, opener) => decideOpenWindow(propsRef.current.onOpenWindow, details, opener);
     host.onDownload = (progress) => propsRef.current.onDownload?.(progress);
+    host.onClosed = () => propsRef.current.onClose?.();
     host.onPermission = {
       request: (request) =>
         propsRef.current.onPermissionRequest?.(request) ?? Promise.resolve(false),
       check: (check) => propsRef.current.onPermissionCheck?.(check) ?? false,
+    };
+    host.onAuth = {
+      login: (request) => propsRef.current.auth?.login(request) ?? Promise.resolve(null),
+      certificateError: (request) => propsRef.current.auth?.certificateError(request) ?? Promise.resolve(false),
+      clientCertificate: (request) => propsRef.current.auth?.clientCertificate(request) ?? Promise.resolve(null),
+      passkeyAccount: (request) => propsRef.current.auth?.passkeyAccount(request) ?? Promise.resolve(null),
     };
     host.onQuit = () => registry.quit(entry);
     host.onFrameSubmitted = () => {

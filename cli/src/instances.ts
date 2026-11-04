@@ -2,6 +2,7 @@ import { callerTty } from "@zenbu-labs/pixel/terminal";
 import type { Direction, Pane, Terminal } from "@zenbu-labs/pixel/terminal";
 
 import { control, WHERE_TIMEOUT_MS } from "./control";
+import { oneLine } from "./output";
 import { instances } from "./registry";
 import type { InstanceRecord } from "./registry";
 
@@ -86,6 +87,6 @@ export async function targets(browser: Browser): Promise<TabTarget[]> {
 
 export function describe(browser: Browser): string {
   const where = browser.pane ? `${browser.paneTab}:${browser.pane}` : "no pane";
-  return `${recordKey(browser)} (${where}) ${browser.url}`;
+  return oneLine(`${recordKey(browser)} (${where}) ${browser.url}`);
 }
 

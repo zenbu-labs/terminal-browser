@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { err } from "./output";
+
 const REFUSAL = `the codex sandbox blocks commands terminal-browser needs to run to determine the terminal pane terminal-browser is running in.
 Re-run this command with escalated permissions.`;
 
@@ -74,7 +76,7 @@ export function apparmorSetup(electronBinary: string): number {
     execFileSync("bash", [APPARMOR_SCRIPT, electronBinary], { stdio: "inherit" });
     return 0;
   } catch (error) {
-    process.stderr.write(
+    err(
       `could not install the AppArmor profile: ${error instanceof Error ? error.message : String(error)}\n`,
     );
     return 1;

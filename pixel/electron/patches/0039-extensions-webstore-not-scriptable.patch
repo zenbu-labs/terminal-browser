@@ -1,0 +1,18 @@
+diff --git a/shell/common/extensions/electron_extensions_client.cc b/shell/common/extensions/electron_extensions_client.cc
+--- a/shell/common/extensions/electron_extensions_client.cc
++++ b/shell/common/extensions/electron_extensions_client.cc
+@@ -157,7 +157,13 @@ ElectronExtensionsClient::GetPermittedChromeSchemeHosts(
+ 
+ bool ElectronExtensionsClient::IsScriptableURL(const GURL& url,
+                                                std::string* error) const {
+-  // No restrictions on URLs.
++  // As in Chrome, extensions may not script the Web Store, whose pages get
++  // privileged bindings.
++  if (extension_urls::IsWebstoreDomain(url)) {
++    if (error)
++      *error = extensions::manifest_errors::kCannotScriptGallery;
++    return false;
++  }
+   return true;
+ }
+ 

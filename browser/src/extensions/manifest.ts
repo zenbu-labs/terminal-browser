@@ -1,0 +1,26 @@
+export {
+  asManifest,
+  grantedByInstall,
+  hostPermissionPattern,
+  isHostPattern,
+  manifestAction,
+  matchesGlob,
+  matchesUrlPatternPath,
+  optionalPermissions,
+  optionsPage,
+  parseMatchPattern,
+  patternMatches,
+  permissionWarnings,
+  pickIcon,
+  requiredPermissions,
+  resolveExtensionPath,
+  PatternSet,
+} from "shared";
+export type {
+  Manifest,
+  ManifestAction,
+  ManifestCommand,
+  ManifestIcons,
+  MatchPattern,
+  RequestedPermissions,
+} from "shared";

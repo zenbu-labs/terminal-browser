@@ -1,0 +1,13 @@
+diff --git a/shell/browser/extensions/electron_messaging_delegate.cc b/shell/browser/extensions/electron_messaging_delegate.cc
+--- a/shell/browser/extensions/electron_messaging_delegate.cc
++++ b/shell/browser/extensions/electron_messaging_delegate.cc
+@@ -50,6 +50,9 @@ std::optional<base::DictValue> ElectronMessagingDelegate::MaybeGetTabInfo(
+       tab.url = api_contents->GetURL().spec();
+       tab.title = base::UTF16ToUTF8(api_contents->GetTitle());
+       tab.audible = api_contents->IsCurrentlyAudible();
++      // Required by the tabs.Tab schema that validates runtime.onMessage and
++      // runtime.onUserScriptMessage senders.
++      tab.split_view_id = -1;
+       return tab.ToValue();
+     }
+   }

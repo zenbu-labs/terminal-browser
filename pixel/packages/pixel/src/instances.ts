@@ -4,6 +4,9 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
+import { connectPrivately } from "./host/private-socket";
+import { reclaimPrivateDir } from "./private-dir";
+
 
 
 export const PROTOCOL = 1;
@@ -98,14 +101,26 @@ export function findOwner(tty: string, env: NodeJS.ProcessEnv = process.env): In
 // and its close before the app joins means the launch failed.
 export function announceGuest(owner: Instance, name: string): { pane: string; end(): void } {
   const pane = randomBytes(8).toString("hex");
-  const socket = net.connect(owner.socket);
-  socket.on("error", () => {});
-  socket.on("connect", () => {
-    socket.write(`${JSON.stringify({ type: "announce", pane, name, pid: process.pid })}\n`);
-  });
+  let ended = false;
+  let socket: net.Socket | null = null;
+  connectPrivately(owner.socket).then(
+    (connected) => {
+      if (ended) {
+        connected.destroy();
+        return;
+      }
+      socket = connected;
+      connected.on("error", () => {});
+      connected.write(`${JSON.stringify({ type: "announce", pane, name, pid: process.pid })}\n`);
+    },
+    () => {},
+  );
   return {
     pane,
-    end: () => socket.destroy(),
+    end: () => {
+      ended = true;
+      socket?.destroy();
+    },
   };
 }
 
@@ -116,8 +131,8 @@ function handoffMarker(tty: string, env: NodeJS.ProcessEnv = process.env): strin
 
 export function markHandoff(tty: string, env: NodeJS.ProcessEnv = process.env): void {
   try {
-    fs.mkdirSync(instancesDir(env), { recursive: true });
-    fs.writeFileSync(handoffMarker(tty, env), String(Date.now()));
+    reclaimPrivateDir(instancesDir(env));
+    fs.writeFileSync(handoffMarker(tty, env), String(Date.now()), { mode: 0o600 });
   } catch {}
 }
 
@@ -146,16 +161,19 @@ export async function waitForOwners(tty: string, env: NodeJS.ProcessEnv = proces
       await sleep(50);
       continue;
     }
-    await new Promise<void>((resolve) => {
-      const socket = net.connect(owner.socket);
-      const done = () => {
-        socket.destroy();
-        resolve();
-      };
-      socket.on("error", done);
-      socket.on("close", done);
-      socket.on("end", done);
-    });
+    await connectPrivately(owner.socket).then(
+      (socket) =>
+        new Promise<void>((resolve) => {
+          const done = () => {
+            socket.destroy();
+            resolve();
+          };
+          socket.on("error", done);
+          socket.on("close", done);
+          socket.on("end", done);
+        }),
+      () => {},
+    );
   }
 }
 
@@ -166,7 +184,7 @@ export class InstanceRecord {
   constructor(record: Instance, env: NodeJS.ProcessEnv = process.env) {
     this.record = record;
     this.file = path.join(instancesDir(env), `${instanceKey(record.tty)}.json`);
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    reclaimPrivateDir(path.dirname(this.file));
     this.write();
   }
 
@@ -183,7 +201,8 @@ export class InstanceRecord {
   private write() {
     const tmp = `${this.file}.${process.pid}.tmp`;
     try {
-      fs.writeFileSync(tmp, `${JSON.stringify(this.record)}\n`);
+      fs.rmSync(tmp, { force: true });
+      fs.writeFileSync(tmp, `${JSON.stringify(this.record)}\n`, { mode: 0o600, flag: "wx" });
       fs.renameSync(tmp, this.file);
     } catch {
       fs.rmSync(tmp, { force: true });
