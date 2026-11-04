@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use super::{DragPhase, Engine, EngineEvent};
 use crate::menu::MenuClick;
-use crate::terminal::{Mods, Mouse, MouseButton, MouseKind};
+use crate::input::{Mods, Mouse, MouseButton, MouseKind};
 use crate::tree::{HitTarget, NodeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,27 +26,6 @@ impl Engine {
         if matches!(mouse.kind, MouseKind::Down | MouseKind::Up) {
             self.focus_click = None;
             self.last_pointer_click = Some(now);
-        }
-        let scrolling = matches!(
-            mouse.kind,
-            MouseKind::ScrollUp
-                | MouseKind::ScrollDown
-                | MouseKind::ScrollLeft
-                | MouseKind::ScrollRight
-        );
-        if self.use_native && self.native.is_some() {
-            self.ingest_native();
-            let located = self.term.reports_pixel_mouse().then_some(point);
-            if scrolling && mouse.mods == Mods::default() {
-                if self
-                    .pairing
-                    .on_wheel_tick(located, now, &mut self.hover_oracle)
-                {
-                    return Ok(());
-                }
-            } else if let Some(located) = located {
-                self.hover_oracle.note_local(located, now);
-            }
         }
         if matches!(
             mouse.kind,
@@ -351,7 +330,7 @@ impl Engine {
             return;
         }
         let shape = shape.to_string();
-        if self.term.set_pointer_shape(&shape).is_ok() {
+        if self.backend.set_pointer_shape(&shape).is_ok() {
             self.pointer_shape = Some(shape);
         }
     }
@@ -454,7 +433,7 @@ impl Engine {
 
     fn open_menu(&mut self, view: usize, at: (f32, f32)) {
         let size = self.comp.views[view].size;
-        let style = crate::menu::MenuStyle::from_terminal(&self.colors);
+        let style = crate::menu::MenuStyle::from_colors(&self.colors);
         let focus = self.menu.open(
             &mut self.comp.views[view].tree,
             view,

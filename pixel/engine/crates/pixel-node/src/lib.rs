@@ -1,15 +1,10 @@
 mod capture;
-mod diff;
-mod events;
-mod highlight;
 #[cfg(target_os = "macos")]
 mod iosurface;
-mod markdown;
-mod mend;
-mod ops;
 mod record;
 mod shm;
 mod surface;
+mod terminal_ops;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,11 +17,12 @@ use napi::threadsafe_function::{
 };
 use napi::{JsFunction, Result};
 use napi_derive::napi;
-use pixel_core::{Engine, EngineConfig, TerminalColors, Waker, fontdue};
+use pixel_core::backend::Backend;
+use pixel_bridge::{IdMap, apply_ops, engine_info, event_json};
+use pixel_core::{Engine, EngineConfig, Waker};
+use pixel_terminal::TerminalBackend;
 use serde_json::json;
 
-use crate::events::event_json;
-use crate::ops::{IdMap, apply_ops};
 use crate::surface::{SurfaceCommand, SurfaceMailbox, SurfacePixels};
 
 pub struct EncodeRecordingTask {
@@ -244,31 +240,14 @@ impl DamageRect {
 const IDLE_AFTER_INPUT: std::time::Duration = std::time::Duration::from_millis(300);
 const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_millis(4);
 
-static UI_FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/InterVariable.ttf");
-static MONO_FONT_BYTES: &[u8] =
-    include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
-
-const SYSTEM_UI_FONTS: &[&str] = &[
-    "/System/Library/Fonts/SFNSRounded.ttf",
-    "/System/Library/Fonts/SFNS.ttf",
-];
-
-fn load_font(candidates: &[&str], fallback: &'static [u8]) -> fontdue::Font {
-    let parse = |bytes: &[u8]| fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default());
-    if cfg!(target_os = "macos") {
-        for path in candidates {
-            if let Ok(bytes) = std::fs::read(path)
-                && let Ok(font) = parse(&bytes)
-            {
-                return font;
-            }
-        }
-    }
-    parse(fallback).expect("bundled font parses")
-}
-
 fn err(e: impl std::fmt::Display) -> Error {
     Error::from_reason(e.to_string())
+}
+
+fn note(engine: &mut Engine, text: String) {
+    if let Some(terminal) = terminal(engine) {
+        terminal.note(text);
+    }
 }
 
 struct SendEngine(Engine);
@@ -276,27 +255,31 @@ struct SendEngine(Engine);
 #[allow(unsafe_code)]
 unsafe impl Send for SendEngine {}
 
-pub(crate) fn engine_info(engine: &Engine) -> serde_json::Value {
-    let (width, height) = engine.comp.window;
-    let (cell_w, cell_h) = engine.cell;
-    json!({
-        "width": width,
-        "height": height,
-        "cellWidth": cell_w,
-        "cellHeight": cell_h,
-        "basePx": engine.base_px,
-        "kittyKeyboard": engine.term.kitty_keyboard(),
-        "hosted": engine.term.is_hosted(),
-        "colors": colors_json(&engine.colors),
-    })
+pub(crate) fn terminal(engine: &mut Engine) -> Option<&mut TerminalBackend> {
+    engine.backend.downcast_mut::<TerminalBackend>()
 }
 
-pub(crate) fn colors_json(colors: &TerminalColors) -> serde_json::Value {
-    json!({
-        "foreground": colors.foreground,
-        "background": colors.background,
-        "palette": colors.palette,
-    })
+type BackendFactory = fn(&serde_json::Value) -> std::io::Result<Box<dyn Backend>>;
+
+static BACKENDS: std::sync::Mutex<Vec<(String, BackendFactory)>> = std::sync::Mutex::new(Vec::new());
+
+// fixme: placeholder copy
+/// Lets a crate that links pixel-node add a backend that `PixelEngine.withBackend(name, options)` can create.
+pub fn register_backend(name: &str, factory: BackendFactory) {
+    let mut backends = BACKENDS.lock().unwrap_or_else(|e| e.into_inner());
+    backends.retain(|(existing, _)| existing != name);
+    backends.push((name.to_string(), factory));
+}
+
+fn create_backend(name: &str, options: &serde_json::Value) -> Result<Box<dyn Backend>> {
+    let factory = BACKENDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(existing, _)| existing == name)
+        .map(|(_, factory)| *factory)
+        .ok_or_else(|| Error::from_reason(format!("no pixel backend named {name} is registered")))?;
+    factory(options).map_err(err)
 }
 
 
@@ -322,28 +305,44 @@ impl PixelEngine {
         session_env: Option<std::collections::HashMap<String, String>>,
         host: Option<HostOptions>,
     ) -> Result<Self> {
-        highlight::prepare();
-        let fonts = pixel_core::fonts::FontRegistry::new(load_font(&[], MONO_FONT_BYTES), load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES));
         let session_env = match session_env {
-            Some(env) => pixel_core::SessionEnv::of_session(env),
-            None => pixel_core::SessionEnv::of_process(),
+            Some(env) => pixel_terminal::SessionEnv::of_session(env),
+            None => pixel_terminal::SessionEnv::of_process(),
         };
-        let mut engine = Engine::new(EngineConfig {
-            fonts,
-            cell_metrics_font: 0,
-            watch_resize: false,
+        let backend = TerminalBackend::new(pixel_terminal::TerminalOptions {
             tty,
-            host: host.map(|host| pixel_core::HostConfig {
+            host: host.map(|host| pixel_terminal::HostOptions {
                 socket: host.socket,
                 pane: host.pane,
                 name: host.name,
                 tty: host.tty,
             }),
-            wrapper: pixel_core::wrapper::Wrapper::named(wrapper.as_deref()),
+            wrapper: pixel_terminal::Wrapper::named(wrapper.as_deref()),
             session_env,
+            watch_resize: false,
         })
         .map_err(err)?;
-        let waker = engine.term.waker().map_err(err)?;
+        Self::start_with(Box::new(backend))
+    }
+
+    #[napi(factory)]
+    pub fn with_backend(name: String, options: Option<String>) -> Result<Self> {
+        let options = match options {
+            Some(json) => serde_json::from_str(&json).map_err(err)?,
+            None => serde_json::Value::Null,
+        };
+        Self::start_with(create_backend(&name, &options)?)
+    }
+
+    fn start_with(backend: Box<dyn Backend>) -> Result<Self> {
+        pixel_bridge::highlight::prepare();
+        let mut engine = Engine::new(EngineConfig {
+            fonts: pixel_bridge::default_fonts(),
+            cell_metrics_font: 0,
+            backend,
+        })
+        .map_err(err)?;
+        let waker = engine.backend.waker().map_err(err)?;
         engine.cpu_throttle.register_current_thread();
         let info = engine_info(&engine).to_string();
         let (tx, rx) = channel();
@@ -496,7 +495,10 @@ impl PixelEngine {
             .engine
             .as_mut()
             .ok_or_else(|| Error::from_reason("key reporting must be configured before start"))?;
-        engine.term.set_key_event_types(enabled).map_err(err)
+        match terminal(engine) {
+            Some(terminal) => terminal.set_key_event_types(enabled).map_err(err),
+            None => Ok(()),
+        }
     }
 
     #[napi]
@@ -545,7 +547,7 @@ impl PixelEngine {
                     Err(e) => break Some(e.to_string()),
                 };
                 for query in layout_queries.drain(..) {
-                    let reply = ops::answer_layout_query(&mut engine, &ids, query);
+                    let reply = pixel_bridge::answer_layout_query(&mut engine, &ids, query);
                     dispatch_to_node.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
                 }
                 if !idle_requests.is_empty() && engine.idle() && engine.since_input() >= IDLE_AFTER_INPUT {
@@ -561,7 +563,7 @@ impl PixelEngine {
                 }
                 while let Ok(cmd) = rx.try_recv() {
                     let started = std::time::Instant::now();
-                    let mut outcome = apply_ops(&mut engine, &mut ids, &cmd);
+                    let mut outcome = apply_ops(&mut engine, &mut ids, &cmd, &mut terminal_ops::TerminalOps);
                     applying += started.elapsed();
                     layout_queries.append(&mut outcome.layout_queries);
                     idle_requests.append(&mut outcome.idle_requests);
@@ -584,14 +586,14 @@ impl PixelEngine {
                 }
                 let (carried, lost) = surfaces.dropped();
                 if carried > seen_carried {
-                    engine.note(format!(
+                    note(&mut engine, format!(
                         "mailbox: {} browser frames dropped, damage carried",
                         carried - seen_carried
                     ));
                     seen_carried = carried;
                 }
                 if lost > seen_lost {
-                    engine.note(format!(
+                    note(&mut engine, format!(
                         "mailbox: {} browser frames dropped, damage lost",
                         lost - seen_lost
                     ));

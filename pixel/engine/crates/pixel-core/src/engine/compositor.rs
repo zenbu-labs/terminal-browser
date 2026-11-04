@@ -60,6 +60,7 @@ pub struct Compositor {
     pub opaque: Vec<crate::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<Rect>,
     layer: Option<crate::canvas::ScrollLayer>,
+    pub native: Option<crate::surfaces::NativeLayout>,
     changed: Vec<Rect>,
     repainted: Vec<Rect>,
     direct: Option<usize>,
@@ -81,6 +82,7 @@ impl Compositor {
             opaque: Vec::new(),
             ui_over_surfaces: Vec::new(),
             layer: None,
+            native: None,
             changed: Vec::new(),
             repainted: Vec::new(),
             direct: None,
@@ -264,7 +266,28 @@ impl Compositor {
             opaque: &self.opaque,
             ui_over_surfaces: &self.ui_over_surfaces,
             layer: self.layer.as_ref(),
+            native: self.native.as_ref(),
         }
+    }
+
+    pub(crate) fn place_native(&mut self) {
+        let rect = |r: crate::tree::PxRect, origin: f32| [r.x + origin, r.y, r.w, r.h];
+        let mut layout = crate::surfaces::NativeLayout::default();
+        for i in self.active_views() {
+            let view = &self.views[i];
+            let origin = view.origin_x as f32;
+            layout.placements.extend(view.tree.surface_nodes().map(|(surface, abs, visible)| crate::surfaces::NativePlacement {
+                surface,
+                rect: rect(abs, origin),
+                visible: rect(visible, origin),
+            }));
+            if view.tree.surface_nodes().next().is_some() {
+                layout.covers.extend(crate::paint::native_covers(&view.tree).into_iter().map(|(surface, r, opaque)| {
+                    crate::surfaces::NativeCover { surface, rect: rect(r, origin), opaque }
+                }));
+            }
+        }
+        self.native = Some(layout);
     }
 
     fn collect_opaque(&mut self) {

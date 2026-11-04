@@ -2,7 +2,7 @@ use std::io;
 
 use super::{ChangeSource, Engine, EngineEvent, MarkRef};
 use crate::logging;
-use crate::terminal::Mouse;
+use crate::input::Mouse;
 use crate::text_input::{InputAction, InputReply};
 use crate::tree::{NodeId, PxRect};
 

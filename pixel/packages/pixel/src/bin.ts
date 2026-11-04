@@ -86,12 +86,19 @@ function ownTty(): string {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
   const passthrough = args.indexOf("--");
-  const own = passthrough < 0 ? args : args.slice(0, passthrough);
+  const given = passthrough < 0 ? args : args.slice(0, passthrough);
   const appArgs = passthrough < 0 ? [] : args.slice(passthrough + 1);
+  const backendAt = given.indexOf("--backend");
+  const backend = backendAt < 0 ? undefined : given[backendAt + 1];
+  // fixme: placeholder copy
+  if (backendAt >= 0 && !backend) fail("--backend needs a module, for example --backend @acme/pixel-backend-desktop");
+  const own = backendAt < 0 ? given : given.filter((_, i) => i !== backendAt && i !== backendAt + 1);
   if (own.includes("--help") || own.includes("-h")) {
     process.stdout.write(
       "usage: pixel [entry|dir] [-- app args]\n  Runs an app's main file inside the pixel runtime, in this terminal pane.\n",
     );
+    // fixme: placeholder copy
+    process.stdout.write("  --backend <module>  draws with another backend instead of this terminal\n");
     return 0;
   }
   const stray = own.slice(1).find((arg) => arg.startsWith("-")) ?? own.find((arg) => arg.startsWith("-"));
@@ -101,11 +108,11 @@ async function main(): Promise<number> {
   if (own.length > 1) fail(`unexpected ${own[1]}; put your app's arguments after --`);
   const entry = resolveEntry(own[0] ?? ".");
 
-  const tty = process.env.PIXEL_TTY ?? ownTty();
-  const owner = findOwner(tty);
+  const tty = backend ? null : (process.env.PIXEL_TTY ?? ownTty());
+  const owner = tty ? findOwner(tty) : null;
   const announced = owner ? announceGuest(owner, appName(appDir(entry))) : null;
   let unsupported = false;
-  if (!owner && !process.env.PIXEL_EMBED) {
+  if (tty && !owner && !process.env.PIXEL_EMBED) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       fail("tty required");
     }
@@ -131,7 +138,8 @@ async function main(): Promise<number> {
   const bootstrap = path.join(__dirname, "bootstrap.js");
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
-  env.PIXEL_TTY = tty;
+  if (tty) env.PIXEL_TTY = tty;
+  if (backend) env.PIXEL_BACKEND = path.isAbsolute(backend) || backend.startsWith(".") ? path.resolve(backend) : backend;
   if (unsupported) env[UNSUPPORTED_ENV] = "1";
   else delete env[UNSUPPORTED_ENV];
   if (announced) env.PIXEL_PANE = announced.pane;
@@ -165,7 +173,7 @@ async function main(): Promise<number> {
       resolve(code ?? (signal ? 128 : 0));
     });
   });
-  await waitForOwners(tty);
+  if (tty) await waitForOwners(tty);
   return exited;
 }
 

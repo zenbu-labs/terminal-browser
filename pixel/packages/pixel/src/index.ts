@@ -1,6 +1,7 @@
 /// <reference path="../electron/electron.d.ts" preserve="true" />
 export { createRoot } from "./root";
 export type { LoadOptions, Root, RootOptions } from "./root";
+export type { BackendOptions, PixelBackend } from "./backend";
 export type { Instance } from "./instances";
 export { findOwner, listInstances } from "./instances";
 export { WebView } from "./webview";
