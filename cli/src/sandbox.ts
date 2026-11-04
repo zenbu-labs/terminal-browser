@@ -28,8 +28,19 @@ export function deniedRefusal(): string | null {
 const APPARMOR_SCRIPT = path.resolve(__dirname, "..", "..", "scripts", "apparmor.sh");
 
 function kernelSetting(file: string): string | null {
-  if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, "utf8").trim();
+  // An existence check won't tell us if the sysctl is readable by the
+  // current user, so try reading it directly and treat failures as unknown.
+  try {
+    return fs.readFileSync(file, "utf8").trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      process.stderr.write(
+        `could not read ${file} (${code ?? String(error)}): it is unknown whether this kernel restricts unprivileged user namespaces\n`,
+      );
+    }
+    return null;
+  }
 }
 
 function setuidSandbox(electronBinary: string): boolean {
