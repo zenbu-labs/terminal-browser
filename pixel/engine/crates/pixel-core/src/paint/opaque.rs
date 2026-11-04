@@ -149,9 +149,9 @@ fn collect_opaque_areas(tree: &Tree, id: NodeId, clip: Option<PxRect>, areas: &m
     } else {
         clip
     };
-    for &child in &node.children {
+    for child in tree.paint_children(id) {
         let skipped = tree.get(child).is_some_and(|n| {
-            (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
+            n.offscreen || (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
         });
         if !skipped {
             collect_opaque_areas(tree, child, child_clip, areas, ui_over_surfaces);
@@ -207,7 +207,8 @@ pub(super) fn collect_surface_occluders(
     };
     for &child in &node.children {
         let skipped = tree.get(child).is_some_and(|n| {
-            (n.slot.is_some() && !n.slot_visible)
+            n.offscreen
+                || (n.slot.is_some() && !n.slot_visible)
                 || (n.mark.is_some() && !n.mark_visible)
                 || n.shape.is_some()
         });

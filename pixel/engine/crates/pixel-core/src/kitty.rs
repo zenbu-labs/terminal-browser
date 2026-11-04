@@ -107,6 +107,35 @@ pub(crate) fn kitty_transmit_named(
     out
 }
 
+pub(crate) fn kitty_transmit_unplaced(image_id: u32, width: u32, height: u32, name: &str, medium: Medium, wrapper: Wrapper) -> Vec<u8> {
+    let payload = BASE64.encode(name);
+    let t = medium.key();
+    let seq = format!("\x1b_Ga=t,f=32,s={width},v={height},t={t},i={image_id},q=2;{payload}\x1b\\");
+    let mut out = Vec::new();
+    emit(&mut out, seq.as_bytes(), wrapper);
+    out
+}
+
+pub(crate) fn kitty_place_rows(image_id: u32, rows: Option<(u32, u32)>, offset: (u32, u32), z: i32, wrapper: Wrapper) -> Vec<u8> {
+    let mut keys = format!("a=p,i={image_id},p={PLACEMENT_ID},C=1");
+    if z != 0 {
+        keys.push_str(&format!(",z={z}"));
+    }
+    if let Some((y, h)) = rows {
+        keys.push_str(&format!(",y={y},h={h}"));
+    }
+    if offset.0 > 0 {
+        keys.push_str(&format!(",X={}", offset.0));
+    }
+    if offset.1 > 0 {
+        keys.push_str(&format!(",Y={}", offset.1));
+    }
+    let seq = format!("\x1b_G{keys},q=2\x1b\\");
+    let mut out = Vec::new();
+    emit(&mut out, seq.as_bytes(), wrapper);
+    out
+}
+
 pub fn kitty_transmit(image_id: u32, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     kitty_transmit_placed(
         Transmit {

@@ -41,6 +41,13 @@ export function useNodeRect(node: RefObject<NodeHandle | null>, registry: ViewRe
       }),
     [node, registry],
   );
+  useLayoutEffect(() => {
+    const watcher = () => node.current?.id;
+    registry.rectWatchers.add(watcher);
+    return () => {
+      registry.rectWatchers.delete(watcher);
+    };
+  }, [node, registry]);
   useEffect(() => {
     const ask = () => registry.queryLayout();
     registry.resizeListeners.add(ask);

@@ -9,6 +9,7 @@ use crate::surfaces::Rect;
 mod flash;
 mod animation;
 mod full;
+mod layer;
 mod merge;
 mod overlay;
 mod patched;
@@ -122,14 +123,27 @@ pub(super) fn straight_pixels(canvas: &Canvas, premultiplied: bool) -> Cow<'_, [
 }
 
 pub(super) fn copy_rect(canvas: &Canvas, rect: Rect, premultiplied: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(rect.area() as usize * 4);
-    let stride = canvas.width as usize * 4;
-    for row in rect.y..rect.y + rect.h {
-        let start = row as usize * stride + rect.x as usize * 4;
-        out.extend_from_slice(&canvas.pixels[start..start + rect.w as usize * 4]);
-    }
-    straighten(&mut out, premultiplied);
+    let mut out = vec![0; rect.area() as usize * 4];
+    copy_rect_into(canvas, rect, premultiplied, &mut out);
     out
+}
+
+pub(super) fn copy_rect_into(canvas: &Canvas, rect: Rect, premultiplied: bool, out: &mut [u8]) {
+    let stride = canvas.width as usize * 4;
+    let row_len = rect.w as usize * 4;
+    for (i, row) in (rect.y..rect.y + rect.h).enumerate() {
+        let start = row as usize * stride + rect.x as usize * 4;
+        out[i * row_len..(i + 1) * row_len].copy_from_slice(&canvas.pixels[start..start + row_len]);
+    }
+    straighten(out, premultiplied);
+}
+
+pub(super) fn transparent(canvas: &Canvas, rect: Rect) -> bool {
+    let stride = canvas.width as usize * 4;
+    (rect.y..rect.y + rect.h).all(|row| {
+        let start = row as usize * stride + rect.x as usize * 4;
+        canvas.pixels[start..start + rect.w as usize * 4].chunks_exact(4).all(|px| px[3] == 0)
+    })
 }
 
 pub(super) fn over_ssh(env: &SessionEnv) -> bool {
@@ -244,6 +258,10 @@ impl Terminal {
         out.extend_from_slice(b"\x1b[?2026h");
         out.extend_from_slice(body);
         out.extend_from_slice(b"\x1b[?2026l");
+        if let Some(at) = self.present_at.take() {
+            self.ready_at = Some(std::time::Instant::now());
+            crate::profiler::span("present.wait", || crate::throttle::sleep_until(at));
+        }
         crate::profiler::span("term.write", || {
             self.io.out().write_all(&out)?;
             self.io.out().flush()

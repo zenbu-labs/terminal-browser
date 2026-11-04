@@ -85,6 +85,54 @@ impl Drop for CpuThrottle {
     }
 }
 
+pub(crate) fn sleep_until(at: std::time::Instant) {
+    use std::time::{Duration, Instant};
+    loop {
+        let Some(left) = at.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()) else {
+            return;
+        };
+        if left > Duration::from_millis(2) {
+            std::thread::sleep(left - Duration::from_millis(2));
+        } else if left > Duration::from_micros(500) {
+            std::thread::sleep(Duration::from_micros(100));
+        } else {
+            std::hint::spin_loop();
+        }
+    }
+}
+
+pub(crate) fn prefer_current_thread() {
+    #[cfg(target_os = "macos")]
+    #[allow(unsafe_code)]
+    {
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(class: u32, relative_priority: i32) -> i32;
+        }
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+        #[repr(C)]
+        struct TimeConstraint {
+            period: u32,
+            computation: u32,
+            constraint: u32,
+            preemptible: i32,
+        }
+        const THREAD_TIME_CONSTRAINT_POLICY: i32 = 2;
+        unsafe extern "C" {
+            fn mach_timebase_info(info: *mut [u32; 2]) -> i32;
+            fn mach_thread_self() -> u32;
+            fn thread_policy_set(thread: u32, flavor: i32, info: *mut TimeConstraint, count: u32) -> i32;
+        }
+        let mut timebase = [0u32; 2];
+        if unsafe { mach_timebase_info(&mut timebase) } != 0 || timebase[0] == 0 {
+            return;
+        }
+        let ticks = |ns: u64| (ns * u64::from(timebase[1]) / u64::from(timebase[0])) as u32;
+        let mut policy = TimeConstraint { period: ticks(8_333_333), computation: ticks(4_000_000), constraint: ticks(8_000_000), preemptible: 1 };
+        unsafe { thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY, &mut policy, 4) };
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn current_thread_port() -> u32 {

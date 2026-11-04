@@ -29,6 +29,7 @@ export class ViewRegistry {
   readonly views = new Set<ViewEntry>();
   focused: ViewEntry | null = null;
   readonly resizeListeners = new Set<() => void>();
+  readonly rectWatchers = new Set<() => number | undefined>();
 
   readonly layout: Store<LayoutSnapshot> = createStore<LayoutSnapshot>({
     rects: new Map(),
@@ -89,8 +90,17 @@ export class ViewRegistry {
     this.hooks.quit(entry);
   }
 
+  watchedRects(): number[] {
+    const ids: number[] = [];
+    for (const watcher of this.rectWatchers) {
+      const id = watcher();
+      if (id != null) ids.push(id);
+    }
+    return ids;
+  }
+
   queryLayout() {
-    this.root.queryLayout();
+    this.root.queryLayout(this.watchedRects());
   }
 
   background(): string {

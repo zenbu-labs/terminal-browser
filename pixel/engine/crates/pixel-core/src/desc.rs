@@ -13,6 +13,7 @@ pub struct Desc {
     pub slot: Option<SlotKind>,
     pub content_height: Option<f32>,
     pub scroll_events: bool,
+    pub stick_events: bool,
     pub wheel_events: bool,
     pub children: Vec<Desc>,
 }
@@ -34,6 +35,7 @@ impl Desc {
             content_height: self.content_height,
             shape: None,
             scroll_events: self.scroll_events,
+            stick_events: self.stick_events,
             wheel_events: self.wheel_events,
             pointer_events: false,
             hover_events: false,

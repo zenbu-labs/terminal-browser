@@ -140,6 +140,18 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             "offset": offset,
             "max": max,
         }),
+        EngineEvent::Stick {
+            view,
+            node,
+            key,
+            stuck,
+        } => json!({
+            "type": "stick",
+            "view": view,
+            "node": ids.get(*view)?.ext(*node)?,
+            "key": key,
+            "stuck": stuck,
+        }),
         EngineEvent::Resize {
             view,
             width,

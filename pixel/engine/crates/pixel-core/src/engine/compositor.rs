@@ -20,6 +20,8 @@ pub struct View {
     pub damage_parts: Vec<Rect>,
     pub opaque: Vec<crate::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<Rect>,
+    pub layer: Option<crate::canvas::ScrollLayer>,
+    pub layer_canvases: Option<crate::paint::LayerCanvases>,
 }
 
 impl View {
@@ -33,6 +35,8 @@ impl View {
             damage_parts: Vec::new(),
             opaque: Vec::new(),
             ui_over_surfaces: Vec::new(),
+            layer: None,
+            layer_canvases: None,
         }
     }
 
@@ -55,6 +59,7 @@ pub struct Compositor {
     pub relayout: bool,
     pub opaque: Vec<crate::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<Rect>,
+    layer: Option<crate::canvas::ScrollLayer>,
     changed: Vec<Rect>,
     repainted: Vec<Rect>,
     direct: Option<usize>,
@@ -75,6 +80,7 @@ impl Compositor {
             relayout: true,
             opaque: Vec::new(),
             ui_over_surfaces: Vec::new(),
+            layer: None,
             changed: Vec::new(),
             repainted: Vec::new(),
             direct: None,
@@ -257,12 +263,18 @@ impl Compositor {
             repainted: &self.repainted,
             opaque: &self.opaque,
             ui_over_surfaces: &self.ui_over_surfaces,
+            layer: self.layer.as_ref(),
         }
     }
 
     fn collect_opaque(&mut self) {
         self.opaque.clear();
         self.ui_over_surfaces.clear();
+        let active = self.active_views();
+        self.layer = match active[..] {
+            [only] if self.direct == Some(only) => self.views[only].layer.clone(),
+            _ => None,
+        };
         for view in self.active_views() {
             let origin = self.views[view].origin_x;
             for area in &self.views[view].opaque {

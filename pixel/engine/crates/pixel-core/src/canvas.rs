@@ -10,6 +10,27 @@ pub struct Frame<'a> {
     pub repainted: &'a [Rect],
     pub opaque: &'a [OpaqueArea],
     pub ui_over_surfaces: &'a [Rect],
+    pub layer: Option<&'a ScrollLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollLayer {
+    pub area: Rect,
+    pub origin_y: i64,
+    pub under: Vec<Pixels>,
+    pub overlays: Vec<Overlay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pixels {
+    pub rect: Rect,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overlay {
+    pub pixels: Pixels,
+    pub above: bool,
 }
 
 type GlyphKey = (usize, char, u32);
@@ -96,10 +117,45 @@ fn fit_to_cells(metrics: &mut fontdue::Metrics, cell: f32, span: f32) {
 type GlyphCache = std::collections::HashMap<GlyphKey, Glyph>;
 std::thread_local! {
     static GLYPH_CACHE: std::cell::RefCell<GlyphCache> = std::cell::RefCell::new(GlyphCache::new());
+    static SIZES_SEEN: std::cell::RefCell<std::collections::HashSet<(usize, u32)>> = std::cell::RefCell::new(std::collections::HashSet::new());
+    static TO_WARM: std::cell::RefCell<Vec<(usize, f32, char)>> = const { std::cell::RefCell::new(Vec::new()) };
     static ADVANCE_CACHE: std::cell::RefCell<std::collections::HashMap<GlyphKey, f32>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
     static LAST_RESAMPLE: std::cell::Cell<Option<(u32, u32, u32, u32)>> =
         const { std::cell::Cell::new(None) };
+}
+
+fn note_size(font: &crate::fonts::Font, px: f32) {
+    if SIZES_SEEN.with_borrow_mut(|seen| seen.insert((font.id(), px.to_bits()))) {
+        TO_WARM.with_borrow_mut(|queue| queue.push((font.id(), px, ' ')));
+    }
+}
+
+pub(crate) fn glyphs_to_warm() -> bool {
+    TO_WARM.with_borrow(|queue| !queue.is_empty())
+}
+
+pub(crate) fn warm_glyphs(fonts: &[crate::fonts::Font], until: std::time::Instant) {
+    while std::time::Instant::now() < until {
+        let Some((id, px, ch)) = TO_WARM.with_borrow(|queue| queue.last().copied()) else { return };
+        let Some(font) = fonts.iter().find(|f| f.id() == id) else {
+            TO_WARM.with_borrow_mut(|queue| queue.pop());
+            continue;
+        };
+        GLYPH_CACHE.with_borrow_mut(|cache| {
+            cache.entry(glyph_key(font, ch, px)).or_insert_with(|| rasterize_glyph(font, ch, px));
+        });
+        TO_WARM.with_borrow_mut(|queue| match char::from_u32(ch as u32 + 1).filter(|next| *next <= '~') {
+            Some(next) => {
+                if let Some(last) = queue.last_mut() {
+                    last.2 = next;
+                }
+            }
+            None => {
+                queue.pop();
+            }
+        });
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -373,6 +429,36 @@ impl Canvas {
     }
 
     // weird impl, but its a fast way to fill an array to a given color without allocating memory beforehand
+    pub(crate) fn raw_copy(&self, rect: Rect) -> Pixels {
+        let stride = self.width as usize * 4;
+        let row_len = rect.w as usize * 4;
+        let mut rgba = Vec::with_capacity(row_len * rect.h as usize);
+        for row in rect.y..rect.y + rect.h {
+            let start = row as usize * stride + rect.x as usize * 4;
+            rgba.extend_from_slice(&self.pixels[start..start + row_len]);
+        }
+        Pixels { rect, rgba }
+    }
+
+    pub(crate) fn straight_copy(&self, rect: Rect) -> Pixels {
+        let stride = self.width as usize * 4;
+        let row_len = rect.w as usize * 4;
+        let mut rgba = Vec::with_capacity(row_len * rect.h as usize);
+        for row in rect.y..rect.y + rect.h {
+            let start = row as usize * stride + rect.x as usize * 4;
+            rgba.extend_from_slice(&self.pixels[start..start + row_len]);
+        }
+        for px in rgba.chunks_exact_mut(4) {
+            let a = u32::from(px[3]);
+            if a != 0 && a != 255 {
+                for c in &mut px[..3] {
+                    *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                }
+            }
+        }
+        Pixels { rect, rgba }
+    }
+
     pub fn fill(&mut self, color: [u8; 4]) {
         if self.pixels.is_empty() {
             return;
@@ -537,9 +623,10 @@ impl Canvas {
                     pen_x += mark_advance_at(marks, range.start + i);
                     continue;
                 }
-                let glyph = cache
-                    .entry(glyph_key(font, ch, px))
-                    .or_insert_with(|| rasterize_glyph(font, ch, px));
+                let glyph = cache.entry(glyph_key(font, ch, px)).or_insert_with(|| {
+                    note_size(font, px);
+                    rasterize_glyph(font, ch, px)
+                });
                 let metrics = glyph.metrics;
                 let glyph_x = pen_x.round() as i32 + metrics.xmin;
                 // ymin is the bottom edge's offset from the baseline (positive = up),

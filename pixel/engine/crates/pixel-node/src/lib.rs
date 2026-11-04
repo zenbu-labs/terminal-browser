@@ -241,6 +241,9 @@ impl DamageRect {
     }
 }
 
+const IDLE_AFTER_INPUT: std::time::Duration = std::time::Duration::from_millis(300);
+const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_millis(4);
+
 static UI_FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/InterVariable.ttf");
 static MONO_FONT_BYTES: &[u8] =
     include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
@@ -319,6 +322,7 @@ impl PixelEngine {
         session_env: Option<std::collections::HashMap<String, String>>,
         host: Option<HostOptions>,
     ) -> Result<Self> {
+        highlight::prepare();
         let fonts = pixel_core::fonts::FontRegistry::new(load_font(&[], MONO_FONT_BYTES), load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES));
         let session_env = match session_env {
             Some(env) => pixel_core::SessionEnv::of_session(env),
@@ -521,18 +525,46 @@ impl PixelEngine {
                 .collect();
             let mut autoprofile = Autoprofile::from_env(&mut engine);
             let (mut seen_carried, mut seen_lost) = (0u64, 0u64);
+            let mut layout_queries = Vec::new();
+            let mut idle_requests = Vec::new();
+            let mut applying = std::time::Duration::ZERO;
             // event loop
             let exit_error = loop {
-                let events = match engine.pump(None) {
+                let input_settling = IDLE_AFTER_INPUT.saturating_sub(engine.since_input());
+                let wait = if !layout_queries.is_empty() {
+                    Some(std::time::Duration::ZERO)
+                } else if !idle_requests.is_empty() && !engine.idle() {
+                    Some(IDLE_RECHECK)
+                } else if !idle_requests.is_empty() {
+                    Some(input_settling)
+                } else {
+                    None
+                };
+                let events = match engine.pump(wait) {
                     Ok(events) => events,
                     Err(e) => break Some(e.to_string()),
                 };
+                for query in layout_queries.drain(..) {
+                    let reply = ops::answer_layout_query(&mut engine, &ids, query);
+                    dispatch_to_node.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
+                }
+                if !idle_requests.is_empty() && engine.idle() && engine.since_input() >= IDLE_AFTER_INPUT {
+                    for request in idle_requests.drain(..) {
+                        let reply = json!({ "type": "idle", "request": request, "applyMs": applying.as_secs_f64() * 1000.0 });
+                        dispatch_to_node.call(Ok(reply.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                    applying = std::time::Duration::ZERO;
+                }
                 autoprofile.tick(&mut engine);
                 if stop.load(Ordering::Relaxed) {
                     break None;
                 }
                 while let Ok(cmd) = rx.try_recv() {
-                    let outcome = apply_ops(&mut engine, &mut ids, &cmd);
+                    let started = std::time::Instant::now();
+                    let mut outcome = apply_ops(&mut engine, &mut ids, &cmd);
+                    applying += started.elapsed();
+                    layout_queries.append(&mut outcome.layout_queries);
+                    idle_requests.append(&mut outcome.idle_requests);
                     if let Some(message) = outcome.error {
                         pixel_core::logging::error("bridge", message.clone());
                         let error = json!({ "type": "error", "message": message });

@@ -42,6 +42,7 @@ export {
   useTerminalColors,
   setClipboard,
   requestClipboardImage,
+  requestIdle,
   highlight,
   diff,
   parseMarkdown,
@@ -53,7 +54,7 @@ export {
   engineLogs,
   useStore,
 } from "./react";
-export type { LogRow, LogBuffer } from "./react";
+export type { LogRow, LogBuffer, Idle } from "./react";
 export type {
   BoxProps,
   TextProps,

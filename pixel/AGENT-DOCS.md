@@ -160,9 +160,11 @@ Text names fonts by family, as in CSS. `FontFace` is `{ family, src, weight?, st
 | `flexBasis`, `width`, `height`, `minWidth`, `maxWidth`, `maxHeight` | `number \| "${n}%" \| "auto"` |
 | `padding`, `margin` | `number \| { top, right, bottom, left }` |
 | `gap` | `number` |
-| `position` | `"flow" \| "absolute"` |
+| `position` | `"flow" \| "absolute" \| "sticky"` (sticky: `inset.top` is how close to the top of the scroll area it stops; it stays inside its parent and paints over the parent's other children) |
 | `inset` | `{ top, right, bottom, left }`, numbers or percents |
 | `overflow` | `"visible" \| "hidden" \| "scroll"` |
+| `layout` | `"flex" \| "list"`, see Long lists |
+| `scrollAnchor` | `"auto" \| "end"` (`"end"`: a scroll box at its end stays at its end as its content grows) |
 | `justifyContent` | `"start" \| "center" \| "end" \| "space-between"` |
 | `alignItems` | `"start" \| "center" \| "end" \| "stretch"` |
 | `background` | `Color \| { from: [x, y], to: [x, y], stops: [{ at, color }] }` |
@@ -182,13 +184,20 @@ Text names fonts by family, as in CSS. `FontFace` is `{ family, src, weight?, st
 
 The engine sets the mouse cursor from whatever is under it. The nearest `pointerShape` on the node or an ancestor wins. Without one, an `Input` or selectable text shows `"text"` (text inside a clickable does not), and everything else shows `"default"`. Anything drawn on top decides, so an overlay above an `Input` needs `pointerShape: "text"`.
 
+<!-- fixme: placeholder copy -->
+### Long lists
+
+A scroll box with `layout: "list"` lays its children out one at a time as rows at its own width, stacked with `gap` inside `padding`, instead of as one flexbox; the box gets its size from its parent like any scroll box. Changing, adding or removing a row only lays out that row, and scrolling only places and draws the rows on screen, so a list of thousands of rows scrolls and streams as fast as a short one. Rows far from the viewport are laid out in idle time; until then they keep their last height (or the average row height). When rows above the viewport change height, the first visible row keeps its place, so what you are reading never jumps. Use `scrollAnchor: "end"` to keep following new rows at the end, and `position: "sticky"` with `onStick` for headers that stay at the top while their section scrolls by.
+
+Mounting thousands of rows in one commit still costs seconds of React and engine work before anything shows. To open a long list instantly, mount only the rows that fill the screen, then mount older ones a slice at a time with `requestIdle(callback)` (exported from `@zenbu-labs/pixel`, like the browser's `requestIdleCallback`): it calls back once the engine has applied every change made so far and has nothing left to draw, with `applyMs`, how long the engine spent applying changes since the previous idle callback. Size each slice so `applyMs` stays a couple of milliseconds and frames never wait on it. Rows mounted above the viewport don't move what is on screen. It returns a function that cancels the callback.
+
 ## Components
 
 Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/pixel/src/react/components.ts`. Every component takes `ref` → `NodeHandle` (`components.ts:23`): `focus()`, `blur()`, `scrollTo(offset, smooth?)`, `scrollIntoView(smooth?)`, `splice(start, end, text)`, `selectAll()`, `addMark(mark, offset?)`, `removeMark(mark)`.
 
 | component | props (file:line) |
 | --- | --- |
-| `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `contentHeight`, `surface: Surface` |
+| `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onStick(stuck)` (sticky boxes: called when one starts or stops being held at the top), `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `contentHeight`, `surface: Surface` |
 | `Text` | `TextProps` `:128`. children must be strings or numbers. `spans: { start, end, color, background?, bold?, italic?, underline?, strikethrough? }[]`, `onClick`, `onMouseEnter`, `onMouseLeave` |
 | `Input` | `InputProps` `:177`. multi-line editor; with `style.wrap: false` it is single-line and its text is vertically centered when the box is taller than one line. `value`, `defaultValue`, `autoFocus` (only inputs take focus on click; clicking or selecting other content leaves focus where it is, so call `blur()` from `onClickOutside` to drop it), `onChange(text, ChangeInfo)`, `onSubmit(text, marks)`, `onCaret(CaretInfo)`, `onPasteImage`, `caretColor`, `caretShape: "bar" | "block" | "underscore"` (block and underscore are one character wide; block redraws the character under it in black or white for contrast), `selectionColor`, `spans`, `gutter: { color, activeColor }`, `activeLine`, `defaultMarks`, `renderMark(id)`, `serializeMark(id)` |
 | `Image` | `ImageProps` `:211`. `src` path or url, `placeholder`, `error`, `onClick` |

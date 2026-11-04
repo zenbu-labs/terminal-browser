@@ -47,6 +47,7 @@ export interface RootOptions
     | "onKey"
     | "onEngineExit"
     | "onLayout"
+    | "layoutIds"
     | "host"
     | "onHostClosed"
     | "onHandoff"
@@ -233,6 +234,7 @@ export function createRoot(options: RootOptions = {}): Root {
       options.onColors?.(colors);
     },
     onLayout: (snapshot) => registry?.layout.set(snapshot),
+    layoutIds: () => registry?.watchedRects() ?? [],
     onHandoff: (next) => {
       handoff = next;
     },

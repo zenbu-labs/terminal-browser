@@ -74,9 +74,11 @@ export interface Style {
   padding?: number | Edges;
   margin?: number | Edges;
   gap?: number;
-  position?: "flow" | "absolute";
+  position?: "flow" | "absolute" | "sticky";
   inset?: InsetEdges;
   overflow?: "visible" | "hidden" | "scroll";
+  layout?: "flex" | "list";
+  scrollAnchor?: "auto" | "end";
   justifyContent?: "start" | "center" | "end" | "space-between";
   alignItems?: "start" | "center" | "end" | "stretch";
   background?: Color | LinearGradient;
@@ -162,6 +164,8 @@ export function serializeStyle(style: Style): Record<string, unknown> {
     position: style.position,
     inset: style.inset,
     overflow: style.overflow,
+    layout: style.layout,
+    scrollAnchor: style.scrollAnchor,
     justifyContent: style.justifyContent,
     alignItems: style.alignItems,
     background: style.background === undefined ? undefined : serializePaint(style.background),

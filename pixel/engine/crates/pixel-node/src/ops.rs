@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use pixel_core::{
     Align, Border, BorderSide, Color, Dimension, Edges, Engine, FlexDirection, Gutter,
     HighlightArea, ImageProps, InputProps, Inset, InsetValue, Justify, LineCap, LineJoin,
-    LinearGradient, NodeId, Paint,
-    Overflow, Position, Props, ScrollbarStyle, SelectionMode, ShapeProps, ShapeStroke,
+    Layout, LinearGradient, NodeId, Paint,
+    Overflow, Position, Props, ScrollAnchor, ScrollbarStyle, SelectionMode, ShapeProps, ShapeStroke,
     SlotKind, Style, TextSpan, parse_path_data,
 };
 use serde::Deserialize;
@@ -117,7 +117,13 @@ enum Op {
         #[serde(default)]
         area: Option<String>,
     },
-    QueryLayout {},
+    QueryLayout {
+        #[serde(default)]
+        ids: Option<Vec<u32>>,
+    },
+    RequestIdle {
+        request: u64,
+    },
     ProfileStart {},
     ProfileStop {},
     SetLogCapture {
@@ -270,6 +276,7 @@ struct PropsDto {
     content_height: Option<f32>,
     shape: Option<ShapeDto>,
     scroll_events: bool,
+    stick_events: bool,
     wheel_events: bool,
     pointer_events: bool,
     hover_events: bool,
@@ -564,6 +571,8 @@ struct StyleDto {
     position: Option<String>,
     inset: Option<InsetDto>,
     overflow: Option<String>,
+    layout: Option<String>,
+    scroll_anchor: Option<String>,
     justify_content: Option<String>,
     align_items: Option<String>,
     background: Option<PaintDto>,
@@ -647,6 +656,7 @@ impl StyleDto {
             gap: self.gap.unwrap_or(0.0),
             position: match self.position.as_deref() {
                 Some("absolute") => Position::Absolute,
+                Some("sticky") => Position::Sticky,
                 _ => Position::Flow,
             },
             inset: self.inset.map_or(Inset::default(), |i| Inset {
@@ -659,6 +669,14 @@ impl StyleDto {
                 Some("hidden") => Overflow::Hidden,
                 Some("scroll") => Overflow::Scroll,
                 _ => Overflow::Visible,
+            },
+            layout: match self.layout.as_deref() {
+                Some("list") => Layout::List,
+                _ => Layout::Flex,
+            },
+            scroll_anchor: match self.scroll_anchor.as_deref() {
+                Some("end") => ScrollAnchor::End,
+                _ => ScrollAnchor::Auto,
             },
             justify_content: self.justify_content.as_deref().and_then(|j| match j {
                 "start" => Some(Justify::Start),
@@ -747,6 +765,7 @@ impl PropsDto {
             content_height: self.content_height,
             shape: self.shape.map(ShapeDto::into_props),
             scroll_events: self.scroll_events,
+            stick_events: self.stick_events,
             wheel_events: self.wheel_events,
             pointer_events: self.pointer_events,
             hover_events: self.hover_events,
@@ -774,7 +793,19 @@ impl PropsDto {
 
 pub struct OpOutcome {
     pub replies: Vec<String>,
+    pub layout_queries: Vec<LayoutQuery>,
+    pub idle_requests: Vec<u64>,
     pub error: Option<String>,
+}
+
+pub struct LayoutQuery {
+    view: usize,
+    only: Option<Vec<u32>>,
+}
+
+pub fn answer_layout_query(engine: &mut Engine, ids: &[IdMap], query: LayoutQuery) -> String {
+    engine.flush_view_layout(query.view);
+    layout_json(engine, &ids[query.view], query.view, query.only.as_deref())
 }
 
 pub fn apply_ops(engine: &mut Engine, ids: &mut Vec<IdMap>, json: &str) -> OpOutcome {
@@ -783,6 +814,8 @@ pub fn apply_ops(engine: &mut Engine, ids: &mut Vec<IdMap>, json: &str) -> OpOut
         Err(e) => {
             return OpOutcome {
                 replies: Vec::new(),
+                layout_queries: Vec::new(),
+                idle_requests: Vec::new(),
                 error: Some(e.to_string()),
             };
         }
@@ -790,6 +823,8 @@ pub fn apply_ops(engine: &mut Engine, ids: &mut Vec<IdMap>, json: &str) -> OpOut
     let view = envelope.view.min(ids.len() - 1);
     let mut errors = Vec::new();
     let mut replies = Vec::new();
+    let mut layout_queries = Vec::new();
+    let mut idle_requests = Vec::new();
     pixel_core::profiler::span_arg("ops.apply", envelope.seq, || {
         for raw in envelope.ops {
             let op: Op = match serde_json::from_str(raw.get()) {
@@ -799,7 +834,10 @@ pub fn apply_ops(engine: &mut Engine, ids: &mut Vec<IdMap>, json: &str) -> OpOut
                     continue;
                 }
             };
-            apply_op(engine, ids, view, op, &mut replies);
+            match op {
+                Op::RequestIdle { request } => idle_requests.push(request),
+                op => apply_op(engine, ids, view, op, &mut replies, &mut layout_queries),
+            }
         }
     });
     let error = if errors.is_empty() {
@@ -807,7 +845,7 @@ pub fn apply_ops(engine: &mut Engine, ids: &mut Vec<IdMap>, json: &str) -> OpOut
     } else {
         Some(errors.join("; "))
     };
-    OpOutcome { replies, error }
+    OpOutcome { replies, layout_queries, idle_requests, error }
 }
 
 fn apply_op(
@@ -816,6 +854,7 @@ fn apply_op(
     view: usize,
     op: Op,
     replies: &mut Vec<String>,
+    layout_queries: &mut Vec<LayoutQuery>,
 ) {
     if let Op::AddView {} = op {
         let new_view = engine.add_view();
@@ -910,10 +949,7 @@ fn apply_op(
             });
             engine.set_highlight(target);
         }
-        Op::QueryLayout {} => {
-            engine.flush_view_layout(view);
-            replies.push(layout_json(engine, &ids[view], view));
-        }
+        Op::QueryLayout { ids: only } => layout_queries.push(LayoutQuery { view, only }),
         Op::ProfileStart {} => engine.profile_start(),
         Op::ProfileStop {} => engine.profile_stop(),
         Op::SetLogCapture { on } => engine.set_log_capture(on),
@@ -931,6 +967,7 @@ fn apply_op(
             }
         }
         Op::RegisterFont { .. } => unreachable!("handled before the per-view bindings"),
+        Op::RequestIdle { .. } => unreachable!("collected while applying the batch"),
         Op::SetKeyCapture { keys } => engine.key_capture = keys,
         Op::SetTitle { text } => engine.set_title(&text),
         Op::Retarget { tty, wrapper, host } => {
@@ -1000,21 +1037,13 @@ fn apply_op(
     }
 }
 
-fn layout_json(engine: &Engine, ids: &IdMap, view: usize) -> String {
+fn layout_json(engine: &Engine, ids: &IdMap, view: usize, only: Option<&[u32]>) -> String {
     use serde_json::json;
     let mut nodes = Vec::new();
     if let Some(tree) = engine.comp.views.get(view).map(|v| &v.tree) {
-        let mut stack = vec![tree.root()];
-        while let Some(id) = stack.pop() {
-            for &child in tree.children(id) {
-                stack.push(child);
-            }
-            let Some(ext) = ids.ext(id) else {
-                continue;
-            };
-            let Some(rect) = tree.rect(id) else {
-                continue;
-            };
+        let describe = |id: NodeId| -> Option<serde_json::Value> {
+            let ext = ids.ext(id)?;
+            let rect = tree.rect(id)?;
             let visible = tree.visible_rect(id).unwrap_or(rect);
             let mut node = json!({
                 "id": ext,
@@ -1047,7 +1076,17 @@ fn layout_json(engine: &Engine, ids: &IdMap, view: usize) -> String {
                     node["margin"] = edges(metrics.margin);
                 }
             }
-            nodes.push(node);
+            Some(node)
+        };
+        match only {
+            Some(only) => nodes.extend(only.iter().filter_map(|&ext| ids.node(ext)).filter_map(describe)),
+            None => {
+                let mut stack = vec![tree.root()];
+                while let Some(id) = stack.pop() {
+                    stack.extend_from_slice(tree.children(id));
+                    nodes.extend(describe(id));
+                }
+            }
         }
     }
     let stats = engine.stats;
@@ -1059,6 +1098,7 @@ fn layout_json(engine: &Engine, ids: &IdMap, view: usize) -> String {
         "height": size.1,
         "split": engine.comp.split,
         "stats": { "frameMs": stats.frame_ms, "fps": stats.fps },
+        "partial": only.is_some(),
         "nodes": nodes,
     })
     .to_string()
