@@ -11,6 +11,28 @@ pub struct OpaqueArea {
     pub rect: Rect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativePlacement {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub visible: [f32; 4],
+}
+
+// fixme: placeholder copy
+/// App UI drawn over a natively hosted surface; `opaque` when nothing of the surface shows through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativeCover {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub opaque: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NativeLayout {
+    pub placements: Vec<NativePlacement>,
+    pub covers: Vec<NativeCover>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rect {
     pub x: u32,
@@ -26,6 +48,16 @@ impl Rect {
 
     pub fn is_empty(self) -> bool {
         self.w == 0 || self.h == 0
+    }
+
+    pub fn covering(area: crate::tree::PxRect) -> Rect {
+        let (x, y) = (area.x.floor().max(0.0), area.y.floor().max(0.0));
+        Rect {
+            x: x as u32,
+            y: y as u32,
+            w: ((area.x + area.w).ceil() - x).max(0.0) as u32,
+            h: ((area.y + area.h).ceil() - y).max(0.0) as u32,
+        }
     }
 
     pub fn union(self, other: Rect) -> Rect {

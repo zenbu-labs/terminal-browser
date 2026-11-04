@@ -251,7 +251,7 @@ fn color_glyph(face: &Face, id: ttf_parser::GlyphId, px: f32, advance: f32) -> O
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(unsafe_code)]
 mod core_text {
     use super::FaceIn;
@@ -419,7 +419,7 @@ mod core_text {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use core_text::candidates;
 
 #[cfg(target_os = "linux")]
@@ -442,7 +442,7 @@ fn fontconfig_match(ch: char) -> Option<(PathBuf, FaceIn)> {
     ))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 fn candidates(_: char) -> std::iter::Empty<(PathBuf, FaceIn)> {
     std::iter::empty()
 }

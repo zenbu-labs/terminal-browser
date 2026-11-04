@@ -364,6 +364,7 @@ pub struct Tree {
     needs_place: bool,
     needs_paint: bool,
     changed_surfaces: Vec<u32>,
+    native_surfaces: bool,
 }
 
 pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
@@ -414,6 +415,7 @@ impl Tree {
             needs_place: true,
             needs_paint: true,
             changed_surfaces: Vec::new(),
+            native_surfaces: false,
         };
         let root = tree.create(Props {
             style: Style {
@@ -1057,6 +1059,24 @@ impl Tree {
             .filter_map(|slot| slot.node.as_ref())
             .filter(move |node| node.surface == Some(surface))
             .map(|node| (node.abs, node.visible))
+    }
+
+    pub(crate) fn set_native_surfaces(&mut self, on: bool) {
+        if self.native_surfaces != on {
+            self.native_surfaces = on;
+            self.mark_paint();
+        }
+    }
+
+    pub(crate) fn native_surfaces(&self) -> bool {
+        self.native_surfaces
+    }
+
+    pub(crate) fn surface_nodes(&self) -> impl Iterator<Item = (u32, PxRect, PxRect)> + '_ {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .filter_map(|node| Some((node.surface?, node.abs, node.visible)))
     }
 
     pub(crate) fn take_changed_surfaces(&mut self) -> Vec<u32> {

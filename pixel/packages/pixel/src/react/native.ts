@@ -1,3 +1,5 @@
+import { installedBinding, requireBinding } from "./binding";
+
 export interface DamageRect {
   x: number;
   y: number;
@@ -138,52 +140,6 @@ export interface DiffRow {
   count?: number;
 }
 
-const NATIVE_PACKAGE = `@zenbu-labs/pixel-native-${process.platform}-${process.arch}`;
-
-function loadBinding(): unknown {
-  try {
-    return require(`${NATIVE_PACKAGE}/pixel.node`);
-  } catch (error) {
-    const target = `${process.platform}-${process.arch} (${NATIVE_PACKAGE})`;
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      (error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND"
-        ? `no native build for ${target}: ${message}]`
-        : `failed to load: ${message}]`,
-    );
-  }
-}
-
-if (process.platform === "darwin" && !process.env.NATIVE_SCROLL_HELPER) {
-  try {
-    process.env.NATIVE_SCROLL_HELPER = require.resolve(`${NATIVE_PACKAGE}/native-scroll-helper`);
-  } catch {}
-}
-
-const binding = loadBinding() as {
-  PixelEngine: new (
-    tty?: string,
-    wrapper?: string,
-    sessionEnv?: Record<string, string>,
-    host?: HostOptions,
-  ) => NativeEngine;
-  highlight(source: string, language: string): HighlightSpan[];
-  highlightCaptures(): string[];
-  diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];
-  parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[];
-  encodeRecording(
-    jobJson: string,
-    onProgress?: (err: unknown, percent: number) => void,
-  ): Promise<void>;
-  captureFilmstrip(
-    dir: string,
-    frames: number[],
-    tileWidth: number,
-    width: number,
-    height: number,
-  ): Promise<Buffer>;
-};
-
 export function createNativeEngine(
   tty?: string,
   wrapper?: string,
@@ -197,26 +153,29 @@ export function createNativeEngine(
         ),
       )
     : undefined;
-  const pixelEngine = new binding.PixelEngine(tty, wrapper, env, host);
+  const pixelEngine = new (requireBinding().PixelEngine)(tty, wrapper, env, host);
 
   return pixelEngine
 }
 
 export function highlight(source: string, language: string): HighlightSpan[] {
-  return binding.highlight(source, language);
+  return requireBinding().highlight(source, language);
 }
 
-export const HIGHLIGHT_CAPTURES: readonly string[] = binding.highlightCaptures();
+export const HIGHLIGHT_CAPTURES: readonly string[] = installedBinding()?.highlightCaptures() ?? [];
 
 export function diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[] {
-  return binding.diff(oldSource, newSource, contextLines);
+  return requireBinding().diff(oldSource, newSource, contextLines);
 }
 
 export function encodeRecording(
   jobJson: string,
   onProgress?: (percent: number) => void,
 ): Promise<void> {
-  return binding.encodeRecording(
+  const encode = requireBinding().encodeRecording;
+  // fixme: placeholder copy
+  if (!encode) return Promise.reject(new Error("this engine can't encode recordings"));
+  return encode(
     jobJson,
     onProgress &&
       ((err, percent) => {
@@ -232,9 +191,12 @@ export function captureFilmstrip(
   width: number,
   height: number,
 ): Promise<Buffer> {
-  return binding.captureFilmstrip(dir, frames, tileWidth, width, height);
+  const capture = requireBinding().captureFilmstrip;
+  // fixme: placeholder copy
+  if (!capture) return Promise.reject(new Error("this engine can't capture filmstrips"));
+  return capture(dir, frames, tileWidth, width, height);
 }
 
 export function parseMarkdown(source: string, streaming?: boolean): MarkdownBlock[] {
-  return binding.parseMarkdown(source, streaming);
+  return requireBinding().parseMarkdown(source, streaming);
 }

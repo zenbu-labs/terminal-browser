@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 
 import { app, screen } from "electron";
 
+import { loadBackend } from "./backend";
 import { debug } from "./debug";
 import { Shell } from "./host/shell";
 import { OwnerServer } from "./host/server";
@@ -113,17 +114,18 @@ export function createRoot(options: RootOptions = {}): Root {
     );
   }
   const env = options.sessionEnv ?? process.env;
-  const terminal = detect(env);
-  if (env[UNSUPPORTED_ENV]) {
+  const backend = loadBackend(env);
+  const terminal = backend ? null : detect(env);
+  if (!backend && env[UNSUPPORTED_ENV]) {
     const message = options.onUnsupportedTerminal?.(terminal) ?? "pixel: this terminal doesn't support graphics\n";
     fs.writeSync(1, message);
     app.exit(1);
     throw new Error("this terminal doesn't support graphics");
   }
 
-  const tty = options.tty ?? env.PIXEL_TTY ?? ownTty();
+  const tty = backend ? undefined : (options.tty ?? env.PIXEL_TTY ?? ownTty());
 
-  const embed = env.PIXEL_EMBED ?? null;
+  const embed = backend ? null : (env.PIXEL_EMBED ?? null);
   let owner: Instance | null = tty && !embed ? findOwner(tty) : null;
   const name = options.name ?? app.getName();
   const cellZoom = new CellZoomFollower();
@@ -178,6 +180,7 @@ export function createRoot(options: RootOptions = {}): Root {
 
   const engineRoot = createEngineRoot({
     ...options,
+    engine: backend?.createEngine({ name, sessionEnv: env }),
     tty: owner || embed ? undefined : tty,
     host: owner
       ? {

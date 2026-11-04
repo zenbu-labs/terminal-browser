@@ -1,12 +1,9 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use super::hover::Verdict;
 use super::{Engine, EngineEvent};
-use crate::logging;
-use crate::terminal::Mods;
+use crate::input::Mods;
 use crate::tree::NodeId;
 
-const PINCH_HOVER_WINDOW: Duration = Duration::from_millis(2000);
 const PINCH_WHEEL_SCALE: f32 = 100.0;
 
 impl Engine {
@@ -17,7 +14,7 @@ impl Engine {
                 .iter()
                 .any(|&id| tree.scroll_state(id).is_some_and(|s| !s.settled()))
         });
-        scrolling || self.bars_animating() || self.term.highlight_active() || self.term.holds_a_frame()
+        scrolling || self.bars_animating() || self.backend.animating() || self.backend.pending_present()
     }
 
     pub(super) fn moving(&self) -> bool {
@@ -27,7 +24,7 @@ impl Engine {
                 let fading = tree.bar_opacity(id) > 0.0 && tree.bar_opacity(id) < 1.0;
                 fading || tree.scroll_state(id).is_some_and(|s| !s.settled())
             })
-        }) || self.term.highlight_active()
+        }) || self.backend.animating()
     }
 
     pub(super) fn bar_at(&self, view: usize, point: (f32, f32)) -> Option<NodeId> {
@@ -187,92 +184,41 @@ impl Engine {
         }
     }
 
-    fn pane_extent(&self) -> ((f32, f32), (f32, f32)) {
-        (
-            (self.comp.window.0 as f32, self.comp.window.1 as f32),
-            (self.cell.0 as f32, self.cell.1 as f32),
-        )
-    }
-
-    pub(super) fn ingest_native(&mut self) {
-        let Some(native) = &mut self.native else {
-            return;
-        };
-        let events = native.drain();
-        let scale = native.scale;
-        if native.dead() {
-            logging::warn(
-                "engine",
-                "native scroll helper exited; falling back to wheel ticks",
-            );
-            self.native = None;
-            self.pairing.reset();
-            self.hover_oracle.invalidate();
-            return;
-        }
-        if !self.use_native {
-            return;
-        }
-        let now = Instant::now();
-        let (pane, pad) = self.pane_extent();
-        self.pairing
-            .ingest(events, scale, now, &mut self.hover_oracle, pane, pad);
-        let wants_cursor = self.term.reports_pixel_mouse() && self.hover_oracle.wants_cursor(now);
-        if let Some(native) = &mut self.native {
-            native.request_positions(wants_cursor);
-        }
-    }
-
-    pub(super) fn drain_native(&mut self, out: &mut Vec<EngineEvent>) {
-        self.ingest_native();
-        let (zoom, scrolls) = self.pairing.take();
-        let (pane, pad) = self.pane_extent();
-        let pinch_here = match self.hover_oracle.verdict(Instant::now(), pane, pad) {
-            Verdict::Deliver => true,
-            Verdict::Discard => false,
-            Verdict::Unknown => self
-                .last_pointer_activity
-                .is_some_and(|at| at.elapsed() < PINCH_HOVER_WINDOW),
-        };
-        let magnification = zoom - 1.0;
-        if (magnification == 0.0 || !pinch_here) && scrolls.is_empty() {
-            return;
-        }
-        let cursor = self.cursor.unwrap_or((
-            self.comp.window.0 as f32 / 2.0,
-            self.comp.window.1 as f32 / 2.0,
-        ));
-        let view = self.comp.view_at(cursor.0);
+    pub(super) fn pinch(&mut self, at: Option<(f32, f32)>, magnification: f32, out: &mut Vec<EngineEvent>) {
+        let point = self.pointer_or_center(at);
+        let view = self.comp.view_at(point.0);
         self.mark_scroll(view);
-        let local = self.comp.to_local(view, cursor);
-        if magnification != 0.0 && pinch_here {
-            self.emit_wheel(
-                view,
-                local,
-                0.0,
-                -magnification * PINCH_WHEEL_SCALE,
-                true,
-                Mods {
-                    ctrl: true,
-                    ..Mods::default()
-                },
-                out,
-            );
-        }
-        if scrolls.is_empty() {
+        let local = self.comp.to_local(view, point);
+        self.emit_wheel(
+            view,
+            local,
+            0.0,
+            -magnification * PINCH_WHEEL_SCALE,
+            true,
+            Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+            out,
+        );
+    }
+
+    pub(super) fn wheel_steps(
+        &mut self,
+        at: Option<(f32, f32)>,
+        steps: &[(f32, f32)],
+        mods: Mods,
+        out: &mut Vec<EngineEvent>,
+    ) {
+        if steps.is_empty() {
             return;
         }
-        if self.last_native_scroll.is_none() {
-            logging::info("engine", "native scroll delivering");
-        }
-        self.last_native_scroll = Some(Instant::now());
-        let mut delta_x = 0.0;
-        let mut delta_y = 0.0;
-        for (dx, dy) in &scrolls {
-            delta_x -= dx;
-            delta_y -= dy;
-        }
-        if self.emit_wheel(view, local, delta_x, delta_y, true, Mods::default(), out) {
+        let point = self.pointer_or_center(at);
+        let view = self.comp.view_at(point.0);
+        self.mark_scroll(view);
+        let local = self.comp.to_local(view, point);
+        let delta = steps.iter().fold((0.0, 0.0), |sum, step| (sum.0 + step.0, sum.1 + step.1));
+        if self.emit_wheel(view, local, delta.0, delta.1, true, mods, out) {
             return;
         }
         let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) else {
@@ -281,8 +227,8 @@ impl Engine {
         let (node, max) = (area.node, area.max_scroll());
         let mut moved = false;
         if let Some(state) = self.comp.views[view].tree.scroll_state_mut(node) {
-            for (_, dy) in scrolls {
-                let next = (state.position - dy).clamp(0.0, max);
+            for (_, dy) in steps {
+                let next = (state.position + dy).clamp(0.0, max);
                 if next != state.position {
                     state.position = next;
                     moved = true;
@@ -296,38 +242,11 @@ impl Engine {
         self.touch_bar(view, node);
     }
 
-    // A host delivered trackpad deltas it had already paired, so they go where
-    // paired native deltas go, without any pairing of our own.
-    pub(super) fn forwarded_wheel(
-        &mut self,
-        point: (f32, f32),
-        delta: (f32, f32),
-        mods: Mods,
-        out: &mut Vec<EngineEvent>,
-    ) {
-        let view = self.comp.view_at(point.0);
-        self.mark_scroll(view);
-        let local = self.comp.to_local(view, point);
-        if self.emit_wheel(view, local, delta.0, delta.1, true, mods, out) {
-            return;
-        }
-        let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) else {
-            return;
-        };
-        let (node, max) = (area.node, area.max_scroll());
-        let mut moved = false;
-        if let Some(state) = self.comp.views[view].tree.scroll_state_mut(node) {
-            let next = (state.position + delta.1).clamp(0.0, max);
-            if next != state.position {
-                state.position = next;
-                moved = true;
-            }
-            state.set_target(next);
-        }
-        if moved {
-            self.comp.views[view].tree.mark_place();
-        }
-        self.touch_bar(view, node);
+    fn pointer_or_center(&self, at: Option<(f32, f32)>) -> (f32, f32) {
+        at.or(self.cursor).unwrap_or((
+            self.comp.window.0 as f32 / 2.0,
+            self.comp.window.1 as f32 / 2.0,
+        ))
     }
 
     pub(super) fn step_scrolls(&mut self, dt: f32) {

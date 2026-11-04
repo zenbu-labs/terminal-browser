@@ -1,7 +1,7 @@
 use std::io;
 
 use super::{ChangeSource, Engine, EngineEvent};
-use crate::terminal::{KeyEvent, KeyKind};
+use crate::input::{KeyEvent, KeyKind};
 use crate::text_input::InputReply;
 
 fn key_label(key: &KeyEvent) -> String {
@@ -16,41 +16,41 @@ fn key_label(key: &KeyEvent) -> String {
         label.push_str("cmd+");
     }
     let name = match key.key {
-        crate::terminal::Key::Char(c) => {
+        crate::input::Key::Char(c) => {
             if key.mods.shift {
                 label.push_str("shift+");
             }
             label.push(c);
             return label;
         }
-        crate::terminal::Key::Up => "up",
-        crate::terminal::Key::Down => "down",
-        crate::terminal::Key::Left => "left",
-        crate::terminal::Key::Right => "right",
-        crate::terminal::Key::Home => "home",
-        crate::terminal::Key::End => "end",
-        crate::terminal::Key::Insert => "insert",
-        crate::terminal::Key::PageUp => "pageup",
-        crate::terminal::Key::PageDown => "pagedown",
-        crate::terminal::Key::Function(number) => {
+        crate::input::Key::Up => "up",
+        crate::input::Key::Down => "down",
+        crate::input::Key::Left => "left",
+        crate::input::Key::Right => "right",
+        crate::input::Key::Home => "home",
+        crate::input::Key::End => "end",
+        crate::input::Key::Insert => "insert",
+        crate::input::Key::PageUp => "pageup",
+        crate::input::Key::PageDown => "pagedown",
+        crate::input::Key::Function(number) => {
             label.push('f');
             label.push_str(&number.to_string());
             return label;
         }
-        crate::terminal::Key::LeftShift => "leftshift",
-        crate::terminal::Key::LeftControl => "leftcontrol",
-        crate::terminal::Key::LeftAlt => "leftalt",
-        crate::terminal::Key::LeftSuper => "leftsuper",
-        crate::terminal::Key::RightShift => "rightshift",
-        crate::terminal::Key::RightControl => "rightcontrol",
-        crate::terminal::Key::RightAlt => "rightalt",
-        crate::terminal::Key::RightSuper => "rightsuper",
-        crate::terminal::Key::Enter => "enter",
-        crate::terminal::Key::Backspace => "backspace",
-        crate::terminal::Key::Delete => "delete",
-        crate::terminal::Key::Escape => "escape",
-        crate::terminal::Key::Tab => "tab",
-        crate::terminal::Key::Unknown => "unknown",
+        crate::input::Key::LeftShift => "leftshift",
+        crate::input::Key::LeftControl => "leftcontrol",
+        crate::input::Key::LeftAlt => "leftalt",
+        crate::input::Key::LeftSuper => "leftsuper",
+        crate::input::Key::RightShift => "rightshift",
+        crate::input::Key::RightControl => "rightcontrol",
+        crate::input::Key::RightAlt => "rightalt",
+        crate::input::Key::RightSuper => "rightsuper",
+        crate::input::Key::Enter => "enter",
+        crate::input::Key::Backspace => "backspace",
+        crate::input::Key::Delete => "delete",
+        crate::input::Key::Escape => "escape",
+        crate::input::Key::Tab => "tab",
+        crate::input::Key::Unknown => "unknown",
     };
     if key.mods.shift {
         label.push_str("shift+");
@@ -60,7 +60,7 @@ fn key_label(key: &KeyEvent) -> String {
 }
 
 fn is_plain_enter(key: &KeyEvent) -> bool {
-    key.key == crate::terminal::Key::Enter
+    key.key == crate::input::Key::Enter
         && !key.mods.shift
         && !key.mods.ctrl
         && !key.mods.alt
@@ -68,7 +68,7 @@ fn is_plain_enter(key: &KeyEvent) -> bool {
 }
 
 fn capture_matches(name: &str, key: &KeyEvent) -> bool {
-    use crate::terminal::Key;
+    use crate::input::Key;
     if key.mods.shift || key.mods.alt || key.mods.ctrl || key.mods.sup {
         return false;
     }
@@ -118,7 +118,7 @@ impl Engine {
             });
             return Ok(());
         }
-        if key.key == crate::terminal::Key::Escape {
+        if key.key == crate::input::Key::Escape {
             if self.menu.is_open() {
                 self.close_menu();
                 return Ok(());
@@ -156,7 +156,7 @@ impl Engine {
                     .input_mut(focus)
                     .expect("checked above");
                 let typed = (key.text.is_some()
-                    || matches!(key.key, crate::terminal::Key::Char(_)))
+                    || matches!(key.key, crate::input::Key::Char(_)))
                     && !key.mods.ctrl
                     && !key.mods.sup
                     && !key.mods.alt;

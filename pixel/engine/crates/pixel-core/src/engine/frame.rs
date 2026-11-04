@@ -8,7 +8,6 @@ use crate::logging;
 use crate::paint::paint;
 use crate::surfaces::Rect;
 
-const INLINE_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
 const PAINT_INTERVAL_WITH_INPUT_PENDING: Duration = Duration::from_millis(16);
 const UNCAPPED_ANIMATION_STEP: Duration = Duration::from_millis(6);
 pub(super) const PRESENT_AFTER_MAX: Duration = Duration::from_micros(7300);
@@ -22,19 +21,6 @@ impl Engine {
     pub fn set_max_fps(&mut self, fps: f32) {
         self.max_fps = fps.max(0.0);
         logging::info("engine", format!("max fps {}", if self.max_fps > 0.0 { self.max_fps.to_string() } else { "uncapped".to_string() }));
-    }
-
-    pub fn set_frame_events(&mut self, on: bool) {
-        if on {
-            self.term.set_overlay_font(self.fonts[0].clone());
-        } else if let Err(error) = self.term.overlay_off() {
-            logging::warn("engine", format!("could not clear the presenter overlay: {error}"));
-        }
-        logging::info("engine", if on { "showing presenter events on screen" } else { "presenter events hidden" });
-    }
-
-    pub fn note(&mut self, text: String) {
-        self.term.note(text);
     }
 
     pub(super) fn frame_interval(&self) -> Duration {
@@ -67,10 +53,9 @@ impl Engine {
 
     pub(super) fn frame_debt(&self) -> Duration {
         let interval = self.frame_interval();
-        if !self.term.frames_are_inline() {
+        let Some(budget) = self.backend.byte_rate_limit() else {
             return interval;
-        }
-        let budget = INLINE_FRAME_BUDGET_MB_PER_SEC * 1_000_000.0;
+        };
         interval.max(Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2)))
     }
 
@@ -84,7 +69,7 @@ impl Engine {
 
     pub(super) fn draws_something(&self) -> bool {
         self.comp.dirty
-            || self.term.holds_a_frame()
+            || self.backend.pending_present()
             || self.comp.active_views().iter().any(|&i| {
                 let view = &self.comp.views[i];
                 view.tree.dirty()
@@ -108,12 +93,15 @@ impl Engine {
             self.frame_deferred = false;
         }
         self.frame_due = None;
-        self.term.tick_highlights()?;
-        self.term.draw_overlay()?;
+        self.backend.before_frame()?;
         if !self.draws_something() {
-            self.term.flatten_if_idle(self.comp.frame())?;
+            self.backend.idle(self.comp.frame())?;
         }
         let active = self.comp.active_views();
+        let native_surfaces = self.backend.wants().native_surfaces;
+        for &i in &active {
+            self.comp.views[i].tree.set_native_surfaces(native_surfaces);
+        }
         let work: Vec<(usize, bool)> = active
             .iter()
             .filter_map(|&i| {
@@ -127,7 +115,7 @@ impl Engine {
                 }
             })
             .collect();
-        if self.term.holds_a_frame() {
+        if self.backend.pending_present() {
             self.comp.dirty = true;
         }
         if work.is_empty() && !self.comp.dirty {
@@ -139,9 +127,11 @@ impl Engine {
             let interval = self.frame_interval();
             let next_slot = self.frame_slot + interval;
             let slot = if !interval.is_zero() && start >= next_slot && start < next_slot + interval { next_slot } else { start };
-            self.term.present_at((!interval.is_zero()).then(|| slot + self.present_after));
+            self.backend.schedule_present((!interval.is_zero()).then(|| slot + self.present_after));
             let mut painted: Vec<Painted> = Vec::new();
-            let draws_layers = self.term.draws_layers();
+            let wants = self.backend.wants();
+            let draws_layers = wants.scroll_layer;
+
             for (i, whole) in work {
                 let size = self.comp.views[i].size;
                 if size.0 == 0 || size.1 == 0 {
@@ -213,9 +203,12 @@ impl Engine {
             if !self.comp.dirty {
                 return Ok(());
             }
-            let direct = self.term.draws_locally();
+            let direct = wants.view_canvas;
             self.compose(&painted, direct);
-            let bytes = crate::profiler::span("draw", || self.term.draw(self.comp.frame()))?;
+            if wants.native_surfaces {
+                self.comp.place_native();
+            }
+            let bytes = crate::profiler::span("draw", || self.backend.present(self.comp.frame()))?;
             crate::profiler::count("bytes", || bytes as u64);
             if let Some((thread_before, process_before)) = cpu
                 && let Some((thread_after, process_after)) = crate::profiler::cpu_us()
@@ -228,7 +221,7 @@ impl Engine {
             let gap = start.duration_since(self.last_frame).as_secs_f32();
             self.last_frame = start;
             self.frame_slot = slot;
-            if let Some(ready) = self.term.take_ready_at() {
+            if let Some(ready) = self.backend.take_presented_at() {
                 self.note_ready(ready.saturating_duration_since(slot));
             }
             let ema = |old: f32, new: f32| {
