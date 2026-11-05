@@ -759,6 +759,11 @@ impl Canvas {
         color: [u8; 4],
     ) -> bool {
         let strip = (max_radius.ceil() * 2.0).max(2.0);
+        // Rows a..b in whole pixels, cut at the canvas top, so a rect that starts above it keeps its bottom edge.
+        let rows = |a: f32, b: f32| {
+            let a = a.round().max(0.0);
+            (a as u32, (b.round() - a).max(0.0) as u32)
+        };
         let whole_pixels = [x, y, w, h].iter().all(|v| (v - v.round()).abs() < 0.01);
         if color[3] != 255 || !whole_pixels || w * h < 65536.0 {
             return false;
@@ -780,13 +785,8 @@ impl Canvas {
             }
             let mx1 = (x + strip).round().max(0.0) as u32;
             let mx2 = (x + w - strip).round().max(0.0) as u32;
-            self.fill_rect(
-                mx1,
-                y.round().max(0.0) as u32,
-                mx2.saturating_sub(mx1),
-                h.round().max(0.0) as u32,
-                color,
-            );
+            let (my, mh) = rows(y, y + h);
+            self.fill_rect(mx1, my, mx2.saturating_sub(mx1), mh, color);
             return true;
         }
         let top = y + strip;
@@ -825,17 +825,13 @@ impl Canvas {
         let cx1 = (x + corner * 2.0).round().max(0.0) as u32;
         let cx2 = (x + w - corner * 2.0).round().max(0.0) as u32;
         if cx2 > cx1 {
-            let strip_px = strip.round().max(0.0) as u32;
-            self.fill_rect(cx1, y.round().max(0.0) as u32, cx2 - cx1, strip_px, color);
-            self.fill_rect(cx1, bottom.round().max(0.0) as u32, cx2 - cx1, strip_px, color);
+            let (ty, th) = rows(y, top);
+            let (by, bh) = rows(bottom, y + h);
+            self.fill_rect(cx1, ty, cx2 - cx1, th, color);
+            self.fill_rect(cx1, by, cx2 - cx1, bh, color);
         }
-        self.fill_rect(
-            x1,
-            top.round().max(0.0) as u32,
-            x2.saturating_sub(x1),
-            (bottom - top).round().max(0.0) as u32,
-            color,
-        );
+        let (my, mh) = rows(top, bottom);
+        self.fill_rect(x1, my, x2.saturating_sub(x1), mh, color);
         true
     }
 
@@ -1704,6 +1700,15 @@ mod tests {
         assert_eq!(px(11, 0), &[9, 9, 9, 255], "top-right square");
         assert_eq!(px(0, 11), &[0, 0, 0, 0], "bottom-left rounded away");
         assert_eq!(px(11, 11), &[0, 0, 0, 0], "bottom-right rounded away");
+    }
+
+    #[test]
+    fn a_large_opaque_rect_that_starts_above_the_canvas_keeps_its_bottom_edge() {
+        let mut canvas = Canvas::new(300, 300);
+        canvas.fill_rounded_rect(0.0, -100.0, 300.0, 250.0, [0.0; 4], [9, 9, 9, 255]);
+        let red = |y: u32| canvas.pixels[((y * 300 + 150) * 4) as usize];
+        assert_eq!(red(149), 9, "the last row inside the rect");
+        assert_eq!(red(150), 0, "the rect ends where it ends, not 100px lower");
     }
 
     #[test]
