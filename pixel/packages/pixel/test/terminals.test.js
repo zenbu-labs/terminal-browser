@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 
-const { checkTerminal, detect } = require("../dist/terminal/index.js");
+const { canSplit, cannotOpenPanes, checkTerminal, detect } = require("../dist/terminal/index.js");
 
 const FIXTURES = path.join(__dirname, "fixtures");
 
@@ -69,6 +69,56 @@ test("vscode draws but cannot open panes", () => {
   const terminal = detect({ TERM_PROGRAM: "vscode" }, async () => "");
   assert.equal(terminal?.name, "vscode");
   assert.equal(terminal?.split, undefined);
+});
+
+/** Detects as if running on another platform; the platform is simulated, not real. */
+function detectOn(platform, env, run = async () => "") {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    return detect(env, run);
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+}
+
+const GHOSTTY = { TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" };
+
+test("ghostty off macOS cannot open panes and says so", () => {
+  const terminal = detectOn("linux", GHOSTTY);
+  assert.equal(terminal?.name, "ghostty");
+  assert.equal(terminal.getCurrentPane, undefined);
+  assert.equal(canSplit(terminal), false);
+  assert.match(cannotOpenPanes(terminal), /^ghostty cannot open panes from a command\./);
+});
+
+test("ghostty older than 1.3.0 asks for an upgrade instead of looking for a pane", async () => {
+  const terminal = detectOn("darwin", { ...GHOSTTY, TERM_PROGRAM_VERSION: "1.2.0" });
+  assert.equal(terminal?.name, "ghostty");
+  assert.equal(canSplit(terminal), true);
+  await assert.rejects(terminal.getCurrentPane({ tty: "/dev/ttys001", cwd: "/" }), /upgrade to Ghostty 1\.3\.0 or newer/);
+  await assert.rejects(terminal.split({}), /upgrade to Ghostty 1\.3\.0 or newer/);
+});
+
+test("ghostty 1.3.0 and newer, or an unknown version, keep the full backend", () => {
+  for (const version of ["1.3.0", "1.10.0", "2.0.0", "tip", undefined]) {
+    const env = version === undefined ? GHOSTTY : { ...GHOSTTY, TERM_PROGRAM_VERSION: version };
+    const terminal = detectOn("darwin", env);
+    assert.equal(typeof terminal.getCurrentPane, "function", String(version));
+    assert.equal(typeof terminal.split, "function", String(version));
+    assert.equal(typeof terminal.listPanes, "function", String(version));
+  }
+});
+
+test("a pane lookup failure on supported ghostty is not reported as an unsupported version", async () => {
+  const run = async () => {
+    throw new Error("ps failed");
+  };
+  const terminal = detectOn("darwin", { ...GHOSTTY, TERM_PROGRAM_VERSION: "1.3.0" }, run);
+  await assert.rejects(terminal.getCurrentPane({ tty: "/dev/ttys001", cwd: "/" }), (error) => {
+    assert.doesNotMatch(error.message, /upgrade to Ghostty|not supported/);
+    return true;
+  });
 });
 
 // there is no tty here, so nothing answers and recognising the terminal is all we have
