@@ -20,7 +20,6 @@ export const MARKDOWN_CSP = [
 const VIDEO = /\.(?:mp4|m4v|webm|mov|ogv)$/i;
 const AUDIO = /\.(?:mp3|m4a|wav|ogg|oga|flac|aac)$/i;
 const ALERT = /^\[!(note|tip|important|warning|caution)\]\s*/i;
-// fixme: placeholder copy
 const ALERT_TITLES: Record<string, string> = {
   note: "Note",
   tip: "Tip",
@@ -131,7 +130,6 @@ async function buildPipeline() {
       return element("div", { className: ["diagram"] }, [{ type: "raw", value: svg }]);
     } catch (error) {
       return element("div", { className: ["diagram-error"] }, [
-        // fixme: placeholder copy
         element("p", {}, [text(`Could not render diagram: ${error instanceof Error ? error.message : String(error)}`)]),
         element("pre", {}, [element("code", {}, [text(source)])]),
       ]);

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::EngineEvent;
 use crate::clipboard_image::PastedImage;
 use crate::logging;
-use crate::terminal::Terminal;
+use crate::backend::{Backend, ClipboardRead};
 use crate::text_input::MARK_CHAR;
 use crate::tree::NodeId;
 
@@ -21,14 +21,14 @@ const PASTE_IMAGE_MIMES: [(&str, &str); 4] = [
     ("image/webp", "webp"),
 ];
 
-struct OscPaste {
+struct TypedPaste {
     view: usize,
     node: NodeId,
-    stage: OscPasteStage,
+    stage: TypedPasteStage,
     deadline: Instant,
 }
 
-enum OscPasteStage {
+enum TypedPasteStage {
     Types,
     Data { ext: &'static str },
 }
@@ -93,8 +93,8 @@ pub(super) fn parse_rich_paste(text: &str) -> Option<(String, Vec<(usize, String
     (!marks.is_empty()).then_some((out, marks))
 }
 
-fn request_text_clipboard(term: &mut Terminal) {
-    if let Err(error) = term.request_clipboard() {
+fn request_text_clipboard(host: &mut dyn Backend) {
+    if let Err(error) = host.read_clipboard(ClipboardRead::Text) {
         logging::warn("engine", format!("clipboard request failed: {error}"));
     }
 }
@@ -102,7 +102,7 @@ fn request_text_clipboard(term: &mut Terminal) {
 pub(super) struct ClipboardFlows {
     rich: Option<RichClip>,
     rich_token: u64,
-    osc: Option<OscPaste>,
+    typed_paste: Option<TypedPaste>,
     pending_pastes: Vec<(u64, usize, NodeId)>,
 }
 
@@ -111,20 +111,20 @@ impl ClipboardFlows {
         Self {
             rich: None,
             rich_token: 0,
-            osc: None,
+            typed_paste: None,
             pending_pastes: Vec::new(),
         }
     }
 
     pub fn begin_rich_capture(
         &mut self,
-        term: &mut Terminal,
+        host: &mut dyn Backend,
         view: usize,
         text: String,
         marks: Vec<(NodeId, crate::text_input::Mark)>,
     ) -> io::Result<Option<EngineEvent>> {
         let projection: String = text.chars().filter(|&c| c != MARK_CHAR).collect();
-        term.set_clipboard(&projection)?;
+        host.write_clipboard(&projection)?;
         if marks.is_empty() {
             self.rich = None;
             return Ok(None);
@@ -154,7 +154,7 @@ impl ClipboardFlows {
         }))
     }
 
-    pub fn attach_rich(&mut self, term: &mut Terminal, token: u64, marks: Vec<(usize, String)>) {
+    pub fn attach_rich(&mut self, host: &mut dyn Backend, token: u64, marks: Vec<(usize, String)>) {
         let Some(rich) = self.rich.as_mut().filter(|r| r.token == token) else {
             return;
         };
@@ -165,7 +165,7 @@ impl ClipboardFlows {
         }
         let rich = self.rich.take().expect("checked above");
         if let Some(enriched) = enrich_clipboard_text(&rich.text, &rich.slots)
-            && let Err(error) = term.set_clipboard(&enriched)
+            && let Err(error) = host.write_clipboard(&enriched)
         {
             logging::warn("engine", format!("clipboard write failed: {error}"));
         }
@@ -178,7 +178,7 @@ impl ClipboardFlows {
 
     pub fn resolve_pastes(
         &mut self,
-        term: &mut Terminal,
+        host: &mut dyn Backend,
         pastes: Vec<(u64, Option<PastedImage>)>,
     ) -> Vec<(usize, NodeId, PastedImage)> {
         let mut delivered = Vec::new();
@@ -190,46 +190,46 @@ impl ClipboardFlows {
             match pasted {
                 Some(image) => delivered.push((view, node, image)),
                 None => {
-                    if self.osc.is_none()
-                        && term.clipboard_data_supported()
-                        && term.request_clipboard_types().is_ok()
+                    if self.typed_paste.is_none()
+                        && host.clipboard_has_types()
+                        && host.read_clipboard(ClipboardRead::Types).is_ok()
                     {
-                        self.osc = Some(OscPaste {
+                        self.typed_paste = Some(TypedPaste {
                             view,
                             node,
-                            stage: OscPasteStage::Types,
+                            stage: TypedPasteStage::Types,
                             deadline: Instant::now() + Duration::from_secs(3),
                         });
                     } else {
-                        request_text_clipboard(term);
+                        request_text_clipboard(host);
                     }
                 }
             }
         }
-        if let Some(paste) = &self.osc
+        if let Some(paste) = &self.typed_paste
             && Instant::now() > paste.deadline
         {
-            self.osc = None;
-            request_text_clipboard(term);
+            self.typed_paste = None;
+            request_text_clipboard(host);
         }
         delivered
     }
 
     pub fn handle_clipboard_data(
         &mut self,
-        term: &mut Terminal,
+        host: &mut dyn Backend,
         items: Vec<(String, Vec<u8>)>,
         ok: bool,
     ) {
-        let Some(paste) = self.osc.take() else {
+        let Some(paste) = self.typed_paste.take() else {
             return;
         };
         if !ok {
-            request_text_clipboard(term);
+            request_text_clipboard(host);
             return;
         }
         match paste.stage {
-            OscPasteStage::Types => {
+            TypedPasteStage::Types => {
                 let offered = items
                     .iter()
                     .find(|(mime, _)| mime == "." || mime.is_empty())
@@ -239,17 +239,17 @@ impl ClipboardFlows {
                     .iter()
                     .find(|(mime, _)| offered.split_whitespace().any(|o| o == *mime));
                 match pick {
-                    Some(&(mime, ext)) if term.request_clipboard_data(mime).is_ok() => {
-                        self.osc = Some(OscPaste {
-                            stage: OscPasteStage::Data { ext },
+                    Some(&(mime, ext)) if host.read_clipboard(ClipboardRead::Item(mime)).is_ok() => {
+                        self.typed_paste = Some(TypedPaste {
+                            stage: TypedPasteStage::Data { ext },
                             deadline: Instant::now() + Duration::from_secs(20),
                             ..paste
                         });
                     }
-                    _ => request_text_clipboard(term),
+                    _ => request_text_clipboard(host),
                 }
             }
-            OscPasteStage::Data { ext } => {
+            TypedPasteStage::Data { ext } => {
                 let data = items
                     .into_iter()
                     .find(|(mime, data)| mime.starts_with("image/") && !data.is_empty())
@@ -263,14 +263,14 @@ impl ClipboardFlows {
                         );
                         self.pending_pastes.push((seq, paste.view, paste.node));
                     }
-                    None => request_text_clipboard(term),
+                    None => request_text_clipboard(host),
                 }
             }
         }
     }
 
-    pub fn osc_deadline(&self) -> Option<Instant> {
-        self.osc.as_ref().map(|paste| paste.deadline)
+    pub fn typed_paste_deadline(&self) -> Option<Instant> {
+        self.typed_paste.as_ref().map(|paste| paste.deadline)
     }
 }
 

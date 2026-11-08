@@ -2,7 +2,6 @@ import { ImageResponse } from "next/og";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-// fixme: placeholder copy
 export const alt = "Pixel · Build graphical applications in the terminal";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";

@@ -9,7 +9,7 @@ import {
   startRecording,
   stopRecording,
 } from "./controller";
-import { exportProfile } from "./export-profile";
+import { exportProfile } from "./profile-exporter";
 import { createStore, useStore } from "./store";
 import { devtoolsStore, ProfileSession, profilerStore, TimeSpan } from "./stores";
 import { MONO, theme } from "./theme";

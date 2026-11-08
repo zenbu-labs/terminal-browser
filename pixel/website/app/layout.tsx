@@ -10,16 +10,13 @@ const mono = JetBrains_Mono({
   adjustFontFallback: false,
 });
 
-// fixme: placeholder copy
 const DESCRIPTION = "Build graphical applications in the terminal";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://pixelgui.com"),
-  // fixme: placeholder copy
   title: "pixel",
   description: DESCRIPTION,
   openGraph: {
-    // fixme: placeholder copy
     title: "Pixel",
     description: DESCRIPTION,
     url: "/",
@@ -28,7 +25,6 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    // fixme: placeholder copy
     title: "Pixel",
     description: DESCRIPTION,
   },

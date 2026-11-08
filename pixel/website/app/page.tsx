@@ -27,19 +27,16 @@ const DEMOS: Demo[] = [
   {
     label: "Browser",
     media: { kind: "video", src: "/media/browser.mp4", poster: "/media/browser-poster.jpg", size: [1954, 1214] },
-    // fixme: placeholder copy
     caption: <a href="https://terminal-browser.com">terminal-browser.com →</a>,
   },
   {
     label: "Vscode",
     media: { kind: "video", src: "/media/vscode.mp4", poster: "/media/vscode-poster.jpg", size: [1972, 1240] },
-    // fixme: placeholder copy
     caption: <a href="https://terminal-code.com">terminal-code.com →</a>,
   },
   {
     label: "Zed",
     media: { kind: "video", src: "/media/zed.mp4", poster: "/media/zed-poster.jpg", size: [1954, 1214] },
-    // fixme: placeholder copy
     caption: <a href={`${EXAMPLES}/zed`}>examples/zed →</a>,
   },
 ];
@@ -63,9 +60,7 @@ const TERMINALS = [
 ];
 
 const USED_BY = [
-  // fixme: placeholder copy
   { name: "terminal-browser", repo: "zenbu-labs/terminal-browser", description: "a real browser inside your terminal" },
-  // fixme: placeholder copy
   { name: "terminal-code", repo: "zenbu-labs/terminal-code", description: "vscode inside your terminal" },
 ];
 
@@ -130,7 +125,6 @@ export default async function Home() {
             <li>
               <span>Windows</span>
               <WipTag
-                // fixme: placeholder copy
                 tooltip="You can use pixel on Windows today through WSL. Native Windows support is a work in progress."
               >
                 WIP

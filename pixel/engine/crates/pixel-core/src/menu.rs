@@ -48,7 +48,7 @@ pub struct MenuStyle {
 }
 
 impl MenuStyle {
-    pub fn from_terminal(colors: &crate::terminal::TerminalColors) -> Self {
+    pub fn from_colors(colors: &crate::backend::HostColors) -> Self {
         let Some(bg) = colors.background else {
             return Self::default();
         };

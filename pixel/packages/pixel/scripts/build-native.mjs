@@ -29,7 +29,7 @@ if (process.platform === "darwin") {
       "-O",
       "-target",
       `${arch}-apple-macos11`,
-      path.join(engineDir, "crates", "pixel-core", "native-scroll-helper.swift"),
+      path.join(engineDir, "crates", "pixel-terminal", "native-scroll-helper.swift"),
       "-o",
       path.join(outDir, "native-scroll-helper"),
     ],
