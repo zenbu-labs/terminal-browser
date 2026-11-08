@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 rayon = "1"
+arboard = { workspace = true }
 pixel-core = { workspace = true }
 rustix = { workspace = true }
 libc = { workspace = true }

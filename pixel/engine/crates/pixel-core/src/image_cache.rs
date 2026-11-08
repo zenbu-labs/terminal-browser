@@ -37,6 +37,7 @@ enum Job {
     Clipboard {
         queued: Instant,
         seq: u64,
+        clipboard: Option<Arc<dyn crate::backend::SystemClipboard>>,
     },
     Bytes {
         data: Vec<u8>,
@@ -183,10 +184,10 @@ fn decode_worker(jobs: Receiver<Job>, results: Sender<Done>, waker: Arc<Mutex<Op
                 }
                 wake(&waker);
             }
-            Job::Clipboard { queued, seq } => {
+            Job::Clipboard { queued, seq, clipboard } => {
                 use crate::clipboard_image::WorkerPaste;
                 let started = Instant::now();
-                let read = crate::clipboard_image::read_for_worker();
+                let read = clipboard.and_then(|clipboard| crate::clipboard_image::read_for_worker(clipboard.as_ref()));
                 let pasted = match &read {
                     Some(WorkerPaste::File(pasted)) => Some(pasted.clone()),
                     Some(WorkerPaste::Bitmap { pasted, .. }) => Some(pasted.clone()),
@@ -363,13 +364,14 @@ fn ensure(cache: &mut Cache, src: &str, equal_to: &[String]) {
     );
 }
 
-pub(crate) fn queue_clipboard_read() -> u64 {
+pub(crate) fn queue_clipboard_read(clipboard: Option<Arc<dyn crate::backend::SystemClipboard>>) -> u64 {
     CACHE.with_borrow_mut(|cache| {
         cache.next_seq += 1;
         let seq = cache.next_seq;
         let _ = jobs_sender(cache).send(Job::Clipboard {
             queued: Instant::now(),
             seq,
+            clipboard,
         });
         seq
     })

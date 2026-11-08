@@ -52,19 +52,12 @@ pub(crate) enum WorkerPaste {
     },
 }
 
-pub(crate) fn read_for_worker() -> Option<WorkerPaste> {
-    let mut clipboard = arboard::Clipboard::new().ok()?;
-    if let Ok(files) = clipboard.get().file_list()
-        && let Some(pasted) = files.iter().find_map(|f| from_file(f, PasteSource::Clipboard))
-    {
+pub(crate) fn read_for_worker(clipboard: &dyn crate::backend::SystemClipboard) -> Option<WorkerPaste> {
+    if let Some(pasted) = clipboard.files().iter().find_map(|f| from_file(f, PasteSource::Clipboard)) {
         return Some(WorkerPaste::File(pasted));
     }
-    let img = clipboard.get_image().ok()?;
-    let rgba = image::RgbaImage::from_raw(
-        img.width as u32,
-        img.height as u32,
-        img.bytes.into_owned(),
-    )?;
+    let img = clipboard.image()?;
+    let rgba = image::RgbaImage::from_raw(img.width, img.height, img.rgba)?;
     let (width, height) = rgba.dimensions();
     let pasted = PastedImage {
         path: temp_path("png").to_string_lossy().into_owned(),

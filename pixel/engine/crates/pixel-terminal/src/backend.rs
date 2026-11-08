@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 use std::io;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pixel_core::backend::{
-    Backend, ClipboardRead, Event, Frame, HostInfo, Metrics, Wants, Waker,
+    Backend, ClipboardRead, Event, Frame, HostInfo, Metrics, SystemClipboard, Wants, Waker,
 };
 use pixel_core::fonts::Font;
 use pixel_core::logging;
@@ -530,6 +531,10 @@ impl Backend for TerminalBackend {
 
     fn clipboard_has_types(&self) -> bool {
         self.term.clipboard_data_supported()
+    }
+
+    fn system_clipboard(&self) -> Option<Arc<dyn SystemClipboard>> {
+        Some(Arc::new(crate::system_clipboard::Arboard))
     }
 
     fn describe(&self) -> serde_json::Map<String, serde_json::Value> {

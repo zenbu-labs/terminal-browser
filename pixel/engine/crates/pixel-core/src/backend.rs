@@ -74,6 +74,18 @@ pub struct Wants {
     pub view_canvas: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+pub trait SystemClipboard: Send + Sync {
+    fn files(&self) -> Vec<std::path::PathBuf>;
+    fn image(&self) -> Option<ClipboardImage>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardRead<'a> {
     Text,
@@ -143,6 +155,10 @@ pub trait Backend: Any + Send {
 
     fn clipboard_has_types(&self) -> bool {
         false
+    }
+
+    fn system_clipboard(&self) -> Option<Arc<dyn SystemClipboard>> {
+        None
     }
 
     fn message(&mut self, _message: serde_json::Value) {}

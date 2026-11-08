@@ -790,7 +790,6 @@ dependencies = [
 name = "pixel-core"
 version = "0.1.0"
 dependencies = [
- "arboard",
  "base64",
  "fontdue",
  "image",
@@ -830,6 +829,7 @@ dependencies = [
 name = "pixel-terminal"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "base64",
  "libc",
  "miniz_oxide",

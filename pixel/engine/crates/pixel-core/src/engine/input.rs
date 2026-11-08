@@ -121,7 +121,7 @@ impl Engine {
                 self.push_change(view, id, source, out);
             }
             InputReply::RequestPaste => {
-                self.clipboard.request_paste(view, id);
+                self.clipboard.request_paste(self.backend.as_ref(), view, id);
             }
         }
         Ok(())

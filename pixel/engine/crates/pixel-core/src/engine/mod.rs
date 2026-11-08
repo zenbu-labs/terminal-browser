@@ -868,7 +868,7 @@ impl Engine {
 
     pub fn request_clipboard_image(&mut self, view: usize) {
         let root = self.comp.views[view].tree.root();
-        self.clipboard.request_paste(view, root);
+        self.clipboard.request_paste(self.backend.as_ref(), view, root);
     }
 
     fn begin_rich_capture(
