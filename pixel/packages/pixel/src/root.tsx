@@ -22,6 +22,8 @@ import {
   markHandoff,
 } from "./instances";
 import type { Instance } from "./instances";
+import { RELAUNCH_FD_ENV } from "./relaunch";
+import type { RelaunchRequest } from "./relaunch";
 import { createRoot as createEngineRoot } from "./react";
 import type { EngineKeyEvent, PixelRoot, RootOptions as EngineRootOptions } from "./react";
 import { RootContext, ViewRegistry } from "./registry";
@@ -68,6 +70,7 @@ export interface Root extends Omit<PixelRoot, "render" | "flushSync" | "stop" | 
   loadURL(url: string, options?: LoadOptions): WebViewHandle;
   loadFile(file: string, options?: LoadOptions): WebViewHandle;
   stop(code?: number): void;
+  relaunch: ((request: RelaunchRequest) => void) | null;
 }
 
 function ownTty(): string | undefined {
@@ -134,6 +137,7 @@ export function createRoot(options: RootOptions = {}): Root {
   let record: InstanceRecord | null = null;
   let handoff: { tty?: string; socket?: string } | null = null;
   let stopping = false;
+  const relaunchFd = process.env[RELAUNCH_FD_ENV] ? Number(process.env[RELAUNCH_FD_ENV]) : null;
 
   const shutdown = (code: number, then: () => void = () => finish(code)) => {
     if (stopping) return;
@@ -392,6 +396,12 @@ export function createRoot(options: RootOptions = {}): Root {
     stop(code = 0) {
       shutdown(code);
     },
+    relaunch: relaunchFd != null
+      ? (request) => {
+          fs.writeSync(relaunchFd, JSON.stringify(request));
+          shutdown(0);
+        }
+      : null,
   };
 
   try {
