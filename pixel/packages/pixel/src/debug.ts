@@ -1,4 +1,4 @@
-const enabled = process.env.PIXEL_DEBUG === "1";
+const enabled = typeof process !== "undefined" && process.env?.PIXEL_DEBUG === "1";
 
 export function debug(...parts: unknown[]): void {
   if (!enabled) return;

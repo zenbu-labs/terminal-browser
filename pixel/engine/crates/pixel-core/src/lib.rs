@@ -1,15 +1,13 @@
+pub mod backend;
 mod canvas;
 pub mod clipboard_image;
 mod desc;
 mod engine;
 pub mod fonts;
-mod herdr;
-mod hosted;
 mod image_cache;
-mod kitty;
+mod input;
 pub mod logging;
 mod menu;
-mod native;
 mod paint;
 pub(crate) mod parallel;
 pub mod profiler;
@@ -20,10 +18,8 @@ mod selection;
 mod style;
 pub mod surfaces;
 mod system_fonts;
-mod terminal;
 mod text_input;
-mod throttle;
-pub mod wrapper;
+pub(crate) mod throttle;
 mod tree;
 mod wrap;
 
@@ -31,13 +27,10 @@ pub use canvas::{Canvas, measure_text};
 pub use desc::Desc;
 pub use engine::{
     ChangeSource, DragPhase, Engine, EngineConfig, EngineEvent, FrameStats, HighlightArea,
-    HostConfig, MarkRef, px_for_cell_height,
+    MarkRef, px_for_cell_height,
 };
-pub use kitty::kitty_transmit;
 pub use logging::{LogEntry, LogLevel};
 pub use menu::{CONTEXT_MENU_KEY, MenuEntry, MenuItem, MenuStyle, context_menu};
-pub use native::{NativeEvent, NativeScroll};
-pub use terminal::{Retarget, SessionEnv};
 pub use paint::paint;
 pub use profiler::{CounterRecord, ProfileData, SpanRecord};
 pub use shape::{LineCap, LineJoin, PathCmd, ShapeProps, ShapeStroke, build_path, parse_path_data, skia_stroke};
@@ -49,10 +42,8 @@ pub use style::{
     Align, Border, BorderSide, Color, Dimension, Edges, FlexDirection, Inset, InsetValue, Justify,
     Layout, LinearGradient, Overflow, Paint, Position, ScrollAnchor, ScrollbarStyle, SelectionMode, Style,
 };
-pub use terminal::{
-    Event, Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind, Terminal, TerminalColors,
-    Waker, WindowSize,
-};
+pub use backend::{Backend, Event, HostColors, Metrics, Waker};
+pub use input::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
 pub use text_input::{
     CaretShape, Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput,
     line_height, offset_to_point, point_to_offset,

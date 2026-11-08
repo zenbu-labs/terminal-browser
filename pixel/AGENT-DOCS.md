@@ -8,7 +8,9 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | --- | --- |
 | `packages/pixel/src/index.ts` | everything exported from `@zenbu-labs/pixel` |
 | `packages/pixel/src/root.tsx` | `createRoot`, `RootOptions`, `Root` |
-| `packages/pixel/src/react/index.ts` | engine root, render settings, key events, clipboard functions |
+| `packages/pixel/src/react/core.ts` | engine root (`createEngineRoot`, `RootPlatform`), render settings, key events, clipboard functions; no node |
+| `packages/pixel/src/react/index.ts` | the node `createRoot` over `react/core.ts`, loads `pixel.node` |
+| `packages/pixel/src/core.ts` | `@zenbu-labs/pixel/core`: everything that runs without node, `setBinding`, `createRoot({ engine })` |
 | `packages/pixel/src/react/reconciler-config.ts` | props and event types for `Box`, `Text`, `Input`, `Image`, `Path`, `MarkedText` |
 | `packages/pixel/src/react/components.ts` | component definitions, `NodeHandle` |
 | `packages/pixel/src/react/styles.ts` | `Style`, `Color`, borders, gradients |
@@ -27,7 +29,10 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | `packages/pixel/src/preload/index.ts` | `@zenbu-labs/pixel/preload` types for `window.pixel` |
 | `packages/pixel/src/electron/index.ts` | `@zenbu-labs/pixel/electron`, re-exports `electron` |
 | `packages/pixel/src/bin.ts` | the `pixel` CLI |
-| `engine/crates/pixel-core/` | Rust engine: layout, painting, terminal output |
+| `engine/crates/pixel-core/` | Rust engine: layout, painting, compositing, input model; `src/backend.rs` is the backend trait |
+| `engine/crates/pixel-terminal/` | the terminal backend: tty, kitty/iTerm2/rex/tmux/herdr frames, cell and color probing, macOS native scroll |
+| `engine/crates/pixel-bridge/` | the JSON op/event protocol between JS and the engine, shared by every host |
+| `engine/crates/pixel-node/` | the node addon; `register_backend` adds backends, `PixelEngine.withBackend` makes one |
 | `engine/crates/pixel-node/` | Node binding for the engine |
 
 ## Examples
@@ -405,6 +410,19 @@ host → { type: "size" | "paste" | "wheel" | "focus" | "colors" | "devtools", .
 ```
 
 `../claude-code-plugin` uses this path to show pixel frames in a Claude Code pane.
+
+## Backends
+
+The engine draws through `pixel_core::backend::Backend` (`engine/crates/pixel-core/src/backend.rs`). The terminal is one backend (`pixel-terminal`); others live in their own repos and depend on `pixel-core` and `pixel-bridge`.
+
+- Required: `start` (first size and colors), `waker`, `poll(timeout)` (the only place the engine thread blocks), `present(Frame)`.
+- `Frame`: the composed canvas, damage (`changed`, `repainted`), opaque areas over surfaces, and what the backend asked for in `wants()`: `scroll_layer` (the biggest list scroller painted on its own so it can be moved), `view_canvas` (present the view's canvas directly).
+- Optional hooks: `poll_metrics` (hosts that ask for their size), `pending_present`, `animating`, `before_frame`, `idle`, `deadline`, `schedule_present` / `take_presented_at` (pacing), `byte_rate_limit`, `set_title`, `set_pointer_shape`, clipboard reads and writes, `message` (app to backend), `describe` (extra `root.info` fields).
+- Backend events: input (`Key`, `Mouse`, `Wheel` steps, `Pinch`, `Paste`, `Focus`) and host changes (`Resize`, `Colors`, `Visible`, `Redraw`, `Closed`, `ClipboardData`). `Message(json)` reaches the app as an event with its own `type`; unknown types go to `onBackendMessage` on a `@zenbu-labs/pixel/core` root, and its `sendToBackend(message)` goes the other way.
+- Binding code that knows its backend reaches it with `engine.backend.downcast_mut::<B>()` (pixel-node does this for retarget and the presenter overlay).
+- Node: a backend package ships its own `.node` built from `pixel-node` plus its crate, calls `register_backend`, and makes its engine with `PixelEngine.withBackend(name, options)`.
+- Hosts without node: install a binding with `setBinding` and use `createRoot({ engine })` from `@zenbu-labs/pixel/core`.
+- `examples/appkit-backend`: a macOS window as a backend (AppKit events in, frames onto a `CALayer`), driving the engine with the same JSON ops React sends. `cargo run` in that folder.
 
 ## Rendering
 

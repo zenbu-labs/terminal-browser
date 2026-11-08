@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pixel-core", "crates/pixel-node"]
+members = ["crates/pixel-core", "crates/pixel-terminal", "crates/pixel-bridge", "crates/pixel-node"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +9,8 @@ publish = false
 
 [workspace.dependencies]
 pixel-core = { path = "crates/pixel-core" }
+pixel-terminal = { path = "crates/pixel-terminal" }
+pixel-bridge = { path = "crates/pixel-bridge" }
 rustix = { version = "1", features = ["termios", "stdio", "event", "fs", "shm", "mm", "process", "pipe"] }
 libc = "0.2"
 base64 = "0.22"

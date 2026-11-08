@@ -159,7 +159,7 @@ export function setMaxFps(fps: number) {
 
 export function setHighlightTransmits(on: boolean) {
   devtoolsStore.update((s) => ({ ...s, highlightTransmits: on }));
-  engineOp({ op: "setRender", highlightTransmits: on });
+  engineOp({ op: "presenter", highlightTransmits: on });
 }
 
 export function requestLayout() {

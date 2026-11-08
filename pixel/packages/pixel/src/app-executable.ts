@@ -10,7 +10,6 @@ export function appExecutable(app: string): string {
       encoding: "utf8",
     }).trim();
   } catch {
-    // fixme: placeholder copy
     throw new Error(`${plist} has no CFBundleExecutable`);
   }
   return path.join(app, "Contents", "MacOS", name);

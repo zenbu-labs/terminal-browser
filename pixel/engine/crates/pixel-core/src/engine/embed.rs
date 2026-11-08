@@ -2,7 +2,7 @@ use std::io;
 
 use super::{Engine, EngineEvent};
 use crate::surfaces::Rect;
-use crate::terminal::{Mouse, MouseKind};
+use crate::input::{Mouse, MouseKind};
 use crate::tree::PxRect;
 
 pub(super) fn offset(rect: Rect, abs: PxRect, visible: PxRect) -> Rect {

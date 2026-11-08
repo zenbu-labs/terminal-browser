@@ -1,4 +1,3 @@
-// fixme: placeholder copy
 export const COPY = {
   title: "Activity",
   filterPlaceholder: "Filter processes",

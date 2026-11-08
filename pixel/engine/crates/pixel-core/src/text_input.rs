@@ -7,7 +7,7 @@ use crate::selection::{
     ClickGesture, ClickTracker, line_end, line_range_at, line_start, next_char, next_word_boundary,
     prev_char, prev_word_boundary, snap_to_boundary, word_range_at,
 };
-use crate::terminal::{Key, KeyEvent, Mouse, MouseButton, MouseKind};
+use crate::input::{Key, KeyEvent, Mouse, MouseButton, MouseKind};
 use crate::tree::PxRect;
 use crate::wrap::{line_of_offset, wrap_lines};
 
@@ -1374,13 +1374,13 @@ mod tests {
         );
     }
 
-    use crate::terminal::Mods;
+    use crate::input::Mods;
 
     fn key(k: Key, mods: Mods) -> KeyEvent {
         KeyEvent {
             key: k,
             mods,
-            kind: crate::terminal::KeyKind::Press,
+            kind: crate::input::KeyKind::Press,
             text: None,
         }
     }
