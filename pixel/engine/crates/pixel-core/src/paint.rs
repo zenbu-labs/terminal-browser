@@ -354,7 +354,7 @@ fn paint_node(
                 wrap_lines(text, font, px, wrap, marks)
             });
             let line_h = line_metrics.new_line_size;
-            let focused = tree.focus() == Some(id);
+            let focused = tree.focus() == Some(id) && !tree.inert(id);
             let caret_line = node.input.as_ref().and_then(|state| {
                 (state.gutter.is_some() || state.active_line.is_some()).then(|| {
                     let cursor = state.input.cursor();
@@ -567,6 +567,7 @@ fn paint_node(
             if let Some(state) = &node.input
                 && state.input.selection().is_none()
                 && tree.focus() == Some(id)
+                && !tree.inert(id)
             {
                 let cursor = state.input.cursor();
                 let shape = state.caret_shape;

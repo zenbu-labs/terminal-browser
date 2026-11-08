@@ -135,7 +135,7 @@ impl Engine {
             });
             return Ok(());
         }
-        let focused = self.focused().and_then(|(view, id)| {
+        let focused = self.live_focus().and_then(|(view, id)| {
             self.comp.views[view]
                 .tree
                 .input_meta(id)

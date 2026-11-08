@@ -542,6 +542,10 @@ impl Engine {
             .map(|id| (self.focus_view, id))
     }
 
+    fn live_focus(&self) -> Option<(usize, NodeId)> {
+        self.focused().filter(|&(view, id)| !self.comp.views[view].tree.inert(id))
+    }
+
     fn paint_then_wait(
         &mut self,
         out_empty: bool,
@@ -787,7 +791,7 @@ impl Engine {
                 crate::profiler::mark("paste", self.active_view as u32, || {
                     format!("paste ({} chars)", text.chars().count())
                 });
-                if let Some((view, focus)) = self.focused() {
+                if let Some((view, focus)) = self.live_focus() {
                     if let Some(image) = crate::clipboard_image::image_path_from_paste(&text) {
                         self.push_paste_image(view, focus, image, out);
                     } else {

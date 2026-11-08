@@ -2555,3 +2555,78 @@ fn a_scrolled_list_is_described_as_content_that_moves_with_what_is_drawn_over_it
     let layer = crate::paint::scroll_layer(&tree).unwrap();
     assert_eq!(layer.overlay_rects(), vec![crate::surfaces::Rect { x: 0, y: 0, w: 40, h: 10 }], "the stuck header is drawn over the content");
 }
+
+#[test]
+fn a_modal_makes_everything_outside_it_inert() {
+    let mut tree = Tree::new((200.0, 100.0));
+    let scroller = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, ..Style::default() },
+        ..Props::default()
+    });
+    let prompt = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(20.0), ..Style::default() },
+        input: Some(InputProps::default()),
+        ..Props::default()
+    });
+    tree.append(tree.root(), scroller);
+    tree.append(scroller, prompt);
+    let backdrop_props = |modal| Props {
+        style: Style {
+            position: Position::Absolute,
+            inset: crate::style::Inset::top_left(100.0, 0.0),
+            width: Dimension::Px(100.0),
+            height: Dimension::Px(100.0),
+            ..Style::default()
+        },
+        clickable: true,
+        modal,
+        ..Props::default()
+    };
+    let backdrop = tree.create(backdrop_props(false));
+    let field = tree.create(Props {
+        style: Style { width: Dimension::Px(100.0), height: Dimension::Px(20.0), ..Style::default() },
+        input: Some(InputProps::default()),
+        ..Props::default()
+    });
+    tree.append(tree.root(), backdrop);
+    tree.append(backdrop, field);
+    let mut fonts = crate::fonts::FontRegistry::bundled();
+    tree.flush_layout(&mut fonts, 16.0);
+    assert_eq!(tree.hit_target(10.0, 10.0), Some(HitTarget::Input(prompt)));
+    assert!(tree.scroll_area_at(10.0, 10.0).is_some());
+
+    tree.update(backdrop, backdrop_props(true));
+    tree.flush_layout(&mut fonts, 16.0);
+    assert_eq!(tree.modal_root(), Some(backdrop));
+    assert!(tree.inert(prompt) && tree.inert(scroller));
+    assert!(!tree.inert(backdrop) && !tree.inert(field));
+    assert_eq!(tree.hit_target(10.0, 10.0), Some(HitTarget::Click(backdrop)), "a click outside lands on the modal");
+    assert_eq!(tree.hit_target(110.0, 10.0), Some(HitTarget::Input(field)));
+    assert!(tree.scroll_area_at(10.0, 10.0).is_none());
+}
+
+#[test]
+fn a_removed_modal_leaves_the_tree_interactive() {
+    let mut tree = Tree::new((200.0, 100.0));
+    let prompt = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(20.0), ..Style::default() },
+        input: Some(InputProps::default()),
+        ..Props::default()
+    });
+    let sheet = tree.create(Props {
+        style: Style { position: Position::Absolute, width: Dimension::Px(200.0), height: Dimension::Px(50.0), ..Style::default() },
+        modal: true,
+        ..Props::default()
+    });
+    tree.append(tree.root(), prompt);
+    tree.append(tree.root(), sheet);
+    let mut fonts = crate::fonts::FontRegistry::bundled();
+    tree.flush_layout(&mut fonts, 16.0);
+    assert!(tree.inert(prompt));
+
+    tree.remove(sheet);
+    tree.flush_layout(&mut fonts, 16.0);
+    assert_eq!(tree.modal_root(), None);
+    assert!(!tree.inert(prompt));
+    assert_eq!(tree.hit_target(10.0, 10.0), Some(HitTarget::Input(prompt)));
+}

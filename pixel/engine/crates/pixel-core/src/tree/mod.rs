@@ -230,6 +230,7 @@ pub struct Props {
     pub pointer_events: bool,
     pub hover_events: bool,
     pub outside_click_events: bool,
+    pub modal: bool,
     pub drag_events: bool,
     pub selection_events: bool,
     pub move_events: bool,
@@ -287,6 +288,7 @@ pub(crate) struct RNode {
     pub pointer_events: bool,
     pub hover_events: bool,
     pub outside_click_events: bool,
+    pub modal: bool,
     pub drag_events: bool,
     pub selection_events: bool,
     pub move_events: bool,
@@ -353,6 +355,8 @@ pub struct Tree {
     full_place: bool,
     order_stale: bool,
     paint_order: Vec<NodeId>,
+    modal: Option<NodeId>,
+    modals: HashSet<NodeId>,
     scrollables: HashSet<NodeId>,
     lists: HashSet<NodeId>,
     pending_lists: HashSet<NodeId>,
@@ -403,6 +407,8 @@ impl Tree {
             full_place: true,
             order_stale: true,
             paint_order: Vec::new(),
+            modal: None,
+            modals: HashSet::new(),
             scrollables: HashSet::new(),
             lists: HashSet::new(),
             pending_lists: HashSet::new(),
@@ -482,6 +488,7 @@ impl Tree {
     }
 
     pub fn create(&mut self, props: Props) -> NodeId {
+        let modal = props.modal;
         // A node born showing a webview is a swap from nothing, and the presenter needs to
         // hear about it the same way: as changed pixels, since no browser damage will say so.
         if let Some(surface) = props.surface {
@@ -536,6 +543,7 @@ impl Tree {
             pointer_events: props.pointer_events,
             hover_events: props.hover_events,
             outside_click_events: props.outside_click_events,
+            modal: props.modal,
             drag_events: props.drag_events,
             selection_events: props.selection_events,
             move_events: props.move_events,
@@ -591,6 +599,10 @@ impl Tree {
             self.focus = Some(id);
         }
         self.needs_layout = true;
+        if modal {
+            self.modals.insert(id);
+            self.order_stale = true;
+        }
         id
     }
 
@@ -684,6 +696,10 @@ impl Tree {
             self.mark_parents.remove(&id);
             self.scrollables.remove(&id);
             self.lists.remove(&id);
+            self.modals.remove(&id);
+            if self.modal == Some(id) {
+                self.modal = None;
+            }
             self.doc.invalidate(id);
         }
         self.needs_layout = true;
@@ -722,6 +738,8 @@ impl Tree {
         node.pointer_events = props.pointer_events;
         node.hover_events = props.hover_events;
         node.outside_click_events = props.outside_click_events;
+        let modal_changed = node.modal != props.modal;
+        node.modal = props.modal;
         node.drag_events = props.drag_events;
         node.selection_events = props.selection_events;
         node.move_events = props.move_events;
@@ -765,6 +783,14 @@ impl Tree {
         if place_changed {
             self.needs_place = true;
             self.full_place = true;
+        }
+        if modal_changed {
+            self.order_stale = true;
+            if props.modal {
+                self.modals.insert(id);
+            } else {
+                self.modals.remove(&id);
+            }
         }
         if image_changed {
             self.needs_layout = true;
@@ -1133,6 +1159,9 @@ impl Tree {
         if self.doc.has_selection() {
             self.ensure_order();
         }
+        if !self.modals.is_empty() || self.modal.is_some() {
+            self.ensure_order();
+        }
     }
 
     pub(crate) fn ensure_order(&mut self) {
@@ -1143,6 +1172,7 @@ impl Tree {
 
     fn rebuild_order(&mut self) {
         self.paint_order.clear();
+        self.modal = None;
         let mut stack = vec![self.root];
         while let Some(id) = stack.pop() {
             let node = self.node(id);
@@ -1152,7 +1182,11 @@ impl Tree {
             if !shown {
                 continue;
             }
+            let modal = node.modal;
             stack.extend(node.children.iter().rev());
+            if modal {
+                self.modal = Some(id);
+            }
             let order = self.paint_order.len() as u32;
             self.node_mut(id).order = order;
             self.paint_order.push(id);
@@ -1161,8 +1195,26 @@ impl Tree {
 
     fn nodes_at(&self, x: f32, y: f32) -> Vec<NodeId> {
         let mut found = Vec::new();
-        self.collect_at(self.root, x, y, &mut found);
+        self.collect_at(self.modal.unwrap_or(self.root), x, y, &mut found);
         found
+    }
+
+    pub fn modal_root(&self) -> Option<NodeId> {
+        self.modal
+    }
+
+    pub fn inert(&self, id: NodeId) -> bool {
+        let Some(modal) = self.modal else {
+            return false;
+        };
+        let mut current = Some(id);
+        while let Some(node) = current {
+            if node == modal {
+                return false;
+            }
+            current = self.get(node).and_then(|n| n.parent);
+        }
+        true
     }
 
     pub(crate) fn paint_children(&self, id: NodeId) -> impl DoubleEndedIterator<Item = NodeId> + '_ {
@@ -2044,7 +2096,7 @@ impl Tree {
     }
 
     pub fn pointer_shape_at(&self, x: f32, y: f32) -> &str {
-        let mut current = self.hit_any(x, y);
+        let mut current = self.hit_any(x, y).filter(|&id| !self.inert(id));
         let mut over_text = false;
         while let Some(id) = current {
             let Some(node) = self.get(id) else {
@@ -2112,7 +2164,9 @@ impl Tree {
                 return Some(HitTarget::Input(input));
             }
         }
-        None
+        self.modal_root()
+            .filter(|&id| self.get(id).is_some_and(|node| node.clickable))
+            .map(HitTarget::Click)
     }
 
     pub fn surface_at(&self, x: f32, y: f32) -> bool {
@@ -2171,7 +2225,7 @@ impl Tree {
         self.scroll_nodes()
             .into_iter()
             .rev()
-            .find(|&id| self.get(id).is_some_and(|node| node.visible.contains(x, y)))
+            .find(|&id| !self.inert(id) && self.get(id).is_some_and(|node| node.visible.contains(x, y)))
             .and_then(|id| self.scroll_area(id))
     }
 
@@ -2518,12 +2572,15 @@ impl DocLayout for Tree {
     }
 
     fn unified_ancestor(&self, id: NodeId) -> Option<NodeId> {
+        let modal = self.modal_root();
+        let mut inside_modal = false;
         let mut current = Some(id);
         while let Some(cur) = current {
             let node = self.get(cur)?;
             if node.style.selection_mode == SelectionMode::Unified {
-                return Some(cur);
+                return Some(if inside_modal { modal? } else { cur });
             }
+            inside_modal |= modal == Some(cur);
             current = node.parent;
         }
         None

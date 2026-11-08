@@ -271,6 +271,7 @@ struct PropsDto {
     text: Option<String>,
     key: Option<String>,
     clickable: bool,
+    modal: bool,
     hidden: bool,
     input: Option<InputDto>,
     image: Option<ImageDto>,
@@ -734,6 +735,7 @@ impl PropsDto {
             text: self.text,
             key: self.key,
             clickable: self.clickable,
+            modal: self.modal,
             hidden: self.hidden,
             input: self.input.map(|i| {
                 let defaults = InputProps::default();
