@@ -11,6 +11,26 @@ pub struct OpaqueArea {
     pub rect: Rect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfacePlacement {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub visible: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceCover {
+    pub surface: u32,
+    pub rect: [f32; 4],
+    pub opaque: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SurfaceLayout {
+    pub placements: Vec<SurfacePlacement>,
+    pub covers: Vec<SurfaceCover>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rect {
     pub x: u32,
@@ -26,6 +46,16 @@ impl Rect {
 
     pub fn is_empty(self) -> bool {
         self.w == 0 || self.h == 0
+    }
+
+    pub fn covering(area: crate::tree::PxRect) -> Rect {
+        let (x, y) = (area.x.floor().max(0.0), area.y.floor().max(0.0));
+        Rect {
+            x: x as u32,
+            y: y as u32,
+            w: ((area.x + area.w).ceil() - x).max(0.0) as u32,
+            h: ((area.y + area.h).ceil() - y).max(0.0) as u32,
+        }
     }
 
     pub fn union(self, other: Rect) -> Rect {

@@ -107,6 +107,10 @@ impl Engine {
     pub(super) fn handle_doc_key(&mut self, key: &KeyEvent) -> io::Result<bool> {
         use Granularity::{Char, Line, Word};
         let view = self.active_view;
+        let tree = &self.comp.views[view].tree;
+        if tree.doc_selection().is_some_and(|sel| tree.inert(sel.anchor.node)) {
+            return Ok(false);
+        }
         let m = key.mods;
         let combo = m.ctrl || m.sup;
         let horizontal = if m.alt {

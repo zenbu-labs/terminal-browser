@@ -12,7 +12,7 @@ use crate::wrap::wrap_lines;
 
 mod opaque;
 
-pub use opaque::opaque_areas;
+pub use opaque::{surface_covers, opaque_areas};
 pub use layer::{LayerCanvases, render_layer, scroll_layer};
 mod layer;
 use opaque::collect_surface_occluders;
@@ -230,6 +230,10 @@ fn paint_node(
             let (_, token) = surface_occluders.swap_remove(at);
             canvas.remove_occluder(token);
         }
+        if tree.host_surfaces() && node.children.is_empty() && crate::surfaces::with(surface, |_| ()).is_none() {
+            let hole = crate::surfaces::Rect::covering(rect);
+            canvas.fill_rect(hole.x, hole.y, hole.w, hole.h, [0, 0, 0, 0]);
+        }
         timed(stats.as_mut().map(|s| &mut s.surface), || {
             crate::surfaces::with(surface, |s| {
                 // scaling? er
@@ -354,7 +358,7 @@ fn paint_node(
                 wrap_lines(text, font, px, wrap, marks)
             });
             let line_h = line_metrics.new_line_size;
-            let focused = tree.focus() == Some(id);
+            let focused = tree.focus() == Some(id) && !tree.inert(id);
             let caret_line = node.input.as_ref().and_then(|state| {
                 (state.gutter.is_some() || state.active_line.is_some()).then(|| {
                     let cursor = state.input.cursor();
@@ -567,6 +571,7 @@ fn paint_node(
             if let Some(state) = &node.input
                 && state.input.selection().is_none()
                 && tree.focus() == Some(id)
+                && !tree.inert(id)
             {
                 let cursor = state.input.cursor();
                 let shape = state.caret_shape;

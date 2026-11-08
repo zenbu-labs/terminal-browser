@@ -398,6 +398,29 @@ fn editor_with_caret(initial: &str, shape: CaretShape) -> Vec<Desc> {
 }
 
 #[test]
+fn a_wrapping_row_moves_children_that_do_not_fit_onto_the_next_line() {
+    let card = |key: &str| Desc {
+        style: Style { width: Dimension::Px(120.0), height: Dimension::Px(30.0), ..Style::default() },
+        key: Some(key.into()),
+        ..Desc::default()
+    };
+    let row = |wrap| {
+        vec![Desc {
+            style: Style { width: Dimension::Px(200.0), flex_wrap: wrap, ..Style::default() },
+            children: vec![card("a"), card("b")],
+            ..Desc::default()
+        }]
+    };
+    let wrapped = tree_of((300.0, 100.0), row(true));
+    let (a, b) = (wrapped.rect(wrapped.find("a").unwrap()).unwrap(), wrapped.rect(wrapped.find("b").unwrap()).unwrap());
+    assert_eq!((b.x, b.y), (a.x, a.y + 30.0), "the second card starts the next line");
+
+    let single = tree_of((300.0, 100.0), row(false));
+    let b = single.rect(single.find("b").unwrap()).unwrap();
+    assert_eq!(b.y, 0.0, "without wrapping the cards share a line and shrink");
+}
+
+#[test]
 fn block_caret_covers_the_next_character_and_redraws_it_on_top() {
     let mut tree = tree_of((200.0, 60.0), editor_with_caret("hWo", CaretShape::Block));
     let id = tree.find("in").unwrap();
@@ -2531,4 +2554,180 @@ fn a_scrolled_list_is_described_as_content_that_moves_with_what_is_drawn_over_it
     scroll_list(&mut tree, 230.0);
     let layer = crate::paint::scroll_layer(&tree).unwrap();
     assert_eq!(layer.overlay_rects(), vec![crate::surfaces::Rect { x: 0, y: 0, w: 40, h: 10 }], "the stuck header is drawn over the content");
+}
+
+#[test]
+fn a_modal_makes_everything_outside_it_inert() {
+    let mut tree = Tree::new((200.0, 100.0));
+    let scroller = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, ..Style::default() },
+        ..Props::default()
+    });
+    let prompt = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(20.0), ..Style::default() },
+        input: Some(InputProps::default()),
+        ..Props::default()
+    });
+    tree.append(tree.root(), scroller);
+    tree.append(scroller, prompt);
+    let backdrop_props = |modal| Props {
+        style: Style {
+            position: Position::Absolute,
+            inset: crate::style::Inset::top_left(100.0, 0.0),
+            width: Dimension::Px(100.0),
+            height: Dimension::Px(100.0),
+            ..Style::default()
+        },
+        clickable: true,
+        modal,
+        ..Props::default()
+    };
+    let backdrop = tree.create(backdrop_props(false));
+    let field = tree.create(Props {
+        style: Style { width: Dimension::Px(100.0), height: Dimension::Px(20.0), ..Style::default() },
+        input: Some(InputProps::default()),
+        ..Props::default()
+    });
+    tree.append(tree.root(), backdrop);
+    tree.append(backdrop, field);
+    let mut fonts = crate::fonts::FontRegistry::bundled();
+    tree.flush_layout(&mut fonts, 16.0);
+    assert_eq!(tree.hit_target(10.0, 10.0), Some(HitTarget::Input(prompt)));
+    assert!(tree.scroll_area_at(10.0, 10.0).is_some());
+
+    tree.update(backdrop, backdrop_props(true));
+    tree.flush_layout(&mut fonts, 16.0);
+    assert_eq!(tree.modal_root(), Some(backdrop));
+    assert!(tree.inert(prompt) && tree.inert(scroller));
+    assert!(!tree.inert(backdrop) && !tree.inert(field));
+    assert_eq!(tree.hit_target(10.0, 10.0), Some(HitTarget::Click(backdrop)), "a click outside lands on the modal");
+    assert_eq!(tree.hit_target(110.0, 10.0), Some(HitTarget::Input(field)));
+    assert!(tree.scroll_area_at(10.0, 10.0).is_none());
+}
+
+#[test]
+fn a_removed_modal_leaves_the_tree_interactive() {
+    let mut tree = Tree::new((200.0, 100.0));
+    let prompt = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(20.0), ..Style::default() },
+        input: Some(InputProps::default()),
+        ..Props::default()
+    });
+    let sheet = tree.create(Props {
+        style: Style { position: Position::Absolute, width: Dimension::Px(200.0), height: Dimension::Px(50.0), ..Style::default() },
+        modal: true,
+        ..Props::default()
+    });
+    tree.append(tree.root(), prompt);
+    tree.append(tree.root(), sheet);
+    let mut fonts = crate::fonts::FontRegistry::bundled();
+    tree.flush_layout(&mut fonts, 16.0);
+    assert!(tree.inert(prompt));
+
+    tree.remove(sheet);
+    tree.flush_layout(&mut fonts, 16.0);
+    assert_eq!(tree.modal_root(), None);
+    assert!(!tree.inert(prompt));
+    assert_eq!(tree.hit_target(10.0, 10.0), Some(HitTarget::Input(prompt)));
+}
+
+#[test]
+fn a_host_drawn_surface_reports_where_it_sits_and_what_covers_it() {
+    let mut tree = Tree::new((200.0, 100.0));
+    let surface = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(60.0), ..Style::default() },
+        surface: Some(7),
+        ..Props::default()
+    });
+    let menu = tree.create(Props {
+        style: Style {
+            position: Position::Absolute,
+            inset: crate::style::Inset::top_left(40.0, 10.0),
+            width: Dimension::Px(50.0),
+            height: Dimension::Px(30.0),
+            background: Some(Paint::Solid([20, 20, 20, 255])),
+            ..Style::default()
+        },
+        ..Props::default()
+    });
+    tree.append(tree.root(), surface);
+    tree.append(tree.root(), menu);
+    let mut fonts = crate::fonts::FontRegistry::bundled();
+    tree.flush_layout(&mut fonts, 16.0);
+
+    let placed: Vec<_> = tree.surface_nodes().map(|(id, rect, _)| (id, rect.w, rect.h)).collect();
+    assert_eq!(placed, vec![(7, 200.0, 60.0)]);
+    let covers = crate::paint::surface_covers(&tree);
+    assert_eq!(covers.len(), 1, "the menu is drawn over the surface");
+    let (id, rect, opaque) = covers[0];
+    assert_eq!((id, rect.x, rect.y, rect.w, rect.h, opaque), (7, 40.0, 10.0, 50.0, 30.0, true));
+}
+
+#[test]
+fn a_one_word_caption_stays_one_line_when_its_card_wraps() {
+    let captioned = |width: f32| Desc {
+        style: Style { flex_direction: FlexDirection::Column, align_items: Some(Align::Start), gap: 8.0, flex_shrink: 0.0, width: Dimension::Px(width), ..Style::default() },
+        children: vec![
+            Desc { style: Style { width: Dimension::Px(width), height: Dimension::Px(264.0), flex_shrink: 0.0, ..Style::default() }, ..Desc::default() },
+            Desc { text: Some("pic.png".into()), ..Desc::default() },
+        ],
+        ..Desc::default()
+    };
+    let tree = tree_of(
+        (1650.0, 1100.0),
+        vec![Desc {
+            style: Style { flex_direction: FlexDirection::Column, width: Dimension::Px(1650.0), height: Dimension::Px(1000.0), overflow: Overflow::Scroll, ..Style::default() },
+            children: vec![Desc {
+                style: Style { flex_direction: FlexDirection::Column, ..Style::default() },
+                children: vec![Desc {
+                    style: Style { flex_direction: FlexDirection::Column, flex_shrink: 0.0, ..Style::default() },
+                    children: vec![Desc {
+                        style: Style { flex_wrap: true, align_items: Some(Align::Start), gap: 16.0, padding: Edges { top: 16.0, left: 30.0, ..Edges::default() }, ..Style::default() },
+                        key: Some("row".into()),
+                        children: vec![captioned(620.0), captioned(890.0)],
+                        ..Desc::default()
+                    }],
+                    ..Desc::default()
+                }],
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        }],
+    );
+    let line = line_height(&font(), 16.0);
+    let row = tree.rect(tree.find("row").unwrap()).unwrap().h;
+    assert!((row - (16.0 + 264.0 + 8.0 + line)).abs() < 1.0, "one line of cards with their captions, got {row}");
+}
+
+#[test]
+fn a_row_with_a_flex_shrink_0_child_pulled_up_by_a_negative_margin_keeps_its_height() {
+    let row = |i: usize| Desc {
+        style: Style { flex_direction: FlexDirection::Column, ..Style::default() },
+        key: Some(format!("row{i}")),
+        children: vec![
+            Desc { style: Style { height: Dimension::Px(40.0), ..Style::default() }, ..Desc::default() },
+            Desc {
+                style: Style {
+                    height: Dimension::Px(30.0),
+                    flex_shrink: 0.0,
+                    position: Position::Sticky,
+                    inset: crate::style::Inset { top: Some(InsetValue::Px(0.0)), ..Default::default() },
+                    margin: Edges { top: -30.0, ..Default::default() },
+                    ..Style::default()
+                },
+                ..Desc::default()
+            },
+            Desc { style: Style { height: Dimension::Px(20.0), ..Style::default() }, ..Desc::default() },
+        ],
+        ..Desc::default()
+    };
+    let mut tree = tree_of((40.0, 100.0), vec![Desc {
+        style: Style { width: Dimension::Px(40.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, layout: Layout::List, ..Style::default() },
+        key: Some("list".into()),
+        children: (0..3).map(row).collect(),
+        ..Desc::default()
+    }]);
+    catch_up(&mut tree);
+    let ys: Vec<f32> = (0..3).map(|i| tree.node(tree.find(&format!("row{i}")).unwrap()).list_y).collect();
+    assert_eq!(ys, vec![0.0, 60.0, 120.0]);
 }

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { appExecutable } from "./app-executable";
 import { announceGuest, findOwner, waitForOwners } from "./instances";
+import { RELAUNCH_FD, RELAUNCH_FD_ENV, parseRelaunchRequest, type RelaunchRequest } from "./relaunch";
 import { apparmorSetup, linuxSandboxError } from "./sandbox";
 import { UNSUPPORTED_ENV, checkTerminal, detect } from "./terminal";
 
@@ -31,6 +33,20 @@ function resolveEntry(given: string): string {
   }
   if (!fs.existsSync(target)) fail(`no such file ${target}`);
   return target;
+}
+
+const TERMINAL_RESET =
+  "\x1b\\\x1b[?2026l\x1b_Ga=d,d=A,q=2\x1b\\\x1b[>4;0m\x1b[?2031l" +
+  "\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l";
+
+function resetTerminal(tty: string | undefined) {
+  let fd = 1;
+  try {
+    if (tty) fd = fs.openSync(tty, "w");
+    fs.writeSync(fd, TERMINAL_RESET);
+    execFileSync("stty", ["sane"], { stdio: [fd, "ignore", "ignore"] });
+  } catch {}
+  if (fd !== 1) fs.closeSync(fd);
 }
 
 function appName(dir: string): string {
@@ -102,10 +118,8 @@ async function main(): Promise<number> {
   const entry = resolveEntry(own[0] ?? ".");
 
   const tty = process.env.PIXEL_TTY ?? ownTty();
-  const owner = findOwner(tty);
-  const announced = owner ? announceGuest(owner, appName(appDir(entry))) : null;
   let unsupported = false;
-  if (!owner && !process.env.PIXEL_EMBED) {
+  if (!findOwner(tty) && !process.env.PIXEL_EMBED) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       fail("tty required");
     }
@@ -129,42 +143,62 @@ async function main(): Promise<number> {
   }
 
   const bootstrap = path.join(__dirname, "bootstrap.js");
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
-  env.PIXEL_TTY = tty;
-  if (unsupported) env[UNSUPPORTED_ENV] = "1";
-  else delete env[UNSUPPORTED_ENV];
-  if (announced) env.PIXEL_PANE = announced.pane;
-  else delete env.PIXEL_PANE;
   const log = logFile(appDir(entry));
-  const stderr = fs.openSync(log, "a");
-  const child = spawn(electron, [bootstrap, entry, ...chromiumArgs, ...appArgs], {
-    stdio: ["inherit", "inherit", stderr],
-    env,
-  });
+
+  let child: ChildProcess | null = null;
   const forward = (signal: NodeJS.Signals) => () => {
+    const target = child;
     try {
-      child.kill(signal);
+      target?.kill(signal);
     } catch {}
     setTimeout(() => {
       try {
-        child.kill("SIGKILL");
+        target?.kill("SIGKILL");
       } catch {}
     }, 2000).unref();
   };
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, forward(signal));
-  const exited = await new Promise<number>((resolve) => {
-    child.on("error", (error) => {
-      process.stderr.write(`pixel: could not start electron: ${error.message}\n`);
-      resolve(1);
+
+  const launch = async (launchArgs: string[], extraEnv: Record<string, string>): Promise<{ code: number; relaunch: RelaunchRequest | null }> => {
+    const owner = findOwner(tty);
+    const announced = owner ? announceGuest(owner, appName(appDir(entry))) : null;
+    const env = { ...process.env, ...extraEnv };
+    delete env.ELECTRON_RUN_AS_NODE;
+    env.PIXEL_TTY = tty;
+    env[RELAUNCH_FD_ENV] = String(RELAUNCH_FD);
+    if (unsupported) env[UNSUPPORTED_ENV] = "1";
+    else delete env[UNSUPPORTED_ENV];
+    if (announced) env.PIXEL_PANE = announced.pane;
+    else delete env.PIXEL_PANE;
+    const stderr = fs.openSync(log, "a");
+    const spawned = spawn(electron, [bootstrap, entry, ...chromiumArgs, ...launchArgs], {
+      stdio: ["inherit", "inherit", stderr, "pipe"],
+      env,
     });
-    child.on("exit", (code, signal) => {
-      if (code && !unsupported) {
-        process.stderr.write(`pixel crashed (exit code ${code}). Full logs: ${log}\n`);
-      }
-      resolve(code ?? (signal ? 128 : 0));
+    child = spawned;
+    let requested = "";
+    spawned.stdio[RELAUNCH_FD]?.on("data", (chunk: Buffer) => (requested += chunk.toString("utf8")));
+    const code = await new Promise<number>((resolve) => {
+      spawned.on("error", (error) => {
+        process.stderr.write(`pixel: could not start electron: ${error.message}\n`);
+        resolve(1);
+      });
+      spawned.on("close", (code, signal) => {
+        if (signal && !owner && !process.env.PIXEL_EMBED && !unsupported) resetTerminal(tty);
+        if (code && !unsupported) {
+          process.stderr.write(`pixel crashed (exit code ${code}). Full logs: ${log}\n`);
+        }
+        resolve(code ?? (signal ? 128 : 0));
+      });
     });
-  });
+    fs.closeSync(stderr);
+    announced?.end();
+    return { code, relaunch: requested ? parseRelaunchRequest(requested) : null };
+  };
+
+  let run = await launch(appArgs, {});
+  while (run.relaunch) run = await launch(run.relaunch.args, run.relaunch.env ?? {});
+  const exited = run.code;
   await waitForOwners(tty);
   return exited;
 }

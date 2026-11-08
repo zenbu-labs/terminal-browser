@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 pub use crate::canvas::{Canvas, Frame, Overlay, Pixels, ScrollLayer, measure_text};
 pub use crate::input::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
-pub use crate::surfaces::{OpaqueArea, Rect};
+pub use crate::surfaces::{OpaqueArea, Rect, SurfaceCover, SurfaceLayout, SurfacePlacement};
 
 pub const API_VERSION: u32 = 1;
 
@@ -72,6 +72,19 @@ pub enum Event {
 pub struct Wants {
     pub scroll_layer: bool,
     pub view_canvas: bool,
+    pub host_surfaces: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+pub trait SystemClipboard: Send + Sync {
+    fn files(&self) -> Vec<std::path::PathBuf>;
+    fn image(&self) -> Option<ClipboardImage>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +156,10 @@ pub trait Backend: Any + Send {
 
     fn clipboard_has_types(&self) -> bool {
         false
+    }
+
+    fn system_clipboard(&self) -> Option<Arc<dyn SystemClipboard>> {
+        None
     }
 
     fn message(&mut self, _message: serde_json::Value) {}

@@ -3,6 +3,7 @@ mod herdr;
 mod hosted;
 mod kitty;
 mod native;
+mod system_clipboard;
 mod terminal;
 pub mod wrapper;
 

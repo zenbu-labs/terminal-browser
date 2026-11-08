@@ -11,6 +11,7 @@ pub struct Frame<'a> {
     pub opaque: &'a [OpaqueArea],
     pub ui_over_surfaces: &'a [Rect],
     pub layer: Option<&'a ScrollLayer>,
+    pub surfaces: Option<&'a crate::surfaces::SurfaceLayout>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

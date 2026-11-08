@@ -30,7 +30,8 @@ impl Engine {
     pub(super) fn bar_at(&self, view: usize, point: (f32, f32)) -> Option<NodeId> {
         let tree = &self.comp.views[view].tree;
         tree.scroll_nodes().into_iter().rev().find(|&id| {
-            tree.bar_opacity(id) > 0.1
+            !tree.inert(id)
+                && tree.bar_opacity(id) > 0.1
                 && tree
                     .scrollbar_rects(id)
                     .is_some_and(|r| r.zone.contains(point.0, point.1))

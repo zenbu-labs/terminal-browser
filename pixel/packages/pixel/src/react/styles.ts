@@ -63,6 +63,7 @@ export type Border =
 
 export interface Style {
   flexDirection?: "row" | "column";
+  flexWrap?: "nowrap" | "wrap";
   flexGrow?: number;
   flexShrink?: number;
   flexBasis?: number | `${number}%` | "auto";
@@ -150,6 +151,7 @@ function serializeBorder(border: Border): Record<string, unknown> {
 export function serializeStyle(style: Style): Record<string, unknown> {
   return {
     flexDirection: style.flexDirection,
+    flexWrap: style.flexWrap,
     flexGrow: style.flexGrow,
     flexShrink: style.flexShrink,
     flexBasis: style.flexBasis,

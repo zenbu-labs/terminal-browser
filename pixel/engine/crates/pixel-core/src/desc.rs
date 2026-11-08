@@ -40,6 +40,7 @@ impl Desc {
             pointer_events: false,
             hover_events: false,
             outside_click_events: false,
+            modal: false,
             drag_events: false,
             selection_events: false,
             move_events: false,

@@ -190,6 +190,12 @@ pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool) -> taffy::Style
             FlexDirection::Row => taffy::FlexDirection::Row,
             FlexDirection::Column => taffy::FlexDirection::Column,
         },
+        flex_wrap: if style.flex_wrap {
+            taffy::FlexWrap::Wrap
+        } else {
+            taffy::FlexWrap::NoWrap
+        },
+        align_content: style.flex_wrap.then_some(taffy::AlignContent::FlexStart),
         flex_grow: style.flex_grow,
         flex_shrink: style.flex_shrink,
         flex_basis: dimension(style.flex_basis),

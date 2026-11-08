@@ -60,6 +60,7 @@ pub struct Compositor {
     pub opaque: Vec<crate::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<Rect>,
     layer: Option<crate::canvas::ScrollLayer>,
+    pub surface_layout: Option<crate::surfaces::SurfaceLayout>,
     changed: Vec<Rect>,
     repainted: Vec<Rect>,
     direct: Option<usize>,
@@ -81,6 +82,7 @@ impl Compositor {
             opaque: Vec::new(),
             ui_over_surfaces: Vec::new(),
             layer: None,
+            surface_layout: None,
             changed: Vec::new(),
             repainted: Vec::new(),
             direct: None,
@@ -264,7 +266,28 @@ impl Compositor {
             opaque: &self.opaque,
             ui_over_surfaces: &self.ui_over_surfaces,
             layer: self.layer.as_ref(),
+            surfaces: self.surface_layout.as_ref(),
         }
+    }
+
+    pub(crate) fn place_surfaces(&mut self) {
+        let rect = |r: crate::tree::PxRect, origin: f32| [r.x + origin, r.y, r.w, r.h];
+        let mut layout = crate::surfaces::SurfaceLayout::default();
+        for i in self.active_views() {
+            let view = &self.views[i];
+            let origin = view.origin_x as f32;
+            layout.placements.extend(view.tree.surface_nodes().map(|(surface, abs, visible)| crate::surfaces::SurfacePlacement {
+                surface,
+                rect: rect(abs, origin),
+                visible: rect(visible, origin),
+            }));
+            if view.tree.surface_nodes().next().is_some() {
+                layout.covers.extend(crate::paint::surface_covers(&view.tree).into_iter().map(|(surface, r, opaque)| {
+                    crate::surfaces::SurfaceCover { surface, rect: rect(r, origin), opaque }
+                }));
+            }
+        }
+        self.surface_layout = Some(layout);
     }
 
     fn collect_opaque(&mut self) {

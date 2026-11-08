@@ -171,8 +171,8 @@ impl ClipboardFlows {
         }
     }
 
-    pub fn request_paste(&mut self, view: usize, node: NodeId) {
-        let seq = crate::image_cache::queue_clipboard_read();
+    pub fn request_paste(&mut self, host: &dyn Backend, view: usize, node: NodeId) {
+        let seq = crate::image_cache::queue_clipboard_read(host.system_clipboard());
         self.pending_pastes.push((seq, view, node));
     }
 

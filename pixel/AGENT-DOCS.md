@@ -161,6 +161,7 @@ Text names fonts by family, as in CSS. `FontFace` is `{ family, src, weight?, st
 | property | type |
 | --- | --- |
 | `flexDirection` | `"row" \| "column"` |
+| `flexWrap` | `"nowrap" \| "wrap"`; wrapped lines pack to the start |
 | `flexGrow`, `flexShrink` | `number` |
 | `flexBasis`, `width`, `height`, `minWidth`, `maxWidth`, `maxHeight` | `number \| "${n}%" \| "auto"` |
 | `padding`, `margin` | `number \| { top, right, bottom, left }` |
@@ -202,7 +203,7 @@ Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/p
 
 | component | props (file:line) |
 | --- | --- |
-| `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onStick(stuck)` (sticky boxes: called when one starts or stops being held at the top), `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `contentHeight`, `surface: Surface` |
+| `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `modal` (while shown only this subtree takes clicks, hover, wheel, selection and keys; a click outside lands on it), `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onStick(stuck)` (sticky boxes: called when one starts or stops being held at the top), `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `contentHeight`, `surface: Surface` |
 | `Text` | `TextProps` `:128`. children must be strings or numbers. `spans: { start, end, color, background?, bold?, italic?, underline?, strikethrough? }[]`, `onClick`, `onMouseEnter`, `onMouseLeave` |
 | `Input` | `InputProps` `:177`. multi-line editor; with `style.wrap: false` it is single-line and its text is vertically centered when the box is taller than one line. `value`, `defaultValue`, `autoFocus` (only inputs take focus on click; clicking or selecting other content leaves focus where it is, so call `blur()` from `onClickOutside` to drop it), `onChange(text, ChangeInfo)`, `onSubmit(text, marks)`, `onCaret(CaretInfo)`, `onPasteImage`, `caretColor`, `caretShape: "bar" | "block" | "underscore"` (block and underscore are one character wide; block redraws the character under it in black or white for contrast), `selectionColor`, `spans`, `gutter: { color, activeColor }`, `activeLine`, `defaultMarks`, `renderMark(id)`, `serializeMark(id)` |
 | `Image` | `ImageProps` `:211`. `src` path or url, `placeholder`, `error`, `onClick` |
@@ -416,8 +417,8 @@ host → { type: "size" | "paste" | "wheel" | "focus" | "colors" | "devtools", .
 The engine draws through `pixel_core::backend::Backend` (`engine/crates/pixel-core/src/backend.rs`). The terminal is one backend (`pixel-terminal`); others live in their own repos and depend on `pixel-core` and `pixel-bridge`.
 
 - Required: `start` (first size and colors), `waker`, `poll(timeout)` (the only place the engine thread blocks), `present(Frame)`.
-- `Frame`: the composed canvas, damage (`changed`, `repainted`), opaque areas over surfaces, and what the backend asked for in `wants()`: `scroll_layer` (the biggest list scroller painted on its own so it can be moved), `view_canvas` (present the view's canvas directly).
-- Optional hooks: `poll_metrics` (hosts that ask for their size), `pending_present`, `animating`, `before_frame`, `idle`, `deadline`, `schedule_present` / `take_presented_at` (pacing), `byte_rate_limit`, `set_title`, `set_pointer_shape`, clipboard reads and writes, `message` (app to backend), `describe` (extra `root.info` fields).
+- `Frame`: the composed canvas, damage (`changed`, `repainted`), opaque areas over surfaces, and what the backend asked for in `wants()`: `scroll_layer` (the biggest list scroller painted on its own so it can be moved), `view_canvas` (present the view's canvas directly), `host_surfaces` (the backend draws surfaces itself: they're left transparent and `Frame.surfaces` lists each surface's placement and the UI covering it; match them to JS surfaces with `surfaceId` from `@zenbu-labs/pixel/core`).
+- Optional hooks: `poll_metrics` (hosts that ask for their size), `pending_present`, `animating`, `before_frame`, `idle`, `deadline`, `schedule_present` / `take_presented_at` (pacing), `byte_rate_limit`, `set_title`, `set_pointer_shape`, clipboard reads and writes, `system_clipboard` (where image pastes are read from; the terminal uses arboard), `message` (app to backend), `describe` (extra `root.info` fields).
 - Backend events: input (`Key`, `Mouse`, `Wheel` steps, `Pinch`, `Paste`, `Focus`) and host changes (`Resize`, `Colors`, `Visible`, `Redraw`, `Closed`, `ClipboardData`). `Message(json)` reaches the app as an event with its own `type`; unknown types go to `onBackendMessage` on a `@zenbu-labs/pixel/core` root, and its `sendToBackend(message)` goes the other way.
 - Binding code that knows its backend reaches it with `engine.backend.downcast_mut::<B>()` (pixel-node does this for retarget and the presenter overlay).
 - Node: a backend package ships its own `.node` built from `pixel-node` plus its crate, calls `register_backend`, and makes its engine with `PixelEngine.withBackend(name, options)`.

@@ -10,6 +10,7 @@ export type { NativeBinding } from "./react/binding";
 export type { NativeEngine } from "./react/native";
 export * from "./react/core";
 export { useRect } from "./layout";
+export { surfaceId } from "./react/surface";
 export { makeTheme } from "./theme";
 export type { Theme } from "./theme";
 
