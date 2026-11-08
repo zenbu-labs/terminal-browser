@@ -398,6 +398,29 @@ fn editor_with_caret(initial: &str, shape: CaretShape) -> Vec<Desc> {
 }
 
 #[test]
+fn a_wrapping_row_moves_children_that_do_not_fit_onto_the_next_line() {
+    let card = |key: &str| Desc {
+        style: Style { width: Dimension::Px(120.0), height: Dimension::Px(30.0), ..Style::default() },
+        key: Some(key.into()),
+        ..Desc::default()
+    };
+    let row = |wrap| {
+        vec![Desc {
+            style: Style { width: Dimension::Px(200.0), flex_wrap: wrap, ..Style::default() },
+            children: vec![card("a"), card("b")],
+            ..Desc::default()
+        }]
+    };
+    let wrapped = tree_of((300.0, 100.0), row(true));
+    let (a, b) = (wrapped.rect(wrapped.find("a").unwrap()).unwrap(), wrapped.rect(wrapped.find("b").unwrap()).unwrap());
+    assert_eq!((b.x, b.y), (a.x, a.y + 30.0), "the second card starts the next line");
+
+    let single = tree_of((300.0, 100.0), row(false));
+    let b = single.rect(single.find("b").unwrap()).unwrap();
+    assert_eq!(b.y, 0.0, "without wrapping the cards share a line and shrink");
+}
+
+#[test]
 fn block_caret_covers_the_next_character_and_redraws_it_on_top() {
     let mut tree = tree_of((200.0, 60.0), editor_with_caret("hWo", CaretShape::Block));
     let id = tree.find("in").unwrap();

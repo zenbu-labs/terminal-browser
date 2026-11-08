@@ -562,6 +562,7 @@ impl CornerRadiusDto {
 #[serde(rename_all = "camelCase", default)]
 struct StyleDto {
     flex_direction: Option<String>,
+    flex_wrap: Option<String>,
     flex_grow: Option<f32>,
     flex_shrink: Option<f32>,
     flex_basis: Option<DimensionDto>,
@@ -648,6 +649,7 @@ impl StyleDto {
                 Some("column") => FlexDirection::Column,
                 _ => FlexDirection::Row,
             },
+            flex_wrap: self.flex_wrap.as_deref() == Some("wrap"),
             flex_grow: self.flex_grow.unwrap_or(0.0),
             flex_shrink: self.flex_shrink.unwrap_or(1.0),
             flex_basis: dimension(self.flex_basis),

@@ -201,6 +201,7 @@ pub enum Paint {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Style {
     pub flex_direction: FlexDirection,
+    pub flex_wrap: bool,
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
@@ -243,6 +244,7 @@ impl Default for Style {
     fn default() -> Self {
         Self {
             flex_direction: FlexDirection::default(),
+            flex_wrap: false,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: Dimension::default(),

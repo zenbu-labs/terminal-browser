@@ -161,6 +161,7 @@ Text names fonts by family, as in CSS. `FontFace` is `{ family, src, weight?, st
 | property | type |
 | --- | --- |
 | `flexDirection` | `"row" \| "column"` |
+| `flexWrap` | `"nowrap" \| "wrap"`; wrapped lines pack to the start |
 | `flexGrow`, `flexShrink` | `number` |
 | `flexBasis`, `width`, `height`, `minWidth`, `maxWidth`, `maxHeight` | `number \| "${n}%" \| "auto"` |
 | `padding`, `margin` | `number \| { top, right, bottom, left }` |
