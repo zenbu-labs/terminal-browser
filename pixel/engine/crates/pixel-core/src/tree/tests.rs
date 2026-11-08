@@ -2630,3 +2630,35 @@ fn a_removed_modal_leaves_the_tree_interactive() {
     assert!(!tree.inert(prompt));
     assert_eq!(tree.hit_target(10.0, 10.0), Some(HitTarget::Input(prompt)));
 }
+
+#[test]
+fn a_host_drawn_surface_reports_where_it_sits_and_what_covers_it() {
+    let mut tree = Tree::new((200.0, 100.0));
+    let surface = tree.create(Props {
+        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(60.0), ..Style::default() },
+        surface: Some(7),
+        ..Props::default()
+    });
+    let menu = tree.create(Props {
+        style: Style {
+            position: Position::Absolute,
+            inset: crate::style::Inset::top_left(40.0, 10.0),
+            width: Dimension::Px(50.0),
+            height: Dimension::Px(30.0),
+            background: Some(Paint::Solid([20, 20, 20, 255])),
+            ..Style::default()
+        },
+        ..Props::default()
+    });
+    tree.append(tree.root(), surface);
+    tree.append(tree.root(), menu);
+    let mut fonts = crate::fonts::FontRegistry::bundled();
+    tree.flush_layout(&mut fonts, 16.0);
+
+    let placed: Vec<_> = tree.surface_nodes().map(|(id, rect, _)| (id, rect.w, rect.h)).collect();
+    assert_eq!(placed, vec![(7, 200.0, 60.0)]);
+    let covers = crate::paint::surface_covers(&tree);
+    assert_eq!(covers.len(), 1, "the menu is drawn over the surface");
+    let (id, rect, opaque) = covers[0];
+    assert_eq!((id, rect.x, rect.y, rect.w, rect.h, opaque), (7, 40.0, 10.0, 50.0, 30.0, true));
+}

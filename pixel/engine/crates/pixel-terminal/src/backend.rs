@@ -464,6 +464,7 @@ impl Backend for TerminalBackend {
         Wants {
             scroll_layer: self.term.draws_layers(),
             view_canvas: self.term.draws_locally(),
+            host_surfaces: false,
         }
     }
 

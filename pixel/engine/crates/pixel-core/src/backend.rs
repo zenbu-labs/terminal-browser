@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 pub use crate::canvas::{Canvas, Frame, Overlay, Pixels, ScrollLayer, measure_text};
 pub use crate::input::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
-pub use crate::surfaces::{OpaqueArea, Rect};
+pub use crate::surfaces::{OpaqueArea, Rect, SurfaceCover, SurfaceLayout, SurfacePlacement};
 
 pub const API_VERSION: u32 = 1;
 
@@ -72,6 +72,7 @@ pub enum Event {
 pub struct Wants {
     pub scroll_layer: bool,
     pub view_canvas: bool,
+    pub host_surfaces: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

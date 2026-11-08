@@ -507,7 +507,7 @@ mod tests {
         let mut canvas = pixel_core::backend::Canvas::new(4, 2);
         canvas.pixels[..4].copy_from_slice(&[1, 2, 3, 255]);
         let whole = [pixel_core::surfaces::Rect::sized(canvas.width, canvas.height)];
-        term.draw(pixel_core::backend::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None })
+        term.draw(pixel_core::backend::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: None })
             .unwrap();
         let header = frames.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(header.contains("\"format\":\"bgra\""), "{header}");
@@ -572,7 +572,7 @@ mod tests {
         let mut canvas = pixel_core::backend::Canvas::new(25, 30);
         canvas.pixels[..4].copy_from_slice(&[9, 8, 7, 255]);
         let whole = [pixel_core::surfaces::Rect::sized(canvas.width, canvas.height)];
-        let frame = pixel_core::backend::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None };
+        let frame = pixel_core::backend::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: None };
         term.draw(frame).unwrap();
         term.draw(frame).unwrap();
 

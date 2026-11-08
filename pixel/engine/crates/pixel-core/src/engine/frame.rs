@@ -98,6 +98,10 @@ impl Engine {
             self.backend.idle(self.comp.frame())?;
         }
         let active = self.comp.active_views();
+        let host_surfaces = self.backend.wants().host_surfaces;
+        for &i in &active {
+            self.comp.views[i].tree.set_host_surfaces(host_surfaces);
+        }
         let work: Vec<(usize, bool)> = active
             .iter()
             .filter_map(|&i| {
@@ -201,6 +205,9 @@ impl Engine {
             }
             let direct = wants.view_canvas;
             self.compose(&painted, direct);
+            if wants.host_surfaces {
+                self.comp.place_surfaces();
+            }
             let bytes = crate::profiler::span("draw", || self.backend.present(self.comp.frame()))?;
             crate::profiler::count("bytes", || bytes as u64);
             if let Some((thread_before, process_before)) = cpu
