@@ -1135,7 +1135,7 @@ fn determine_container_main_size(
                             let flex_contribution = if item.content_flex_fraction > 0.0 {
                                 f32_max(1.0, item.flex_grow) * flex_fraction
                             } else if item.content_flex_fraction < 0.0 {
-                                let scaled_shrink_factor = f32_max(1.0, item.flex_shrink) * item.inner_flex_basis;
+                                let scaled_shrink_factor = f32_max(1.0, item.flex_shrink * item.inner_flex_basis);
                                 scaled_shrink_factor * flex_fraction
                             } else {
                                 0.0

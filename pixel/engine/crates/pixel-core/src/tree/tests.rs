@@ -2662,3 +2662,72 @@ fn a_host_drawn_surface_reports_where_it_sits_and_what_covers_it() {
     let (id, rect, opaque) = covers[0];
     assert_eq!((id, rect.x, rect.y, rect.w, rect.h, opaque), (7, 40.0, 10.0, 50.0, 30.0, true));
 }
+
+#[test]
+fn a_one_word_caption_stays_one_line_when_its_card_wraps() {
+    let captioned = |width: f32| Desc {
+        style: Style { flex_direction: FlexDirection::Column, align_items: Some(Align::Start), gap: 8.0, flex_shrink: 0.0, width: Dimension::Px(width), ..Style::default() },
+        children: vec![
+            Desc { style: Style { width: Dimension::Px(width), height: Dimension::Px(264.0), flex_shrink: 0.0, ..Style::default() }, ..Desc::default() },
+            Desc { text: Some("pic.png".into()), ..Desc::default() },
+        ],
+        ..Desc::default()
+    };
+    let tree = tree_of(
+        (1650.0, 1100.0),
+        vec![Desc {
+            style: Style { flex_direction: FlexDirection::Column, width: Dimension::Px(1650.0), height: Dimension::Px(1000.0), overflow: Overflow::Scroll, ..Style::default() },
+            children: vec![Desc {
+                style: Style { flex_direction: FlexDirection::Column, ..Style::default() },
+                children: vec![Desc {
+                    style: Style { flex_direction: FlexDirection::Column, flex_shrink: 0.0, ..Style::default() },
+                    children: vec![Desc {
+                        style: Style { flex_wrap: true, align_items: Some(Align::Start), gap: 16.0, padding: Edges { top: 16.0, left: 30.0, ..Edges::default() }, ..Style::default() },
+                        key: Some("row".into()),
+                        children: vec![captioned(620.0), captioned(890.0)],
+                        ..Desc::default()
+                    }],
+                    ..Desc::default()
+                }],
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        }],
+    );
+    let line = line_height(&font(), 16.0);
+    let row = tree.rect(tree.find("row").unwrap()).unwrap().h;
+    assert!((row - (16.0 + 264.0 + 8.0 + line)).abs() < 1.0, "one line of cards with their captions, got {row}");
+}
+
+#[test]
+fn a_row_with_a_flex_shrink_0_child_pulled_up_by_a_negative_margin_keeps_its_height() {
+    let row = |i: usize| Desc {
+        style: Style { flex_direction: FlexDirection::Column, ..Style::default() },
+        key: Some(format!("row{i}")),
+        children: vec![
+            Desc { style: Style { height: Dimension::Px(40.0), ..Style::default() }, ..Desc::default() },
+            Desc {
+                style: Style {
+                    height: Dimension::Px(30.0),
+                    flex_shrink: 0.0,
+                    position: Position::Sticky,
+                    inset: crate::style::Inset { top: Some(InsetValue::Px(0.0)), ..Default::default() },
+                    margin: Edges { top: -30.0, ..Default::default() },
+                    ..Style::default()
+                },
+                ..Desc::default()
+            },
+            Desc { style: Style { height: Dimension::Px(20.0), ..Style::default() }, ..Desc::default() },
+        ],
+        ..Desc::default()
+    };
+    let mut tree = tree_of((40.0, 100.0), vec![Desc {
+        style: Style { width: Dimension::Px(40.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, layout: Layout::List, ..Style::default() },
+        key: Some("list".into()),
+        children: (0..3).map(row).collect(),
+        ..Desc::default()
+    }]);
+    catch_up(&mut tree);
+    let ys: Vec<f32> = (0..3).map(|i| tree.node(tree.find(&format!("row{i}")).unwrap()).list_y).collect();
+    assert_eq!(ys, vec![0.0, 60.0, 120.0]);
+}

@@ -18,6 +18,34 @@ pub(crate) struct CacheEntry<T> {
     content: T,
 }
 
+impl<T> CacheEntry<T> {
+    fn applies_to(&self, cached_size: Size<f32>, known: Size<Option<f32>>, available: Size<AvailableSpace>) -> bool {
+        axis_applies(self.known_dimensions.width, self.available_space.width, cached_size.width, known.width, available.width)
+            && axis_applies(
+                self.known_dimensions.height,
+                self.available_space.height,
+                cached_size.height,
+                known.height,
+                available.height,
+            )
+    }
+}
+
+fn axis_applies(
+    entry_known: Option<f32>,
+    entry_available: AvailableSpace,
+    cached: f32,
+    known: Option<f32>,
+    available: AvailableSpace,
+) -> bool {
+    match known {
+        Some(_) => {
+            known == entry_known || (known == Some(cached) && entry_available != AvailableSpace::MinContent)
+        }
+        None => entry_known.is_none() && entry_available.is_roughly_equal(available),
+    }
+}
+
 /// A cache for caching the results of a sizing a Grid Item or Flexbox Item
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
@@ -115,32 +143,12 @@ impl Cache {
         match input.run_mode {
             RunMode::PerformLayout => self
                 .final_layout_entry
-                .filter(|entry| {
-                    let cached_size = entry.content.size;
-                    (known_dimensions.width == entry.known_dimensions.width
-                        || known_dimensions.width == Some(cached_size.width))
-                        && (known_dimensions.height == entry.known_dimensions.height
-                            || known_dimensions.height == Some(cached_size.height))
-                        && (known_dimensions.width.is_some()
-                            || entry.available_space.width.is_roughly_equal(available_space.width))
-                        && (known_dimensions.height.is_some()
-                            || entry.available_space.height.is_roughly_equal(available_space.height))
-                })
+                .filter(|entry| entry.applies_to(entry.content.size, known_dimensions, available_space))
                 .map(|e| e.content),
             RunMode::ComputeSize => {
                 for entry in self.measure_entries.iter().flatten() {
-                    let cached_size = entry.content;
-
-                    if (known_dimensions.width == entry.known_dimensions.width
-                        || known_dimensions.width == Some(cached_size.width))
-                        && (known_dimensions.height == entry.known_dimensions.height
-                            || known_dimensions.height == Some(cached_size.height))
-                        && (known_dimensions.width.is_some()
-                            || entry.available_space.width.is_roughly_equal(available_space.width))
-                        && (known_dimensions.height.is_some()
-                            || entry.available_space.height.is_roughly_equal(available_space.height))
-                    {
-                        return Some(LayoutOutput::from_outer_size(cached_size));
+                    if entry.applies_to(entry.content, known_dimensions, available_space) {
+                        return Some(LayoutOutput::from_outer_size(entry.content));
                     }
                 }
 

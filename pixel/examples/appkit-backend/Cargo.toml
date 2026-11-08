@@ -16,3 +16,6 @@ dispatch2 = "0.3"
 
 [profile.dev]
 opt-level = 2
+
+[patch.crates-io]
+taffy = { path = "../../engine/vendor/taffy" }
