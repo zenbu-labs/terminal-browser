@@ -91,6 +91,9 @@ enum Op {
     Focus {
         id: Option<u32>,
     },
+    Blur {
+        id: u32,
+    },
     ScrollIntoView {
         id: u32,
         #[serde(default)]
@@ -907,6 +910,11 @@ fn apply_op(
             let node = id.and_then(|id| map.live(tree, id));
             engine.set_focus(view, node);
         }
+        Op::Blur { id } => {
+            if let Some(node) = map.live(tree, id) {
+                engine.blur(view, node);
+            }
+        }
         Op::ScrollTo { id, offset, smooth } => {
             if let Some(node) = map.live(tree, id) {
                 engine.scroll_to(view, node, offset, smooth);
@@ -1171,5 +1179,54 @@ mod removed_subtree_tests {
         assert_eq!(map.node(11), None);
         assert_eq!(map.node(12), None);
         assert!(tree.children(tree.root()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod blur_tests {
+    use std::io;
+    use std::time::Duration;
+
+    use pixel_core::backend::{Frame, HostInfo, Metrics};
+    use pixel_core::{Backend, Engine, EngineConfig, Event, HostColors, Waker};
+
+    use super::{IdMap, NoHostOps, apply_ops};
+
+    struct Quiet;
+
+    impl Backend for Quiet {
+        fn start(&mut self) -> io::Result<HostInfo> {
+            Ok(HostInfo { metrics: Metrics { window: (400, 200), cell: (10, 20) }, colors: HostColors::default() })
+        }
+        fn waker(&mut self) -> io::Result<Waker> {
+            Ok(Waker::new(|| {}))
+        }
+        fn poll(&mut self, _: Option<Duration>) -> io::Result<Option<Event>> {
+            Ok(None)
+        }
+        fn present(&mut self, _: Frame<'_>) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn blurring_an_input_takes_focus_only_from_itself() {
+        let mut engine = Engine::new(EngineConfig { fonts: crate::default_fonts(), cell_metrics_font: 0, backend: Box::new(Quiet) }).unwrap();
+        let mut ids: Vec<IdMap> = vec![IdMap::new(engine.comp.views[0].tree.root())];
+        let mut run = |engine: &mut Engine, ops: &str| {
+            let outcome = apply_ops(engine, &mut ids, &format!(r#"{{"view":0,"ops":[{ops}]}}"#), &mut NoHostOps);
+            assert!(outcome.error.is_none(), "{:?}", outcome.error);
+        };
+        let input = r#"{"style":{"width":100,"height":20},"input":{}}"#;
+        run(&mut engine, &format!(r#"{{"op":"create","id":1,"props":{input}}},{{"op":"insertBefore","parent":0,"child":1}},{{"op":"create","id":2,"props":{input}}},{{"op":"insertBefore","parent":0,"child":2}}"#));
+        run(&mut engine, r#"{"op":"focus","id":2}"#);
+        let palette = engine.comp.views[0].tree.focus();
+        assert!(palette.is_some());
+
+        run(&mut engine, r#"{"op":"blur","id":1}"#);
+        assert_eq!(engine.comp.views[0].tree.focus(), palette, "blurring the prompt leaves the palette focused");
+
+        run(&mut engine, r#"{"op":"blur","id":2}"#);
+        assert_eq!(engine.comp.views[0].tree.focus(), None);
     }
 }

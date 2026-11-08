@@ -643,7 +643,7 @@ const hostConfig = {
       blur: () => {
         if (type !== "input") return;
         const b = instance.bridge;
-        b.push(instance.view, { op: "focus", id: null });
+        b.push(instance.view, { op: "blur", id: instance.id });
         b.flush();
       },
       scrollTo: (offset: number, smooth = false) => {

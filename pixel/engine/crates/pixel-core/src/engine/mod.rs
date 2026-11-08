@@ -542,6 +542,12 @@ impl Engine {
             .map(|id| (self.focus_view, id))
     }
 
+    pub fn blur(&mut self, view: usize, id: NodeId) {
+        if self.focused() == Some((view, id)) {
+            self.set_focus(view, None);
+        }
+    }
+
     fn live_focus(&self) -> Option<(usize, NodeId)> {
         self.focused().filter(|&(view, id)| !self.comp.views[view].tree.inert(id))
     }
