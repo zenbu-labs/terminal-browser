@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { app } from "electron";
-import { APP_DIR_NAME } from "pixel-store";
+import { APP_DIR_NAME } from "shared";
 
 // er i don't think this is necessary anymore given our daemon but i guess it doesn't hurt to be explicit 
 export function claimProfile() {

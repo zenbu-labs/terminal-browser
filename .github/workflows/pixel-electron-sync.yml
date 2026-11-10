@@ -1,0 +1,100 @@
+name: pixel electron sync
+run-name: "sync with upstream electron releases"
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Force a specific electron version (e.g. 43.3.0) instead of auto-detection"
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plan, check patches, dispatch builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          min_version=$(jq -r .minimum_version pixel/electron/config.json)
+          supported_majors=$(jq -r .supported_majors pixel/electron/config.json)
+
+          if [ -n "$FORCED_VERSION" ]; then
+            candidates="$FORCED_VERSION"
+          else
+            # newest stable release of each of the N newest majors, at or above minimum_version
+            gh api "repos/electron/electron/releases?per_page=100" \
+              --jq '.[] | select(.prerelease==false) | .tag_name' | sed 's/^v//' > stable.txt
+            majors=$(sed 's/\..*//' stable.txt | sort -rn -u | head -n "$supported_majors")
+            candidates=""
+            for major in $majors; do
+              newest=$(grep "^$major\." stable.txt | sort -V | tail -1)
+              floor=$(printf '%s\n%s\n' "$min_version" "$newest" | sort -V | head -1)
+              if [ "$floor" = "$min_version" ]; then
+                candidates="$candidates $newest"
+              fi
+            done
+          fi
+
+          # this repo's own v<version> tags share the release list; only electron-v<version> tags count
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' \
+            | sed -n 's/^electron-v//p' > published.txt || true
+          gh issue list -R "$GITHUB_REPOSITORY" --state open --json title --jq '.[].title' > open-issues.txt || true
+          gh run list -R "$GITHUB_REPOSITORY" --workflow pixel-electron-build.yml --json displayTitle,status \
+            --jq '.[] | select(.status=="queued" or .status=="in_progress") | .displayTitle' > active-builds.txt || true
+
+          conflicts=0
+          for version in $candidates; do
+            if grep -qx "$version" published.txt; then
+              echo "v$version: already released, skipping"
+              continue
+            fi
+            if grep -q "electron v$version" open-issues.txt; then
+              echo "v$version: open issue exists (close it to re-enable), skipping"
+              continue
+            fi
+            if grep -q "v$version" active-builds.txt; then
+              echo "v$version: build already queued or running, skipping"
+              continue
+            fi
+
+            echo "v$version: checking patches"
+            if bash pixel/electron/scripts/check-patches.sh "$version"; then
+              echo "v$version: dispatching build"
+              gh workflow run pixel-electron-build.yml -R "$GITHUB_REPOSITORY" -f "version=$version"
+            else
+              conflicts=1
+              title="🚨 Patch conflict: electron v$version"
+              gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "$(cat <<BODY
+          The patches in \`electron/patches\` no longer apply cleanly to electron **v$version**.
+
+          Until this is fixed, v$version will NOT be built or released (this sync run failed loudly, and future runs skip the version while this issue is open).
+
+          To fix:
+          1. \`git clone --depth 1 --branch v$version https://github.com/electron/electron /tmp/electron-rebase\`
+          2. Apply what applies, hand-resolve the rest, regenerate the patch with \`git diff\`
+          3. Commit the updated patch to \`electron/patches\`
+          4. Close this issue — the next sync run picks the version up automatically
+
+          Failing run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          BODY
+          )"
+            fi
+          done
+
+          if [ "$conflicts" -ne 0 ]; then
+            echo "::error::Patch conflict detected — see the issue(s) created above"
+            exit 1
+          fi

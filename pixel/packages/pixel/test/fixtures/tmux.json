@@ -1,0 +1,40 @@
+{
+  "env": {
+    "TMUX": "/tmp/tmux-501/default,123,0",
+    "TMUX_PANE": "%4"
+  },
+  "exec": {
+    "tmux list-panes -a -F #{session_name}\t#{window_id}\t#{pane_id}\t#{pane_title}": "work\t@1\t%3\trobby@Mac: ~\nwork\t@1\t%4\tterminal-browser:90107-1\nother\t@2\t%9\tvim\n",
+    "tmux split-window -v -l 40% -t %4 terminal-browser open": ""
+  },
+  "expect": {
+    "name": "tmux",
+    "currentPane": {
+      "id": "%4",
+      "tab": "work:@1"
+    },
+    "split": {
+      "request": {
+        "direction": "down",
+        "command": [
+          "terminal-browser",
+          "open"
+        ],
+        "size": 0.4,
+        "from": {
+          "id": "%4",
+          "tab": "work:@1"
+        },
+        "tty": null
+      },
+      "commands": [
+        "tmux split-window -v -l 40% -t %4 terminal-browser open"
+      ]
+    },
+    "pasteKey": {
+      "commands": [
+        "tmux send-keys -t %4 C-v"
+      ]
+    }
+  }
+}

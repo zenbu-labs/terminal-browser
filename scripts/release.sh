@@ -19,14 +19,14 @@ rm -rf "$OUT"
 mkdir -p "$STAGE"/{bin,cli/dist,browser/dist,browser/node_modules/@zenbu-labs,electron,agent-browser/bin,assets/fonts,scripts}
 
 # pixel resolves its engine binary and scroll helper from this package at runtime;
-# it comes from npm, or from a local checkout after scripts/link-pixel.sh
+# both come from the pixel/ workspace packages, built by pixel:build:native
 NATIVE_PKG="$(node -e '
   const lib = require.resolve("@zenbu-labs/pixel/package.json", { paths: [process.argv[1]] });
   const pkg = require.resolve(`@zenbu-labs/pixel-native-${process.argv[2]}/package.json`, { paths: [require("path").dirname(lib)] });
   process.stdout.write(require("fs").realpathSync(require("path").dirname(pkg)));
 ' "$ROOT/browser" "$TARGET" 2>/dev/null || true)"
 if [ -z "$NATIVE_PKG" ] || [ ! -f "$NATIVE_PKG/pixel.node" ]; then
-  echo "refusing to build: @zenbu-labs/pixel-native-$TARGET is not installed in browser/ (pnpm install, or scripts/link-pixel.sh for a local checkout)" >&2
+  echo "refusing to build: @zenbu-labs/pixel-native-$TARGET has no pixel.node; run pnpm --filter @zenbu-labs/pixel build:native -- --release" >&2
   exit 1
 fi
 cp -RL "$NATIVE_PKG" "$STAGE/browser/node_modules/@zenbu-labs/pixel-native-$TARGET"

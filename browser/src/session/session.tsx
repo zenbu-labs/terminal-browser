@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 
-import { app } from "electron";
-import { createRoot } from "@zenbu-labs/pixel";
+import { app, clipboard, screen, shell, systemPreferences } from "electron";
+import { createRoot, initialWebViewState } from "@zenbu-labs/pixel";
 import type {
   DevtoolsDock,
   DownloadProgress,
@@ -15,34 +15,46 @@ import type {
 import { detect } from "@zenbu-labs/pixel/terminal";
 import type { Pane, Terminal } from "@zenbu-labs/pixel/terminal";
 
+import {
+  commandLabel,
+  ENGINE_LOG_FILE,
+  fetchLatestRelease,
+  installedChannel,
+  installedVersion,
+  lastUrl,
+  listApps,
+  listStep,
+  maxFps,
+  renderEnv,
+  setLastUrl,
+  settings as settingsTable,
+  SETTINGS_FILE,
+  SHORTCUTS_FILE,
+  socketTerminal,
+  store,
+  SUGGESTIONS_OFF,
+  TERMINAL_SOCKET_ENV,
+  upgradeCommand,
+} from "shared";
+import type {
+  CommandId,
+  InstanceRow,
+  RegisteredApp,
+} from "shared";
 import { bundledAsset } from "../assets";
 import { CopyOnSelect, Grab, reactGrabPreloadPath } from "../grab/grab";
+import type { GrabRegion } from "../grab/grab";
+import { grabScreenshot } from "../grab/screenshot";
 import { AgentPaneFinder } from "../grab/target";
 import type { EmbeddedAgent } from "../grab/target";
 import type { ZoomDirection } from "../zoom";
-import {
-  SHORTCUTS_FILE,
-  SETTINGS_FILE,
-  TERMINAL_SOCKET_ENV,
-  lastUrl,
-  listApps,
-  setLastUrl,
-  settings as settingsTable,
-  socketTerminal,
-  store,
-} from "pixel-store";
-import type { InstanceRow, RegisteredApp } from "pixel-store";
 
-import { commandLabel } from "../config/commands";
-import type { CommandId } from "../config/commands";
-import { listStep } from "../config/keys";
 
 import type { RecordTarget } from "../record/recorder";
 import { RecordSession } from "../record/session";
 import type { RecordActions } from "../record/types";
 import { Registry } from "../registry";
 import { Chrome } from "../ui/chrome";
-import { ICONS } from "../ui/icons";
 import type {
   ChromeActions,
   ChromeLayout,
@@ -53,19 +65,36 @@ import type {
   PageMenuView,
   TabActions,
   TabView,
+  ToastView,
+  ReleaseView,
 } from "../ui/types";
 import { displayUrl, normalizeUrl, searchOrUrl, searchUrlFor } from "../url";
 import type { SearchUrl } from "../url";
-import { START_URL } from "../pages/scheme";
+import { HOME_URL, START_URL } from "../pages/scheme";
 import type { PageContext } from "../pages/scheme";
 import { makeTheme } from "../ui/theme";
+import { BROWSING_DATA_KINDS, browsingSession, clearBrowsingData } from "./browsing-data";
+import type { BrowsingDataKind } from "./browsing-data";
 import { fuzzyScore } from "./fuzzy";
+import { PermissionPrompts } from "./permissions";
+import type { MediaDevice } from "./permissions";
 import { clampDevtoolsFraction, computeLayout, dividerFraction, recordBarHeight } from "./layout";
+
+// Installed builds run from a dist root; anything else is a source checkout.
+const DEV_BUILD = !process.env.TERMINAL_BROWSER_DIST_ROOT;
 import type { DevtoolsPlacement, SurfaceLayout } from "./layout";
-import { SUGGESTIONS_OFF } from "../config/search";
 import { SettingsManager } from "./settings";
+import { Telemetry } from "../telemetry";
 import { fetchSuggestions } from "./suggest";
 import { TabManager } from "./tabs";
+
+function displayHz(): number {
+  try {
+    return Math.max(0, screen.getPrimaryDisplay().displayFrequency);
+  } catch {
+    return 0;
+  }
+}
 import type { Tab } from "./tabs";
 
 export interface SessionContext {
@@ -138,18 +167,11 @@ function matchApps(apps: RegisteredApp[], query: string): RegisteredApp[] {
     .map((entry) => entry.app);
 }
 
-function initialState(url: string): WebViewState {
-  return {
-    url,
-    // why...
-    title: "",
-    loading: true,
-    canGoBack: false,
-    canGoForward: false,
-    findMatches: null,
-    zoom: 1,
-    favicon: null,
-  };
+const CLEAR_DATA_LABEL = "Clear browsing data";
+
+interface ClearDataState {
+  checked: Set<BrowsingDataKind>;
+  clearing: boolean;
 }
 
 class Session {
@@ -161,6 +183,7 @@ class Session {
   private readonly argv: string[];
   private readonly sessionFlags: {
     clipboardRead: boolean;
+    transparent: boolean;
   };
   private readonly partition: string | null;
   private readonly socksPort: number | null;
@@ -168,14 +191,26 @@ class Session {
   private readonly settings = new SettingsManager(
     {
       requestRender: () => this.render(),
+      settingsChanged: () => this.applyRenderSettings(),
       toast: (text, state) => this.showToast(text, state),
       setClipboard: (text) => this.root?.setClipboard(text),
-      openUrl: (url) => this.tabs.create(url),
       overlayOpened: () => this.enterOverlay([]),
       overlayClosed: () => this.leaveOverlay(),
+      release: () => this.release,
     },
     { settings: SETTINGS_FILE, shortcuts: SHORTCUTS_FILE },
   );
+  private readonly release: ReleaseView = {
+    version: installedVersion() ?? "dev",
+    latest: null,
+    upgrade: upgradeCommand(),
+  };
+  private readonly telemetry = new Telemetry({
+    version: this.release.version,
+    usageEnabled: () => this.settings.get("telemetry.usage") !== "off",
+    crashReportsEnabled: () => false,
+    terminal: () => this.terminal?.name ?? null,
+  });
   private readonly tabs: TabManager;
   private readonly fallbackState: WebViewState;
 
@@ -184,7 +219,6 @@ class Session {
 
   private layout: ChromeLayout | null = null;
   private surfaceLayout: SurfaceLayout | null = null;
-  private fontId = 0;
 
   private shuttingDown = false;
   private devtoolsDockSide: DevtoolsDock = "bottom";
@@ -206,6 +240,7 @@ class Session {
     | { kind: "toolbar" }
     | null = null;
 
+  private clearData: ClearDataState | null = null;
   private findOpen = false;
   private urlEditOpen = false;
   private palette: { query: string; index: number } | null = null;
@@ -214,14 +249,17 @@ class Session {
   private zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   private download: DownloadView | null = null;
   private downloadTimer: ReturnType<typeof setTimeout> | null = null;
-  private toast: { text: string; detail?: string; failed: boolean; alert: boolean } | null =
-    null;
+  private toast: ToastView | null = null;
+  private profiling = false;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly permissions = new PermissionPrompts({
+    requestRender: () => this.render(),
+    deviceAccess: (device) => this.deviceAccess(device),
+  });
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();
   private copyWatchers = new Map<number, CopyOnSelect>();
   private readonly copyOnSelect: boolean;
-  private readonly grabIcon = bundledAsset(path.join("react-grab", "logo.png"));
   private readonly agentPanes: AgentPaneFinder;
   private shownRecord: RecordSession | null = null;
   private recordStarting = false;
@@ -230,7 +268,7 @@ class Session {
 
   constructor(ctx: SessionContext) {
     this.ctx = ctx;
-    this.defaultUrl = ctx.env.TERMINAL_BROWSER_START_PAGE === "1" ? START_URL : "about:blank";
+    this.defaultUrl = ctx.env.TERMINAL_BROWSER_START_PAGE === "1" ? START_URL : HOME_URL;
     const socket = ctx.env[TERMINAL_SOCKET_ENV];
     this.terminal = socket ? socketTerminal(socket) : detect(ctx.env);
     this.marker = `terminal-browser:${ctx.key}`;
@@ -244,12 +282,13 @@ class Session {
     });
     this.sessionFlags = {
       clipboardRead: this.argv.includes("--allow-clipboard-read"),
+      transparent: this.argv.includes("--transparent"),
     };
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
     this.partition = sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null;
-    this.fallbackState = initialState(this.initialUrl());
+    this.fallbackState = initialWebViewState(this.initialUrl());
     this.copyOnSelect = ctx.env.TERMINAL_BROWSER_COPY_ON_SELECT === "1";
     this.browserPreload = reactGrabPreloadPath(this.copyOnSelect);
     this.tabs = new TabManager(
@@ -284,7 +323,8 @@ class Session {
         onActiveState: (state, urlChanged) => {
           if (urlChanged) rememberUrl(state.url);
           this.ensureCopyWatcher();
-          if (Math.abs(state.zoom - this.lastZoom) > 0.001) this.showZoomHud(state.zoom);
+          const zoomed = Math.abs(state.zoom - this.lastZoom) > 0.001;
+          if (zoomed && this.pageMenu?.kind !== "toolbar") this.showZoomHud(state.zoom);
           this.lastZoom = state.zoom;
           this.registry?.update();
           this.syncTitle();
@@ -299,12 +339,14 @@ class Session {
 
   async start(): Promise<void> {
     if (process.platform === "darwin") app.dock?.hide();
+    this.checkForUpdate();
+    this.telemetry.launched();
     await this.loadDevtoolsSettings();
     if (!this.ctx.tty) process.stdout.write(`\x1b]2;${this.marker}\x07`);
     this.root = createRoot({
       name: "terminal-browser",
       tty: this.ctx.tty,
-      sessionEnv: this.ctx.env,
+      sessionEnv: { ...this.ctx.env, ...renderEnv((key) => this.settings.get(key)) },
       cwd: this.ctx.cwd,
       onKey: (event) => this.handleKey(event),
       onResize: () => {
@@ -313,6 +355,9 @@ class Session {
         this.render();
       },
       onColors: () => this.render(),
+      onFocus: (focused) => {
+        if (focused) this.telemetry.used();
+      },
       onVisible: (visible) => {
         if (this.sessionHidden === !visible) return;
         this.sessionHidden = !visible;
@@ -321,11 +366,10 @@ class Session {
       onQuit: () => this.shutdown(),
       onExit: (code) => this.ctx.onClose(code),
     });
-    this.fontId = await this.root.registerFont(bundledFontPath());
     this.settings.setNoSuper(!this.root.info.kittyKeyboard);
+    this.applyRenderSettings();
     this.settings.watch();
     this.recalculateLayout();
-    this.root.setPointerShape("default");
     this.tabs.create(this.fallbackState.url);
     this.registry = new Registry({
       key: this.ctx.key,
@@ -350,7 +394,7 @@ class Session {
       },
       closeTab: (id) => {
         if (!this.tabs.has(id)) return false;
-        this.tabs.close(id);
+        this.closeTab(id);
         return true;
       },
       agentTouch: (id) => this.tabs.touchAgentControl(id),
@@ -359,6 +403,7 @@ class Session {
         this.root ? { width: this.root.info.width, height: this.root.info.height } : null,
       tabs: () => this.tabs.registryView(),
       targets: () => this.tabs.targets(),
+      clearBrowsingData: (kinds) => this.clearBrowsingData(kinds),
     });
     this.registry.setCdpPort(this.ctx.cdpPort);
     void this.findOwnPane();
@@ -389,7 +434,7 @@ class Session {
 
   private closeOrShutdown(id: number) {
     if (this.tabs.count <= 1) this.shutdown();
-    else this.tabs.close(id);
+    else this.closeTab(id);
   }
 
   private syncTitle() {
@@ -427,10 +472,10 @@ class Session {
         stdio: tty ? "ignore" : "inherit",
         env,
       });
-      child.on("error", () => this.showToast(`could not launch ${app.name}`, "failed"));
+      child.on("error", () => this.showToast(`Could not launch ${app.name}`, "failed"));
       child.unref();
     } catch {
-      this.showToast(`could not launch ${app.name}`, "failed");
+      this.showToast(`Could not launch ${app.name}`, "failed");
     }
   }
 
@@ -446,6 +491,7 @@ class Session {
       proxy: this.socksPort ? `socks5://127.0.0.1:${this.socksPort}` : null,
       preload: this.browserPreload,
       clipboardRead: this.sessionFlags.clipboardRead,
+      transparent: tab.transparent || this.sessionFlags.transparent || this.settings.get("window.transparent") === "on",
     }));
   }
 
@@ -462,7 +508,36 @@ class Session {
     pointer: (id, event) => {
       if (id === this.tabs.active?.id) this.activeRecord()?.pointerSample(event);
     },
+    permissionRequest: (id, request) => this.permissions.request(id, request),
+    permissionCheck: (check) => this.permissions.check(check),
   };
+
+  private closeTab(id: number) {
+    this.permissions.closed(id);
+    this.tabs.close(id);
+  }
+
+  private async deviceAccess(device: MediaDevice): Promise<boolean> {
+    if (process.platform !== "darwin") return true;
+    const status = systemPreferences.getMediaAccessStatus(device);
+    if (status === "granted") return true;
+    if (status === "not-determined") return systemPreferences.askForMediaAccess(device);
+    const pane = device === "camera" ? "Privacy_Camera" : "Privacy_Microphone";
+    this.showToast(
+      device === "camera"
+        ? "Camera access is turned off for this terminal in macOS System Settings"
+        : "Microphone access is turned off for this terminal in macOS System Settings",
+      "alert",
+      `Note: enabling access gives every program that runs inside this terminal ${device} capability, not just terminal-browser`,
+      {
+        label: "Open System Settings",
+        run: () =>
+          void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`),
+      },
+      null,
+    );
+    return false;
+  }
 
   private render() {
     if (!this.root || !this.layout) return;
@@ -472,7 +547,6 @@ class Session {
         actions={this.actions}
         layout={this.layout}
         colors={this.root.info.colors}
-        font={this.fontId}
         findOpen={this.findOpen}
         tabs={this.tabs.view()}
         newTab={
@@ -497,13 +571,24 @@ class Session {
             : null
         }
         pageMenu={this.pageMenuView()}
+        permissionPrompt={this.tabs.active ? this.permissions.view(this.tabs.active.id) : null}
         settings={this.settings.view()}
+        clearData={
+          this.clearData
+            ? {
+              checked: BROWSING_DATA_KINDS.filter((kind) => this.clearData!.checked.has(kind)),
+              clearing: this.clearData.clearing,
+            }
+            : null
+        }
         dividerEngaged={this.dividerHover || this.dividerDragging}
         record={this.activeRecord()?.view() ?? null}
         recordSurface={this.activeRecord()?.surface ?? null}
         tabViews={this.tabViews()}
         tabActions={this.tabActions}
         devtools={this.devtoolsView()}
+        profiling={this.profiling}
+        grabActive={this.activeGrab()?.active ?? false}
       />,
     );
   }
@@ -516,6 +601,29 @@ class Session {
       this.tabs.activeHandle?.reload();
     },
     urlEdit: () => this.openUrlEdit(),
+    tabMute: (id) => {
+      const tab = this.tabs.get(id);
+      tab?.ref.current?.setAudioMuted(!tab.state.muted);
+    },
+    permissionDecide: (decision) => {
+      const tab = this.tabs.active;
+      if (tab) this.permissions.decide(tab.id, decision);
+    },
+    toastDismiss: () => {
+      this.toast = null;
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+      this.render();
+    },
+    clearDataToggle: (kind) => {
+      const dialog = this.clearData;
+      if (!dialog || dialog.clearing) return;
+      if (dialog.checked.has(kind)) dialog.checked.delete(kind);
+      else dialog.checked.add(kind);
+      this.render();
+    },
+    clearDataConfirm: () => void this.confirmClearData(),
+    clearDataCancel: () => this.closeClearData(),
     urlEditCancel: () => this.closeUrlEdit(),
     urlSubmit: (text) => {
       this.closeUrlEdit();
@@ -531,11 +639,13 @@ class Session {
       this.render();
     },
     paletteRun: (index) => this.runPalette(index),
+    profileStop: () => void this.toggleProfile(),
     paletteClose: () => this.closePalette(),
     tabSwitch: (id) => this.tabs.activate(id),
     tabClose: (id) => this.closeOrShutdown(id),
     tabNew: () => this.openNewTabModal(),
     tabMenu: () => this.toggleToolbarMenu(),
+    grab: () => void this.toggleGrab(),
     newTabQuery: (text) => this.newTabQuery(text),
     newTabSubmit: (text) => {
       this.closeNewTabModal();
@@ -545,9 +655,6 @@ class Session {
     newTabCancel: () => this.closeNewTabModal(),
     devtoolsDividerHover: (hovering) => {
       this.dividerHover = hovering;
-      this.root?.setPointerShape(
-        hovering ? (this.devtoolsDockSide === "bottom" ? "row-resize" : "col-resize") : "default",
-      );
       this.render();
     },
     devtoolsDividerDrag: (event) => {
@@ -580,12 +687,13 @@ class Session {
     },
     pageMenuAction: (id) => this.runPageMenu(id),
     pageMenuClose: () => this.closePageMenu(),
+    pageMenuZoom: (direction) => this.applyZoom(direction),
     settings: this.settings.actions,
     record: this.recordActions(),
   };
 
   private openSettings() {
-    if (this.palette || this.newTab || this.urlEditOpen) return;
+    if (this.palette || this.newTab || this.urlEditOpen || this.clearData) return;
     this.closePageMenu();
     this.settings.open();
   }
@@ -736,6 +844,11 @@ class Session {
       if (event.key === "escape" || command === "settings.open") this.settings.close();
       return true;
     }
+    if (this.clearData) {
+      if (event.key === "escape") this.closeClearData();
+      else if (event.key === "enter") void this.confirmClearData();
+      return true;
+    }
     if (this.palette) {
       const step = listStep(event);
       if (event.key === "escape" || command === "palette") {
@@ -776,6 +889,11 @@ class Session {
       if (event.key === "escape") this.closeUrlEdit();
       return true;
     }
+    const prompted = this.tabs.active;
+    if (event.key === "escape" && prompted && this.permissions.hasPending(prompted.id)) {
+      this.permissions.decide(prompted.id, "dismiss");
+      return true;
+    }
     if (!this.findOpen && this.activeRecord()?.handleKey(event)) return true;
     if (event.key === "escape" && this.findOpen) {
       this.closeFind();
@@ -793,6 +911,7 @@ class Session {
   }
 
   private runCommand(id: CommandId) {
+    this.telemetry.used();
     const handle = this.tabs.activeHandle;
     switch (id) {
       case "quit":
@@ -812,6 +931,12 @@ class Session {
         if (tab && !this.activeRecord()?.reviewing) this.closeOrShutdown(tab.id);
         return;
       }
+      case "tab.next":
+        this.activateAdjacentTab(1);
+        return;
+      case "tab.previous":
+        this.activateAdjacentTab(-1);
+        return;
       case "url.edit":
         this.openUrlEdit();
         return;
@@ -913,15 +1038,81 @@ class Session {
     this.render();
   }
 
-  private showToast(text: string, state: "done" | "failed" | "alert", detail?: string) {
-    this.toast = { text, detail, failed: state === "failed", alert: state === "alert" };
+  private showToast(
+    text: string,
+    state: "done" | "failed" | "alert",
+    detail?: string,
+    action?: ToastView["action"],
+    durationMs: number | null = action ? 8000 : 2000,
+  ) {
+    this.toast = {
+      text,
+      detail,
+      failed: state === "failed",
+      alert: state === "alert",
+      sticky: durationMs === null,
+      action,
+    };
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => {
-      this.toast = null;
-      this.toastTimer = null;
-      this.render();
-    }, 2000);
+    this.toastTimer =
+      durationMs === null
+        ? null
+        : setTimeout(() => {
+            this.toast = null;
+            this.toastTimer = null;
+            this.render();
+          }, durationMs);
     this.render();
+  }
+
+  private async toggleProfile() {
+    if (!this.root) return;
+    if (!this.profiling) {
+      this.root.startProfile();
+      this.profiling = true;
+      this.render();
+      return;
+    }
+    this.profiling = false;
+    this.render();
+    const exported = await this.root.stopProfile();
+    if (!exported) {
+      this.showToast("Nothing was recorded", "failed");
+      return;
+    }
+    clipboard.writeText(exported);
+    const root = this.root;
+    this.showToast("Profile path copied to clipboard", "done", undefined, {
+      label: "View profile",
+      run: () => {
+        this.toast = null;
+        this.render();
+        root.openDevtools("profiler");
+      },
+    });
+  }
+
+  private checkForUpdate() {
+    if (this.release.version === "dev" || this.settings.get("updates.check") === "off") return;
+    fetchLatestRelease(installedChannel(), AbortSignal.timeout(5000))
+      .then((latest) => {
+        if (latest.version === this.release.version) return;
+        this.release.latest = latest.version;
+        this.render();
+      })
+      .catch(() => {});
+  }
+
+  private applyRenderSettings() {
+    const root = this.root;
+    if (!root) return;
+    const render = {
+      maxFps: maxFps(this.settings.get("render.fps"), displayHz()),
+      highlightTransmits: this.settings.get("render.transmitOutlines") === "on",
+      frameEvents: this.settings.get("render.frameEvents") === "on",
+    };
+    root.setRender(render);
+    root.setLogFile(this.settings.get("debug.logFile") === "on" ? ENGINE_LOG_FILE : null);
   }
 
   private blurToOverlay() {
@@ -996,7 +1187,7 @@ class Session {
 
   private openPageMenu(params: Electron.ContextMenuParams) {
     if (!this.surfaceLayout) return;
-    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
+    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen || this.clearData) return;
     const scale = this.surfaceLayout.scale;
     this.pageMenu = {
       kind: "page",
@@ -1010,6 +1201,51 @@ class Session {
     this.render();
   }
 
+  private openClearData() {
+    if (this.clearData || this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
+    this.closePageMenu();
+    this.clearData = { checked: new Set(BROWSING_DATA_KINDS), clearing: false };
+    this.enterOverlay(["enter"]);
+    this.render();
+  }
+
+  private closeClearData() {
+    if (!this.clearData || this.clearData.clearing) return;
+    this.clearData = null;
+    this.leaveOverlay();
+    this.render();
+  }
+
+  private async confirmClearData() {
+    const dialog = this.clearData;
+    if (!dialog || dialog.clearing || dialog.checked.size === 0) return;
+    dialog.clearing = true;
+    this.render();
+    let failure: unknown = null;
+    try {
+      await this.clearBrowsingData([...dialog.checked]);
+    } catch (error) {
+      failure = error;
+    }
+    dialog.clearing = false;
+    this.closeClearData();
+    if (failure) {
+      this.showToast("Could not clear browsing data", "failed", failure instanceof Error ? failure.message : String(failure));
+      return;
+    }
+    this.showToast("Browsing data cleared", "done", undefined, {
+      label: "Reload page",
+      run: () => {
+        this.actions.toastDismiss();
+        this.actions.reload();
+      },
+    });
+  }
+
+  private clearBrowsingData(kinds: BrowsingDataKind[]): Promise<void> {
+    return clearBrowsingData(browsingSession(this.partition), kinds);
+  }
+
   private closePageMenu() {
     if (!this.pageMenu) return;
     this.pageMenu = null;
@@ -1021,7 +1257,7 @@ class Session {
       this.closePageMenu();
       return;
     }
-    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen) return;
+    if (this.palette || this.newTab || this.urlEditOpen || this.settings.isOpen || this.clearData) return;
     this.pageMenu = { kind: "toolbar" };
     this.render();
   }
@@ -1035,6 +1271,9 @@ class Session {
     switch (id) {
       case "settings":
         this.openSettings();
+        return;
+      case "clear-data":
+        this.openClearData();
         return;
       case "grab":
         void this.toggleGrab();
@@ -1086,7 +1325,7 @@ class Session {
     const watcher = new CopyOnSelect(handle, {
       copied: (text) => {
         this.root?.setClipboard(text);
-        this.showToast("copied to clipboard", "done");
+        this.showToast("Copied to clipboard", "done");
       },
     });
     this.copyWatchers.set(tab.id, watcher);
@@ -1097,7 +1336,8 @@ class Session {
     let grab = this.grabs.get(tab.id);
     if (!grab) {
       grab = new Grab(handle, {
-        selected: (content) => void this.sendGrab(content),
+        selected: (content, region) => void this.sendGrab(handle, content, region),
+        changed: () => this.render(),
       });
       this.grabs.set(tab.id, grab);
     }
@@ -1120,11 +1360,13 @@ class Session {
     }
   }
 
-  private async sendGrab(content: string) {
-    this.root?.setClipboard(content);
+  private async sendGrab(handle: WebViewHandle, content: string, region: GrabRegion | null) {
+    const screenshot = region ? await grabScreenshot(handle, region, content, handle.state.url) : null;
+    if (screenshot) await screenshot.copyWithText().catch(() => this.root?.setClipboard(content));
+    else this.root?.setClipboard(content);
     try {
-      const target = await this.agentPanes.send(content);
-      this.showToast(target ? "Sent to agent" : "copied to clipboard", "done");
+      const delivery = await this.agentPanes.send(content, screenshot);
+      this.showToast(delivery ? "Sent to agent" : "Copied to clipboard", "done");
     } catch (error) {
       this.showToast(error instanceof Error ? error.message : String(error), "failed");
     }
@@ -1133,26 +1375,23 @@ class Session {
   private grabMenuItem(): PageMenuItem {
     return {
       id: "grab",
-      label: this.activeGrab()?.active ? "stop selection" : "send to agent",
+      label: this.activeGrab()?.active ? "Stop selection" : "Send to agent",
       enabled: true,
       shortcut: this.keymap.label("grab.toggle"),
-      icon: this.grabIcon ? { kind: "image", src: this.grabIcon } : undefined,
     };
   }
 
   private toolMenuItems(): PageMenuItem[] {
     return [
-      this.grabMenuItem(),
       {
         id: "record",
-        label: this.activeRecord() ? "complete recording" : "record",
+        label: this.activeRecord() ? "Complete recording" : "Record",
         enabled: true,
         shortcut: this.activeRecord() ? "" : this.keymap.label("record.toggle"),
-        icon: { kind: "path", d: ICONS.record, tint: "red", weight: 4.5 },
       },
       {
         id: "inspect",
-        label: "inspect",
+        label: "Inspect",
         enabled: true,
         shortcut: this.keymap.label("devtools.toggle"),
       },
@@ -1163,11 +1402,16 @@ class Session {
     return [
       ...this.toolMenuItems(),
       {
+        id: "clear-data",
+        label: CLEAR_DATA_LABEL,
+        enabled: true,
+        shortcut: "",
+      },
+      {
         id: "settings",
         label: commandLabel("settings.open"),
         enabled: true,
         shortcut: this.keymap.label("settings.open"),
-        icon: { kind: "path", d: ICONS.settings },
       },
     ];
   }
@@ -1175,14 +1419,19 @@ class Session {
   private pageMenuView(): PageMenuView | null {
     if (!this.pageMenu || !this.layout) return null;
     if (this.pageMenu.kind === "toolbar") {
-      return { x: this.layout.width, y: this.layout.toolbarHeight, items: this.toolbarMenuItems() };
+      return {
+        x: this.layout.width,
+        y: this.layout.toolbarHeight,
+        zoomPercent: Math.round((this.tabs.activeState?.zoom ?? 1) * 100),
+        items: this.toolbarMenuItems(),
+      };
     }
     const items: PageMenuItem[] = [
       ...(this.pageMenu.selectionText
         ? [
             {
               id: "copy",
-              label: "copy",
+              label: "Copy",
               enabled: true,
               shortcut: process.platform === "darwin" ? "cmd+c" : "ctrl+c",
             },
@@ -1190,10 +1439,11 @@ class Session {
         : []),
       ...(this.pageMenu.linkURL
         ? [
-            { id: "open-link-tab", label: "open link in new tab", enabled: true, shortcut: "" },
-            { id: "copy-link", label: "copy link address", enabled: true, shortcut: "" },
+            { id: "open-link-tab", label: "Open link in new tab", enabled: true, shortcut: "" },
+            { id: "copy-link", label: "Copy link address", enabled: true, shortcut: "" },
           ]
         : []),
+      this.grabMenuItem(),
       ...this.toolMenuItems(),
     ];
     return { x: this.pageMenu.x, y: this.pageMenu.y, items };
@@ -1343,17 +1593,42 @@ class Session {
     });
     return [
       command("find"),
+      command("tab.next"),
+      command("tab.previous"),
       command("record.toggle"),
       command("grab.toggle"),
       command("devtools.toggle"),
+      { id: "clear-data", label: CLEAR_DATA_LABEL, shortcut: "", run: () => this.openClearData() },
+      ...(DEV_BUILD
+        ? [
+          {
+            id: "profile",
+            label: this.profiling ? "Stop profile" : "Start profile",
+            shortcut: "",
+            run: () => void this.toggleProfile(),
+          },
+          {
+            id: "highlight-transmits",
+            label: this.root?.highlightTransmits()
+              ? "Hide transmit outlines"
+              : "Show transmit outlines",
+            shortcut: "",
+            run: () =>
+              this.settings.actions.set(
+                "render.transmitOutlines",
+                this.root?.highlightTransmits() ? "off" : "on",
+              ),
+          },
+        ]
+        : []),
       ...(devtoolsOpen
         ? [
             {
               id: "devtools-dock",
               label:
                 this.devtoolsDockSide === "bottom"
-                  ? "dock devtools right"
-                  : "dock devtools bottom",
+                  ? "Dock devtools right"
+                  : "Dock devtools bottom",
               shortcut: "",
               run: () =>
                 this.setDevtoolsDockSide(this.devtoolsDockSide === "bottom" ? "right" : "bottom"),
@@ -1364,7 +1639,7 @@ class Session {
         ? [
           {
             id: "dev-reload",
-            label: "reload instance",
+            label: "Reload instance",
             shortcut: "ctrl+shift+r",
             run: () => this.requestDevReload(this.ctx.env.TERMINAL_BROWSER_DEV_SOCKET!),
           },
@@ -1372,6 +1647,14 @@ class Session {
         : []),
       command("settings.open"),
     ];
+  }
+
+  private activateAdjacentTab(step: 1 | -1) {
+    const tabs = this.tabs.all();
+    const active = this.tabs.active;
+    if (!active || tabs.length < 2) return;
+    const at = tabs.findIndex((tab) => tab.id === active.id);
+    this.tabs.activate(tabs[(at + step + tabs.length) % tabs.length]!.id);
   }
 
   private requestDevReload(socketPath: string) {
@@ -1383,13 +1666,13 @@ class Session {
     switch (id) {
       case "record.toggle": {
         const record = this.activeRecord();
-        if (!record) return "record page";
-        return record.reviewing ? "complete recording" : "stop recording";
+        if (!record) return "Record page";
+        return record.reviewing ? "Complete recording" : "Stop recording";
       }
       case "grab.toggle":
-        return this.activeGrab()?.active ? "stop selection" : "send to agent";
+        return this.activeGrab()?.active ? "Stop selection" : "Send to agent";
       case "devtools.toggle":
-        return this.tabs.active?.devtools ? "close devtools" : "open devtools";
+        return this.tabs.active?.devtools ? "Close devtools" : "Open devtools";
       default:
         return commandLabel(id);
     }
@@ -1415,6 +1698,7 @@ class Session {
       this.root.displayScale,
       reviewing ? null : placement,
       reviewing ? recordBarHeight(info) : 0,
+      this.ctx.env.TERMINAL_BROWSER_NO_CHROME === "1",
     );
     this.layout = result.chrome;
     this.surfaceLayout = result.surface;
@@ -1479,11 +1763,11 @@ function rememberUrl(url: string) {
 function embeddedAgent(url: string | undefined, token: string | undefined): EmbeddedAgent | null {
   if (!url) return null;
   return {
-    async send(content) {
+    async send(content, screenshot) {
       const response = await fetch(`${url.replace(/\/$/, "")}/agent-text`, {
         method: "POST",
         headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ text: content }),
+        body: JSON.stringify({ text: content, screenshot }),
       });
       return response.ok;
     },

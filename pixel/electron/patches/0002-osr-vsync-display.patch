@@ -1,0 +1,59 @@
+diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
+--- a/shell/browser/osr/osr_render_widget_host_view.cc
++++ b/shell/browser/osr/osr_render_widget_host_view.cc
+@@ -208,6 +208,9 @@ OffScreenRenderWidgetHostView::OffScreenRenderWidgetHostView(
+   compositor_->SetAcceleratedWidget(gfx::kNullAcceleratedWidget);
+   compositor_->SetDelegate(this);
+   compositor_->SetRootLayer(root_layer_.get());
++#if BUILDFLAG(IS_MAC)
++  UpdateVSyncDisplay();
++#endif
+ 
+   ResizeRootLayer(false);
+ 
+@@ -908,6 +911,10 @@ void OffScreenRenderWidgetHostView::SetupFrameRate(bool force) {
+   if (!force && frame_rate_threshold_us_ != 0)
+     return;
+ 
++#if BUILDFLAG(IS_MAC)
++  UpdateVSyncDisplay();
++#endif
++
+   frame_rate_threshold_us_ = 1000000 / frame_rate_;
+ 
+   if (compositor_) {
+@@ -916,6 +923,21 @@ void OffScreenRenderWidgetHostView::SetupFrameRate(bool force) {
+   }
+ }
+ 
++#if BUILDFLAG(IS_MAC)
++// Bind the offscreen compositor to the primary display so viz drives begin
++// frames from a real display link. With an invalid display id viz falls back
++// to a 60Hz timer whose supported-interval menu tops out at 60fps: any page
++// input then makes the frame interval decider clamp begin frames to 60 and
++// the throttled interval permanently overwrites the requested frame rate.
++void OffScreenRenderWidgetHostView::UpdateVSyncDisplay() {
++  if (!compositor_)
++    return;
++  if (auto* screen = display::Screen::Get()) {
++    compositor_->SetVSyncDisplayID(screen->GetPrimaryDisplay().id());
++  }
++}
++#endif
++
+ void OffScreenRenderWidgetHostView::Invalidate() {
+   InvalidateBounds(gfx::Rect(GetRequestedRendererSize()));
+ }
+diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
+--- a/shell/browser/osr/osr_render_widget_host_view.h
++++ b/shell/browser/osr/osr_render_widget_host_view.h
+@@ -271,6 +271,9 @@ class OffScreenRenderWidgetHostView
+  private:
+   void ReleaseCompositor();
+   void SetupFrameRate(bool force);
++#if BUILDFLAG(IS_MAC)
++  void UpdateVSyncDisplay();
++#endif
+   void ResizeRootLayer(bool force);
+ 
+   viz::FrameSinkId AllocateFrameSinkId();

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Serves this directory on the remote machine and tells the caller where. Any
+# bundle works the same way: print READY <url> once something is listening.
+set -eu
+cd "$(dirname "$0")"
+PORT="${PORT:-$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')}"
+python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+echo $! > .pid
+sleep 0.3
+echo "READY http://127.0.0.1:$PORT/"
+wait

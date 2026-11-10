@@ -1,0 +1,5 @@
+#!/bin/sh
+cd "$(dirname "$0")"
+[ -f .pid ] && kill "$(cat .pid)" 2>/dev/null
+rm -f .pid
+exit 0

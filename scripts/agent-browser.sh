@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-REF="v0.33.0"
+REF="v0.38.1"
 
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/terminal-browser/agent-browser/$REF"
 BIN="$CACHE/bin/agent-browser"

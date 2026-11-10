@@ -13,16 +13,13 @@ export function AgentBriefButton({
   onCopy(): void;
 }) {
   const [copied, flash] = useCopiedFlash();
-  const [first, second] = copy.agent;
-  const label = { fontSize: rem * 0.78, color: theme.muted, wrap: false, selectable: false };
   return (
     <Box
       style={{
-        flexDirection: "column",
-        gap: rem * 0.05,
-        padding: { left: rem * 0.8, right: rem * 0.5, top: rem * 0.3, bottom: rem * 0.3 },
-        margin: { bottom: rem * 0.5 },
-        cornerRadius: rem * 0.35,
+        alignItems: "center",
+        gap: rem * 0.7,
+        padding: { left: rem * 0.9, right: rem * 0.7, top: rem * 0.6, bottom: rem * 0.6 },
+        cornerRadius: rem * 0.4,
         hoverBackground: theme.hover,
       }}
       onClick={() => {
@@ -30,11 +27,20 @@ export function AgentBriefButton({
         flash();
       }}
     >
-      <Text style={label}>{first}</Text>
-      <Box style={{ alignItems: "center", gap: rem * 0.3 }}>
-        <Text style={label}>{second}</Text>
-        <CopyIcon copied={copied} size={rem * 0.85} theme={theme} />
-      </Box>
+      <Text
+        style={{
+          flexGrow: 1,
+          flexBasis: 0,
+          fontSize: rem * 0.9,
+          color: theme.muted,
+          wrap: false,
+          ellipsis: true,
+          selectable: false,
+        }}
+      >
+        {copy.agent}
+      </Text>
+      <CopyIcon copied={copied} size={rem * 0.95} theme={theme} />
     </Box>
   );
 }

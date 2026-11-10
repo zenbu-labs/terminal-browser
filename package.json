@@ -11,7 +11,17 @@
     "dist": "pnpm build:dist && pnpm install:dist",
     "release:patch": "scripts/tag-release.sh patch",
     "release:minor": "scripts/tag-release.sh minor",
-    "release:major": "scripts/tag-release.sh major"
+    "release:major": "scripts/tag-release.sh major",
+    "monitor": "pnpm --filter terminal-browser-monitor start",
+    "pixel:build": "pnpm --filter @zenbu-labs/pixel build",
+    "pixel:build:native": "pnpm --filter @zenbu-labs/pixel build:native --",
+    "pixel:typecheck": "pnpm --filter './pixel/**' typecheck",
+    "pixel:test": "pnpm --filter './pixel/**' test",
+    "zed:setup": "pnpm --filter zed bootstrap",
+    "zed": "pnpm --filter zed -s build && node pixel/examples/zed/dist/cli.js",
+    "starter": "pnpm --filter pixel-app start",
+    "starter:launch": "node pixel/packages/pixel/dist/bin.js pixel/packages/create-pixel/template",
+    "starter:build": "pnpm --filter pixel-app build"
   },
   "packageManager": "pnpm@10.13.1",
   "devDependencies": {

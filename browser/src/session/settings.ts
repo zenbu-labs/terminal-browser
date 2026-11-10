@@ -2,26 +2,39 @@ import os from "node:os";
 import path from "node:path";
 
 import type { EngineKeyEvent } from "@zenbu-labs/pixel";
+import { z } from "zod";
 
+import {
+  chordFromEvent,
+  commandLabel,
+  ConfigStore,
+  defaultSettings,
+  formatChord,
+  isCommandId,
+  isSettingKey,
+  Keymap,
+  SETTING_KEYS,
+  SETTINGS,
+} from "shared";
+import type {
+  Chord,
+  CommandId,
+  ConfigFiles,
+  SettingKey,
+  Settings,
+  ShortcutOverrides,
+} from "shared";
 import { bundledAsset } from "../assets";
-import { commandLabel, isCommandId } from "../config/commands";
-import type { CommandId } from "../config/commands";
-import { ConfigStore } from "../config/config";
-import type { ConfigFiles } from "../config/config";
-import { Keymap, chordFromEvent, formatChord } from "../config/keys";
-import type { Chord, ShortcutOverrides } from "../config/keys";
-import { SUGGESTIONS_OFF, engineBySearch, engineBySuggest } from "../config/search";
-import { SETTINGS, SETTING_KEYS, defaultSettings, isSettingKey } from "../config/settings";
-import type { SettingKey, Settings } from "../config/settings";
-import type { SettingRow, SettingsActions, SettingsSection, SettingsView } from "../ui/types";
+import type { ReleaseView, SettingRow, SettingsActions, SettingsSection, SettingsView } from "../ui/types";
 
 export interface SettingsHost {
   requestRender(): void;
+  settingsChanged(): void;
   toast(text: string, state: "done" | "failed"): void;
   setClipboard(text: string): void;
-  openUrl(url: string): void;
   overlayOpened(): void;
   overlayClosed(): void;
+  release(): ReleaseView;
 }
 
 interface Modal {
@@ -33,13 +46,23 @@ interface Modal {
 
 function settingRow(key: SettingKey, value: string): SettingRow {
   const def = SETTINGS[key];
-  const base = { key, label: def.label, hint: def.hint, link: def.link, modified: value !== def.default };
+  const base = {
+    key,
+    group: def.group,
+    label: def.label,
+    hint: def.hint,
+    modified: value !== def.default,
+  };
   if (!def.choices) return { ...base, kind: "string", value };
   const choices = def.choices.map((choice) => ({
     ...choice,
     logo: choice.logo ? bundledAsset(choice.logo) : null,
   }));
-  return { ...base, kind: "choice", value, choices };
+  const values = def.choices.map((choice) => choice.value);
+  if (values.length === 2 && values.includes("on") && values.includes("off")) {
+    return { ...base, kind: "toggle", value, inverted: def.inverted ?? false };
+  }
+  return { ...base, kind: "choice", value, choices, custom: !(def.schema instanceof z.ZodEnum) };
 }
 
 function agentBrief(files: ConfigFiles): string {
@@ -105,9 +128,10 @@ export class SettingsManager {
     if (loaded.settings) this.values = loaded.settings;
     if (loaded.shortcuts) this.overrides = loaded.shortcuts;
     this.map = new Keymap(this.overrides, { noSuper: this.noSuper });
+    if (loaded.settings) this.host.settingsChanged();
     this.host.requestRender();
     if (loaded.errors.length) this.host.toast(loaded.errors[0], "failed");
-    else if (announce) this.host.toast("config reloaded", "done");
+    else if (announce) this.host.toast("Config reloaded", "done");
   }
 
   watch() {
@@ -197,15 +221,11 @@ export class SettingsManager {
     reloadConfig: () => this.reload(true),
     copyAgentBrief: () => {
       this.host.setClipboard(agentBrief(this.config.files));
-      this.host.toast("copied to clipboard", "done");
+      this.host.toast("Copied to clipboard", "done");
     },
     copyPath: (file) => {
       this.host.setClipboard(this.config.files[file]);
-      this.host.toast("copied to clipboard", "done");
-    },
-    openLink: (url) => {
-      this.close();
-      this.host.openUrl(url);
+      this.host.toast("Copied to clipboard", "done");
     },
   };
 
@@ -244,6 +264,7 @@ export class SettingsManager {
         settings: homeRelative(this.config.files.settings),
         shortcuts: homeRelative(this.config.files.shortcuts),
       },
+      release: this.host.release(),
     };
   }
 
@@ -253,19 +274,7 @@ export class SettingsManager {
     delete this.modal?.drafts[key];
     this.write(() => {
       this.config.setSetting(key, value as Settings[SettingKey] | undefined);
-      if (key === "search.engine") this.followEngine(value as string | undefined);
     });
-  }
-
-  private followEngine(nextSearch: string | undefined) {
-    const suggestions = this.values["search.suggestions"];
-    if (suggestions === SUGGESTIONS_OFF) return;
-    const previous = engineBySearch(this.values["search.engine"]);
-    if (!previous || engineBySuggest(suggestions)?.id !== previous.id) return;
-    const next = engineBySearch(nextSearch ?? SETTINGS["search.engine"].default);
-    if (!next?.suggest || next.suggest === suggestions) return;
-    const isDefault = next.suggest === SETTINGS["search.suggestions"].default;
-    this.config.setSetting("search.suggestions", isDefault ? undefined : next.suggest);
   }
 
   private commitDrafts(modal: Modal) {

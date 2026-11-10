@@ -1,4 +1,4 @@
-import { parseSuggestions } from "../config/search";
+import { parseSuggestions } from "shared";
 import { searchUrlFor } from "../url";
 
 export async function fetchSuggestions(template: string, query: string, limit = 6): Promise<string[]> {

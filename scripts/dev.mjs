@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "cli", "dist", "main.js");
 const SOCKET = path.join(os.tmpdir(), `terminal-browser-dev-${process.pid}.sock`);
+const DEFAULT_URL = "https://terminal-browser.com";
 const browserArgs = process.argv.slice(2);
+if (browserArgs.length === 0) browserArgs.push(DEFAULT_URL);
 
 let browser = null;
 let reloadRequested = false;
@@ -32,10 +34,23 @@ async function waitForEnter(prompt) {
   rl.close();
 }
 
+const BUILD_STEPS = [
+  ["pnpm", ["--filter", "@zenbu-labs/pixel", "build"]],
+  ["pnpm", ["--filter", "@zenbu-labs/pixel", "build:native", "--", "--release"]],
+  ["pnpm", ["-r", "--filter", "!./pixel/**", "build"]],
+];
+
 async function build() {
   while (true) {
     say("building");
-    if ((await run("pnpm", ["-r", "build"])) === 0) return;
+    let failed = false;
+    for (const [command, args] of BUILD_STEPS) {
+      if ((await run(command, args)) !== 0) {
+        failed = true;
+        break;
+      }
+    }
+    if (!failed) return;
     if (stopping) return;
     await waitForEnter("dev: build failed, press enter to retry ");
   }

@@ -1,0 +1,40 @@
+{
+  "env": {
+    "TERM_PROGRAM": "WezTerm",
+    "WEZTERM_PANE": "7"
+  },
+  "exec": {
+    "wezterm cli list --format json": "[{\"window_id\":0,\"tab_id\":2,\"pane_id\":7,\"title\":\"terminal-browser:90107-1\"},{\"window_id\":0,\"tab_id\":3,\"pane_id\":8,\"title\":\"zsh\"}]",
+    "wezterm cli split-pane --right -- terminal-browser open": ""
+  },
+  "expect": {
+    "name": "wezterm",
+    "currentPane": {
+      "id": "7",
+      "tab": "0:2"
+    },
+    "split": {
+      "request": {
+        "direction": "right",
+        "command": [
+          "terminal-browser",
+          "open"
+        ],
+        "size": null,
+        "from": {
+          "id": "7",
+          "tab": "0:2"
+        },
+        "tty": null
+      },
+      "commands": [
+        "wezterm cli split-pane --right -- terminal-browser open"
+      ]
+    },
+    "pasteKey": {
+      "commands": [
+        "wezterm cli send-text --no-paste --pane-id 7"
+      ]
+    }
+  }
+}

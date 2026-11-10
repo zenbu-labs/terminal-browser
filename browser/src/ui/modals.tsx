@@ -109,7 +109,7 @@ export function PaletteCard({
               selectable: false,
             }}
           >
-            no matching actions
+            No matching actions
           </Text>
         )}
         {view.items.map((item, i) => (

@@ -1,0 +1,128 @@
+diff --git a/docs/api/session.md b/docs/api/session.md
+--- a/docs/api/session.md
++++ b/docs/api/session.md
+@@ -1030,7 +1030,7 @@ session.fromPartition('some-partition').setPermissionRequestHandler((webContents
+ 
+ #### `ses.setPermissionCheckHandler(handler)`
+ 
+-* `handler` Function\<boolean> | null
++* `handler` Function\<boolean | string> | null
+   * `webContents` ([WebContents](web-contents.md) | null) - WebContents that contains the frame checking the permission. This is `null` when the check is not made on behalf of a document, for example for a service worker or for a `notifications` check. If the check comes from a subframe, `webContents` is the top-level WebContents; use `requestingOrigin`, `requestingUrl` and `isMainFrame` to identify the frame that is asking.
+   * `permission` string - Type of permission check. Electron forwards every permission type that Chromium checks, so this list mirrors Chromium's permission types and includes some that have no effect on desktop or are only used by specific platforms or features.
+     * `ar` - Access to augmented reality sessions via the [WebXR Device API](https://developer.mozilla.org/en-US/docs/Web/API/WebXR_Device_API).
+@@ -1114,6 +1114,10 @@ session.fromPartition('some-partition').setPermissionCheckHandler((webContents,
+ > [!NOTE]
+ > `isMainFrame` will always be `false` for a `fileSystem` request as a result of Chromium limitations.
+ 
++Return `true` to report the permission as granted, `false` to report it as denied, or `prompt` to report that
++the user has not decided yet. Pages see `prompt` as `prompt` from `navigator.permissions.query()` and
++`default` from `Notification.permission`, so they go on to request the permission.
++
+ #### `ses.setDisplayMediaRequestHandler(handler[, opts])`
+ 
+ * `handler` Function | null
+diff --git a/shell/browser/electron_permission_manager.cc b/shell/browser/electron_permission_manager.cc
+--- a/shell/browser/electron_permission_manager.cc
++++ b/shell/browser/electron_permission_manager.cc
+@@ -325,10 +325,8 @@ blink::mojom::PermissionStatus ElectronPermissionManager::GetPermissionStatus(
+       blink::PermissionDescriptorToPermissionType(permission_descriptor);
+   base::DictValue details;
+   details.Set("embeddingOrigin", embedding_origin.spec());
+-  bool granted = CheckPermissionWithDetails(permission, {}, requesting_origin,
+-                                            std::move(details));
+-  return granted ? blink::mojom::PermissionStatus::GRANTED
+-                 : blink::mojom::PermissionStatus::DENIED;
++  return CheckPermissionStatusWithDetails(permission, {}, requesting_origin,
++                                          std::move(details));
+ }
+ 
+ content::PermissionResult
+@@ -359,15 +357,27 @@ bool ElectronPermissionManager::CheckPermissionWithDetails(
+     content::RenderFrameHost* render_frame_host,
+     const GURL& requesting_origin,
+     base::DictValue details) const {
++  return CheckPermissionStatusWithDetails(permission, render_frame_host,
++                                          requesting_origin,
++                                          std::move(details)) ==
++         blink::mojom::PermissionStatus::GRANTED;
++}
++
++blink::mojom::PermissionStatus
++ElectronPermissionManager::CheckPermissionStatusWithDetails(
++    blink::PermissionType permission,
++    content::RenderFrameHost* render_frame_host,
++    const GURL& requesting_origin,
++    base::DictValue details) const {
+   if (permission == blink::PermissionType::GEOLOCATION &&
+       IsGeolocationDisabledViaCommandLine())
+-    return false;
++    return blink::mojom::PermissionStatus::DENIED;
+ 
+   if (check_handler_.is_null()) {
+     if (permission == blink::PermissionType::DEPRECATED_SYNC_CLIPBOARD_READ) {
+-      return false;
++      return blink::mojom::PermissionStatus::DENIED;
+     } else {
+-      return true;
++      return blink::mojom::PermissionStatus::GRANTED;
+     }
+   }
+ 
+@@ -391,8 +401,14 @@ bool ElectronPermissionManager::CheckPermissionWithDetails(
+     default:
+       break;
+   }
+-  return check_handler_.Run(web_contents, permission, requesting_origin,
+-                            base::Value(std::move(details)));
++  base::Value answer = check_handler_.Run(web_contents, permission,
++                                          requesting_origin,
++                                          base::Value(std::move(details)));
++  if (answer.is_bool() && answer.GetBool())
++    return blink::mojom::PermissionStatus::GRANTED;
++  if (answer.is_string() && answer.GetString() == "prompt")
++    return blink::mojom::PermissionStatus::ASK;
++  return blink::mojom::PermissionStatus::DENIED;
+ }
+ 
+ bool ElectronPermissionManager::CheckDevicePermission(
+@@ -463,13 +479,9 @@ ElectronPermissionManager::GetPermissionResultForCurrentDocument(
+               content::PermissionUtil::GetLastCommittedOriginAsURL(
+                   render_frame_host->GetMainFrame())
+                   .spec());
+-  bool granted = CheckPermissionWithDetails(
++  return content::PermissionResult(CheckPermissionStatusWithDetails(
+       permission, render_frame_host,
+-      render_frame_host->GetLastCommittedOrigin().GetURL(), std::move(details));
+-  return granted ? content::PermissionResult(
+-                       blink::mojom::PermissionStatus::GRANTED)
+-                 : content::PermissionResult(
+-                       blink::mojom::PermissionStatus::DENIED);
++      render_frame_host->GetLastCommittedOrigin().GetURL(), std::move(details)));
+ }
+ 
+ content::PermissionResult
+diff --git a/shell/browser/electron_permission_manager.h b/shell/browser/electron_permission_manager.h
+--- a/shell/browser/electron_permission_manager.h
++++ b/shell/browser/electron_permission_manager.h
+@@ -52,7 +52,7 @@ class ElectronPermissionManager : public content::PermissionControllerDelegate {
+                                                       StatusCallback,
+                                                       const base::Value&)>;
+   using CheckHandler =
+-      base::RepeatingCallback<bool(content::WebContents*,
++      base::RepeatingCallback<base::Value(content::WebContents*,
+                                    blink::PermissionType,
+                                    const GURL& requesting_origin,
+                                    const base::Value&)>;
+@@ -95,6 +95,12 @@ class ElectronPermissionManager : public content::PermissionControllerDelegate {
+                                   content::RenderFrameHost* render_frame_host,
+                                   const GURL& requesting_origin,
+                                   base::DictValue details) const;
++  // a check handler can answer "prompt", which pages see as "ask first"
++  blink::mojom::PermissionStatus CheckPermissionStatusWithDetails(
++      blink::PermissionType permission,
++                                  content::RenderFrameHost* render_frame_host,
++                                  const GURL& requesting_origin,
++                                  base::DictValue details) const;
+ 
+   bool CheckDevicePermission(blink::PermissionType permission,
+                              const url::Origin& origin,

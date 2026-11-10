@@ -2,12 +2,35 @@ import type { RefObject } from "react";
 import type {
   DownloadProgress,
   DragEvent,
+  MediaCapture,
   OpenWindowDecision,
+  PermissionCheck,
+  PermissionCheckAnswer,
+  PermissionRequest,
   PointerEvent,
   WebViewHandle,
   WebViewState,
+  ZoomDirection,
 } from "@zenbu-labs/pixel";
 import type { RecordActions } from "../record/types";
+import type { BrowsingDataKind } from "../session/browsing-data";
+import type { IconName } from "./icons";
+
+export interface ToastView {
+  text: string;
+  detail?: string;
+  failed: boolean;
+  alert: boolean;
+  sticky: boolean;
+  action?: { label: string; run(): void };
+}
+
+export type PermissionDecision = "allow" | "block" | "dismiss";
+
+export interface PermissionPromptView {
+  host: string | null;
+  items: { icon: IconName; label: string }[];
+}
 
 export interface PaletteView {
   index: number;
@@ -29,6 +52,9 @@ export interface TabRow {
   favicon: string | null;
   active: boolean;
   agentControlled: boolean;
+  audible: boolean;
+  muted: boolean;
+  capturing: MediaCapture;
 }
 
 export interface DownloadView {
@@ -37,25 +63,30 @@ export interface DownloadView {
   state: "progressing" | "done" | "failed";
 }
 
-export type PageMenuIcon =
-  | { kind: "path"; d: string; tint?: "red"; weight?: number }
-  | { kind: "image"; src: string };
-
 export interface PageMenuItem {
   id: string;
   label: string;
   enabled: boolean;
   shortcut: string;
-  icon?: PageMenuIcon;
+}
+
+export interface ClearDataView {
+  checked: BrowsingDataKind[];
+  clearing: boolean;
 }
 
 export interface PageMenuView {
   x: number;
   y: number;
+  zoomPercent?: number;
   items: PageMenuItem[];
 }
 
-export type SettingsSection = "general" | "shortcuts" | "advanced";
+import type { SettingGroup } from "shared";
+
+export type { SettingGroup };
+
+export type SettingsSection = SettingGroup | "shortcuts";
 
 export interface ShortcutRow {
   id: string;
@@ -73,13 +104,14 @@ export interface SettingChoiceView {
 
 export type SettingRow = {
   key: string;
+  group: SettingGroup;
   label: string;
-  hint?: string;
-  link?: string;
+  hint: string;
   modified: boolean;
 } & (
   | { kind: "string"; value: string }
-  | { kind: "choice"; value: string; choices: SettingChoiceView[] }
+  | { kind: "toggle"; value: string; inverted: boolean }
+  | { kind: "choice"; value: string; choices: SettingChoiceView[]; custom: boolean }
 );
 
 export interface SettingsView {
@@ -89,6 +121,13 @@ export interface SettingsView {
   shortcuts: ShortcutRow[];
   settings: SettingRow[];
   files: { settings: string; shortcuts: string };
+  release: ReleaseView;
+}
+
+export interface ReleaseView {
+  version: string;
+  latest: string | null;
+  upgrade: string;
 }
 
 export interface SettingsActions {
@@ -105,7 +144,6 @@ export interface SettingsActions {
   reloadConfig(): void;
   copyAgentBrief(): void;
   copyPath(file: "settings" | "shortcuts"): void;
-  openLink(url: string): void;
 }
 
 export interface ChromeActions {
@@ -125,6 +163,8 @@ export interface ChromeActions {
   tabClose(id: number): void;
   tabNew(): void;
   tabMenu(): void;
+  tabMute(id: number): void;
+  grab(): void;
   newTabQuery(text: string): void;
   newTabSubmit(text: string): void;
   newTabPick(index: number): void;
@@ -134,7 +174,14 @@ export interface ChromeActions {
   devtoolsDividerHover(hovering: boolean): void;
   pageMenuAction(id: string): void;
   pageMenuClose(): void;
+  pageMenuZoom(direction: ZoomDirection): void;
+  permissionDecide(decision: PermissionDecision): void;
+  toastDismiss(): void;
+  clearDataToggle(kind: BrowsingDataKind): void;
+  clearDataConfirm(): void;
+  clearDataCancel(): void;
   settings: SettingsActions;
+  profileStop(): void;
   record: RecordActions;
 }
 
@@ -153,6 +200,8 @@ export interface ChromeLayout {
     dock: "bottom" | "right";
   } | null;
   rem: number;
+  frame: number;
+  radius: number;
 }
 
 export interface TabView {
@@ -165,6 +214,7 @@ export interface TabView {
   proxy: string | null;
   preload: string | null;
   clipboardRead: boolean;
+  transparent: boolean;
 }
 
 export interface TabActions {
@@ -173,6 +223,8 @@ export interface TabActions {
   contextMenu(id: number, params: Electron.ContextMenuParams): void;
   download(progress: DownloadProgress): void;
   pointer(id: number, event: PointerEvent): void;
+  permissionRequest(id: number, request: PermissionRequest): Promise<boolean>;
+  permissionCheck(check: PermissionCheck): PermissionCheckAnswer;
 }
 
 export interface DevtoolsView {

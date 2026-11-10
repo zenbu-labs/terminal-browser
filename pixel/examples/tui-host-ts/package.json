@@ -1,0 +1,15 @@
+{
+  "name": "tui-host-ts",
+  "private": true,
+  "type": "module",
+  "main": "dist/host.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "start": "node src/host.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

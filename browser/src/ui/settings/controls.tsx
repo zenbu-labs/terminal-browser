@@ -17,17 +17,17 @@ export function IconButton({
   return (
     <Box
       style={{
-        width: rem * 1.25,
-        height: rem * 1.25,
+        width: rem * 1.6,
+        height: rem * 1.6,
         flexShrink: 0,
         alignItems: "center",
         justifyContent: "center",
-        cornerRadius: rem * 0.25,
+        cornerRadius: rem * 0.3,
         hoverBackground: theme.hoverStrong,
       }}
       onClick={onClick}
     >
-      <Icon icon={icon} size={rem * 0.85} color={theme.muted} />
+      <Icon icon={icon} size={rem * 1} color={theme.muted} />
     </Box>
   );
 }
@@ -57,6 +57,47 @@ export function TextButton({
       onClick={onClick}
     >
       <Text style={{ fontSize: rem * 0.85, wrap: false, selectable: false }}>{label}</Text>
+    </Box>
+  );
+}
+
+export function Toggle({
+  on,
+  rem,
+  theme,
+  onChange,
+}: {
+  on: boolean;
+  rem: number;
+  theme: Theme;
+  onChange(on: boolean): void;
+}) {
+  const height = Math.round(rem * 1.2);
+  const knob = height - 6;
+  return (
+    <Box
+      style={{
+        width: Math.round(rem * 2.2),
+        height,
+        flexShrink: 0,
+        alignItems: "center",
+        justifyContent: on ? "end" : "start",
+        padding: 2,
+        cornerRadius: height / 2,
+        background: on ? theme.hoverStrong : theme.field,
+        hoverBackground: theme.hoverStrong,
+        border: { width: 1, color: theme.fieldBorder },
+      }}
+      onClick={() => onChange(!on)}
+    >
+      <Box
+        style={{
+          width: knob,
+          height: knob,
+          cornerRadius: knob / 2,
+          background: on ? theme.fg : theme.muted,
+        }}
+      />
     </Box>
   );
 }

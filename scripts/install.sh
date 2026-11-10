@@ -53,11 +53,6 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN_HOME="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
 APP="$DATA_HOME/terminal-browser/app"
-if [ -d "$APP" ]; then
-  echo "updating existing install (was $(cat "$APP/VERSION" 2>/dev/null || echo unknown))"
-else
-  echo "installing to $APP"
-fi
 rm -rf "$APP.new"
 mkdir -p "$APP.new"
 tar -xzf "$TARBALL" -C "$APP.new" --strip-components 1
@@ -84,6 +79,7 @@ fi
 echo "installed terminal-browser $(cat "$APP/VERSION")${CHANNEL:+ ($CHANNEL)}"
 
 if [ -z "${TERMINAL_BROWSER_SKIP_SETUP:-}" ]; then
+  echo
   "$APP/bin/terminal-browser" setup || true
 fi
 case ":$PATH:" in

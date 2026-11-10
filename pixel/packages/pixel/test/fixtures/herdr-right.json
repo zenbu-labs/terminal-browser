@@ -1,0 +1,35 @@
+{
+  "env": {
+    "HERDR_PANE_ID": "w1:p1",
+    "HERDR_TAB_ID": "w1:t1"
+  },
+  "exec": {
+    "herdr pane split --pane w1:p1 --direction right --focus --ratio 0.4 --right-click pane": "{\"result\":{\"pane\":{\"pane_id\":\"w1:p2\"}}}",
+    "herdr pane run w1:p2 terminal-browser open": ""
+  },
+  "expect": {
+    "name": "herdr",
+    "currentPane": {
+      "id": "w1:p1",
+      "tab": "w1:t1"
+    },
+    "split": {
+      "request": {
+        "direction": "right",
+        "command": ["terminal-browser", "open"],
+        "size": 0.4,
+        "from": { "id": "w1:p1", "tab": "w1:t1" },
+        "tty": null
+      },
+      "commands": [
+        "herdr pane split --pane w1:p1 --direction right --focus --ratio 0.4 --right-click pane",
+        "herdr pane run w1:p2 terminal-browser open"
+      ]
+    },
+    "pasteKey": {
+      "commands": [
+        "herdr pane send-text w1:p1 \u0016"
+      ]
+    }
+  }
+}

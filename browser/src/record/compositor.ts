@@ -84,7 +84,7 @@ export function writeFailedManifest(dir: string, page: { url: string; title: str
 export async function compositeRecording(options: CompositeOptions): Promise<void> {
   const { recorder, markup, page, trim } = options;
   const frames = recorder.frames;
-  if (frames.length === 0) throw new Error("nothing captured");
+  if (frames.length === 0) throw new Error("Nothing captured");
   const dir = recorder.dir;
 
   const trimStart = trim?.startMs ?? 0;

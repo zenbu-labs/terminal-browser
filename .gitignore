@@ -4,8 +4,10 @@
 **/*.rs.bk
 # Keep Cargo.lock committed: this repo builds binaries, so reproducible builds win.
 
-# Profiling and coverage output (engine dumps and devtools exports, any depth)
-profiles/
+# Profiling and coverage output (engine dumps and devtools exports)
+/profiles/
+/browser/profiles/
+/monitor/profiles/
 *.profraw
 *.profdata
 /coverage/
@@ -43,7 +45,7 @@ agent/app/.data/
 browser/dist/
 cli/dist/
 terminals/dist/
-store/dist/
+shared/dist/
 .claude/worktrees/
 tools/
 dist-release/

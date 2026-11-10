@@ -1,0 +1,40 @@
+{
+  "env": {
+    "TERM_PROGRAM": "rex",
+    "REX_BLOCK": "block:01a19731-9239-717e-b3e9-e3c6c29420f5"
+  },
+  "exec": {
+    "rex block ls --json": "{\"blocks\":[{\"block_id\":\"block:01a19731-9239-717e-b3e9-e3c6c29420f5\",\"label\":\"shell\",\"creator_name\":\"com.superlogical.terminal\",\"flavor\":\"com.superlogical.terminal.shell\",\"host_id\":\"797f0912-f8d9-4d36-b9d4-a422619bce9a\",\"placement\":\"placed\",\"window_id\":\"window:01a19731-9254-7aba-b1dc-1f43ba1dde11\",\"owner\":\"client:01a19732-f36b-73c8-a900-825b31d6595b\"},{\"block_id\":\"block:01a19736-7e2d-7b0c-b414-51998bff7984\",\"label\":\"shell\",\"creator_name\":\"com.superlogical.terminal\",\"flavor\":\"com.superlogical.terminal.shell\",\"host_id\":\"797f0912-f8d9-4d36-b9d4-a422619bce9a\",\"placement\":\"placed\",\"window_id\":\"window:01a19731-9254-7aba-b1dc-1f43ba1dde11\",\"owner\":\"client:01a19732-f36b-73c8-a900-825b31d6595b\"},{\"block_id\":\"block:01a19729-e188-7999-997e-b9dee11ab0d7\",\"label\":\"shell\",\"creator_name\":\"com.superlogical.terminal\",\"flavor\":\"com.superlogical.terminal.shell\",\"host_id\":\"797f0912-f8d9-4d36-b9d4-a422619bce9a\",\"placement\":\"placed\",\"window_id\":\"window:01a19729-e1a1-7509-890d-30a016c975e5\"}]}",
+    "rex split --block block:01a19731-9239-717e-b3e9-e3c6c29420f5 --split right --ratio 40 -- terminal-browser open": ""
+  },
+  "expect": {
+    "name": "rex",
+    "currentPane": {
+      "id": "block:01a19731-9239-717e-b3e9-e3c6c29420f5",
+      "tab": "window:01a19731-9254-7aba-b1dc-1f43ba1dde11"
+    },
+    "split": {
+      "request": {
+        "direction": "right",
+        "command": [
+          "terminal-browser",
+          "open"
+        ],
+        "size": 0.4,
+        "from": {
+          "id": "block:01a19731-9239-717e-b3e9-e3c6c29420f5",
+          "tab": "window:01a19731-9254-7aba-b1dc-1f43ba1dde11"
+        },
+        "tty": null
+      },
+      "commands": [
+        "rex split --block block:01a19731-9239-717e-b3e9-e3c6c29420f5 --split right --ratio 40 -- terminal-browser open"
+      ]
+    },
+    "pasteKey": {
+      "commands": [
+        "rex send --block block:01a19731-9239-717e-b3e9-e3c6c29420f5"
+      ]
+    }
+  }
+}

@@ -8,6 +8,7 @@ const CHANNEL = "grab";
 const PLUGIN = "terminal-browser";
 const SCRIPT_ASSET = "react-grab/index.global.js";
 const BINDING = "__pixelEmit";
+const REGION_PADDING = 8;
 
 let librarySource: string | null = null;
 function reactGrabLibrary(): string {
@@ -20,6 +21,23 @@ function reactGrabLibrary(): string {
 
 const REGISTER_PLUGIN = `(api) => {
   const emit = (data) => window.${BINDING}?.(JSON.stringify({ channel: ${JSON.stringify(CHANNEL)}, data }));
+  const regionAround = (elements) => {
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (const element of elements) {
+      const box = element.getBoundingClientRect();
+      if (box.width === 0 && box.height === 0) continue;
+      left = Math.min(left, box.left);
+      top = Math.min(top, box.top);
+      right = Math.max(right, box.right);
+      bottom = Math.max(bottom, box.bottom);
+    }
+    if (!Number.isFinite(left)) return null;
+    const x = Math.max(0, left - ${REGION_PADDING});
+    const y = Math.max(0, top - ${REGION_PADDING});
+    const x2 = Math.min(window.innerWidth, right + ${REGION_PADDING});
+    const y2 = Math.min(window.innerHeight, bottom + ${REGION_PADDING});
+    return x2 - x >= 1 && y2 - y >= 1 ? { x, y, width: x2 - x, height: y2 - y } : null;
+  };
   const overlay = document.querySelector("[data-react-grab]")?.shadowRoot;
   if (overlay && !overlay.querySelector("#${PLUGIN}-style")) {
     const style = document.createElement("style");
@@ -34,8 +52,8 @@ const REGISTER_PLUGIN = `(api) => {
     hooks: {
       onActivate: () => emit({ type: "active", active: true }),
       onDeactivate: () => emit({ type: "active", active: false }),
-      transformCopyContent: (content) => {
-        emit({ type: "selected", content });
+      transformCopyContent: (content, elements) => {
+        emit({ type: "selected", content, region: regionAround(elements) });
         api.reset();
         api.deactivate();
         return content;
@@ -124,16 +142,32 @@ const ACTIVATE_SCRIPT = `(() => {
 
 const DEACTIVATE_SCRIPT = "window.__REACT_GRAB__?.deactivate()";
 
+export interface GrabRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 type GrabMessage =
   | { type: "active"; active: boolean }
-  | { type: "selected"; content: string };
+  | { type: "selected"; content: string; region: GrabRegion | null };
 
 export interface GrabHooks {
-  selected(content: string): void;
+  selected(content: string, region: GrabRegion | null): void;
+  changed(): void;
 }
 
 export class Grab {
-  active = false;
+  private _active = false;
+  get active(): boolean {
+    return this._active;
+  }
+  private set active(value: boolean) {
+    if (this._active === value) return;
+    this._active = value;
+    this.hooks.changed();
+  }
   private readonly onMessage = (_event: unknown, method: string, params: unknown) => {
     if (method === "Page.frameNavigated") {
       const frame = (params as { frame?: { parentId?: string } }).frame;
@@ -198,7 +232,7 @@ export class Grab {
     if (message.type === "selected") {
       if (!this.active) return;
       this.active = false;
-      this.hooks.selected(message.content);
+      this.hooks.selected(message.content, message.region ?? null);
       void this.deactivate();
     }
   }

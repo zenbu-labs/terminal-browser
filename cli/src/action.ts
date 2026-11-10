@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { AGENT_SOCKETS_DIR } from "pixel-store";
+import { AGENT_SOCKETS_DIR } from "shared";
 import type { Terminal } from "@zenbu-labs/pixel/terminal";
 
 import { control } from "./control";

@@ -1,15 +1,7 @@
 /* @jsx h */
 import type { ClientKeyEvent, ClientPointerEvent, ClientSurface } from 'claude-code'
-import { MAX_PLACEHOLDER_CELLS, imageColor, placeholderRow } from './placeholders.ts'
 
-
-
-export type Props = {
-  placed: { imageId: number; cols: number; rows: number } | null
-  cols: number
-  rows: number
-  title: string
-} | undefined
+export const MAX_IMAGE_CELLS = 255
 
 type State = { cols: number; rows: number }
 
@@ -56,8 +48,8 @@ function pointerEvent(event: ClientPointerEvent): InputEvent | null {
   return { type: 'mouse', kind: event.type, button: event.button, x: event.x, y: event.y, mods }
 }
 
-export default function Browser(props: Props, surface: ClientSurface<State>) {
-  const { Box, Text } = surface.elements
+export default function Browser(_props: unknown, surface: ClientSurface<State>) {
+  const { Box } = surface.elements
   const queue: InputEvent[] = []
 
   if (surface.state === undefined) {
@@ -77,25 +69,12 @@ export default function Browser(props: Props, surface: ClientSurface<State>) {
     })
   }
 
-  const cols = Math.min(surface.columns, MAX_PLACEHOLDER_CELLS)
-  const rows = Math.min(surface.rows, MAX_PLACEHOLDER_CELLS)
+  const cols = Math.min(surface.columns, MAX_IMAGE_CELLS)
+  const rows = Math.min(surface.rows, MAX_IMAGE_CELLS)
   if (cols > 0 && rows > 0 && surface.state && (surface.state.cols !== cols || surface.state.rows !== rows)) {
     surface.setState({ cols, rows })
     surface.post({ type: 'size', cols, rows })
   }
 
-  const placed = props?.placed
-  if (!placed) return <Box flexDirection="column" height="100%" />
-  const drawCols = Math.min(placed.cols, props?.cols ?? cols)
-  const drawRows = Math.min(placed.rows, props?.rows ?? rows)
-  const color = imageColor(placed.imageId)
-  const lines: string[] = []
-  for (let row = 0; row < drawRows; row++) lines.push(placeholderRow(row, drawCols))
-  return (
-    <Box flexDirection="column" height="100%">
-      {lines.map((line, row) => (
-        <Text key={`r${row}`} color={color} wrap="truncate-end">{line}</Text>
-      ))}
-    </Box>
-  )
+  return <Box flexDirection="column" height="100%" />
 }

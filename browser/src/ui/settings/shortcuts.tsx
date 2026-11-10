@@ -8,6 +8,7 @@ import type { SettingsActions, SettingsView, ShortcutRow } from "../types";
 import { copy } from "./copy";
 import { ScrollPane } from "./scroll-pane";
 import { IconButton } from "./controls";
+import { PANE_PADDING_REMS } from "./index";
 
 export function ShortcutsPane({
   view,
@@ -34,11 +35,11 @@ export function ShortcutsPane({
           flexShrink: 0,
           alignItems: "center",
           gap: rem * 0.5,
-          padding: { left: rem * 1, right: rem * 1 },
+          padding: { left: rem * PANE_PADDING_REMS, right: rem * PANE_PADDING_REMS },
           border: { bottom: [1, theme.hairline] },
         }}
       >
-        <Icon icon="search" size={rem * 0.9} color={theme.muted} />
+        <Icon icon="search" size={rem * 1} color={theme.muted} />
         <Input
           ref={input}
           autoFocus
@@ -61,7 +62,7 @@ export function ShortcutsPane({
         {view.shortcuts.length === 0 && (
           <Text
             style={{
-              padding: { left: rem * 1, top: rem * 0.4 },
+              padding: { left: rem * PANE_PADDING_REMS, top: rem * 0.4 },
               fontSize: rem * 0.9,
               color: theme.muted,
               selectable: false,
@@ -108,7 +109,7 @@ function ShortcutLine({
         flexShrink: 0,
         alignItems: "center",
         gap: rem * 0.4,
-        padding: { left: rem * 1, right: rem * 0.6 },
+        padding: { left: rem * PANE_PADDING_REMS, right: rem * PANE_PADDING_REMS },
         hoverBackground: theme.hover,
       }}
       onMouseEnter={() => setHover(true)}

@@ -1,0 +1,81 @@
+{
+  "name": "@zenbu-labs/pixel",
+  "version": "0.0.20",
+  "description": "Build graphical applications in the terminal",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zenbu-labs/terminal-browser.git",
+    "directory": "pixel/packages/pixel"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "pixel": "dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
+    "./preload": {
+      "types": "./dist/preload/index.d.ts",
+      "default": "./dist/preload/index.js"
+    },
+    "./electron": {
+      "types": "./dist/electron/index.d.ts",
+      "default": "./dist/electron/index.js"
+    },
+    "./terminal": {
+      "types": "./dist/terminal/index.d.ts",
+      "default": "./dist/terminal/index.js"
+    },
+    "./app-executable": {
+      "types": "./dist/app-executable.d.ts",
+      "default": "./dist/app-executable.js"
+    },
+    "./ssh": {
+      "types": "./dist/ssh/index.d.ts",
+      "default": "./dist/ssh/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "scripts/postinstall.mjs",
+    "scripts/apparmor.sh"
+  ],
+  "config": {
+    "electron": "44.5.1"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs",
+    "build": "tsc -p tsconfig.json",
+    "build:native": "node scripts/build-native.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "react-reconciler": "^0.29.2"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1"
+  },
+  "optionalDependencies": {
+    "@zenbu-labs/pixel-native-darwin-arm64": "0.0.20",
+    "@zenbu-labs/pixel-native-darwin-x64": "0.0.20",
+    "@zenbu-labs/pixel-native-linux-arm64": "0.0.20",
+    "@zenbu-labs/pixel-native-linux-x64": "0.0.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-reconciler": "^0.28.8",
+    "react": "^18.3.1",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,60 @@
+diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
+--- a/shell/browser/osr/osr_render_widget_host_view.cc
++++ b/shell/browser/osr/osr_render_widget_host_view.cc
+@@ -972,6 +972,43 @@ OffScreenRenderWidgetHostView::GetNewScreenInfosForUpdate() {
+   return screen_infos;
+ }
+ 
++#if BUILDFLAG(IS_LINUX)
++// RenderWidgetHostViewBase::UpdateScreenInfo without its Ozone block: on
++// Wayland with per-surface scaling that block replaces device_scale_factor
++// with the platform window's preferred scale, and an offscreen view has no
++// platform window, so the lookup falls back to 1.0 and clobbers the scale
++// this view was created with. GetNewScreenInfosForUpdate is authoritative
++// here. The base's rotation bookkeeping is skipped along with it: offscreen
++// screen info reports a fixed orientation, so it can never change.
++void OffScreenRenderWidgetHostView::UpdateScreenInfo() {
++  bool force_sync_visual_properties = false;
++  if (widget_type_ == content::WidgetType::kPopup) {
++    if (host()) {
++      force_sync_visual_properties = true;
++      host()->SendScreenRects();
++    }
++  } else if (host() && host()->delegate()) {
++    host()->delegate()->SendScreenRects();
++  }
++
++  auto new_screen_infos = GetNewScreenInfosForUpdate();
++  new_screen_infos.mutable_current().handwriting_radius = handwriting_radius_;
++
++  if (scale_override_for_capture_ != 1.0f) {
++    new_screen_infos.mutable_current().device_scale_factor *=
++        scale_override_for_capture_;
++  }
++
++  if (screen_infos_ == new_screen_infos && !force_sync_visual_properties)
++    return;
++
++  screen_infos_ = std::move(new_screen_infos);
++
++  if (host())
++    host()->NotifyScreenInfoChanged();
++}
++#endif  // BUILDFLAG(IS_LINUX)
++
+ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
+   SetupFrameRate(false);
+ 
+diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
+--- a/shell/browser/osr/osr_render_widget_host_view.h
++++ b/shell/browser/osr/osr_render_widget_host_view.h
+@@ -169,6 +169,9 @@ class OffScreenRenderWidgetHostView
+   gfx::Size GetCompositorViewportPixelSize() override;
+   ui::Compositor* GetCompositor() override;
+   display::ScreenInfos GetNewScreenInfosForUpdate() override;
++#if BUILDFLAG(IS_LINUX)
++  void UpdateScreenInfo() override;
++#endif
+ 
+   const viz::LocalSurfaceId& GetLocalSurfaceId() const override;
+   const viz::FrameSinkId& GetFrameSinkId() const override;

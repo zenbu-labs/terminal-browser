@@ -1,15 +1,16 @@
 import { createRef } from "react";
 import type { RefObject } from "react";
+import { initialWebViewState } from "@zenbu-labs/pixel";
 import type { OpenWindowDecision, WebViewHandle, WebViewState } from "@zenbu-labs/pixel";
 
 import type { TabRow } from "../ui/types";
-import { displayUrl } from "../url";
-import { DOC_SCHEME } from "../pages/scheme";
+import { DOC_SCHEME, displayUrl, isMarkdownDocument } from "../url";
 
 export interface Tab {
   readonly id: number;
   readonly url: string;
   readonly ref: RefObject<WebViewHandle>;
+  readonly transparent: boolean;
   state: WebViewState;
   targetId: string | null;
   agentControlAt: number | null;
@@ -72,20 +73,17 @@ export class TabManager {
   }
 
   create(url: string, activate = true): Tab {
+    const first = this.seq === 1;
     const tab: Tab = {
       id: this.seq++,
       url,
       ref: createRef<WebViewHandle>(),
-      state: {
-        url,
-        title: "",
-        loading: true,
-        canGoBack: false,
-        canGoForward: false,
-        findMatches: null,
-        zoom: 1,
-        favicon: null,
-      },
+      // we apply transparency on the tab only if the webview was created with the initial url being a ".md", and
+      // intentionally don't detect if a new .md tab was loaded because it would force us to destroy the webview and
+      // recreate it to apply transparency. The most clever implementation simply rebuilds browser state when this
+      // happens, but it's a little complex and this case is much less often than initially spawning on .md for our users
+      transparent: first && isMarkdownDocument(url),
+      state: initialWebViewState(url),
       targetId: null,
       agentControlAt: null,
       devtools: false,
@@ -268,6 +266,9 @@ export class TabManager {
       favicon: tab.state.favicon,
       active: tab.id === this.activeId,
       agentControlled: tab.agentControlAt != null,
+      audible: tab.state.audible,
+      muted: tab.state.muted,
+      capturing: tab.state.capturing,
     }));
   }
 

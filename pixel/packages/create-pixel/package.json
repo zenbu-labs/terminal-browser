@@ -1,0 +1,28 @@
+{
+  "name": "@zenbu-labs/create-pixel",
+  "version": "0.0.20",
+  "description": "Create a pixel app",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zenbu-labs/terminal-browser.git",
+    "directory": "pixel/packages/create-pixel"
+  },
+  "type": "module",
+  "bin": {
+    "create-pixel": "index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "template/package.json",
+    "template/tsconfig.json",
+    "template/gitignore",
+    "template/src"
+  ],
+  "dependencies": {
+    "@clack/prompts": "^1.8.1"
+  },
+  "engines": {
+    "node": ">=20.11"
+  }
+}

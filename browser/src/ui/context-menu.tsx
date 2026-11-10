@@ -1,6 +1,8 @@
-import { Box, Image, Path, Text } from "@zenbu-labs/pixel";
+import { Box, Text } from "@zenbu-labs/pixel";
+import { Icon } from "./icons";
+import type { IconName } from "./icons";
 import type { Theme } from "./theme";
-import type { ChromeActions, ChromeLayout, PageMenuIcon, PageMenuItem, PageMenuView } from "./types";
+import type { ChromeActions, ChromeLayout, PageMenuItem, PageMenuView } from "./types";
 
 export function PageContextMenu({
   view,
@@ -14,19 +16,19 @@ export function PageContextMenu({
   theme: Theme;
 }) {
   const rem = layout.rem;
-  const rowH = Math.round(rem * 1.55);
+  const rowH = Math.round(rem * 1.7);
+  const menuPad = Math.round(rem * 0.25);
   const charW = rem * 0.82 * 0.6;
   const shortcutW = rem * 0.72 * 0.6;
-  const hasIcons = view.items.some((item) => item.icon);
   const width = Math.round(
     view.items.reduce((widest, item) => {
-      let row = rem * 1.4 + item.label.length * charW;
-      if (hasIcons) row += rem * 1.2;
-      if (item.shortcut) row += rem * 0.6 + item.shortcut.length * shortcutW;
+      let row = rem * 1.8 + menuPad * 2 + item.label.length * charW;
+      if (item.shortcut) row += rem * 1 + item.shortcut.length * shortcutW;
       return Math.max(widest, row);
-    }, rem * 9),
+    }, view.zoomPercent === undefined ? rem * 10 : rem * 14),
   );
-  const height = view.items.length * rowH;
+  const dividerH = menuPad * 2 + 1;
+  const height = view.items.length * rowH + menuPad * 2 + (view.zoomPercent === undefined ? 0 : rowH + dividerH);
   const x = Math.max(2, Math.min(view.x, layout.width - width - 4));
   const y = Math.max(2, Math.min(view.y, layout.height - height - 4));
   return (
@@ -46,25 +48,22 @@ export function PageContextMenu({
           inset: { top: y, left: x },
           width,
           flexDirection: "column",
+          padding: menuPad,
           background: theme.overlay,
           cornerRadius: rem * 0.45,
           border: { width: 1, color: theme.fieldBorder },
           overflow: "hidden",
         }}
       >
-        {view.items.map((item, i) => (
-          <MenuRow
-            key={item.id}
-            item={item}
-            rowH={rowH}
-            rem={rem}
-            theme={theme}
-            actions={actions}
-            first={i === 0}
-            last={i === view.items.length - 1}
-            alignIcons={hasIcons}
-          />
+        {view.items.map((item) => (
+          <MenuRow key={item.id} item={item} rowH={rowH} rem={rem} theme={theme} actions={actions} />
         ))}
+        {view.zoomPercent !== undefined && (
+          <>
+            <Box style={{ height: 1, margin: { top: menuPad, bottom: menuPad }, background: theme.hairline, flexShrink: 0 }} />
+            <ZoomRow percent={view.zoomPercent} rowH={rowH} rem={rem} theme={theme} actions={actions} />
+          </>
+        )}
       </Box>
     </>
   );
@@ -76,42 +75,26 @@ function MenuRow({
   rem,
   theme,
   actions,
-  first,
-  last,
-  alignIcons,
 }: {
   item: PageMenuItem;
   rowH: number;
   rem: number;
   theme: Theme;
   actions: ChromeActions;
-  first: boolean;
-  last: boolean;
-  alignIcons: boolean;
 }) {
-  const radius = Math.max(2, rem * 0.45 - 1);
   return (
     <Box
       style={{
         height: rowH,
         alignItems: "center",
-        padding: { left: rem * 0.7, right: rem * 0.7 },
+        gap: rem * 0.45,
+        padding: { left: rem * 0.4, right: rem * 0.6 },
         hoverBackground: item.enabled ? theme.hover : undefined,
-        cornerRadius: {
-          topLeft: first ? radius : 0,
-          topRight: first ? radius : 0,
-          bottomLeft: last ? radius : 0,
-          bottomRight: last ? radius : 0,
-        },
+        cornerRadius: rem * 0.3,
         flexShrink: 0,
       }}
       onClick={item.enabled ? () => actions.pageMenuAction(item.id) : undefined}
     >
-      {item.icon ? (
-        <MenuIcon icon={item.icon} enabled={item.enabled} rem={rem} theme={theme} />
-      ) : (
-        alignIcons && <Box style={{ width: rem * 1.2, flexShrink: 0 }} />
-      )}
       <Text
         style={{
           flexGrow: 1,
@@ -140,51 +123,79 @@ function MenuRow({
   );
 }
 
-function MenuIcon({
-  icon,
-  enabled,
+function ZoomRow({
+  percent,
+  rowH,
   rem,
   theme,
+  actions,
 }: {
-  icon: PageMenuIcon;
-  enabled: boolean;
+  percent: number;
+  rowH: number;
   rem: number;
   theme: Theme;
+  actions: ChromeActions;
 }) {
-  switch (icon.kind) {
-    case "image": {
-      const size = rem * 0.95;
-      return (
-        <Image
-          src={icon.src}
-          error={<Box style={{ width: size, height: size }} />}
-          style={{
-            width: size,
-            height: size,
-            flexShrink: 0,
-            margin: { left: -rem * 0.1, right: rem * 0.35 },
-          }}
-        />
-      );
-    }
-    case "path":
-      return (
-        <Path
-          d={icon.d}
-          viewBox={24}
-          stroke={{
-            width: icon.weight ?? 2.2,
-            color: enabled ? (icon.tint === "red" ? theme.red : theme.muted) : theme.disabled,
-            cap: "round",
-            join: "round",
-          }}
-          style={{
-            width: rem * 0.75,
-            height: rem * 0.75,
-            flexShrink: 0,
-            margin: { right: rem * 0.45 },
-          }}
-        />
-      );
-  }
+  const controlH = Math.round(rem * 1.3);
+  const divider = <Box style={{ width: 1, height: controlH, background: theme.fieldBorder, flexShrink: 0 }} />;
+  return (
+    <Box
+      style={{ height: rowH, alignItems: "center", gap: rem * 0.45, padding: { left: rem * 0.4, right: rem * 0.4 }, flexShrink: 0 }}
+      onClick={() => {}}
+    >
+      <Text style={{ flexGrow: 1, flexBasis: 0, fontSize: rem * 0.82, color: theme.fg, wrap: false, selectable: false }}>
+        Zoom
+      </Text>
+      <Box
+        style={{
+          height: controlH,
+          alignItems: "center",
+          cornerRadius: rem * 0.35,
+          border: { width: 1, color: theme.fieldBorder },
+          background: theme.field,
+          overflow: "hidden",
+          flexShrink: 0,
+        }}
+      >
+        <ZoomButton icon="minus" size={controlH} rem={rem} theme={theme} onClick={() => actions.pageMenuZoom(-1)} />
+        {divider}
+        <Box style={{ width: rem * 3, height: controlH, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Text style={{ fontSize: rem * 0.75, color: theme.fg, wrap: false, selectable: false }}>{`${percent}%`}</Text>
+        </Box>
+        {divider}
+        <ZoomButton icon="plus" size={controlH} rem={rem} theme={theme} onClick={() => actions.pageMenuZoom(1)} />
+      </Box>
+    </Box>
+  );
+}
+
+function ZoomButton({
+  icon,
+  size,
+  rem,
+  theme,
+  onClick,
+}: {
+  icon: IconName;
+  size: number;
+  rem: number;
+  theme: Theme;
+  onClick(): void;
+}) {
+  return (
+    <Box
+      style={{
+        width: size,
+        height: size,
+        alignItems: "center",
+        justifyContent: "center",
+        cornerRadius: rem * 0.3,
+        hoverBackground: theme.hover,
+        flexShrink: 0,
+      }}
+      onClick={onClick}
+    >
+      <Icon icon={icon} size={rem * 0.8} color={theme.muted} />
+    </Box>
+  );
 }

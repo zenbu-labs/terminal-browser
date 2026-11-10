@@ -1,46 +1,12 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import readline from "node:readline";
+
+import { fetchLatestRelease, installedByHomebrew, installedChannel, installedVersion } from "shared";
 
 import { instances } from "./registry";
 import type { InstanceRecord } from "./registry";
 
-const RELEASE_ORIGIN = process.env.TERMINAL_BROWSER_RELEASE_ORIGIN ?? "https://terminal-browser.sh/install";
-
-interface Latest {
-  version: string;
-  install: string;
-}
-
-export function installedVersion(): string | null {
-  const root = process.env.TERMINAL_BROWSER_DIST_ROOT;
-  if (!root) return null;
-  try {
-    return fs.readFileSync(path.join(root, "VERSION"), "utf8").trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-function installedChannel(): string {
-  const root = process.env.TERMINAL_BROWSER_DIST_ROOT;
-  if (!root) return "stable";
-  try {
-    return fs.readFileSync(path.join(root, "CHANNEL"), "utf8").trim() || "stable";
-  } catch {
-    return "stable";
-  }
-}
-
-async function fetchLatest(channel: string): Promise<Latest> {
-  const url = channel === "stable" ? `${RELEASE_ORIGIN}/latest.json` : `${RELEASE_ORIGIN}/${channel}/latest.json`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`release check failed (${response.status} from ${url})`);
-  const latest = (await response.json()) as Latest;
-  if (!latest.version || !latest.install) throw new Error(`release check failed (bad manifest from ${url})`);
-  return latest;
-}
+export { installedVersion };
 
 function describeInstance(record: InstanceRecord): string {
   const page = record.title && record.title !== record.url ? `${record.title}  ${record.url}` : record.url;
@@ -72,12 +38,12 @@ export async function upgradeCommand(): Promise<number> {
   if (!current) {
     throw new Error("Could not perform upgrade: please file an issue https://github.com/zenbu-labs/terminal-browser/issues");
   }
-  const latest = await fetchLatest(installedChannel());
+  const latest = await fetchLatestRelease(installedChannel());
   if (latest.version === current) {
     process.stdout.write(`already up to date (${current})\n`);
     return 0;
   }
-  if (process.env.TERMINAL_BROWSER_DIST_ROOT?.split(path.sep).includes("Caskroom")) {
+  if (installedByHomebrew()) {
     process.stdout.write(`${latest.version} is available. This install is managed by Homebrew, run:\n`);
     process.stdout.write("  brew upgrade --cask terminal-browser\n");
     return 0;

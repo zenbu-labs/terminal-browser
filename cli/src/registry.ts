@@ -1,2 +1,2 @@
-export { listInstances as instances } from "pixel-store";
-export type { InstanceRow as InstanceRecord } from "pixel-store";
+export { listInstances as instances } from "shared";
+export type { InstanceRow as InstanceRecord } from "shared";

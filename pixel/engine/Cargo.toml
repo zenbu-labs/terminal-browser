@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = ["crates/pixel-core", "crates/pixel-terminal", "crates/pixel-bridge", "crates/pixel-node"]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+pixel-core = { path = "crates/pixel-core" }
+pixel-terminal = { path = "crates/pixel-terminal" }
+pixel-bridge = { path = "crates/pixel-bridge" }
+rustix = { version = "1", features = ["termios", "stdio", "event", "fs", "shm", "mm", "process", "pipe"] }
+libc = "0.2"
+base64 = "0.22"
+fontdue = "0.9"
+miniz_oxide = "0.8"
+taffy = "0.10"
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico"] }
+arboard = { version = "3.6", features = ["wayland-data-control"] }
+serde_json = "1"
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_code = "warn"
+unused_doc_comments = "allow"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+# Dependencies are compiled once with optimizations and then cached, so pixel
+# pushing stays fast in dev builds. Our own code stays at opt-level 0 for fast
+# iteration.
+[profile.dev.package."*"]
+opt-level = 2
+
+# The engine's per-pixel loops are the frame budget; apps iterate at opt 0
+# while the engine compiles optimized.
+[profile.dev.package.pixel-core]
+opt-level = 2
+
+[profile.dev.package.pixel-node]
+opt-level = 2
+
+[profile.dev]
+# Full debuginfo is rarely needed and slows linking; backtraces still work.
+debug = "line-tables-only"
+
+[patch.crates-io]
+taffy = { path = "vendor/taffy" }

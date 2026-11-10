@@ -1,0 +1,34 @@
+[graph]
+all-features = true
+
+[licenses]
+# Our own crates are publish = false and carry no license field.
+private = { ignore = true }
+# Deliberately minimal: extend this list consciously when a vetted dependency
+# needs it.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Zlib",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+]
+
+[advisories]
+ignore = [
+    # ttf-parser (via fontdue) is unmaintained, not vulnerable. It only ever
+    # parses our own bundled font, and fontdue is interim scaffolding until we
+    # adopt a full text stack (swash/cosmic-text or fontations/skrifa).
+    "RUSTSEC-2026-0192",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies inside the workspace are fine.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

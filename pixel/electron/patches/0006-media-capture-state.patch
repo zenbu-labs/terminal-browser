@@ -1,0 +1,368 @@
+diff --git a/docs/api/structures/media-capture.md b/docs/api/structures/media-capture.md
+new file mode 100644
+--- /dev/null
++++ b/docs/api/structures/media-capture.md
+@@ -0,0 +1,5 @@
++# MediaCapture Object
++
++* `video` boolean - True while a camera stream is open.
++* `audio` boolean - True while a microphone stream is open.
++* `display` boolean - True while a screen, window or tab capture stream is open.
+diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
+--- a/docs/api/web-contents.md
++++ b/docs/api/web-contents.md
+@@ -743,6 +743,15 @@ Returns:
+ 
+ Emitted when media becomes audible or inaudible.
+ 
++#### Event: 'media-capture-changed'
++
++Returns:
++
++* `event` Event
++* `capture` [MediaCapture](structures/media-capture.md) - Which kinds of media this `webContents` currently has open.
++
++Emitted when the page, or one of its frames, opens or closes a camera, microphone or display capture stream.
++
+ #### Event: 'did-change-theme-color'
+ 
+ Returns:
+@@ -1541,6 +1550,10 @@ Returns `boolean` - Whether this page has been muted.
+ 
+ Returns `boolean` - Whether audio is currently playing.
+ 
++#### `contents.getMediaCapture()`
++
++Returns [`MediaCapture`](structures/media-capture.md) - Which kinds of media this `webContents` currently has open.
++
+ #### `contents.setCaretBrowsingEnabled(enabled)`
+ 
+ <!--
+diff --git a/filenames.gni b/filenames.gni
+--- a/filenames.gni
++++ b/filenames.gni
+@@ -442,6 +442,8 @@ filenames = {
+     "shell/browser/login_handler.h",
+     "shell/browser/media/media_capture_devices_dispatcher.cc",
+     "shell/browser/media/media_capture_devices_dispatcher.h",
++    "shell/browser/media/media_capture_ui.cc",
++    "shell/browser/media/media_capture_ui.h",
+     "shell/browser/media/media_device_id_salt.cc",
+     "shell/browser/media/media_device_id_salt.h",
+     "shell/browser/metrics/electron_metrics_log_uploader.cc",
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -207,6 +207,7 @@
+ #include "extensions/browser/view_type_utils.h"
+ #include "extensions/common/mojom/view_type.mojom.h"
+ #include "shell/browser/extensions/electron_extension_web_contents_observer.h"
++#include "shell/browser/media/media_capture_ui.h"
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_PRINTING)
+@@ -3683,6 +3684,32 @@ bool WebContents::IsCurrentlyAudible() {
+   return web_contents()->IsCurrentlyAudible();
+ }
+ 
++namespace {
++
++v8::Local<v8::Value> MediaCaptureToV8(v8::Isolate* isolate,
++                                      const MediaCaptureState& capture) {
++  auto dict = gin_helper::Dictionary::CreateEmpty(isolate);
++  dict.Set("video", capture.video);
++  dict.Set("audio", capture.audio);
++  dict.Set("display", capture.display);
++  return dict.GetHandle();
++}
++
++}  // namespace
++
++v8::Local<v8::Value> WebContents::GetMediaCapture(v8::Isolate* isolate) const {
++  MediaCaptureState capture;
++  if (auto* usage = MediaCaptureUsage::FromWebContents(web_contents()))
++    capture = usage->state();
++  return MediaCaptureToV8(isolate, capture);
++}
++
++void WebContents::OnMediaCaptureChanged(const MediaCaptureState& capture) {
++  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
++  v8::HandleScope handle_scope(isolate);
++  Emit("media-capture-changed", MediaCaptureToV8(isolate, capture));
++}
++
+ #if BUILDFLAG(ENABLE_PRINTING)
+ namespace {
+ 
+@@ -5262,6 +5289,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
+       .SetMethod("setAudioMuted", &WebContents::SetAudioMuted)
+       .SetMethod("isAudioMuted", &WebContents::IsAudioMuted)
+       .SetMethod("isCurrentlyAudible", &WebContents::IsCurrentlyAudible)
++      .SetMethod("getMediaCapture", &WebContents::GetMediaCapture)
+       .SetMethod("setCaretBrowsingEnabled",
+                  &WebContents::SetCaretBrowsingEnabled)
+       .SetMethod("isCaretBrowsingEnabled", &WebContents::IsCaretBrowsingEnabled)
+diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/electron_api_web_contents.h
+--- a/shell/browser/api/electron_api_web_contents.h
++++ b/shell/browser/api/electron_api_web_contents.h
+@@ -101,6 +101,8 @@ class DevToolsEyeDropper;
+ 
+ namespace electron {
+ 
++struct MediaCaptureState;
++
+ class DevToolsContextMenu;
+ class DraggableRegionDebugger;
+ class ElectronBrowserContext;
+@@ -263,6 +265,8 @@ class WebContents final : public ExclusiveAccessContext,
+   void SetAudioMuted(bool muted);
+   bool IsAudioMuted();
+   bool IsCurrentlyAudible();
++  v8::Local<v8::Value> GetMediaCapture(v8::Isolate* isolate) const;
++  void OnMediaCaptureChanged(const MediaCaptureState& capture);
+   void SetEmbedder(const WebContents* embedder);
+   void SetDevToolsWebContents(const WebContents* devtools);
+   bool IsBeingCaptured();
+diff --git a/shell/browser/media/media_capture_ui.cc b/shell/browser/media/media_capture_ui.cc
+new file mode 100644
+--- /dev/null
++++ b/shell/browser/media/media_capture_ui.cc
+@@ -0,0 +1,152 @@
++// Copyright (c) 2026 Zenbu Labs. All rights reserved.
++// Use of this source code is governed by the MIT license that can be
++// found in the LICENSE file.
++
++#include "shell/browser/media/media_capture_ui.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "content/public/browser/web_contents.h"
++#include "shell/browser/api/electron_api_web_contents.h"
++#include "third_party/blink/public/common/mediastream/media_stream_request.h"
++
++namespace electron {
++
++namespace {
++
++using blink::mojom::MediaStreamType;
++
++enum class Kind { kNone, kVideo, kAudio, kDisplay };
++
++Kind KindOf(const std::optional<blink::MediaStreamDevice>& device) {
++  if (!device)
++    return Kind::kNone;
++  switch (device->type) {
++    case MediaStreamType::DEVICE_VIDEO_CAPTURE:
++      return Kind::kVideo;
++    case MediaStreamType::DEVICE_AUDIO_CAPTURE:
++      return Kind::kAudio;
++    case MediaStreamType::NO_SERVICE:
++    case MediaStreamType::NUM_MEDIA_TYPES:
++      return Kind::kNone;
++    default:
++      return Kind::kDisplay;
++  }
++}
++
++// Owned by the stream request: created when the embedder accepts the request
++// and destroyed when the last device of the request stops.
++class MediaCaptureUI : public content::MediaStreamUI {
++ public:
++  MediaCaptureUI(base::WeakPtr<content::WebContents> web_contents,
++                 const blink::mojom::StreamDevices& devices)
++      : web_contents_(std::move(web_contents)), devices_(devices) {}
++
++  ~MediaCaptureUI() override {
++    if (!started_ || !web_contents_)
++      return;
++    if (auto* usage = MediaCaptureUsage::FromWebContents(web_contents_.get()))
++      usage->Remove(devices_);
++  }
++
++  gfx::NativeViewId OnStarted(
++      base::RepeatingClosure stop,
++      SourceCallback source,
++      const std::string& label,
++      std::vector<content::DesktopMediaID> screen_capture_ids,
++      StateChangeCallback state_change) override {
++    if (started_ || !web_contents_)
++      return 0;
++    started_ = true;
++    MediaCaptureUsage::CreateForWebContents(web_contents_.get());
++    MediaCaptureUsage::FromWebContents(web_contents_.get())->Add(devices_);
++    return 0;
++  }
++
++  void OnDeviceStoppedForSourceChange(
++      const std::string& label,
++      const content::DesktopMediaID& old_media_id,
++      const content::DesktopMediaID& new_media_id,
++      bool captured_surface_control_active) override {}
++
++  void OnDeviceStopped(const std::string& label,
++                       const content::DesktopMediaID& media_id) override {}
++
++ private:
++  base::WeakPtr<content::WebContents> web_contents_;
++  const blink::mojom::StreamDevices devices_;
++  bool started_ = false;
++};
++
++void RespondWithTracking(base::WeakPtr<content::WebContents> web_contents,
++                         content::MediaResponseCallback callback,
++                         const blink::mojom::StreamDevicesSet& stream_devices_set,
++                         blink::mojom::MediaStreamRequestResult result,
++                         std::unique_ptr<content::MediaStreamUI> ui) {
++  if (!ui && result == blink::mojom::MediaStreamRequestResult::OK &&
++      !stream_devices_set.stream_devices.empty()) {
++    ui = std::make_unique<MediaCaptureUI>(
++        web_contents, *stream_devices_set.stream_devices[0]);
++  }
++  std::move(callback).Run(stream_devices_set, result, std::move(ui));
++}
++
++}  // namespace
++
++MediaCaptureUsage::MediaCaptureUsage(content::WebContents* web_contents)
++    : content::WebContentsUserData<MediaCaptureUsage>(*web_contents) {}
++
++MediaCaptureUsage::~MediaCaptureUsage() = default;
++
++MediaCaptureState MediaCaptureUsage::state() const {
++  return {video_ > 0, audio_ > 0, display_ > 0};
++}
++
++void MediaCaptureUsage::Add(const blink::mojom::StreamDevices& devices) {
++  Adjust(devices, 1);
++}
++
++void MediaCaptureUsage::Remove(const blink::mojom::StreamDevices& devices) {
++  Adjust(devices, -1);
++}
++
++void MediaCaptureUsage::Adjust(const blink::mojom::StreamDevices& devices,
++                               int delta) {
++  const MediaCaptureState before = state();
++  for (Kind kind : {KindOf(devices.audio_device), KindOf(devices.video_device)}) {
++    switch (kind) {
++      case Kind::kVideo:
++        video_ += delta;
++        break;
++      case Kind::kAudio:
++        audio_ += delta;
++        break;
++      case Kind::kDisplay:
++        display_ += delta;
++        break;
++      case Kind::kNone:
++        break;
++    }
++  }
++  const MediaCaptureState after = state();
++  if (after == before)
++    return;
++  if (auto* api_contents = api::WebContents::From(&GetWebContents()))
++    api_contents->OnMediaCaptureChanged(after);
++}
++
++content::MediaResponseCallback TrackMediaCapture(
++    content::WebContents* web_contents,
++    content::MediaResponseCallback callback) {
++  return base::BindOnce(&RespondWithTracking, web_contents->GetWeakPtr(),
++                        std::move(callback));
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(MediaCaptureUsage);
++
++}  // namespace electron
+diff --git a/shell/browser/media/media_capture_ui.h b/shell/browser/media/media_capture_ui.h
+new file mode 100644
+--- /dev/null
++++ b/shell/browser/media/media_capture_ui.h
+@@ -0,0 +1,58 @@
++// Copyright (c) 2026 Zenbu Labs. All rights reserved.
++// Use of this source code is governed by the MIT license that can be
++// found in the LICENSE file.
++
++#ifndef ELECTRON_SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_UI_H_
++#define ELECTRON_SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_UI_H_
++
++#include "content/public/browser/media_stream_request.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
++
++namespace content {
++class WebContents;
++}
++
++namespace electron {
++
++struct MediaCaptureState {
++  bool video = false;
++  bool audio = false;
++  bool display = false;
++
++  bool operator==(const MediaCaptureState&) const = default;
++};
++
++// Counts the open capture streams of a WebContents and tells its
++// api::WebContents whenever the set of captured kinds changes.
++class MediaCaptureUsage
++    : public content::WebContentsUserData<MediaCaptureUsage> {
++ public:
++  ~MediaCaptureUsage() override;
++
++  MediaCaptureState state() const;
++  void Add(const blink::mojom::StreamDevices& devices);
++  void Remove(const blink::mojom::StreamDevices& devices);
++
++ private:
++  friend class content::WebContentsUserData<MediaCaptureUsage>;
++  explicit MediaCaptureUsage(content::WebContents* web_contents);
++
++  void Adjust(const blink::mojom::StreamDevices& devices, int delta);
++
++  int video_ = 0;
++  int audio_ = 0;
++  int display_ = 0;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++// Wraps a media response so an accepted request carries a MediaStreamUI whose
++// lifetime follows the stream, the same way Chrome's capture indicator works.
++content::MediaResponseCallback TrackMediaCapture(
++    content::WebContents* web_contents,
++    content::MediaResponseCallback callback);
++
++}  // namespace electron
++
++#endif  // ELECTRON_SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_UI_H_
+diff --git a/shell/browser/web_contents_permission_helper.cc b/shell/browser/web_contents_permission_helper.cc
+--- a/shell/browser/web_contents_permission_helper.cc
++++ b/shell/browser/web_contents_permission_helper.cc
+@@ -18,6 +18,7 @@
+ #include "shell/browser/electron_browser_context.h"
+ #include "shell/browser/electron_permission_manager.h"
+ #include "shell/browser/media/media_capture_devices_dispatcher.h"
++#include "shell/browser/media/media_capture_ui.h"
+ #include "third_party/blink/public/common/mediastream/media_stream_request.h"
+ #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+ 
+@@ -256,8 +257,9 @@ void WebContentsPermissionHelper::RequestFullscreenPermission(
+ void WebContentsPermissionHelper::RequestMediaAccessPermission(
+     const content::MediaStreamRequest& request,
+     content::MediaResponseCallback response_callback) {
+-  auto callback = base::BindOnce(&MediaAccessAllowed, request,
+-                                 std::move(response_callback));
++  auto callback = base::BindOnce(
++      &MediaAccessAllowed, request,
++      TrackMediaCapture(web_contents_.get(), std::move(response_callback)));
+ 
+   base::DictValue details;
+   base::ListValue media_types;

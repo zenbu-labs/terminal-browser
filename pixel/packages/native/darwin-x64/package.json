@@ -1,0 +1,21 @@
+{
+  "name": "@zenbu-labs/pixel-native-darwin-x64",
+  "version": "0.0.20",
+  "description": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zenbu-labs/terminal-browser.git",
+    "directory": "pixel/packages/native/darwin-x64"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "pixel.node",
+    "native-scroll-helper"
+  ]
+}

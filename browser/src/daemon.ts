@@ -5,7 +5,7 @@ import path from "node:path";
 import { app } from "electron";
 
 // why is this defined in pixel store?
-import { DAEMON_SOCKET } from "pixel-store";
+import { DAEMON_SOCKET } from "shared";
 import { createSession } from "./session/session";
 import type { SessionHandle } from "./session/session";
 import { servePages } from "./pages/scheme";
@@ -25,7 +25,8 @@ interface OpenRequest {
 
 export function buildStamp(): string {
   try {
-    return String(Math.floor(fs.statSync(path.join(__dirname, "main.js")).mtimeMs));
+    const built = Math.floor(fs.statSync(path.join(__dirname, "main.js")).mtimeMs);
+    return `${built} ${fs.realpathSync(process.execPath)}`;
   } catch {
     return "unknown";
   }

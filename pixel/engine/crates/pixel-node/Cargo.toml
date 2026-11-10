@@ -1,0 +1,32 @@
+[package]
+name = "pixel-node"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pixel-core = { workspace = true }
+pixel-terminal = { workspace = true }
+pixel-bridge = { workspace = true, features = ["napi"] }
+napi = { version = "2", default-features = false, features = ["napi8"] }
+napi-derive = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+openh264 = { version = "0.9.7", features = ["source"] }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+mp4 = "0.14.0"
+png = "0.18.1"
+tiny-skia.workspace = true
+rustix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"
+
+[lints]
+workspace = true

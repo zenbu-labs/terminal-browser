@@ -1,0 +1,737 @@
+mod capture;
+#[cfg(target_os = "macos")]
+mod iosurface;
+mod record;
+mod shm;
+mod surface;
+mod terminal_ops;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::thread::JoinHandle;
+
+use napi::bindgen_prelude::*;
+use napi::threadsafe_function::{
+    ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
+};
+use napi::{JsFunction, Result};
+use napi_derive::napi;
+use pixel_core::backend::Backend;
+use pixel_bridge::{IdMap, apply_ops, engine_info, event_json};
+use pixel_core::{Engine, EngineConfig, Waker};
+use pixel_terminal::TerminalBackend;
+use serde_json::json;
+
+use crate::surface::{SurfaceCommand, SurfaceMailbox, SurfacePixels};
+
+pub struct EncodeRecordingTask {
+    job_json: String,
+    progress: Option<ThreadsafeFunction<f64>>,
+}
+
+impl Task for EncodeRecordingTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<()> {
+        let progress = self.progress.clone();
+        record::run(&self.job_json, &move |percent: f64| {
+            if let Some(callback) = &progress {
+                callback.call(Ok(percent), ThreadsafeFunctionCallMode::NonBlocking);
+            }
+        })
+        .map_err(Error::from_reason)
+    }
+
+    fn resolve(&mut self, _env: Env, _output: ()) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub struct FilmstripTask {
+    dir: String,
+    frames: Vec<u32>,
+    tile_width: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Task for FilmstripTask {
+    type Output = Vec<u8>;
+    type JsValue = Buffer;
+
+    fn compute(&mut self) -> Result<Vec<u8>> {
+        let mut segment = capture::Segment::open(std::path::Path::new(&self.dir))
+            .map_err(|e| Error::from_reason(format!("{}: {e}", self.dir)))?;
+        let mut strip = pixel_core::Canvas::new(self.width, self.height);
+        strip.fill([24, 24, 26, 255]);
+        for (slot, &index) in self.frames.iter().enumerate() {
+            let (pixels, w, h) = segment.frame(index as usize).map_err(err)?;
+            strip.blit_scaled_rgba(
+                (slot as u32 * self.tile_width) as f32,
+                0.0,
+                self.tile_width as f32,
+                self.height as f32,
+                pixels,
+                w,
+                h,
+            );
+        }
+        Ok(strip.pixels)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Vec<u8>) -> Result<Buffer> {
+        Ok(Buffer::from(output))
+    }
+}
+
+#[napi(ts_return_type = "Promise<Buffer>")]
+pub fn capture_filmstrip(
+    dir: String,
+    frames: Vec<u32>,
+    tile_width: u32,
+    width: u32,
+    height: u32,
+) -> AsyncTask<FilmstripTask> {
+    AsyncTask::new(FilmstripTask {
+        dir,
+        frames,
+        tile_width,
+        width,
+        height,
+    })
+}
+
+#[napi(ts_return_type = "Promise<void>")]
+pub fn encode_recording(
+    job_json: String,
+    on_progress: Option<JsFunction>,
+) -> Result<AsyncTask<EncodeRecordingTask>> {
+    let progress = on_progress
+        .map(|callback| {
+            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<f64>| {
+                ctx.env.create_double(ctx.value).map(|value| vec![value])
+            })
+        })
+        .transpose()?;
+    Ok(AsyncTask::new(EncodeRecordingTask { job_json, progress }))
+}
+
+struct Autoprofile {
+    stop_at: Option<std::time::Instant>,
+}
+
+// useful for headless profiling
+impl Autoprofile {
+    fn from_env(engine: &mut Engine) -> Self {
+        let stop_at = std::env::var("TERMINAL_BROWSER_AUTOPROFILE_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+        if stop_at.is_some() {
+            engine.profile_start();
+        }
+        Self { stop_at }
+    }
+
+    fn tick(&mut self, engine: &mut Engine) {
+        if self
+            .stop_at
+            .is_some_and(|at| std::time::Instant::now() >= at)
+        {
+            self.stop_at = None;
+            if let Ok(Some(path)) = engine.profile_stop_to_file() {
+                pixel_core::logging::info(
+                    "profiler",
+                    format!("autoprofile written to {}", path.display()),
+                );
+            }
+        }
+    }
+}
+
+
+fn ingest_frame(engine: &mut Engine, frame: &surface::SurfaceFrame) -> std::result::Result<u32, String> {
+    match &frame.pixels {
+        #[cfg(target_os = "macos")]
+        SurfacePixels::IoSurface(surface) => {
+            let locked = surface.lock()?;
+            let len = locked.stride * locked.height as usize;
+            ingest_pixels(
+                engine,
+                frame,
+                locked.width,
+                locked.height,
+                &locked.pixels()[..len],
+                locked.stride,
+            )
+        }
+        SurfacePixels::Shm(surface) => {
+            let len = surface.stride * surface.height as usize;
+            ingest_pixels(
+                engine,
+                frame,
+                surface.width,
+                surface.height,
+                &surface.pixels()[..len],
+                surface.stride,
+            )
+        }
+        // owned?
+        SurfacePixels::Owned {
+            bgra,
+            width,
+            height,
+        } => ingest_pixels(engine, frame, *width, *height, bgra, *width as usize * 4),
+    }
+}
+
+fn ingest_pixels(
+    engine: &mut Engine,
+    frame: &surface::SurfaceFrame,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    stride: usize,
+) -> std::result::Result<u32, String> {
+    engine
+        .ingest_surface(frame.id, width, height, pixels, stride, frame.damage.as_deref())
+        .map(|_| height)
+        .map_err(|error| error.to_string())
+}
+
+#[napi(object)]
+pub struct HostOptions {
+    pub socket: String,
+    pub pane: String,
+    pub name: String,
+    pub tty: Option<String>,
+}
+
+#[napi(object)]
+pub struct SurfaceShm {
+    pub fd: i32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub size: u32,
+}
+
+#[napi(object)]
+pub struct DamageRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl DamageRect {
+    fn into_rect(self) -> pixel_core::surfaces::Rect {
+        pixel_core::surfaces::Rect {
+            x: self.x,
+            y: self.y,
+            w: self.width,
+            h: self.height,
+        }
+    }
+}
+
+const IDLE_AFTER_INPUT: std::time::Duration = std::time::Duration::from_millis(300);
+const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_millis(4);
+
+fn err(e: impl std::fmt::Display) -> Error {
+    Error::from_reason(e.to_string())
+}
+
+fn note(engine: &mut Engine, text: String) {
+    if let Some(terminal) = terminal(engine) {
+        terminal.note(text);
+    }
+}
+
+struct SendEngine(Engine);
+
+#[allow(unsafe_code)]
+unsafe impl Send for SendEngine {}
+
+pub(crate) fn terminal(engine: &mut Engine) -> Option<&mut TerminalBackend> {
+    engine.backend.downcast_mut::<TerminalBackend>()
+}
+
+type BackendFactory = fn(&serde_json::Value) -> std::io::Result<Box<dyn Backend>>;
+
+static BACKENDS: std::sync::Mutex<Vec<(String, BackendFactory)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn register_backend(name: &str, factory: BackendFactory) {
+    let mut backends = BACKENDS.lock().unwrap_or_else(|e| e.into_inner());
+    backends.retain(|(existing, _)| existing != name);
+    backends.push((name.to_string(), factory));
+}
+
+fn create_backend(name: &str, options: &serde_json::Value) -> Result<Box<dyn Backend>> {
+    let factory = BACKENDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(existing, _)| existing == name)
+        .map(|(_, factory)| *factory)
+        .ok_or_else(|| Error::from_reason(format!("no pixel backend named {name} is registered")))?;
+    factory(options).map_err(err)
+}
+
+
+#[napi]
+pub struct PixelEngine {
+    engine: Option<Engine>,
+    info: String,
+    tx: Sender<String>,
+    rx: Option<Receiver<String>>,
+    waker: Waker,
+    surfaces: Arc<SurfaceMailbox>,
+    captures: capture::Registry,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[napi]
+impl PixelEngine {
+    #[napi(constructor)]
+    pub fn new(
+        tty: Option<String>,
+        wrapper: Option<String>,
+        session_env: Option<std::collections::HashMap<String, String>>,
+        host: Option<HostOptions>,
+    ) -> Result<Self> {
+        let session_env = match session_env {
+            Some(env) => pixel_terminal::SessionEnv::of_session(env),
+            None => pixel_terminal::SessionEnv::of_process(),
+        };
+        let backend = TerminalBackend::new(pixel_terminal::TerminalOptions {
+            tty,
+            host: host.map(|host| pixel_terminal::HostOptions {
+                socket: host.socket,
+                pane: host.pane,
+                name: host.name,
+                tty: host.tty,
+            }),
+            wrapper: pixel_terminal::Wrapper::named(wrapper.as_deref()),
+            session_env,
+            watch_resize: false,
+        })
+        .map_err(err)?;
+        Self::start_with(Box::new(backend))
+    }
+
+    #[napi(factory)]
+    pub fn with_backend(name: String, options: Option<String>) -> Result<Self> {
+        let options = match options {
+            Some(json) => serde_json::from_str(&json).map_err(err)?,
+            None => serde_json::Value::Null,
+        };
+        Self::start_with(create_backend(&name, &options)?)
+    }
+
+    fn start_with(backend: Box<dyn Backend>) -> Result<Self> {
+        pixel_bridge::highlight::prepare();
+        let mut engine = Engine::new(EngineConfig {
+            fonts: pixel_bridge::default_fonts(),
+            cell_metrics_font: 0,
+            backend,
+        })
+        .map_err(err)?;
+        let waker = engine.backend.waker().map_err(err)?;
+        engine.cpu_throttle.register_current_thread();
+        let info = engine_info(&engine).to_string();
+        let (tx, rx) = channel();
+        Ok(Self {
+            engine: Some(engine),
+            info,
+            tx,
+            rx: Some(rx),
+            waker,
+            // who even uses you tho
+            surfaces: Arc::new(SurfaceMailbox::default()),
+            captures: capture::Registry::default(),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        })
+    }
+
+    #[napi]
+    pub fn info(&self) -> String {
+        self.info.clone()
+    }
+
+    #[napi]
+    pub fn apply_ops(&self, ops: String) -> Result<()> {
+        let _ = self.tx.send(ops);
+        self.waker.wake();
+        Ok(())
+    }
+
+    #[napi]
+    pub fn update_surface(
+        &self,
+        id: u32,
+        bgra: Buffer,
+        width: u32,
+        height: u32,
+        damage: Option<DamageRect>,
+    ) -> Result<()> {
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| Error::from_reason("surface dimensions overflow"))?;
+        let source = bgra.as_ref();
+        if expected == 0 || source.len() < expected {
+            return Err(Error::from_reason(format!(
+                "surface buffer has {} bytes, expected {expected}",
+                source.len()
+            )));
+        }
+        let damage = damage.map(DamageRect::into_rect);
+        self.captures
+            .capture(id, &source[..expected], width as usize * 4, width, height, damage);
+        let mut owned = self.surfaces.take_spare(id);
+        owned.clear();
+        owned.extend_from_slice(&source[..expected]);
+        self.surfaces.submit(
+            id,
+            SurfacePixels::Owned {
+                bgra: owned,
+                width,
+                height,
+            },
+            damage,
+        );
+        self.waker.wake();
+        Ok(())
+    }
+
+    #[napi]
+    pub fn remove_surface(&self, id: u32) {
+        self.surfaces.remove(id);
+        self.waker.wake();
+    }
+
+    #[napi]
+    pub fn surface_stats(&self) -> String {
+        let (submitted, coalesced, presented, rows) = self.surfaces.stats();
+        json!({
+            "submitted": submitted,
+            "coalesced": coalesced,
+            "presented": presented,
+            "rows": rows,
+        })
+        .to_string()
+    }
+
+    #[napi]
+    pub fn start_surface_capture(&self, surface_id: u32, dir: String) -> Result<u32> {
+        self.captures
+            .start(surface_id, std::path::Path::new(&dir))
+            .map_err(err)
+    }
+
+    #[napi]
+    pub fn stop_surface_capture(&self, capture_id: u32) -> Result<String> {
+        let stats  = self.captures.stop(capture_id).map_err(err)?;
+        Ok(json!({
+            "frames": stats.frames,
+            "drops": stats.drops,
+            "durationMs": stats.duration_us as f64 / 1000.0,
+        })
+        .to_string())
+    }
+
+    #[napi]
+    pub fn capture_index(&self, capture_id: u32) -> Result<String> {
+        self.captures
+            .with_segment(capture_id, |segment| {
+                let frames: Vec<serde_json::Value> = segment
+                    .metas()
+                    .iter()
+                    .map(|meta| {
+                        json!({
+                            "tMs": meta.t_us as f64 / 1000.0,
+                            "key": meta.key,
+                            "width": meta.width,
+                            "height": meta.height,
+                            "dropsBefore": meta.drops_before,
+                        })
+                    })
+                    .collect();
+                Ok(json!({
+                    "frames": frames,
+                    "drops": segment.drops,
+                    "durationMs": segment.duration_us as f64 / 1000.0,
+                })
+                .to_string())
+            })
+            .map_err(err)
+    }
+
+    #[napi]
+    pub fn capture_frame(&self, capture_id: u32, index: u32) -> Result<Buffer> {
+        self.captures
+            .with_segment(capture_id, |segment| {
+                let (pixels, _, _) = segment.frame(index as usize)?;
+                Ok(Buffer::from(pixels))
+            })
+            .map_err(err)
+    }
+
+    #[napi]
+    pub fn release_capture(&self, capture_id: u32) {
+        self.captures.release(capture_id);
+    }
+
+    #[napi]
+    pub fn set_key_event_types(&mut self, enabled: bool) -> Result<()> {
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or_else(|| Error::from_reason("key reporting must be configured before start"))?;
+        match terminal(engine) {
+            Some(terminal) => terminal.set_key_event_types(enabled).map_err(err),
+            None => Ok(()),
+        }
+    }
+
+    #[napi]
+    pub fn start(&mut self, callback: JsFunction) -> Result<()> {
+        let dispatch_to_node: ThreadsafeFunction<String> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
+                Ok(vec![ctx.value])
+            })?;
+        let engine = self
+            .engine
+            .take()
+            .ok_or_else(|| Error::from_reason("engine already started"))?;
+        let rx = self
+            .rx
+            .take()
+            .ok_or_else(|| Error::from_reason("engine already started"))?;
+        let stop = self.stop.clone();
+        let surfaces = self.surfaces.clone();
+        let cell = SendEngine(engine);
+        self.thread = Some(std::thread::spawn(move || {
+            let cell = cell;
+            let mut engine = cell.0;
+            engine.set_default_menu(true);
+            let mut ids: Vec<IdMap> = (0..engine.comp.views.len())
+                .map(|view| IdMap::new(engine.comp.views[view].tree.root()))
+                .collect();
+            let mut autoprofile = Autoprofile::from_env(&mut engine);
+            let (mut seen_carried, mut seen_lost) = (0u64, 0u64);
+            let mut layout_queries = Vec::new();
+            let mut idle_requests = Vec::new();
+            let mut applying = std::time::Duration::ZERO;
+            // event loop
+            let exit_error = loop {
+                let input_settling = IDLE_AFTER_INPUT.saturating_sub(engine.since_input());
+                let wait = if !layout_queries.is_empty() {
+                    Some(std::time::Duration::ZERO)
+                } else if !idle_requests.is_empty() && !engine.idle() {
+                    Some(IDLE_RECHECK)
+                } else if !idle_requests.is_empty() {
+                    Some(input_settling)
+                } else {
+                    None
+                };
+                let events = match engine.pump(wait) {
+                    Ok(events) => events,
+                    Err(e) => break Some(e.to_string()),
+                };
+                for query in layout_queries.drain(..) {
+                    let reply = pixel_bridge::answer_layout_query(&mut engine, &ids, query);
+                    dispatch_to_node.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
+                }
+                if !idle_requests.is_empty() && engine.idle() && engine.since_input() >= IDLE_AFTER_INPUT {
+                    for request in idle_requests.drain(..) {
+                        let reply = json!({ "type": "idle", "request": request, "applyMs": applying.as_secs_f64() * 1000.0 });
+                        dispatch_to_node.call(Ok(reply.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                    applying = std::time::Duration::ZERO;
+                }
+                autoprofile.tick(&mut engine);
+                if stop.load(Ordering::Relaxed) {
+                    break None;
+                }
+                while let Ok(cmd) = rx.try_recv() {
+                    let started = std::time::Instant::now();
+                    let mut outcome = apply_ops(&mut engine, &mut ids, &cmd, &mut terminal_ops::TerminalOps);
+                    applying += started.elapsed();
+                    layout_queries.append(&mut outcome.layout_queries);
+                    idle_requests.append(&mut outcome.idle_requests);
+                    if let Some(message) = outcome.error {
+                        pixel_core::logging::error("bridge", message.clone());
+                        let error = json!({ "type": "error", "message": message });
+                        dispatch_to_node.call(
+                            Ok(error.to_string()),
+                            ThreadsafeFunctionCallMode::NonBlocking,
+                        );
+                    }
+                    for reply in outcome.replies {
+                        dispatch_to_node.call(Ok(reply), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                }
+                for event in &events {
+                    if let Some(json) = event_json(event, &engine, &ids) {
+                        dispatch_to_node.call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                }
+                let (carried, lost) = surfaces.dropped();
+                if carried > seen_carried {
+                    note(&mut engine, format!(
+                        "mailbox: {} browser frames dropped, damage carried",
+                        carried - seen_carried
+                    ));
+                    seen_carried = carried;
+                }
+                if lost > seen_lost {
+                    note(&mut engine, format!(
+                        "mailbox: {} browser frames dropped, damage lost",
+                        lost - seen_lost
+                    ));
+                    seen_lost = lost;
+                }
+                let mut surface_error = None;
+                for command in surfaces.take() {
+                    match command {
+                        SurfaceCommand::Frame(frame) => {
+                            // draw frame when we have a surface available? is this polled in a loop?
+                            let result = ingest_frame(&mut engine, &frame);
+                            match result {
+                                Ok(rows) => surfaces.recycle(frame, rows),
+                                Err(error) => {
+                                    surface_error = Some(error);
+                                    break;
+                                }
+                            } }
+                        SurfaceCommand::Remove(id) => {
+                            if let Err(error) = engine.delete_surface(id) {
+                                surface_error = Some(error.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+                if surface_error.is_some() {
+                    break surface_error;
+                }
+            };
+            drop(engine);
+            if !stop.load(Ordering::Relaxed) {
+                let exit = json!({ "type": "exit", "error": exit_error });
+                dispatch_to_node.call(
+                    Ok(exit.to_string()),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                );
+            }
+        }));
+        Ok(())
+    }
+
+    #[napi]
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.waker.wake();
+        if let Some(thread) = self.thread.take() {
+            let (done_tx, done_rx) = channel();
+            std::thread::spawn(move || {
+                let _ = thread.join();
+                let _ = done_tx.send(());
+            });
+            let _ = done_rx.recv_timeout(std::time::Duration::from_secs(1));
+        }
+        self.engine = None;
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[napi]
+impl PixelEngine {
+    #[napi]
+    pub fn update_surface_texture(
+        &self,
+        id: u32,
+        handle: f64,
+        damage_x: u32,
+        damage_y: u32,
+        damage_width: u32,
+        damage_height: u32,
+    ) -> Result<()> {
+        let surface = iosurface::RetainedSurface::retain(handle as u64 as usize).map_err(Error::from_reason)?;
+        let damage = (damage_width > 0 && damage_height > 0).then_some(pixel_core::surfaces::Rect {
+            x: damage_x,
+            y: damage_y,
+            w: damage_width,
+            h: damage_height,
+        });
+        if self.captures.wants(id) {
+            let locked = surface.lock().map_err(Error::from_reason)?;
+            self.captures.capture(
+                id,
+                locked.pixels(),
+                locked.stride,
+                locked.width,
+                locked.height,
+                damage,
+            );
+        }
+        self.surfaces
+            .submit(id, SurfacePixels::IoSurface(surface), damage);
+        self.waker.wake();
+        Ok(())
+    }
+}
+
+#[napi]
+impl PixelEngine {
+    #[napi]
+    pub fn update_surface_shm(
+        &self,
+        id: u32,
+        shm: SurfaceShm,
+        damage: Option<DamageRect>,
+        released: Option<ThreadsafeFunction<u32>>,
+    ) -> Result<()> {
+        let release_hook = released.map(|tsfn| {
+            Box::new(move || {
+                tsfn.call(Ok(0), ThreadsafeFunctionCallMode::NonBlocking);
+            }) as Box<dyn FnOnce() + Send>
+        });
+        let mut surface =
+            match shm::ShmSurface::from_region(shm.fd, shm.width, shm.height, shm.stride, shm.size)
+            {
+                Ok(surface) => surface,
+                Err(error) => {
+                    if let Some(hook) = release_hook {
+                        hook();
+                    }
+                    return Err(Error::from_reason(error));
+                }
+            };
+        if let Some(hook) = release_hook {
+            surface.set_on_drop(hook);
+        }
+        let damage = damage.map(DamageRect::into_rect);
+        if self.captures.wants(id) {
+            self.captures.capture(
+                id,
+                surface.pixels(),
+                surface.stride,
+                surface.width,
+                surface.height,
+                damage,
+            );
+        }
+        self.surfaces
+            .submit(id, SurfacePixels::Shm(surface), damage);
+        self.waker.wake();
+        Ok(())
+    }
+}
+

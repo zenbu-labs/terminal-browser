@@ -53,7 +53,6 @@ function report(value: unknown, exitCode = 0): never {
 async function launch(argv: string[]): Promise<never> {
   const tty = flag(argv, "--tty") ?? callerTty().path;
   if (!tty) report({ error: "no tty: Claude Code is not running on a terminal", code: "tty" }, 2);
-  const transport = flag(argv, "--transport") ?? "file"
   const cellOverride = flag(argv, "--cell") ?? process.env.CC_BROWSER_CELL ?? "";
   const token = crypto.randomBytes(24).toString("hex");
   const socket = path.join(os.tmpdir(), `cc-browser-${process.pid}-${Date.now().toString(36)}.sock`);
@@ -62,7 +61,7 @@ async function launch(argv: string[]): Promise<never> {
   const [self, ...selfArgs] = selfCommand();
   const child = spawn(
     self,
-    [...selfArgs, "claude-bridge", "serve", "--tty", tty, "--transport", transport, "--socket", socket, "--cell", cellOverride, "--token", token],
+    [...selfArgs, "claude-bridge", "serve", "--tty", tty, "--socket", socket, "--cell", cellOverride, "--token", token],
     { detached: true, stdio: ["ignore", "pipe", logFd] },
   );
   let line = "";
@@ -87,7 +86,7 @@ async function launch(argv: string[]): Promise<never> {
   const { port } = JSON.parse(line.split("\n")[0]) as { port: number };
   child.stdout!.destroy();
   child.unref();
-  const launched = { port, pid: child.pid, tty, transport, terminalBrowser: installedVersion() ?? "dev", token };
+  const launched = { port, pid: child.pid, tty, terminalBrowser: installedVersion() ?? "dev", token };
   fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} launch ${JSON.stringify({ ...launched, token: undefined })}\n`);
   report(launched);
 }
@@ -100,9 +99,20 @@ type Size = z.infer<typeof Size>;
 
 const Mods = z.object({ shift: z.boolean(), alt: z.boolean(), ctrl: z.boolean(), super: z.boolean() }).partial();
 
+const Frame = z.object({
+  shm: z.string(),
+  format: z.enum(["rgba", "rgb"]),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  generation: z.number().int().nonnegative(),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+});
+type Frame = z.infer<typeof Frame>;
+
 const PixelMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("join"), pane: z.string().optional(), name: z.string().optional(), pid: z.number().optional() }),
-  z.object({ type: z.literal("placed"), imageId: z.number(), cols: z.number(), rows: z.number(), cell: Cell.nullish() }),
+  Frame.extend({ type: z.literal("frame"), cell: Cell.nullish() }),
   z.object({ type: z.literal("title"), text: z.string() }),
   z.object({ type: z.literal("pointer"), shape: z.string() }),
   z.object({ type: z.literal("clipboard"), text: z.string() }),
@@ -123,19 +133,23 @@ const InputEvent = z.discriminatedUnion("type", [
 ]);
 
 const OpenBody = z.object({ url: z.string().optional(), cols: z.number().optional(), rows: z.number().optional() });
+const STATE_WAIT_MS = 1000;
+const MAX_IMAGE_PX = 4096;
 const InputBody = z.object({ events: z.array(z.unknown()) });
-const TextBody = z.object({ text: z.string().trim().min(1) });
+const AgentTextBody = z.object({ text: z.string().trim().min(1), screenshot: z.string().nullish() });
+type AgentText = { text: string; screenshot: string | null };
 
 class Bridge {
-  readonly imageId = 0x100000 + Math.floor(Math.random() * 0xefffff);
   port: number | null = null;
   size: Size = { cols: 80, rows: 24 };
   url: string | null = null;
-  placed: { imageId: number; cols: number; rows: number } | null = null;
+  frame: Frame | null = null;
+  version = 0;
+  private waiters: Array<() => void> = [];
   title = "";
   alive = false;
   error: string | null = null;
-  inbox: string[] = [];
+  inbox: AgentText[] = [];
   private conn: net.Socket | null = null;
   private child: ChildProcess | null = null;
   private pixelServer: net.Server | null = null;
@@ -145,7 +159,6 @@ class Bridge {
 
   constructor(
     readonly tty: string,
-    readonly transport: string,
     readonly socketPath: string,
     readonly cellOverride: [number, number] | null,
     readonly token: string,
@@ -153,8 +166,9 @@ class Bridge {
 
   state() {
     return {
+      version: this.version,
       url: this.url,
-      placed: this.placed,
+      frame: this.frame,
       title: this.title,
       alive: this.alive,
       error: this.error,
@@ -162,9 +176,55 @@ class Bridge {
     };
   }
 
+  changed(): void {
+    this.version += 1;
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  stateAfter(version: number): Promise<ReturnType<Bridge["state"]>> {
+    if (version !== this.version) return Promise.resolve(this.state());
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.waiters = this.waiters.filter((waiter) => waiter !== wake);
+        resolve(this.state());
+      }, STATE_WAIT_MS);
+      const wake = () => {
+        clearTimeout(timer);
+        resolve(this.state());
+      };
+      this.waiters.push(wake);
+    });
+  }
+
+  pushInbox(item: AgentText): void {
+    this.inbox.push(item);
+    this.changed();
+  }
+
+  takeInbox(): AgentText[] {
+    const items = this.inbox.splice(0, this.inbox.length);
+    if (items.length > 0) this.changed();
+    return items;
+  }
+
 
   private sizeMessage(type: "init" | "size") {
     return { type, cols: this.size.cols, rows: this.size.rows, cell: this.cellOverride ?? undefined };
+  }
+
+  private fitImageLimits(size: Size): Size {
+    const [cw, ch] = this.cell() ?? DEFAULT_CELL;
+    return {
+      cols: Math.max(1, Math.min(size.cols, Math.floor(MAX_IMAGE_PX / cw))),
+      rows: Math.max(1, Math.min(size.rows, Math.floor(MAX_IMAGE_PX / ch))),
+    };
+  }
+
+  private setFrame(frame: Frame | null): void {
+    this.frame = frame;
+    this.changed();
   }
 
   private send(message: unknown): void {
@@ -196,7 +256,7 @@ class Bridge {
       conn.on("close", () => {
         if (this.conn === conn) {
           this.conn = null;
-          this.placed = null;
+          this.setFrame(null);
         }
       });
     });
@@ -214,17 +274,20 @@ class Bridge {
     if (!parsed.success) return;
     const message = parsed.data;
     switch (message.type) {
-      case "join": {
-        const init = { ...this.sizeMessage("init"), imageId: this.imageId, transport: this.transport, focused: true };
-        this.send(init);
+      case "join":
+        this.send({ ...this.sizeMessage("init"), transport: "host", focused: true });
+        break;
+      case "frame": {
+        const { type: _type, cell, ...frame } = message;
+        if (cell) this.measuredCell = cell;
+        this.setFrame(frame);
         break;
       }
-      case "placed":
-        this.placed = { imageId: message.imageId, cols: message.cols, rows: message.rows };
-        if (message.cell) this.measuredCell = message.cell;
-        break;
       case "title":
-        this.title = message.text;
+        if (message.text !== this.title) {
+          this.title = message.text;
+          this.changed();
+        }
         break;
       case "clipboard":
         if (DEBUG) log("clipboard from browser", { chars: message.text.length });
@@ -245,7 +308,7 @@ class Bridge {
 
 
   open(url: string | undefined, size: Size | null): void {
-    if (size) this.size = size;
+    if (size) this.size = this.fitImageLimits(size);
     if (this.alive) {
       if (url && url !== this.url) void this.navigate(url);
       this.send(this.sizeMessage("size"));
@@ -254,7 +317,8 @@ class Bridge {
     }
     this.url = url ?? this.url ?? "about:blank";
     this.error = null;
-    this.placed = null;
+    this.alive = true;
+    this.setFrame(null);
     const env = { ...process.env };
     delete env.PIXEL_PANE;
     env.PIXEL_EMBED = this.socketPath;
@@ -274,19 +338,19 @@ class Bridge {
     child.on("error", (error) => {
       this.alive = false;
       this.error = error.message;
+      this.changed();
     });
     child.on("exit", (code) => {
       if (this.child !== child) return;
       this.child = null;
       this.alive = false;
-      this.placed = null;
+      this.setFrame(null);
       if (code && !this.stopping) {
         this.error = stderr.trim() || `terminal-browser exited with ${code}`;
         log("browser exited with an error", { code, stderr: stderr.trim().slice(-300) });
       }
     });
     this.child = child;
-    this.alive = true;
   }
 
   private async browserKey(): Promise<string | null> {
@@ -311,10 +375,10 @@ class Bridge {
   }
 
   resize(size: Size): void {
-    if (size.cols === this.size.cols && size.rows === this.size.rows) return;
-    this.size = size;
-    const message = this.sizeMessage("size");
-    this.send(message);
+    const fitted = this.fitImageLimits(size);
+    if (fitted.cols === this.size.cols && fitted.rows === this.size.rows) return;
+    this.size = fitted;
+    this.send(this.sizeMessage("size"));
   }
 
   input(events: unknown[]): void {
@@ -397,8 +461,9 @@ function sizeOf(body: z.infer<typeof OpenBody>): Size | null {
 }
 
 type Reply = [number, unknown];
+type Handler = (body: unknown, query: URLSearchParams) => Reply | Promise<Reply>;
 
-function withBody<T>(schema: z.ZodType<T>, handler: (body: T) => Reply): (body: unknown) => Reply {
+function withBody<T>(schema: z.ZodType<T>, handler: (body: T) => Reply): Handler {
   return (body) => {
     const parsed = schema.safeParse(body);
     if (!parsed.success) return [400, { error: "invalid body" }];
@@ -406,9 +471,12 @@ function withBody<T>(schema: z.ZodType<T>, handler: (body: T) => Reply): (body: 
   };
 }
 
-function routes(bridge: Bridge): Record<string, (body: unknown) => Reply> {
+function routes(bridge: Bridge): Record<string, Handler> {
   return {
-    "GET /state": () => [200, bridge.state()],
+    "GET /state": async (_body, query) => {
+      const version = Number(query.get("version"));
+      return [200, await bridge.stateAfter(Number.isFinite(version) ? version : -1)];
+    },
     "POST /open": withBody(OpenBody, (body) => {
       bridge.open(body.url, sizeOf(body));
       return [200, bridge.state()];
@@ -422,11 +490,11 @@ function routes(bridge: Bridge): Record<string, (body: unknown) => Reply> {
       bridge.input(body.events);
       return [200, {}];
     }),
-    "POST /agent-text": withBody(TextBody, (body) => {
-      bridge.inbox.push(body.text);
+    "POST /agent-text": withBody(AgentTextBody, (body) => {
+      bridge.pushInbox({ text: body.text, screenshot: body.screenshot ?? null });
       return [200, {}];
     }),
-    "POST /inbox/take": () => [200, { texts: bridge.inbox.splice(0, bridge.inbox.length) }],
+    "POST /inbox/take": () => [200, { items: bridge.takeInbox() }],
     "POST /browser/close": () => {
       bridge.hide();
       return [200, bridge.state()];
@@ -442,7 +510,6 @@ const IDLE_EXIT_MS = 60_000;
 
 function serve(argv: string[]): void {
   const tty = flag(argv, "--tty");
-  const transport = flag(argv, "--transport") ?? "inline";
   const socket = flag(argv, "--socket");
   const cellOverride = parseCell(flag(argv, "--cell"));
   const token = flag(argv, "--token") ?? "";
@@ -450,7 +517,7 @@ function serve(argv: string[]): void {
     process.stderr.write("claude-bridge serve needs --tty and --socket\n");
     process.exit(2);
   }
-  const bridge = new Bridge(tty, transport, socket, cellOverride, token);
+  const bridge = new Bridge(tty, socket, cellOverride, token);
   bridge.listenForPixel();
   const table = routes(bridge);
   let lastSeen = Date.now();
@@ -463,7 +530,9 @@ function serve(argv: string[]): void {
     lastSeen = Date.now();
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const handler = table[`${request.method} ${url.pathname}`];
-    const [status, value] = handler ? handler(request.method === "POST" ? await readJson(request) : {}) : [404, { error: "not found" }];
+    const [status, value] = handler
+      ? await handler(request.method === "POST" ? await readJson(request) : {}, url.searchParams)
+      : [404, { error: "not found" }];
     response.writeHead(status, { "content-type": "application/json" });
     response.end(JSON.stringify(value));
   });

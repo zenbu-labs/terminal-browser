@@ -1,0 +1,212 @@
+name: pixel electron build
+run-name: "build patched electron v${{ inputs.version }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Electron version to build (e.g. 43.3.0)"
+        required: true
+      platforms:
+        description: "Comma separated platforms to build; the others keep their published assets"
+        required: false
+        default: "darwin-arm64,darwin-x64,linux-x64,linux-arm64"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: electron-build-${{ inputs.version }}
+  cancel-in-progress: false
+
+# Releases are tagged electron-v<version> so they never collide with the pixel-v<version>
+# tags of the pixel packages or terminal-browser's own v<version> tags.
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'darwin-arm64,darwin-x64,linux-x64,linux-arm64' }}
+          MACOS_RUNNER: ${{ vars.MACOS_BUILD_RUNNER || 'depot-macos-26' }}
+          LINUX_RUNNER: ${{ vars.LINUX_BUILD_RUNNER || 'depot-ubuntu-24.04-16' }}
+        run: |
+          set -euo pipefail
+          rows=""
+          for platform in ${PLATFORMS//,/ }; do
+            case "$platform" in
+              darwin-arm64|darwin-x64) runner="$MACOS_RUNNER" ;;
+              linux-x64|linux-arm64) runner="$LINUX_RUNNER" ;;
+              *) echo "unknown platform: $platform" >&2; exit 1 ;;
+            esac
+            rows="$rows{\"platform\":\"$platform\",\"runner\":\"$runner\"}"
+          done
+          include=$(printf %s "$rows" | jq -sc .)
+          echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
+          echo "building: $PLATFORMS"
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 600
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build patched electron
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          sudo xcode-select -p 2>/dev/null || true
+          export ELECTRON_BUILD_DIR="$RUNNER_TEMP/electron-build"
+          bash pixel/electron/scripts/build.sh "${{ inputs.version }}" \
+            "$RUNNER_TEMP/out" "${{ matrix.platform }}"
+          mv "$RUNNER_TEMP/out/SHASUMS256.txt" \
+            "$RUNNER_TEMP/out/sha-${{ matrix.platform }}.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electron-asset-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/out/electron-v${{ inputs.version }}-${{ matrix.platform }}.zip
+            ${{ runner.temp }}/out/electron.d.ts
+            ${{ runner.temp }}/out/sha-${{ matrix.platform }}.txt
+          if-no-files-found: error
+
+      - name: Report failure loudly
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ inputs.version }}"
+          platform="${{ matrix.platform }}"
+          title="🚨 Build failed: electron v$version ($platform)"
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq length)
+          if [ "$existing" = "0" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "Build of patched electron v$version for $platform failed, so the electron-v$version release is missing its $platform asset.
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          While this issue is open, the sync workflow will not retry this version. Fix the cause (or re-run the workflow manually), then close this issue to re-enable automatic builds."
+          fi
+
+  publish:
+    # single writer for the release and SHASUMS256.txt: the build legs run in
+    # parallel and never touch the release themselves
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: electron-asset-*
+          merge-multiple: true
+          path: out
+
+      - name: Publish whatever built
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          tag="electron-v$version"
+          cd out
+          ls *.zip electron.d.ts >/dev/null
+          # every platform leg generates the same electron.d.ts and lists it
+          cat sha-*.txt | sort -u > new.txt
+          # fixme: placeholder copy
+          notes="Patched Electron v$version for pixel.
+
+          Patches (source of truth: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/main/pixel/electron/patches):
+          - macOS: offscreen-rendering compositors ride a real display link, so page frame rates follow \`webContents.setFrameRate\` instead of being clamped to 60fps on input.
+          - Linux: offscreen frames can be delivered through shared memory, and offscreen views keep their requested \`deviceScaleFactor\` on native Wayland instead of having it clobbered to 1.0.
+          - Offscreen wheel events keep their scroll phase, so trackpad scrolling and momentum work.
+          - Resizing an offscreen view no longer makes the renderer submit frames that are dropped, so the page keeps painting while it resizes.
+          - \`webContents\` emits \`media-capture-changed\` and exposes \`getMediaCapture()\`, reporting whether the page is using the camera, microphone or screen capture.
+          - Offscreen input reaches cross-origin iframes: mouse and wheel events are routed to the frame under the pointer, and \`sendInputEvent\` keys go to the focused frame.
+          - A permission check handler can return \`'prompt'\`, so pages see a permission as not yet decided instead of denied and go on to request it.
+          - \`electron.d.ts\` is generated from the patched API docs, so it types these additions.
+
+          Build: cookies on disk are encrypted with an OS keychain key (the \`EnableCookieEncryption\` fuse), the macOS app is marked \`LSUIElement\` so it never shows in the Dock, and it is signed with our Developer ID and notarized.
+
+          Upstream release: https://github.com/electron/electron/releases/tag/v$version"
+          if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" \
+              --title "electron v$version (patched)" --notes "$notes"
+          fi
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" \
+            --pattern "SHASUMS256.txt" || touch SHASUMS256.txt
+          # keep existing entries for platforms this run did not rebuild
+          while read -r _ starred; do
+            grep -v "${starred#\*}" SHASUMS256.txt > kept.txt || true
+            mv kept.txt SHASUMS256.txt
+          done < new.txt
+          cat new.txt >> SHASUMS256.txt
+          gh release upload "$tag" -R "$GITHUB_REPOSITORY" --clobber \
+            *.zip electron.d.ts SHASUMS256.txt
+
+      - name: Report failure loudly
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ inputs.version }}"
+          title="🚨 Publish failed: electron v$version"
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq length)
+          if [ "$existing" = "0" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "Publishing the built assets for electron v$version failed, so the electron-v$version release is missing assets that were successfully built.
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          While this issue is open, the sync workflow will not retry this version. Fix the cause (or re-run the workflow manually), then close this issue to re-enable automatic builds."
+          fi
+
+  verify-manifest:
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Every published zip has a manifest entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="electron-v${{ inputs.version }}"
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" --pattern "SHASUMS256.txt"
+          missing=""
+          for zip in $(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep '\.zip$'); do
+            grep -q "\*$zip" SHASUMS256.txt || missing="$missing $zip"
+          done
+          if [ -n "$missing" ]; then
+            echo "SHASUMS256.txt missing entries:$missing" >&2
+            exit 1
+          fi
+
+      - name: Report failure loudly
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ inputs.version }}"
+          title="🚨 SHASUMS256.txt incomplete: electron v$version"
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq length)
+          if [ "$existing" = "0" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "The electron-v$version release has zip assets with no entry in SHASUMS256.txt, so installs of those platforms will fail the checksum lookup.
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          The run's log lists the missing entries. Re-run the workflow (or fix SHASUMS256.txt by hand), then close this issue."
+          fi

@@ -24,4 +24,13 @@ for the user if after the last time you plan to use terminal-browser action you
 run terminal-browser action done, which immediately clears the indication
 that you are using the browser tab
 
+Some pages publish WebMCP tools: named actions with a JSON schema that the
+page runs itself. agent-browser announces them when a page has them, and
+`terminal-browser action -- webmcp list --json` shows the full schemas. Prefer
+`terminal-browser action -- webmcp invoke <tool> --params '<json>'` over
+snapshot, click and fill when a tool covers what you need; it is faster and
+does not break when the layout changes. Tools can carry annotations. Treat
+`readOnly: false` as a change to the user's data and `consequential: true` as
+something to confirm with the user before invoking.
+
 ## Command reference

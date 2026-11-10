@@ -1,0 +1,24 @@
+[package]
+name = "pixel-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+rayon = "1"
+rustix = { workspace = true }
+libc = { workspace = true }
+base64 = { workspace = true }
+fontdue = { workspace = true }
+miniz_oxide = { workspace = true }
+taffy = { workspace = true }
+tiny-skia = { workspace = true }
+image = { workspace = true }
+serde_json = { workspace = true }
+ttf-parser = { version = "0.21", default-features = false, features = ["std", "variable-fonts"] }
+unicode-width = "0.2"
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]

@@ -1,0 +1,11 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- "Duo" mark (design 2a): two offset session panes, prompt chevron in the
+       front one. Tile inset + radius follow the macOS Big Sur icon grid
+       (824pt tile @1024). -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#ECEAE4"/>
+  <g transform="translate(108.8 125.6) scale(8.4)">
+    <rect x="28" y="16" width="58" height="46" rx="12" fill="#3FDD8C" opacity="0.8"/>
+    <rect x="10" y="30" width="58" height="46" rx="12" fill="#17171A"/>
+    <path d="M24 42 L35 53 L24 64" fill="none" stroke="#ECEAE4" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

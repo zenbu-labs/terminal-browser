@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import readline from "node:readline";
 
 import {
   DAEMON_SOCKET,
@@ -15,21 +16,19 @@ import {
   registerApp,
   socketTerminal,
   unregisterApp,
-} from "pixel-store";
+} from "shared";
 import {
   callerTty,
   canSplit,
   cannotOpenPanes,
   checkTerminal,
   detect,
-  unsupportedGraphicsMessage,
 } from "@zenbu-labs/pixel/terminal";
 import { findOwner } from "@zenbu-labs/pixel/terminal";
 import type { Direction, Terminal, TerminalCheck } from "@zenbu-labs/pixel/terminal";
 import { actionCommand } from "./action";
 import { control } from "./control";
-import { setupCommand } from "./editors";
-import { ensureSetup, linkSkills, markSetupDone } from "./setup";
+import { ensureSetup, setupCommand } from "./setup";
 import { commandHelp, helpTopics, rootHelp } from "./help";
 import { browsers, describe, recordKey } from "./instances";
 import type { Browser } from "./instances";
@@ -37,13 +36,15 @@ import { findHosts, openInHost } from "./interop";
 import { lsCommand } from "./ls";
 import { instances } from "./registry";
 import { apparmorSetup, deniedRefusal, linuxSandboxError, sandboxRefusal } from "./sandbox";
+import { appExecutable } from "@zenbu-labs/pixel/app-executable";
 import { connectSsh, validateSshTarget } from "@zenbu-labs/pixel/ssh";
 import type { InstanceRecord } from "./registry";
 import { installedVersion, upgradeCommand } from "./upgrade";
 import { claudeBridgeCommand } from "./claude-bridge";
+import { configCommand } from "./config";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
-const CAPABILITIES = ["embedding"] as const;
+const CAPABILITIES = ["embedding", "image-frames"] as const;
 delete process.env.ELECTRON_RUN_AS_NODE;
 
 function fail(message: string): never {
@@ -53,6 +54,11 @@ function fail(message: string): never {
 
 function print(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function reportOpened(browser: string, tab?: number | string | null) {
+  const where = tab === undefined || tab === null ? browser : `tab ${tab} in ${browser}`;
+  process.stdout.write(`opened ${where} (terminal-browser ls for details)\n`);
 }
 
 function takeFlag(args: string[], name: string): string | undefined {
@@ -87,6 +93,8 @@ function browserDirectory(): string {
 }
 
 function electronBinary(): string {
+  const override = process.env.PIXEL_ELECTRON_APP;
+  if (override) return appExecutable(override);
   if (DIST_ROOT) return path.join(DIST_ROOT, "electron", ...ELECTRON_DIST_BIN);
   const library = require.resolve("@zenbu-labs/pixel/package.json", { paths: [browserDirectory()] });
   return path.join(path.dirname(library), "electron", "dist", ...ELECTRON_DEV_BIN);
@@ -94,7 +102,12 @@ function electronBinary(): string {
 
 function browserLaunchCommand(argv: string[]): { command: string[]; cwd: string } {
   const browserDir = browserDirectory();
-  const electron = electronBinary();
+  let electron: string;
+  try {
+    electron = electronBinary();
+  } catch (error) {
+    fail((error as Error).message);
+  }
   const main = path.join(browserDir, "dist", "main.js");
   for (const required of [electron, main]) {
     if (!fs.existsSync(required)) {
@@ -151,7 +164,7 @@ function interactiveTty(): string | null {
 function browserBuildStamp(): string {
   const main = path.resolve(__dirname, "..", "..", "browser", "dist", "main.js");
   try {
-    return String(Math.floor(fs.statSync(main).mtimeMs));
+    return `${Math.floor(fs.statSync(main).mtimeMs)} ${fs.realpathSync(electronBinary())}`;
   } catch {
     return "unknown";
   }
@@ -170,6 +183,7 @@ function spawnDaemon() {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
   );
+  env.NODE_ENV ??= "production";
   const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });
   child.unref();
 }
@@ -436,21 +450,28 @@ function currentTerminal(): Promise<TerminalCheck> {
   return asked;
 }
 
-async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
-  const check = await currentTerminal();
-  const found = await browsers(check.terminal);
+function listBrowsers(found: Browser[]): string {
+  return found.map((browser) => `  ${describe(browser)}`).join("\n");
+}
+
+function chooseBrowser(found: Browser[], key: string | undefined): Browser | undefined {
   const here = key
     ? found.filter((browser) => recordKey(browser) === key)
     : found.filter((browser) => browser.inCurrentTab);
-  const list = (browsers: Browser[]) => browsers.map((browser) => `  ${describe(browser)}`).join("\n");
-  if (key && here.length === 0) fail(`no browser ${key}. Running:\n${list(found)}`);
+  if (key && here.length === 0) fail(`no browser ${key}. Running:\n${listBrowsers(found)}`);
   if (here.length > 1) {
-    fail(`${here.length} browsers in this tab, so say which with --browser:\n${list(here)}`);
+    fail(`${here.length} browsers in this tab, so say which with --browser:\n${listBrowsers(here)}`);
   }
-  const target = here[0];
+  return here[0];
+}
+
+async function newTabCommand(url: string | undefined, key: string | undefined): Promise<number> {
+  const check = await currentTerminal();
+  const target = chooseBrowser(await browsers(check.terminal), key);
   if (target) {
     const where = url ? { cmd: "open-tab", url, cwd: process.cwd() } : { cmd: "open-tab" };
-    print(await control(target.socket, where));
+    const opened = (await control(target.socket, where)) as { openedTab?: number };
+    reportOpened(recordKey(target), opened.openedTab);
     return 0;
   }
   if (!key && !mergeDisabled() && (await tryAdopt(url ? [url] : [], null))) return 0;
@@ -462,8 +483,73 @@ async function newTabCommand(url: string | undefined, key: string | undefined): 
   split.push("--split-dir=right");
   const tty = ownTtyPath() ?? callerTty().path;
   if (tty) split.push(`--parent-tty=${tty}`);
-  print(await launchInSplit(check.terminal!, "right", split, null));
+  reportOpened(recordKey(await launchInSplit(check.terminal!, "right", split, null)));
   return 0;
+}
+
+const BROWSING_DATA_NAMES: Record<string, string> = {
+  siteData: "cookies and site data",
+  cache: "cached images and files",
+};
+
+function clearSummary(kinds: string[]): string {
+  const shown = kinds.length > 0 ? kinds : Object.keys(BROWSING_DATA_NAMES);
+  const what = shown.map((kind) => BROWSING_DATA_NAMES[kind]).join(", and ");
+  return `This clears ${what}${shown.length > 1 ? "," : ""} for every site in every terminal-browser window${shown.includes("siteData") ? ", signing you out" : ""}.`;
+}
+
+async function confirmClear(summary: string): Promise<boolean> {
+  const ask = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise<string>((resolve) => {
+    ask.question(`${summary} Continue? [y/N] `, resolve);
+    ask.on("close", () => resolve("n"));
+  });
+  ask.close();
+  return /^(y|yes)$/i.test(answer.trim());
+}
+
+async function clearBrowsingDataCommand(args: string[]): Promise<number> {
+  const key = takeFlag(args, "--browser");
+  const confirmed = takeBoolFlag(args, "--yes") || takeBoolFlag(args, "-y");
+  const kinds = [
+    ...(takeBoolFlag(args, "--cookies") ? ["siteData"] : []),
+    ...(takeBoolFlag(args, "--cache") ? ["cache"] : []),
+  ];
+  if (args.length > 0) fail(`unexpected ${args[0]} (see terminal-browser clear-browsing-data --help)`);
+  const found = await browsers((await currentTerminal()).terminal);
+  const target = chooseBrowser(found, key) ?? (found.length === 1 ? found[0] : undefined);
+  if (!target) {
+    if (found.length === 0) fail("no browser is open, so there is nothing to clear");
+    fail(`no browser in this terminal tab, so say which with --browser:\n${listBrowsers(found)}`);
+  }
+  if (!confirmed) {
+    const summary = clearSummary(kinds);
+    if (!process.stdin.isTTY) fail(`${summary}\nPass --yes to confirm when not running interactively.`);
+    if (!(await confirmClear(summary))) {
+      process.stdout.write("cancelled\n");
+      return 0;
+    }
+  }
+  const reply = (await control(target.socket, {
+    cmd: "clear-browsing-data",
+    ...(kinds.length > 0 ? { kinds } : {}),
+  })) as { cleared: string[] };
+  process.stdout.write(`cleared ${reply.cleared.map((kind) => BROWSING_DATA_NAMES[kind] ?? kind).join(", and ")}\n`);
+  return 0;
+}
+
+function unsupportedGraphicsMessage(color: boolean): string {
+  const sgr = (code: string, text: string) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
+  return [
+    "",
+    `  ${sgr("1", "Unsupported terminal: this terminal cannot display graphics")}`,
+    "",
+    `  ${sgr("2", "We recommend Ghostty:")}`,
+    `  ${sgr("4", "https://ghostty.org/download")}`,
+    "",
+    `  ${sgr("2", "Note: any terminal that supports the kitty graphics protocol is supported")}`,
+    "",
+  ].join("\n");
 }
 
 async function requireGraphics(check: TerminalCheck) {
@@ -474,6 +560,7 @@ async function requireGraphics(check: TerminalCheck) {
 
 const BROWSER_FLAGS = [
   "--allow-clipboard-read",
+  "--transparent",
   "--ssh=",
   "--split-dir=",
   "--parent-tty=",
@@ -552,7 +639,7 @@ async function tryAdopt(args: string[], direction: Direction | null): Promise<bo
   for (const host of hosts) {
     try {
       const opened = await openInHost(host.socket, { url: resolved });
-      print({ adopted: instanceKey(host), socket: host.socket, tab: opened.tab });
+      reportOpened(instanceKey(host), opened.tab);
       return true;
     } catch {}
   }
@@ -598,7 +685,7 @@ async function openCommand(args: string[]) {
   const argv = args.map((arg) => (arg === url && fs.existsSync(arg) ? path.resolve(arg) : arg));
   argv.push(`--split-dir=${direction}`);
   if (tty) argv.push(`--parent-tty=${tty}`);
-  print(await launchInSplit(terminal!, direction, argv, size));
+  reportOpened(recordKey(await launchInSplit(terminal!, direction, argv, size)));
 }
 
 function splitPassthrough(args: string[]): { own: string[]; passthrough: string[] } {
@@ -714,14 +801,9 @@ async function main(): Promise<number> {
     await lsCommand((await currentTerminal()).terminal, all, json);
     return 0;
   }
-  if (command === "setup") {
-    const sandbox = apparmorSetup(electronBinary());
-    linkSkills();
-    const editors = setupCommand();
-    markSetupDone();
-    return editors !== 0 ? editors : sandbox;
-  }
+  if (command === "setup") return setupCommand(electronBinary());
   if (command === "upgrade") return upgradeCommand();
+  if (command === "config") return configCommand(args);
   if (command === "claude-bridge") return claudeBridgeCommand(args);
   if (command === "shutdown") return shutdownDaemon();
   if (command === "register-app") return registerAppCommand(args);
@@ -731,6 +813,10 @@ async function main(): Promise<number> {
     requirePaneAccess();
     const key = takeFlag(args, "--browser");
     return newTabCommand(args.find((arg) => !arg.startsWith("-")), key);
+  }
+  if (command === "clear-browsing-data") {
+    requirePaneAccess();
+    return clearBrowsingDataCommand(args);
   }
   if (command === "action") {
     requirePaneAccess();

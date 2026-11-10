@@ -1,7 +1,7 @@
 import { callerTty } from "@zenbu-labs/pixel/terminal";
 import type { Terminal } from "@zenbu-labs/pixel/terminal";
-import { INTEROP_PROTOCOL_VERSIONS, listInteropInstances } from "pixel-store";
-import type { InteropInstance, OpenSpec } from "pixel-store";
+import { INTEROP_PROTOCOL_VERSIONS, listInteropInstances } from "shared";
+import type { InteropInstance, OpenSpec } from "shared";
 
 import { control, WHERE_TIMEOUT_MS } from "./control";
 

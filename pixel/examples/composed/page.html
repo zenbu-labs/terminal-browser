@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>composed example</title>
+<style>
+  :root { --bg: #111; --fg: #ddd; --accent: #7aa2f7; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+               font: 15px/1.6 ui-monospace, Menlo, monospace; }
+  main { padding: 24px; max-width: 520px; }
+  h1 { font-size: 18px; margin: 0 0 12px; color: var(--accent); }
+  button, a { font: inherit; color: var(--accent); }
+  button { background: none; border: 1px solid var(--accent); border-radius: 4px;
+           padding: 6px 12px; cursor: pointer; margin: 4px 8px 4px 0; }
+  .swatches { display: flex; gap: 4px; margin: 12px 0; }
+  .swatches span { width: 22px; height: 22px; border-radius: 3px; display: block; }
+  input { font: inherit; width: 100%; box-sizing: border-box; padding: 6px;
+          background: transparent; color: var(--fg); border: 1px solid var(--fg); }
+</style>
+</head>
+<body>
+<main>
+  <h1>page with a preload</h1>
+  <p id="theme">waiting for the terminal theme…</p>
+  <div class="swatches" id="swatches"></div>
+  <p>
+    <button onclick="window.open('https://example.com', '_blank', 'width=600,height=400')">window.open popup</button>
+    <a href="https://github.com/zenbu-labs" target="_blank">target=_blank link</a>
+  </p>
+  <p><input placeholder="type here to test keys and the paste menu]"></p>
+  <p><button onclick="pixel.quit()">pixel.quit()</button></p>
+</main>
+<script>
+  const rgb = (c) => c ? `rgb(${c[0]}, ${c[1]}, ${c[2]})` : "transparent";
+  pixel.onTheme((theme) => {
+    document.documentElement.style.setProperty("--bg", rgb(theme.background));
+    document.documentElement.style.setProperty("--fg", rgb(theme.foreground));
+    document.documentElement.style.setProperty("--accent", rgb(theme.ansi[4] ?? theme.foreground));
+    document.getElementById("theme").textContent =
+      `background ${rgb(theme.background)}, foreground ${rgb(theme.foreground)}`;
+    document.getElementById("swatches").innerHTML = theme.ansi
+      .map((c) => `<span style="background:${rgb(c)}"></span>`)
+      .join("");
+  });
+</script>
+</body>
+</html>

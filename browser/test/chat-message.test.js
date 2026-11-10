@@ -46,29 +46,22 @@ const hostile = [
 ];
 
 for (const content of hostile) {
-  test(`shell target: ${JSON.stringify(content)} becomes one single-quoted inert word`, () => {
+  test(`${JSON.stringify(content)} becomes one single-quoted inert word for a shell and the same text plus two blank lines for an agent`, () => {
     const out = chatMessage(content, shell);
     assert.ok(out.startsWith("'") && out.endsWith("'"), "wrapped in single quotes");
     assert.equal(CONTROL.test(out), false, "no control bytes");
     assert.equal(LINE_BREAKS.test(out), false, "no line breaks of any kind");
     const literal = unquote(out);
-    assert.ok(literal.startsWith("> "), "the literal is the quoted line");
-    assert.equal(literal.slice(2), literal.slice(2).trimEnd(), "no trailing whitespace to hide a newline");
-    assert.equal(literal, chatMessage(content, agent).slice(0, -2), "same text an agent would get");
-  });
-
-  test(`agent target: ${JSON.stringify(content)} has exactly the two trailing blank lines`, () => {
-    const out = chatMessage(content, agent);
-    assert.ok(out.endsWith("\n\n"));
-    const body = out.slice(0, -2);
-    assert.equal(CONTROL.test(body), false, "no control bytes before the trailing newlines");
-    assert.equal(LINE_BREAKS.test(body), false, "no newline inside the body");
+    assert.equal(literal, literal.trim(), "no surrounding whitespace to hide a newline");
+    const pasted = chatMessage(content, agent);
+    assert.ok(pasted.endsWith("\n\n"), "exactly the two trailing blank lines");
+    assert.equal(literal, pasted.slice(0, -2), "same text an agent would get");
   });
 }
 
 test("shell metacharacters and quotes stay literal text", () => {
-  assert.equal(chatMessage("a; touch /tmp/x | sh", shell), "'> a; touch /tmp/x | sh'");
-  assert.equal(chatMessage("it's \\ here", shell), "'> it'\\''s '\\\\' here'");
+  assert.equal(chatMessage("a; touch /tmp/x | sh", shell), "'a; touch /tmp/x | sh'");
+  assert.equal(chatMessage("it's \\ here", shell), "'it'\\''s '\\\\' here'");
 });
 
 test("fuzz: random code points never yield control bytes or line breaks", () => {

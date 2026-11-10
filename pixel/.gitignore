@@ -1,0 +1,28 @@
+# Cargo build artifacts
+/engine/target/
+**/*.rs.bk
+*.profraw
+*.profdata
+*.snap.new
+*.pending-snap
+
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.env
+.env.*
+
+node_modules/
+dist/
+__pycache__/
+*.pyc
+packages/native/*/pixel.node
+packages/native/*/native-scroll-helper
+.claude/worktrees/
+
+# the patched electron build and its types, fetched by postinstall
+/packages/pixel/electron/

@@ -247,30 +247,3 @@ export function enableTerminalImages(): EditorResult[] {
     }
   });
 }
-
-export function setupCommand(): number {
-  const results = enableTerminalImages();
-  if (results.length === 0) {
-    process.stdout.write("no vscode-family editors found\n");
-    return 0;
-  }
-  const turnedOn = results.filter((r) => r.outcome === "enabled" || r.outcome === "created");
-  const already = results.filter((r) => r.outcome === "already");
-  const failed = results.filter((r) => r.outcome === "failed");
-  for (const editor of turnedOn) {
-    process.stdout.write(`enabled terminal images in ${editor.name}\n`);
-  }
-  for (const editor of failed) {
-    process.stderr.write(`could not edit ${editor.settings}: ${editor.error ?? "unknown error"}\n`);
-  }
-  if (turnedOn.length === 0 && failed.length === 0) {
-    process.stdout.write(
-      `terminal images already enabled in ${already.length} editor${already.length === 1 ? "" : "s"}\n`,
-    );
-    return 0;
-  }
-  if (turnedOn.length > 0) {
-    process.stdout.write("open a new terminal in those editors to pick it up\n");
-  }
-  return failed.length > 0 ? 1 : 0;
-}

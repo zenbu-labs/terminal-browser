@@ -1,0 +1,24 @@
+{
+  "name": "zed",
+  "private": true,
+  "main": "dist/daemon.js",
+  "bin": {
+    "zed-example": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "bootstrap": "tsc -p tsconfig.json && node dist/setup.js",
+    "start": "tsc -p tsconfig.json && node dist/cli.js",
+    "dist": "tsc -p tsconfig.json && sh scripts/install-local.sh"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "@zenbu-labs/pixel": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.5.0"
+  }
+}

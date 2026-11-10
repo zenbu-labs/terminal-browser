@@ -22,6 +22,8 @@ Options:
                         proxy the result back to the local terminal-browser instance
   --allow-clipboard-read
                         Lets websites read from clipboard.
+  --transparent         [placeholder copy: Let the terminal show through pages that do not paint
+                        a background. Persist it with terminal-browser config set window.transparent on]
   --no-merge            Do not open the terminal-browser instance as a tab in a neighbor terminal-browser
 
 
@@ -50,7 +52,6 @@ Options:
     body: `
 Sets up configuration to make terminal-browser work best, this includes:
 - installing agent skills
-- enabling configuration settings in terminals that is required for terminal-browser to work
 
 `,
   },
@@ -80,6 +81,25 @@ Options:
 Examples:
   terminal-browser new-tab github.com
   terminal-browser new-tab --browser 90107-1 localhost:3000
+`,
+  },
+  "clear-browsing-data": {
+    summary: "Clear cookies, site data and cache, like a browser's Clear browsing data",
+    usage: "terminal-browser clear-browsing-data [options]",
+    body: `
+Clears cookies and site data, and cached images and files, for every site in
+every terminal-browser window, signing you out. Asks first when run in a
+terminal; otherwise needs --yes. Reload open pages to see the change.
+
+Options:
+  -y, --yes           Clear without asking
+  --cookies           Only clear cookies and site data
+  --cache             Only clear cached images and files
+  --browser <key>     A browser key from terminal-browser ls
+
+Examples:
+  terminal-browser clear-browsing-data
+  terminal-browser clear-browsing-data --yes --cookies
 `,
   },
   apps: {
@@ -113,6 +133,34 @@ Remove application metadata from ~/.local/share/terminal-browser-interop/apps/<i
 Every browser in a terminal pane shares one browser process as an optimization. To
 fully quit terminal-browser operations, you can use this shutdown command. This will
 close all open browsers.
+`,
+  },
+  config: {
+    summary: "Get and set settings and shortcuts",
+    usage: "terminal-browser config <list|get|set|unset|path> [key] [value]",
+    body: `
+Reads and writes the settings.json and shortcuts.json files.
+
+Settings are addressed by their settings.json key. Shortcuts are addressed as
+shortcuts.<command> and take a comma separated list of key chords, or none to
+unbind. unset restores the default.
+
+Commands:
+  list                 List every setting and shortcut with its current value
+  get <key>            Print the value of one key
+  set <key> <value>    Set a key
+  unset <key>          Restore a key to its default
+  path                 Print the paths of the config files
+
+Examples:
+  terminal-browser config list
+  terminal-browser config get search.engine
+  terminal-browser config set telemetry.usage off
+  terminal-browser config set updates.check off
+  terminal-browser config set shortcuts.tab.new "cmd+t,ctrl+t"
+  terminal-browser config set shortcuts.record.toggle none
+  terminal-browser config unset render.fps
+  terminal-browser config path
 `,
   },
   action: {

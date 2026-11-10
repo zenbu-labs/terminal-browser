@@ -1,27 +1,31 @@
 /* @jsx h */
 import type { EngineInterface, Register } from 'claude-code'
 import type { Browser } from './browser'
-import type { Props as SurfaceProps } from './surface.tsx'
+import { MAX_IMAGE_CELLS } from './surface.tsx'
 import { normalizeUrl } from './urls.ts'
 import {
   isBridgeState,
   isInputMessage,
   isLaunchReport,
   isSizeMessage,
-  takenTexts,
+  takenItems,
   type BridgeState,
+  type Frame,
 } from './bridge-protocol.ts'
 
 
 
 const PANE = 'browser'
+const IMAGE_KEY = 'view'
+const IMAGE_ALT = ''
 const OPEN_TOOL = 'mcp__terminal-browser__open'
 const CLOSE_TOOL = 'mcp__terminal-browser__close'
 const START_URL = 'terminal-browser://start'
 const INSTALL_URL = 'https://terminal-browser.sh'
-const REQUIRED_CAPABILITIES = ['embedding']
-const POLL_MS = 250
-const IDLE_POLL_MS = 600
+const REQUIRED_CAPABILITIES = ['embedding', 'image-frames']
+const WATCH_RETRY_MS = 250
+const DENIED_REDRAW_MS = 500
+const DENIALS_BEFORE_LOGGING = 3
 
 
 const state = {
@@ -31,7 +35,9 @@ const state = {
   pendingUrl: null as string | null,
   region: null as { cols: number; rows: number } | null,
   last: null as BridgeState | null,
-  stopPolling: null as (() => void) | null,
+  frame: null as Frame | null,
+  mounted: null as { cols: number; rows: number } | null,
+  watcher: 0,
   // a hack to programatically trigger agent input focus
   viewGeneration: 0,
 }
@@ -91,7 +97,7 @@ async function startBridge($: EngineInterface): Promise<{ ok: true } | { ok: fal
   }
   state.port = report.port
   state.token = report.token
-  startPolling($)
+  void watchBridge($)
   return { ok: true }
 }
 
@@ -109,10 +115,10 @@ async function post($: EngineInterface, path: string, body: unknown): Promise<un
   }
 }
 
-async function fetchState($: EngineInterface): Promise<BridgeState | null> {
+async function fetchState($: EngineInterface, version: number): Promise<BridgeState | null> {
   if (state.port === null) return null
   try {
-    const response = await $.http.fetch(bridgeUrl('/state'), { headers: authHeaders() })
+    const response = await $.http.fetch(bridgeUrl(`/state?version=${version}`), { headers: authHeaders() })
     const parsed: unknown = response.ok ? JSON.parse(response.text) : null
     return isBridgeState(parsed) ? parsed : null
   } catch {
@@ -121,6 +127,76 @@ async function fetchState($: EngineInterface): Promise<BridgeState | null> {
 }
 
 
+function imageSource(frame: Frame) {
+  return { shm: frame.shm, format: frame.format, width: frame.width, height: frame.height, generation: frame.generation }
+}
+
+function imageGrid(frame: Frame, cols: number, rows: number) {
+  return {
+    cols: Math.max(1, Math.min(frame.cols, cols, MAX_IMAGE_CELLS)),
+    rows: Math.max(1, Math.min(frame.rows, rows, MAX_IMAGE_CELLS)),
+  }
+}
+
+function fitsMounted(frame: Frame): boolean {
+  const mounted = state.mounted
+  if (!mounted || !state.region) return false
+  const grid = imageGrid(frame, state.region.cols, state.region.rows)
+  return grid.cols === mounted.cols && grid.rows === mounted.rows
+}
+
+async function watchBridge($: EngineInterface): Promise<void> {
+  const watcher = ++state.watcher
+  const live = () => state.watcher === watcher && state.port !== null
+  let version = -1
+  let denials = 0
+  let lastDeniedRedraw = 0
+  while (live()) {
+    const fresh = await fetchState($, version)
+    if (!live()) return
+    if (!fresh) {
+      await $.clock.sleep(WATCH_RETRY_MS)
+      continue
+    }
+    version = fresh.version
+    const previous = state.last
+    state.last = fresh
+    if (fresh.inbox > 0) await deliverAgentText($)
+    if (!state.open) continue
+    const pictureGone = fresh.frame === null && state.frame !== null
+    if (pictureGone) state.frame = null
+    const paneChanged =
+      !previous
+      || pictureGone
+      || previous.title !== fresh.title
+      || previous.alive !== fresh.alive
+      || previous.error !== fresh.error
+    if (paneChanged) {
+      $.ui.invalidate('ui.render')
+      if (fresh.title) await $.ui.open({ id: PANE, title: fresh.title.slice(0, 40) })
+    }
+    const frame = fresh.frame
+    if (!frame || frame.generation === state.frame?.generation) continue
+    state.frame = frame
+    if (!fitsMounted(frame)) {
+      $.ui.invalidate('ui.render')
+      continue
+    }
+    const result = await $.ui.blit({ requestId: PANE, key: IMAGE_KEY, source: imageSource(frame) })
+    if (!result.deny) {
+      denials = 0
+      continue
+    }
+    denials += 1
+    if (denials === DENIALS_BEFORE_LOGGING) $.ui.log(`terminal-browser: frame blit refused: ${result.deny}`)
+    const now = Date.now()
+    if (now - lastDeniedRedraw >= DENIED_REDRAW_MS) {
+      lastDeniedRedraw = now
+      $.ui.invalidate('ui.render')
+    }
+  }
+}
+
 async function openBrowser($: EngineInterface, raw: string | null): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
   if (state.port === null) {
     const started = await startBridge($)
@@ -128,7 +204,6 @@ async function openBrowser($: EngineInterface, raw: string | null): Promise<{ ok
   }
   const alive = state.last?.alive === true
   const url = raw ? normalizeUrl(raw) : (alive && state.last?.url ? state.last.url : START_URL)
-  const wasOpen = state.open
   state.pendingUrl = url
   state.open = true
   await $.ui.open({ id: PANE, title: 'browser', focus: true, rows: 24 })
@@ -137,7 +212,6 @@ async function openBrowser($: EngineInterface, raw: string | null): Promise<{ ok
     state.pendingUrl = null
     await post($, '/open', { url, ...state.region })
   }
-  if (!wasOpen) startPolling($)
   return { ok: true, url }
 }
 
@@ -151,41 +225,16 @@ async function browserClosed($: EngineInterface): Promise<void> {
   state.open = false
   state.pendingUrl = null
   state.region = null
+  state.frame = null
+  state.mounted = null
   await post($, '/browser/close', {})
-  if (state.port !== null) startPolling($)
 }
-
-function startPolling($: EngineInterface): void {
-  state.stopPolling?.()
-  const timer = $.clock.every(state.open ? POLL_MS : IDLE_POLL_MS, () => {
-    void poll($)
-  })
-  state.stopPolling = () => timer.cancel()
-}
-
-async function poll($: EngineInterface): Promise<void> {
-  const fresh = await fetchState($)
-  if (!fresh) return
-  if (fresh.inbox > 0) await deliverAgentText($)
-  const previous = state.last
-  state.last = fresh
-  if (!state.open) return
-  const changed =
-    !previous
-    || JSON.stringify(previous.placed) !== JSON.stringify(fresh.placed)
-    || previous.title !== fresh.title
-    || previous.alive !== fresh.alive
-    || previous.error !== fresh.error
-  if (!changed) return
-  $.ui.invalidate('ui.render')
-  if (fresh.title) await $.ui.open({ id: PANE, title: fresh.title.slice(0, 40) })
-}
-
 
 async function deliverAgentText($: EngineInterface): Promise<void> {
-  const lines = takenTexts(await post($, '/inbox/take', {}))
-    .filter(text => text.trim() !== '')
-    .map(text => `> ${text.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()}`)
+  const oneLine = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
+  const lines = takenItems(await post($, '/inbox/take', {}))
+    .filter(item => item.text.trim() !== '')
+    .flatMap(item => [oneLine(item.text), ...(item.screenshot ? [oneLine(item.screenshot)] : [])])
   if (lines.length === 0) return
   const { isFilled } = await $.prompt.fill({ text: `${lines.join('\n')}\n` })
   if (!isFilled) {
@@ -195,16 +244,6 @@ async function deliverAgentText($: EngineInterface): Promise<void> {
   }
   state.viewGeneration += 1
   $.ui.invalidate('ui.render')
-}
-
-function surfaceProps(cols: number, rows: number): SurfaceProps {
-  const last = state.last
-  return {
-    placed: last?.placed ?? null,
-    cols,
-    rows,
-    title: last?.title ?? '',
-  }
 }
 
 
@@ -279,12 +318,20 @@ export const register: Register = (on, options) => {
       const { Box } = await $.ui.resolve(e)
       return <Box />
     }
-    const { Box, Client } = await $.ui.resolve(e)
+    const { Box, Client, Image } = await $.ui.resolve(e)
     const rows = e.props.scroll.bodyRows > 0 ? e.props.scroll.bodyRows : Math.max(8, (e.viewport?.rows ?? 30) - 8)
     const cols = Math.max(1, e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 80))
+    const frame = state.frame
+    const grid = frame ? imageGrid(frame, cols, rows) : null
+    state.mounted = grid
     return (
-      <Box flexDirection="column">
-        <Client key={viewKey()} module="./surface.tsx" width={cols} height={rows} props={surfaceProps(cols, rows)} />
+      <Box flexDirection="column" width={cols} height={rows}>
+        {frame && grid ? (
+          <Image key={IMAGE_KEY} source={imageSource(frame)} columns={grid.cols} rows={grid.rows} alt={IMAGE_ALT} />
+        ) : null}
+        <Box position="absolute" top={0} left={0} width={cols} height={rows}>
+          <Client key={viewKey()} module="./surface.tsx" width={cols} height={rows} />
+        </Box>
       </Box>
     )
   })

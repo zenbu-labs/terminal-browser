@@ -52,7 +52,7 @@ export function makeTheme(colors: EngineInfo["colors"]): Theme {
     disabled: mix(fg, bg, 0.7),
     field: lift(fg, 0.06),
     fieldBorder: lift(fg, 0.16),
-    frame: withAlpha(fg, 96),
+    frame: withAlpha(fg, 64),
     hover: lift(fg, 0.12),
     hoverStrong: lift(fg, 0.26),
     hairline: lift(fg, 0.12),

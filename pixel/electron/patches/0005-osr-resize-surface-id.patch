@@ -1,0 +1,112 @@
+diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
+--- a/shell/browser/osr/osr_render_widget_host_view.cc
++++ b/shell/browser/osr/osr_render_widget_host_view.cc
+@@ -281,6 +281,15 @@ void OffScreenRenderWidgetHostView::InitAsChild(gfx::NativeView) {
+ }
+ 
+ void OffScreenRenderWidgetHostView::SetSize(const gfx::Size& size) {
++  // While a frame is being composited the size must stay paired with the
++  // current LocalSurfaceId; a renderer told about a new size under the old id
++  // submits a mismatched frame. Apply the size together with the new id once
++  // the hold is released.
++  if (hold_resize_) {
++    pending_size_ = size;
++    pending_resize_ = true;
++    return;
++  }
+   size_ = size;
+   SynchronizeVisualProperties();
+ }
+@@ -736,6 +745,10 @@ void OffScreenRenderWidgetHostView::SynchronizeVisualProperties() {
+     return;
+   }
+ 
++  if (pending_size_) {
++    size_ = *pending_size_;
++    pending_size_.reset();
++  }
+   ResizeRootLayer(true);
+ }
+ 
+@@ -1012,16 +1025,26 @@ void OffScreenRenderWidgetHostView::UpdateScreenInfo() {
+ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
+   SetupFrameRate(false);
+ 
++  gfx::Size size = GetViewBounds().size();
++  const bool size_changed = size != root_layer()->bounds().size();
++
++  // The screen info reported for this view embeds its size, so UpdateScreenInfo()
++  // synchronizes visual properties with the renderer on every resize. The id for
++  // the new size has to exist by then, or the renderer is told the new size under
++  // the old id and submits a frame viz rejects.
++  if (force || size_changed)
++    AllocateDelegatedFrameHostSurfaceId();
++
+   auto old_screen_info = screen_infos_.current();
+   UpdateScreenInfo();
+-
+   auto new_screen_info = screen_infos_.current();
+-  gfx::Size size = GetViewBounds().size();
+ 
+-  if (!force && size == root_layer()->bounds().size() &&
+-      old_screen_info == new_screen_info)
++  if (!force && !size_changed && old_screen_info == new_screen_info)
+     return;
+ 
++  if (!force && !size_changed)
++    AllocateDelegatedFrameHostSurfaceId();
++
+   root_layer()->SetBounds(gfx::Rect(size));
+ 
+   auto sf = GetDeviceScaleFactor();
+@@ -1034,10 +1057,6 @@ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
+     compositor_->SetDisplayColorSpaces(new_screen_info.display_color_spaces);
+   }
+ 
+-  delegated_frame_host_allocator_.GenerateId();
+-  delegated_frame_host_surface_id_ =
+-      delegated_frame_host_allocator_.GetCurrentLocalSurfaceId();
+-
+   delegated_frame_host()->EmbedSurface(
+       delegated_frame_host_surface_id_, size,
+       cc::DeadlinePolicy::UseDefaultDeadline());
+@@ -1050,6 +1069,12 @@ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
+   }
+ }
+ 
++void OffScreenRenderWidgetHostView::AllocateDelegatedFrameHostSurfaceId() {
++  delegated_frame_host_allocator_.GenerateId();
++  delegated_frame_host_surface_id_ =
++      delegated_frame_host_allocator_.GetCurrentLocalSurfaceId();
++}
++
+ viz::FrameSinkId OffScreenRenderWidgetHostView::AllocateFrameSinkId() {
+   return viz::FrameSinkId(
+       base::checked_cast<uint32_t>(
+diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
+--- a/shell/browser/osr/osr_render_widget_host_view.h
++++ b/shell/browser/osr/osr_render_widget_host_view.h
+@@ -6,6 +6,7 @@
+ #define ELECTRON_SHELL_BROWSER_OSR_OSR_RENDER_WIDGET_HOST_VIEW_H_
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+@@ -278,6 +279,7 @@ class OffScreenRenderWidgetHostView
+   void UpdateVSyncDisplay();
+ #endif
+   void ResizeRootLayer(bool force);
++  void AllocateDelegatedFrameHostSurfaceId();
+ 
+   viz::FrameSinkId AllocateFrameSinkId();
+ 
+@@ -315,6 +317,7 @@ class OffScreenRenderWidgetHostView
+ 
+   bool hold_resize_ = false;
+   bool pending_resize_ = false;
++  std::optional<gfx::Size> pending_size_;
+ 
+   viz::LocalSurfaceId delegated_frame_host_surface_id_;
+   viz::ParentLocalSurfaceIdAllocator delegated_frame_host_allocator_;

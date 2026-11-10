@@ -16,9 +16,20 @@ export interface AgentTarget {
 
 const CONTROL_BYTES = /[\x00-\x1f\x7f-\x9f]/g;
 
-export function chatMessage(content: string, target: AgentTarget): string {
-  const line = `> ${content.replace(CONTROL_BYTES, " ").replace(/\s+/g, " ").trim()}`;
-  return target.agent ? `${line}\n\n` : shellLiteral(line);
+export function chatMessage(content: string, target: AgentTarget, screenshotFile: string | null = null): string {
+  const line = content.replace(CONTROL_BYTES, " ").replace(/\s+/g, " ").trim();
+  if (!target.agent) return shellLiteral(screenshotFile ? `${line} ${screenshotFile}` : line);
+  return screenshotFile ? `${line}\n${screenshotFile}\n\n` : `${line}\n\n`;
+}
+
+export interface Screenshot {
+  file(): string;
+  copyToClipboard(): Promise<void>;
+}
+
+export interface Delivery {
+  target: AgentTarget;
+  pasted: boolean;
 }
 
 export interface AgentPaneContext {
@@ -30,7 +41,7 @@ export interface AgentPaneContext {
 }
 
 export interface EmbeddedAgent {
-  send(content: string): Promise<boolean>;
+  send(content: string, screenshot: string | null): Promise<boolean>;
 }
 
 const EMBED_TARGET: AgentTarget = { pane: "embed", tier: "embed", agent: true };
@@ -58,6 +69,9 @@ async function withCommands(panes: PaneDetails[]): Promise<PaneDetails[]> {
 
 const isAgentPane = (pane: PaneDetails): boolean => codingAgent(pane.command) != null;
 
+const canPaste = (terminal: Terminal, target: AgentTarget, screenshot: Screenshot): boolean =>
+  target.agent && terminal.pasteKey != null && screenshot != null;
+
 export class AgentPaneFinder {
   private cached: AgentTarget | null = null;
   private resolving: Promise<AgentTarget | null> | null = null;
@@ -69,25 +83,35 @@ export class AgentPaneFinder {
     void this.target();
   }
 
-  async send(content: string): Promise<AgentTarget | null> {
+  async send(content: string, screenshot: Screenshot | null): Promise<Delivery | null> {
     if (this.ctx.embedded) {
-      const taken = await this.ctx.embedded.send(content).catch(() => false);
-      if (taken) return EMBED_TARGET;
+      const taken = await this.ctx.embedded.send(content, screenshot?.file() ?? null).catch(() => false);
+      if (taken) return { target: EMBED_TARGET, pasted: false };
     }
     const terminal = this.ctx.terminal;
     if (!terminal?.sendText) return null;
     let target = await this.target();
     if (!target) return null;
+    const message = (to: AgentTarget) =>
+      chatMessage(content, to, screenshot && !canPaste(terminal, to, screenshot) ? screenshot.file() : null);
     try {
-      await terminal.sendText(target.pane, chatMessage(content, target));
+      await terminal.sendText(target.pane, message(target));
     } catch {
       this.cached = null;
       target = await this.target();
       if (!target) return null;
-      await terminal.sendText(target.pane, chatMessage(content, target));
+      await terminal.sendText(target.pane, message(target));
     }
+    const pasted = await this.pasteScreenshot(terminal, target, screenshot);
     await terminal.focusPane?.(target.pane).catch(() => {});
-    return target;
+    return { target, pasted };
+  }
+
+  private async pasteScreenshot(terminal: Terminal, target: AgentTarget, screenshot: Screenshot | null): Promise<boolean> {
+    if (!screenshot || !canPaste(terminal, target, screenshot)) return false;
+    await screenshot.copyToClipboard();
+    await terminal.pasteKey!(target.pane);
+    return true;
   }
 
   private target(): Promise<AgentTarget | null> {

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Mobile SSH">
+  <rect width="512" height="512" fill="#1A1A2E"/>
+  <rect x="96" y="144" width="320" height="240" rx="22" ry="22"
+        fill="none" stroke="#FFFFFF" stroke-width="20"
+        stroke-linejoin="round"/>
+  <path fill="none" stroke="#FFFFFF" stroke-width="26"
+        stroke-linecap="round" stroke-linejoin="round"
+        d="M150 210 L240 264 L150 318"/>
+  <path fill="none" stroke="#FFFFFF" stroke-width="26"
+        stroke-linecap="round"
+        d="M260 320 L362 320"/>
+</svg>

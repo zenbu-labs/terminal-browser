@@ -1,0 +1,26 @@
+{
+  "name": "pixel-app",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "tsc -p tsconfig.json && pixel . --",
+    "launch": "pixel . --",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zenbu-labs/pixel": "workspace:*",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.5.0"
+  },
+  "trustedDependencies": [
+    "@zenbu-labs/pixel"
+  ],
+  "allowScripts": {
+    "@zenbu-labs/pixel": true
+  }
+}

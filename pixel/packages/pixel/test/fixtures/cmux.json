@@ -1,0 +1,47 @@
+{
+  "env": {
+    "CMUX_SURFACE_ID": "2f1a0c44-0000-4000-8000-000000000003",
+    "CMUX_WORKSPACE_ID": "9b0e77aa-0000-4000-8000-000000000001",
+    "TERM": "xterm-256color",
+    "TERM_PROGRAM": "ghostty",
+    "GHOSTTY_RESOURCES_DIR": "/Applications/cmux.app/Contents/Resources/ghostty"
+  },
+  "exec": {
+    "cmux list-panes --json --id-format both": "{\"panes\":[{\"id\":\"aa000000-0000-4000-8000-00000000000a\",\"ref\":\"pane:1\",\"focused\":true,\"surface_count\":2},{\"id\":\"bb000000-0000-4000-8000-00000000000b\",\"ref\":\"pane:2\",\"focused\":false,\"surface_count\":1}]}",
+    "cmux list-pane-surfaces --pane aa000000-0000-4000-8000-00000000000a --json --id-format both": "{\"surfaces\":[{\"id\":\"2f1a0c44-0000-4000-8000-000000000003\",\"ref\":\"surface:3\",\"selected\":true,\"title\":\"robby@Mac: ~\"},{\"id\":\"2f1a0c44-0000-4000-8000-000000000004\",\"ref\":\"surface:4\",\"selected\":false,\"title\":\"vim\"}]}",
+    "cmux list-pane-surfaces --pane bb000000-0000-4000-8000-00000000000b --json --id-format both": "{\"surfaces\":[{\"id\":\"2f1a0c44-0000-4000-8000-000000000005\",\"ref\":\"surface:5\",\"selected\":true,\"title\":\"terminal-browser:90107-1\"}]}",
+    "cmux send --surface 2f1a0c44-0000-4000-8000-000000000009 -- terminal-browser open\\n": "",
+    "cmux new-split right --surface 2f1a0c44-0000-4000-8000-000000000003 --focus true --json --id-format both": "{\"accepted\":true,\"surface_id\":\"2f1a0c44-0000-4000-8000-000000000009\",\"surface_ref\":\"surface:9\"}"
+  },
+  "expect": {
+    "name": "cmux",
+    "currentPane": {
+      "id": "2f1a0c44-0000-4000-8000-000000000003",
+      "tab": "9b0e77aa-0000-4000-8000-000000000001"
+    },
+    "split": {
+      "request": {
+        "direction": "right",
+        "command": [
+          "terminal-browser",
+          "open"
+        ],
+        "size": 0.4,
+        "from": {
+          "id": "2f1a0c44-0000-4000-8000-000000000003",
+          "tab": "9b0e77aa-0000-4000-8000-000000000001"
+        },
+        "tty": null
+      },
+      "commands": [
+        "cmux new-split right --surface 2f1a0c44-0000-4000-8000-000000000003 --focus true --json --id-format both",
+        "cmux send --surface 2f1a0c44-0000-4000-8000-000000000009 -- terminal-browser open\\n"
+      ]
+    },
+    "pasteKey": {
+      "commands": [
+        "cmux send --surface 2f1a0c44-0000-4000-8000-000000000003 -- \u0016"
+      ]
+    }
+  }
+}

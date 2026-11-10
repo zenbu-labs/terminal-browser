@@ -1,0 +1,10 @@
+{
+  "platforms": [
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-arm64",
+    "linux-x64"
+  ],
+  "supported_majors": 2,
+  "minimum_version": "43.6.0"
+}

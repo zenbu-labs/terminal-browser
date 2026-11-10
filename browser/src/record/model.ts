@@ -28,8 +28,8 @@ export type CropScope = "frame" | "video";
 export type HandleId = "nw" | "n" | "ne" | "w" | "e" | "sw" | "s" | "se" | "from" | "to";
 
 export const CROP_SCOPES: { label: string; scope: CropScope }[] = [
-  { label: "crop this frame", scope: "frame" },
-  { label: "crop full video", scope: "video" },
+  { label: "Crop this frame", scope: "frame" },
+  { label: "Crop full video", scope: "video" },
 ];
 
 const MONO_ADVANCE = 0.6;

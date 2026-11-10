@@ -1,0 +1,41 @@
+{
+  "env": {
+    "SUPACODE_SURFACE_ID": "EC6CD762-7A00-487D-921A-7B9467781C87",
+    "SUPACODE_TAB_ID": "054FDD7B-1058-44F6-94B0-F92396A611B3",
+    "SUPACODE_WORKTREE_ID": "%2FUsers%2Frobby%2Fterminal-agent-browser%2F",
+    "TERM": "xterm-ghostty",
+    "TERM_PROGRAM": "supacode",
+    "GHOSTTY_RESOURCES_DIR": "/Applications/supacode.app/Contents/Resources/ghostty"
+  },
+  "exec": {
+    "supacode tab list": "054FDD7B-1058-44F6-94B0-F92396A611B3\n8335FE68-C438-406B-BD5A-0579D848DE6F\n",
+    "supacode surface list --tab 054FDD7B-1058-44F6-94B0-F92396A611B3": "EC6CD762-7A00-487D-921A-7B9467781C87\n",
+    "supacode surface list --tab 8335FE68-C438-406B-BD5A-0579D848DE6F": "3E2AD4CD-2FC2-4E13-9964-B9F7CD02EFC3\n",
+    "supacode surface split --surface EC6CD762-7A00-487D-921A-7B9467781C87 --direction horizontal --input terminal-browser open": "9F1C2B3A-0000-4000-8000-000000000009\n"
+  },
+  "expect": {
+    "name": "supacode",
+    "currentPane": {
+      "id": "EC6CD762-7A00-487D-921A-7B9467781C87",
+      "tab": "054FDD7B-1058-44F6-94B0-F92396A611B3"
+    },
+    "split": {
+      "request": {
+        "direction": "right",
+        "command": [
+          "terminal-browser",
+          "open"
+        ],
+        "size": 0.4,
+        "from": {
+          "id": "EC6CD762-7A00-487D-921A-7B9467781C87",
+          "tab": "054FDD7B-1058-44F6-94B0-F92396A611B3"
+        },
+        "tty": null
+      },
+      "commands": [
+        "supacode surface split --surface EC6CD762-7A00-487D-921A-7B9467781C87 --direction horizontal --input terminal-browser open"
+      ]
+    }
+  }
+}

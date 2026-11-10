@@ -1,0 +1,17 @@
+{
+  "name": "hello",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "start": "tsc -p tsconfig.json && pixel . --"
+  },
+  "dependencies": {
+    "@zenbu-labs/pixel": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
