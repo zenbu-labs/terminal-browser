@@ -36,6 +36,8 @@ static DEFAULT_PROFILE: Smooth = Smooth {
     brake: 0.025,
 };
 
+static GRID_PROFILE: crate::scroll::profiles::Rows = crate::scroll::profiles::Rows { per_tick: 3.0 };
+
 pub struct EngineConfig {
     pub fonts: crate::fonts::FontRegistry,
     pub cell_metrics_font: usize,
@@ -252,6 +254,7 @@ pub struct Engine {
     pub cell: (u32, u32),
     pub base_px: f32,
     pub colors: HostColors,
+    grid: bool,
     cursor: Option<(f32, f32)>,
     hover: Option<(usize, NodeId)>,
     focus_view: usize,
@@ -321,7 +324,11 @@ impl Engine {
         let info = backend.start()?;
         let Metrics { window, cell } = info.metrics;
         let colors = info.colors;
-        let base_px = px_for_cell_height(&config.fonts[config.cell_metrics_font], cell.1 as f32);
+        let mut fonts = config.fonts;
+        if info.grid {
+            fonts.set_grid(Some(grid_metrics(cell)));
+        }
+        let base_px = px_for_cell_height(&fonts[config.cell_metrics_font], cell.1 as f32);
         logging::info(
             "engine",
             format!(
@@ -332,17 +339,18 @@ impl Engine {
         let engine = Self {
             backend,
             comp: Compositor::new(window),
-            fonts: config.fonts,
+            fonts,
             cell_metrics_font: config.cell_metrics_font,
             cell,
             base_px,
             colors,
+            grid: info.grid,
             cursor: None,
             hover: None,
             focus_view: 0,
             active_view: 0,
             host_focused: true,
-            profile: &DEFAULT_PROFILE,
+            profile: if info.grid { &GRID_PROFILE } else { &DEFAULT_PROFILE },
             default_menu: false,
             menu: MenuController::default(),
             inspect_mode: false,
@@ -386,6 +394,10 @@ impl Engine {
             stats: FrameStats::default(),
         };
         Ok(engine)
+    }
+
+    pub fn grid(&self) -> bool {
+        self.grid
     }
 
     pub fn add_font_face(&mut self, family: &str, weight: u16, italic: bool, face: fontdue::Font, source: &str) {
@@ -763,7 +775,8 @@ impl Engine {
         crate::profiler::mark("resize", 0, || {
             format!("resize {}x{} cell {}x{}", window.0, window.1, cell.0, cell.1)
         });
-        let base_changed = (base_px - self.base_px).abs() > 0.01;
+        let grid_changed = self.grid && self.fonts.set_grid(Some(grid_metrics(cell)));
+        let base_changed = (base_px - self.base_px).abs() > 0.01 || grid_changed;
         self.comp.window = window;
         self.cell = cell;
         self.base_px = base_px;
@@ -901,8 +914,13 @@ impl Engine {
 }
 
 
+fn grid_metrics(cell: (u32, u32)) -> crate::fonts::GridMetrics {
+    crate::fonts::GridMetrics { cell: (cell.0 as f32, cell.1 as f32) }
+}
+
 pub fn px_for_cell_height(font: &crate::fonts::Font, cell_height: f32) -> f32 {
     let probe = font
+        .primary()
         .horizontal_line_metrics(100.0)
         .expect("font has horizontal metrics");
     (cell_height * 100.0 / probe.new_line_size).clamp(6.0, 512.0)

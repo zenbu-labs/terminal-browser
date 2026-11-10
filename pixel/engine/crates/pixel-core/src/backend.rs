@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub use crate::canvas::{Canvas, Frame, Overlay, Pixels, ScrollLayer, measure_text};
+pub use crate::scene::{ViewScene, Scene, SceneOp};
 pub use crate::input::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
 pub use crate::surfaces::{OpaqueArea, Rect, SurfaceCover, SurfaceLayout, SurfacePlacement};
 
@@ -26,6 +27,7 @@ pub struct Metrics {
 pub struct HostInfo {
     pub metrics: Metrics,
     pub colors: HostColors,
+    pub grid: bool,
 }
 
 #[derive(Clone)]
@@ -73,6 +75,7 @@ pub struct Wants {
     pub scroll_layer: bool,
     pub view_canvas: bool,
     pub host_surfaces: bool,
+    pub scene: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -14,7 +14,35 @@ pub struct Font {
     id: usize,
     pub synthetic_bold: bool,
     pub synthetic_italic: bool,
+    pub bold: bool,
+    pub italic: bool,
+    pub grid: Option<GridMetrics>,
     variants: [usize; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridMetrics {
+    pub cell: (f32, f32),
+}
+
+impl GridMetrics {
+    pub fn columns(ch: char) -> usize {
+        match ch {
+            '\u{FE0F}' => 1,
+            '\t' => 1,
+            _ if ch.is_control() => 0,
+            _ => unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0),
+        }
+    }
+
+    pub fn advance(&self, ch: char) -> f32 {
+        Self::columns(ch) as f32 * self.cell.0
+    }
+
+    pub fn line_metrics(&self) -> fontdue::LineMetrics {
+        let height = self.cell.1;
+        fontdue::LineMetrics { ascent: height * 0.8, descent: -height * 0.2, line_gap: 0.0, new_line_size: height }
+    }
 }
 
 static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -25,7 +53,7 @@ fn next_id() -> usize {
 
 impl Font {
     pub fn single(face: fontdue::Font) -> Font {
-        Font { faces: vec![Arc::new(face)], id: next_id(), synthetic_bold: false, synthetic_italic: false, variants: [0; 4] }
+        Font { faces: vec![Arc::new(face)], id: next_id(), synthetic_bold: false, synthetic_italic: false, bold: false, italic: false, grid: None, variants: [0; 4] }
     }
 
     pub fn primary(&self) -> &fontdue::Font {
@@ -57,7 +85,10 @@ impl Font {
     }
 
     pub fn horizontal_line_metrics(&self, px: f32) -> Option<fontdue::LineMetrics> {
-        self.primary().horizontal_line_metrics(px)
+        match self.grid {
+            Some(grid) => Some(grid.line_metrics()),
+            None => self.primary().horizontal_line_metrics(px),
+        }
     }
 }
 
@@ -82,6 +113,7 @@ pub struct FontRegistry {
     family_ids: HashMap<Vec<String>, usize>,
     stacks: Vec<Font>,
     interned: HashMap<StackKey, usize>,
+    grid: Option<GridMetrics>,
 }
 
 pub const DEFAULT_FAMILIES: usize = 0;
@@ -92,7 +124,7 @@ const GENERIC_ALIASES: [(&str, &str); 2] = [("system-ui", SANS_SERIF), ("ui-mono
 
 impl FontRegistry {
     pub fn new(monospace: fontdue::Font, sans_serif: fontdue::Font) -> Self {
-        let mut registry = Self { faces: Vec::new(), family_lists: Vec::new(), family_ids: HashMap::new(), stacks: Vec::new(), interned: HashMap::new() };
+        let mut registry = Self { faces: Vec::new(), family_lists: Vec::new(), family_ids: HashMap::new(), stacks: Vec::new(), interned: HashMap::new(), grid: None };
         registry.add_face(MONOSPACE, REGULAR, false, monospace, "bundled:monospace");
         registry.add_face(SANS_SERIF, REGULAR, false, sans_serif, "bundled:sans-serif");
         registry.families(&[MONOSPACE.to_string()]);
@@ -106,13 +138,30 @@ impl FontRegistry {
             return false;
         }
         self.faces.push(Registered { family, weight, italic, source: source.to_string(), face: Arc::new(face) });
+        self.rebuild();
+        true
+    }
+
+    pub fn grid(&self) -> Option<GridMetrics> {
+        self.grid
+    }
+
+    pub fn set_grid(&mut self, grid: Option<GridMetrics>) -> bool {
+        if self.grid == grid {
+            return false;
+        }
+        self.grid = grid;
+        self.rebuild();
+        true
+    }
+
+    fn rebuild(&mut self) {
         let built: Vec<(StackKey, usize)> = self.interned.iter().map(|(&key, &base)| (key, base)).collect();
         for (key, base) in built {
             for (i, stack) in self.variant_stacks(key, base).into_iter().enumerate() {
                 self.stacks[base + i] = stack;
             }
         }
-        true
     }
 
     pub fn families(&mut self, names: &[String]) -> usize {
@@ -157,6 +206,9 @@ impl FontRegistry {
             id: next_id(),
             synthetic_bold: weight >= BOLD_THRESHOLD && primary.is_some_and(|r| r.weight < BOLD_THRESHOLD),
             synthetic_italic: italic && primary.is_some_and(|r| !r.italic),
+            bold: weight >= BOLD_THRESHOLD,
+            italic,
+            grid: self.grid,
             variants,
         }
     }

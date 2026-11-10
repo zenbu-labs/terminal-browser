@@ -38,6 +38,7 @@ pub struct ShapeProps {
     pub cmds: Vec<PathCmd>,
     pub stroke: ShapeStroke,
     pub view_box: Option<f32>,
+    pub fallback: Option<String>,
 }
 
 pub fn parse_path_data(d: &str) -> Vec<PathCmd> {

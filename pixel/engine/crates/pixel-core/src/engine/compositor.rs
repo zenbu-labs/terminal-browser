@@ -22,6 +22,9 @@ pub struct View {
     pub ui_over_surfaces: Vec<Rect>,
     pub layer: Option<crate::canvas::ScrollLayer>,
     pub layer_canvases: Option<crate::paint::LayerCanvases>,
+    pub scene: crate::scene::Scene,
+    pub scene_size: (u32, u32),
+    pub scene_changed: bool,
 }
 
 impl View {
@@ -37,6 +40,9 @@ impl View {
             ui_over_surfaces: Vec::new(),
             layer: None,
             layer_canvases: None,
+            scene: crate::scene::Scene::default(),
+            scene_size: (0, 0),
+            scene_changed: false,
         }
     }
 
@@ -267,6 +273,7 @@ impl Compositor {
             ui_over_surfaces: &self.ui_over_surfaces,
             layer: self.layer.as_ref(),
             surfaces: self.surface_layout.as_ref(),
+            scenes: &[],
         }
     }
 

@@ -72,10 +72,14 @@ impl Engine {
             || self.backend.pending_present()
             || self.comp.active_views().iter().any(|&i| {
                 let view = &self.comp.views[i];
-                view.tree.dirty()
-                    || !view.damage_parts.is_empty()
-                    || (view.canvas.width, view.canvas.height) != view.size
+                view.tree.dirty() || !view.damage_parts.is_empty() || self.view_resized(i)
             })
+    }
+
+    fn view_resized(&self, i: usize) -> bool {
+        let view = &self.comp.views[i];
+        let drawn = if self.backend.wants().scene { view.scene_size } else { (view.canvas.width, view.canvas.height) };
+        drawn != view.size
     }
 
     pub(super) fn frame(&mut self) -> io::Result<()> {
@@ -106,7 +110,7 @@ impl Engine {
             .iter()
             .filter_map(|&i| {
                 let view = &self.comp.views[i];
-                if view.tree.dirty() || (view.canvas.width, view.canvas.height) != view.size {
+                if view.tree.dirty() || self.view_resized(i) {
                     Some((i, true))
                 } else if view.damage_parts.is_empty() {
                     None
@@ -131,6 +135,10 @@ impl Engine {
             let mut painted: Vec<Painted> = Vec::new();
             let wants = self.backend.wants();
             let draws_layers = wants.scroll_layer;
+            if wants.scene {
+                let bytes = crate::profiler::span("draw", || self.present_scenes(work))?;
+                return self.finish_frame(start, slot, bytes, cpu);
+            }
 
             for (i, whole) in work {
                 let size = self.comp.views[i].size;
@@ -209,6 +217,66 @@ impl Engine {
                 self.comp.place_surfaces();
             }
             let bytes = crate::profiler::span("draw", || self.backend.present(self.comp.frame()))?;
+            self.finish_frame(start, slot, bytes, cpu)
+        })
+    }
+
+    fn present_scenes(&mut self, work: Vec<(usize, bool)>) -> io::Result<usize> {
+        for (i, _) in work {
+            let size = self.comp.views[i].size;
+            if size.0 == 0 || size.1 == 0 {
+                continue;
+            }
+            let cursor = self
+                .cursor
+                .filter(|&(x, _)| self.comp.view_at(x) == i)
+                .map(|c| self.comp.to_local(i, c));
+            let fonts = &mut self.fonts;
+            let view = &mut self.comp.views[i];
+            view.damage_parts.clear();
+            view.tree.flush_layout(fonts, self.base_px);
+            view.tree.take_changed_surfaces();
+            view.scene = crate::paint::record_scene(&view.tree, fonts, cursor);
+            view.scene_size = size;
+            view.scene_changed = true;
+            view.tree.clear_paint_flag();
+        }
+        let active = self.comp.active_views();
+        let scenes: Vec<crate::scene::ViewScene<'_>> = active
+            .iter()
+            .map(|&i| {
+                let view = &self.comp.views[i];
+                crate::scene::ViewScene {
+                    view: i,
+                    origin: (view.origin_x, 0),
+                    size: view.size,
+                    clear: view.clear_color,
+                    scene: &view.scene,
+                    changed: view.scene_changed,
+                }
+            })
+            .collect();
+        let frame = crate::canvas::Frame {
+            canvas: &self.comp.frame,
+            premultiplied: false,
+            changed: &[],
+            repainted: &[],
+            opaque: &[],
+            ui_over_surfaces: &[],
+            layer: None,
+            surfaces: None,
+            scenes: &scenes,
+        };
+        let bytes = self.backend.present(frame)?;
+        for i in active {
+            self.comp.views[i].scene_changed = false;
+        }
+        self.comp.dirty = false;
+        Ok(bytes)
+    }
+
+    fn finish_frame(&mut self, start: Instant, slot: Instant, bytes: usize, cpu: Option<(u64, u64)>) -> io::Result<()> {
+        {
             crate::profiler::count("bytes", || bytes as u64);
             if let Some((thread_before, process_before)) = cpu
                 && let Some((thread_after, process_after)) = crate::profiler::cpu_us()
@@ -239,7 +307,7 @@ impl Engine {
                 self.note_frame_wanted();
             }
             Ok(())
-        })
+        }
     }
 
     fn note_ready(&mut self, took: Duration) {

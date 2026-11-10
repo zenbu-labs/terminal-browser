@@ -787,6 +787,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixel-cells"
+version = "0.1.0"
+dependencies = [
+ "pixel-core",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "pixel-core"
 version = "0.1.0"
 dependencies = [
@@ -833,6 +842,7 @@ dependencies = [
  "base64",
  "libc",
  "miniz_oxide",
+ "pixel-cells",
  "pixel-core",
  "rayon",
  "rustix",

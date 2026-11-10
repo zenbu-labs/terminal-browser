@@ -12,6 +12,7 @@ pub struct Frame<'a> {
     pub ui_over_surfaces: &'a [Rect],
     pub layer: Option<&'a ScrollLayer>,
     pub surfaces: Option<&'a crate::surfaces::SurfaceLayout>,
+    pub scenes: &'a [crate::scene::ViewScene<'a>],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +63,9 @@ fn natural_fallback_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32
 }
 
 fn glyph_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32 {
+    if let Some(grid) = font.grid {
+        return grid.advance(ch);
+    }
     if draws_itself(font, ch) {
         return font.metrics(ch, px).advance_width;
     }

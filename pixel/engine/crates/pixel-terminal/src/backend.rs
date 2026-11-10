@@ -16,6 +16,7 @@ use crate::native::hover::{HoverOracle, Verdict};
 use crate::native::pairing::NativePairing;
 use crate::terminal::{self, Handoff, Retarget, SessionEnv, Terminal, WindowSize};
 use crate::wrapper::Wrapper;
+use pixel_cells::{CellPresenter, ColorTier};
 
 const CELL_REPLY_WAIT: Duration = Duration::from_millis(150);
 const COLOR_SETTLE_DELAY: Duration = Duration::from_millis(50);
@@ -38,6 +39,7 @@ pub struct TerminalOptions {
     pub wrapper: Wrapper,
     pub session_env: SessionEnv,
     pub watch_resize: bool,
+    pub cells: bool,
 }
 
 pub struct TerminalBackend {
@@ -60,6 +62,14 @@ pub struct TerminalBackend {
     pointer: Option<(f32, f32)>,
     last_pointer_activity: Option<Instant>,
     queued: VecDeque<Event>,
+    cells: Option<CellPresenter>,
+    grid_size: (u16, u16),
+}
+
+fn grid_of(ws: &WindowSize) -> (u16, u16) {
+    let cols = if ws.cols > 0 { ws.cols } else { 80 };
+    let rows = if ws.rows > 0 { ws.rows } else { 24 };
+    (cols.min(u16::MAX as u32) as u16, rows.min(u16::MAX as u32) as u16)
 }
 
 pub(crate) fn window_from(ws: &WindowSize, cell: (u32, u32), cell_is_exact: bool) -> (u32, u32) {
@@ -87,10 +97,15 @@ impl TerminalBackend {
                 None => Terminal::join_host(&host.socket, &host.pane, &host.name)?,
             },
             (None, Some(path)) => {
-                Terminal::open(path, options.wrapper, options.session_env.clone())?
+                Terminal::open(path, options.wrapper, options.session_env.clone(), options.cells)?
             }
-            (None, None) => Terminal::new(options.wrapper, options.session_env.clone())?,
+            (None, None) => Terminal::new(options.wrapper, options.session_env.clone(), options.cells)?,
         };
+        let cells = term.draws_cells().then(|| {
+            let env = options.session_env.clone();
+            let tier = ColorTier::detect(|key| env.var(key));
+            CellPresenter::new(tier, Default::default(), terminal::DEFAULT_CELL, (80, 24))
+        });
         if options.watch_resize {
             term.watch_resize()?;
         }
@@ -114,7 +129,20 @@ impl TerminalBackend {
             pointer: None,
             last_pointer_activity: None,
             queued: VecDeque::new(),
+            cells,
+            grid_size: (80, 24),
         })
+    }
+
+    pub fn color_tier(&self) -> Option<ColorTier> {
+        self.cells.as_ref().map(CellPresenter::tier)
+    }
+
+    pub fn set_color_tier(&mut self, tier: ColorTier) {
+        if let Some(cells) = &mut self.cells {
+            cells.set_tier(tier);
+            self.queued.push_back(Event::Redraw);
+        }
     }
 
     pub fn kitty_keyboard(&self) -> bool {
@@ -163,7 +191,7 @@ impl TerminalBackend {
     }
 
     fn spawn_native(&mut self) {
-        self.native = if self.term.is_hosted() && !self.term.is_embedded() {
+        self.native = if self.cells.is_some() || self.term.is_hosted() && !self.term.is_embedded() {
             None
         } else {
             NativeScroll::spawn(self.term.waker().ok())
@@ -206,7 +234,11 @@ impl TerminalBackend {
 
     fn resize_to(&mut self, ws: &WindowSize, cell: (u32, u32), source: &str) -> io::Result<()> {
         self.term.set_cell_size(cell);
-        let window = window_from(ws, cell, self.cell_exact);
+        let window = window_from(ws, cell, self.cell_exact || self.cells.is_some());
+        if let Some(cells) = &mut self.cells {
+            self.grid_size = grid_of(ws);
+            cells.set_geometry(cell, self.grid_size);
+        }
         if window == self.window && cell == self.cell {
             return Ok(());
         }
@@ -399,7 +431,12 @@ impl TerminalBackend {
                 self.schedule_color_request(COLOR_SETTLE_DELAY);
                 None
             }
-            terminal::Event::Colors(colors) => Some(Event::Colors(colors)),
+            terminal::Event::Colors(colors) => {
+                if let Some(cells) = &mut self.cells {
+                    cells.set_colors(colors);
+                }
+                Some(Event::Colors(colors))
+            }
         })
     }
 }
@@ -409,8 +446,14 @@ impl Backend for TerminalBackend {
         let colors = self.term.query_colors()?;
         let ws = self.term.size()?;
         let cell = self.term.cell_size()?.unwrap_or(terminal::DEFAULT_CELL);
-        self.window = window_from(&ws, cell, false);
+        self.term.set_cell_size(cell);
+        self.window = window_from(&ws, cell, self.cells.is_some());
         self.cell = cell;
+        if let Some(cells) = &mut self.cells {
+            self.grid_size = grid_of(&ws);
+            cells.set_colors(colors);
+            cells.set_geometry(cell, self.grid_size);
+        }
         self.cell_estimate = ws.cell_size();
         self.spawn_native();
         logging::info(
@@ -423,7 +466,7 @@ impl Backend for TerminalBackend {
                 if self.term.relayed() { ", tmux passthrough" } else { "" }
             ),
         );
-        Ok(HostInfo { metrics: Metrics { window: self.window, cell }, colors })
+        Ok(HostInfo { metrics: Metrics { window: self.window, cell }, colors, grid: self.cells.is_some() })
     }
 
     fn waker(&mut self) -> io::Result<Waker> {
@@ -448,7 +491,13 @@ impl Backend for TerminalBackend {
     }
 
     fn present(&mut self, frame: Frame<'_>) -> io::Result<usize> {
-        self.term.draw(frame)
+        let Some(cells) = &mut self.cells else {
+            return self.term.draw(frame);
+        };
+        let mut out = Vec::new();
+        pixel_core::profiler::span("cells.encode", || cells.present(&frame, &mut out));
+        self.term.write_cells(&out)?;
+        Ok(out.len())
     }
 
     fn poll_metrics(&mut self) -> io::Result<Option<Metrics>> {
@@ -461,27 +510,37 @@ impl Backend for TerminalBackend {
     }
 
     fn wants(&self) -> Wants {
+        if self.cells.is_some() {
+            return Wants { scene: true, ..Wants::default() };
+        }
         Wants {
             scroll_layer: self.term.draws_layers(),
             view_canvas: self.term.draws_locally(),
             host_surfaces: false,
+            scene: false,
         }
     }
 
     fn pending_present(&self) -> bool {
-        self.term.holds_a_frame()
+        self.cells.is_none() && self.term.holds_a_frame()
     }
 
     fn animating(&self) -> bool {
-        self.term.highlight_active()
+        self.cells.is_none() && self.term.highlight_active()
     }
 
     fn before_frame(&mut self) -> io::Result<()> {
+        if self.cells.is_some() {
+            return Ok(());
+        }
         self.term.tick_highlights()?;
         self.term.draw_overlay()
     }
 
     fn idle(&mut self, last: Frame<'_>) -> io::Result<()> {
+        if self.cells.is_some() {
+            return Ok(());
+        }
         self.term.flatten_if_idle(last)
     }
 
@@ -489,8 +548,8 @@ impl Backend for TerminalBackend {
         [
             self.color_request_at,
             self.awaiting_cell.as_ref().map(|(_, at)| *at),
-            self.term.idle_flatten_at(),
-            self.term.overlay_due(),
+            self.cells.is_none().then(|| self.term.idle_flatten_at()).flatten(),
+            self.cells.is_none().then(|| self.term.overlay_due()).flatten(),
             self.term.relayed().then(|| Instant::now() + RELAYED_RESIZE_POLL),
         ]
         .into_iter()
@@ -542,6 +601,10 @@ impl Backend for TerminalBackend {
         let mut info = serde_json::Map::new();
         info.insert("kittyKeyboard".into(), self.term.kitty_keyboard().into());
         info.insert("hosted".into(), self.term.is_hosted().into());
+        info.insert("renderer".into(), if self.cells.is_some() { "cells" } else { "pixels" }.into());
+        if let Some(tier) = self.color_tier() {
+            info.insert("colorTier".into(), tier.name().into());
+        }
         info
     }
 }

@@ -110,6 +110,8 @@ export interface PathProps {
   d: string;
   stroke: ShapeStroke;
   viewBox?: number;
+  /** fixme: placeholder copy — text drawn instead of the path when the root renders on a character grid (`info.grid`), e.g. "›" for a chevron. */
+  fallback?: string;
   onClick?: (event: ClickEvent) => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -217,6 +219,8 @@ export interface ImageProps {
   style?: Style;
   id?: string;
   src: string;
+  /** fixme: placeholder copy — text drawn instead of the picture when the root renders on a character grid (`info.grid`). */
+  fallback?: string;
   onClick?: (event: ClickEvent) => void;
   placeholder?: React.ReactNode;
   error?: React.ReactNode;
@@ -372,6 +376,7 @@ function serializeProps(
     base.shape = {
       d: props.d ?? "",
       viewBox: props.viewBox,
+      fallback: props.fallback,
       stroke: {
         width: props.stroke.width,
         color: parseColor(props.stroke.color),
@@ -389,6 +394,7 @@ function serializeProps(
     base.image = {
       src: props.src ?? "",
       confirmedEqualTo: props.advanced?.confirmedEqualTo,
+      fallback: props.fallback,
     };
   } else if (type === "input") {
     const valueChanged = !prevProps || props.value !== prevProps.value;

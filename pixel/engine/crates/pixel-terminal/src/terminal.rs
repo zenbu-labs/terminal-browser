@@ -217,6 +217,7 @@ pub struct Terminal {
     color_scheme_updates: bool,
     color_query: Option<ColorQuery>,
     kitty_keyboard: bool,
+    cells: bool,
 }
 
 #[derive(Default)]
@@ -297,7 +298,7 @@ impl SessionEnv {
 }
 
 impl Terminal {
-    pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
+    pub fn new(wrapper: Wrapper, env: SessionEnv, cells: bool) -> io::Result<Self> {
         Self::with_handle(
             TtyHandle::Stdio {
                 stdin: io::stdin(),
@@ -305,12 +306,27 @@ impl Terminal {
             },
             wrapper,
             env,
+            cells,
         )
     }
 
-    pub fn open(tty_path: &str, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
+    pub fn open(tty_path: &str, wrapper: Wrapper, env: SessionEnv, cells: bool) -> io::Result<Self> {
         let file = std::fs::File::options().read(true).write(true).open(tty_path)?;
-        Self::with_handle(TtyHandle::File(file), wrapper, env)
+        Self::with_handle(TtyHandle::File(file), wrapper, env, cells)
+    }
+
+    pub fn draws_cells(&self) -> bool {
+        self.cells
+    }
+
+    pub fn write_cells(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        pixel_core::profiler::span("term.write", || {
+            self.io.out().write_all(bytes)?;
+            self.io.out().flush()
+        })
     }
 
     pub fn join_host(socket: &str, pane: &str, name: &str) -> io::Result<Self> {
@@ -384,7 +400,7 @@ impl Terminal {
 
     pub fn retarget(&mut self, target: Retarget, env: SessionEnv) -> io::Result<()> {
         let mut fresh = match target {
-            Retarget::Tty { path, wrapper } => Terminal::open(&path, wrapper, env)
+            Retarget::Tty { path, wrapper } => Terminal::open(&path, wrapper, env, self.cells)
                 .map_err(|e| io::Error::new(e.kind(), format!("open {path}: {e}")))?,
             Retarget::Host { socket, pane, name } => Terminal::join_host(&socket, &pane, &name)?,
         };
@@ -395,7 +411,7 @@ impl Terminal {
         Ok(())
     }
 
-    fn with_handle(mut io: TtyHandle, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
+    fn with_handle(mut io: TtyHandle, wrapper: Wrapper, env: SessionEnv, cells: bool) -> io::Result<Self> {
         let step = |name: &str, error: io::Error| io::Error::new(error.kind(), format!("{name}: {error}"));
         let saved = retry_intr(|| termios::tcgetattr(io.read_fd())).map_err(|e| step("tcgetattr", e.into()))?;
         let mut raw = saved.clone();
@@ -403,30 +419,33 @@ impl Terminal {
         retry_intr(|| termios::tcsetattr(io.read_fd(), OptionalActions::Drain, &raw)).map_err(|e| step("tcsetattr", e.into()))?;
 
         // would prefer if they weren't magic and linked to some known doc on the internet
-        io.out().write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
-        )?; // enable many reporting modes so we get info about mouse/keyboard
+        io.out().write_all(if cells {
+            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u"
+        } else {
+            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u"
+        })?; // enable many reporting modes so we get info about mouse/keyboard
         io.out().flush()?;
 
         let mut terminal = Self::blank(
             io,
             Some(saved),
             wrapper,
-            crate::herdr::HerdrTarget::from_env(&env),
+            (!cells).then(|| crate::herdr::HerdrTarget::from_env(&env)).flatten(),
         );
+        terminal.cells = cells;
         terminal.kitty_keyboard = terminal.probe_kitty_keyboard()?;
         if !terminal.kitty_keyboard {
             terminal.io.out().write_all(b"\x1b[>4;2m")?;
             terminal.io.out().flush()?;
         }
-        let mouse_pixels = if wrapper.relayed() {
+        let mouse_pixels = if wrapper.relayed() || cells {
             Some(false)
         } else {
             terminal.probe_mouse_pixels()?
         };
         terminal.mouse_pixels = mouse_pixels == Some(true);
         terminal.mouse_pixels_pending = mouse_pixels.is_none();
-        if !terminal.mouse_pixels {
+        if !terminal.mouse_pixels && !cells {
             terminal.io.out().write_all(b"\x1b[?1016l\x1b[?1006h")?;
             terminal.io.out().flush()?;
         }
@@ -436,9 +455,11 @@ impl Terminal {
             terminal.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
         }
         // these are a bit messy/sus
-        terminal.transport = terminal.probe_transport(&env)?;
-        terminal.identity = terminal.probe_identity(&env)?;
-        terminal.present = terminal.choose_present(&env)?;
+        if !cells {
+            terminal.transport = terminal.probe_transport(&env)?;
+            terminal.identity = terminal.probe_identity(&env)?;
+            terminal.present = terminal.choose_present(&env)?;
+        }
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
         if terminal.color_scheme_updates {
             terminal.io.out().write_all(b"\x1b[?2031h")?;
@@ -496,6 +517,7 @@ impl Terminal {
             color_scheme_updates: false,
             color_query: None,
             kitty_keyboard: false,
+            cells: false,
         }
     }
 
@@ -1071,8 +1093,11 @@ impl Terminal {
         Ok(())
     }
 
+    // Without the kitty keyboard protocol (or under tmux) the escape key is a bare 0x1b, which is only told apart
+    // from the start of a sequence by nothing following it.
     fn lone_escape_deadline(&mut self) -> Option<Instant> {
-        if !self.wrapper.relayed() || self.pending.first() != Some(&0x1b) {
+        let bare_escapes = self.wrapper.relayed() || !self.kitty_keyboard;
+        if !bare_escapes || self.pending.first() != Some(&0x1b) {
             self.lone_escape_since = None;
             return None;
         }
@@ -1745,8 +1770,12 @@ impl Drop for Terminal {
             return;
         }
         self.payloads.remove_all();
-        let delete = crate::kitty::kitty_delete(self.image_id, self.wrapper);
-        let _ = self.io.out().write_all(&delete);
+        if self.cells {
+            let _ = self.io.out().write_all(b"\x1b[0m\x1b[0 q");
+        } else {
+            let delete = crate::kitty::kitty_delete(self.image_id, self.wrapper);
+            let _ = self.io.out().write_all(&delete);
+        }
         if !self.kitty_keyboard {
             let _ = self.io.out().write_all(b"\x1b[>4;0m");
         }
@@ -3011,7 +3040,7 @@ mod tty_tests {
     use std::io::{Read as _, Write as _};
 
     fn open(path: &str, wrapper: Wrapper) -> Terminal {
-        Terminal::open(path, wrapper, SessionEnv::of_session(Default::default())).unwrap()
+        Terminal::open(path, wrapper, SessionEnv::of_session(Default::default()), false).unwrap()
     }
 
     struct FakeTmuxClient {
@@ -3371,7 +3400,7 @@ mod tty_tests {
     }
 
     #[test]
-    fn a_bare_escape_resolves_on_its_own_only_under_tmux() {
+    fn a_bare_escape_resolves_on_its_own_under_tmux_or_without_kitty_keys() {
         let (mut master, _slave, path) = open_pty();
         let _terminal = fake_terminal(&master);
         let mut term = open(&path, Wrapper::Tmux);
@@ -3397,6 +3426,17 @@ mod tty_tests {
         master.write_all(b"\x1b").unwrap();
         let got = term.poll_event(Some(Duration::from_millis(200))).unwrap();
         assert!(got.is_none(), "outside tmux escape arrives as CSI-u: {got:?}");
+
+        let (mut master, _slave, path) = open_pty();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::None);
+        term.kitty_keyboard = false;
+        master.write_all(b"\x1b").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(
+            matches!(&got, Some(Event::Key(key)) if key.key == Key::Escape),
+            "a terminal without kitty keys sends escape as a bare 0x1b: {got:?}"
+        );
     }
 
     #[test]

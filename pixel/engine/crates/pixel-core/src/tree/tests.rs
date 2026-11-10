@@ -1763,6 +1763,7 @@ fn placeholder_slot_fills_the_image_rect_until_the_decode_lands() {
                 image: Some(ImageProps {
                     src: path.to_string_lossy().to_string(),
                     equal_to: Vec::new(),
+                    fallback: None,
                 }),
                 key: Some("img".into()),
                 children: vec![Desc {
@@ -1965,6 +1966,7 @@ fn failed_image_with_unknown_dims_occupies_a_square() {
         image: Some(ImageProps {
             src: "/nonexistent/never.png".into(),
             equal_to: Vec::new(),
+            fallback: None,
         }),
         ..Props::default()
     });

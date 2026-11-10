@@ -1,0 +1,16 @@
+[package]
+name = "pixel-cells"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+pixel-core = { workspace = true }
+unicode-segmentation = "1"
+unicode-width = "0.2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+unicode-width = "0.2"

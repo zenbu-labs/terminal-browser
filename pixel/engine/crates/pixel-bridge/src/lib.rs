@@ -48,6 +48,7 @@ pub fn engine_info(engine: &Engine) -> serde_json::Value {
         "cellWidth": cell_w,
         "cellHeight": cell_h,
         "basePx": engine.base_px,
+        "grid": engine.grid(),
         "colors": colors_json(&engine.colors),
         "protocol": PROTOCOL_VERSION,
         "backendApi": pixel_core::backend::API_VERSION,

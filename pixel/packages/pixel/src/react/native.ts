@@ -68,6 +68,10 @@ export interface EngineInfo {
   cellWidth: number;
   cellHeight: number;
   basePx: number;
+  /** fixme: placeholder copy — true when the backend draws characters on a cell grid instead of pixels: text is one row per line and one cell per column. */
+  grid: boolean;
+  renderer?: "pixels" | "cells";
+  colorTier?: "truecolor" | "256" | "16" | "mono";
   kittyKeyboard: boolean;
   hosted: boolean;
   colors: TerminalColors;

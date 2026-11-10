@@ -102,7 +102,6 @@ function createRoot(options?: RootOptions): Root
 | `onKey?(event: EngineKeyEvent): boolean \| void` | called for every key; return `true` to stop it reaching the focused WebView or Input |
 | `onQuit?(view: WebViewHandle \| null)` | called when a page navigates to `pixel://quit` or calls `pixel.quit()`; default stops the root |
 | `onExit?(code: number)` | called after the root stops; default `app.exit(code)` |
-| `onUnsupportedTerminal?(terminal: Terminal \| null): string` | text written to the terminal when `pixel` found no graphics support; the process then exits 1 |
 | `onRightClick?({ x, y })` | right click outside a WebView |
 | `onPaste?(text)` | text paste |
 | `onPasteImage?(image: PastedImage)` | image paste |
@@ -126,7 +125,7 @@ function createRoot(options?: RootOptions): Root
 | `loadURL(url, options?: LoadOptions): WebViewHandle` | renders a full size WebView, or navigates the mounted one |
 | `loadFile(path, options?: LoadOptions): WebViewHandle` | same for a local file |
 | `stop(code?)` | unmounts, restores the terminal, calls `onExit` |
-| `info: EngineInfo` | `{ width, height, cellWidth, cellHeight, basePx, kittyKeyboard, hosted, colors }` |
+| `info: EngineInfo` | `{ width, height, cellWidth, cellHeight, basePx, grid, renderer?, colorTier?, kittyKeyboard, hosted, colors }` (`grid`: drawn as characters on a cell grid) |
 | `displayScale: number` | device pixel ratio |
 | `hosted: boolean` | true when running as a guest tab or embedded |
 | `setTitle(text)` | sets the terminal title |
@@ -206,8 +205,8 @@ Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/p
 | `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `modal` (while shown only this subtree takes clicks, hover, wheel, selection and keys; a click outside lands on it), `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onStick(stuck)` (sticky boxes: called when one starts or stops being held at the top), `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `contentHeight`, `surface: Surface` |
 | `Text` | `TextProps` `:128`. children must be strings or numbers. `spans: { start, end, color, background?, bold?, italic?, underline?, strikethrough? }[]`, `onClick`, `onMouseEnter`, `onMouseLeave` |
 | `Input` | `InputProps` `:177`. multi-line editor; with `style.wrap: false` it is single-line and its text is vertically centered when the box is taller than one line. `value`, `defaultValue`, `autoFocus` (only inputs take focus on click; clicking or selecting other content leaves focus where it is, so call `blur()` from `onClickOutside` to drop it), `onChange(text, ChangeInfo)`, `onSubmit(text, marks)`, `onCaret(CaretInfo)`, `onPasteImage`, `caretColor`, `caretShape: "bar" | "block" | "underscore"` (block and underscore are one character wide; block redraws the character under it in black or white for contrast), `selectionColor`, `spans`, `gutter: { color, activeColor }`, `activeLine`, `defaultMarks`, `renderMark(id)`, `serializeMark(id)` |
-| `Image` | `ImageProps` `:211`. `src` path or url, `placeholder`, `error`, `onClick` |
-| `Path` | `PathProps` `:104`. SVG path data. `d`, `viewBox`, `stroke: { width, color, cap?, join? }`, `onClick`, `onDrag` |
+| `Image` | `ImageProps` `:211`. `src` path or url, `placeholder`, `error`, `onClick`, `fallback` (text drawn instead on a character grid; without it the picture is drawn in half blocks) |
+| `Path` | `PathProps` `:104`. SVG path data. `d`, `viewBox`, `stroke: { width, color, cap?, join? }`, `onClick`, `onDrag`, `fallback` (text drawn instead on a character grid, e.g. `"›"`; without it nothing is drawn there) |
 | `MarkedText` | `MarkedTextProps` `:197`. `text`, `marks`, `renderMark`, `serializeMark` |
 | `Link` | `packages/pixel/src/react/link.tsx`. `href`, `children`, `style`, `onClick(ClickEvent)`. Opens `href` in the default browser on click (`onClick` replaces that), shows the pointer cursor on hover. String children render as `Text` with `style`; use `style.hoverColor` for a hover state |
 | `Markdown` | `packages/pixel/src/react/markdown.tsx:25`. `text`, `theme: MarkdownTheme`, `rem`, `streaming`, `codeFamily` (code blocks, default `"monospace"`), `onLinkClick(href)`, `highlight`, `highlightBg` |
@@ -423,7 +422,18 @@ The engine draws through `pixel_core::backend::Backend` (`engine/crates/pixel-co
 - Binding code that knows its backend reaches it with `engine.backend.downcast_mut::<B>()` (pixel-node does this for retarget and the presenter overlay).
 - Node: a backend package ships its own `.node` built from `pixel-node` plus its crate, calls `register_backend`, and makes its engine with `PixelEngine.withBackend(name, options)`.
 - Hosts without node: install a binding with `setBinding` and use `createRoot({ engine })` from `@zenbu-labs/pixel/core`.
+- `wants().scene` + `HostInfo.grid`: a backend that draws characters. The engine lays out on a grid (`GridMetrics`: every grapheme is its display width in cells, every line one cell tall, px lengths in styles round to whole cells, a sub-half-cell size becomes a one-cell hairline, a visible border gets a cell of padding), scrolls in whole rows (`Rows` profile), and instead of rasterizing hands `Frame.scenes`: per view a `Scene` display list (`pixel-core/src/scene.rs`: rects, gradients, borders, text runs, images, surfaces, shapes, caret, clips) with its origin and a changed flag. `pixel-cells` turns scenes into a cell grid and minimal ANSI.
 - `examples/appkit-backend`: a macOS window as a backend (AppKit events in, frames onto a `CALayer`), driving the engine with the same JSON ops React sends. `cargo run` in that folder.
+
+## Cell rendering
+
+Terminals without kitty graphics get the cell backend (`engine/crates/pixel-cells`, wired into `pixel-terminal`). `pixel` picks it when the graphics probe is refused or unanswered (the probe ends with a device-attributes request, so a terminal that ignores the graphics query answers "no" quickly); `PIXEL_RENDERER=cells` forces it. `root.info.grid` is `true` and `root.info.renderer` is `"cells"`; apps size things in cells and use `fallback` on `Path`/`Image`.
+
+- **Grid:** parallel arrays; a cell's character is a tagged u32 (character, pooled grapheme, or the covered half of a wide one); colors are terminal default, palette index or RGB (`grid.rs`).
+- **Painter:** scene to grid with alpha blending (a translucent fill keeps the glyph under it and tints it), clips, box-drawing borders, line glyphs for hairlines, `■` for dots, half blocks for images, a labelled box for webviews (`paint.rs`).
+- **Encoder:** diffs against the last grid (one compare skips an unchanged row), resends SGR and cursor moves only when they change, handles wide and variation-selector glyphs, wraps frames in `CSI ?2026h/l`, places the hardware cursor last with `DECSCUSR` for the caret shape, and writes nothing for an unchanged frame (`encode.rs`).
+- **Colors:** truecolor, 256, 16 (matched against the terminal's own palette from OSC 4, with its default colors as candidates) or none, from `NO_COLOR`, `COLORTERM`, `TERM`, `TERM_PROGRAM`; `PIXEL_COLORS=truecolor|256|16|mono` overrides (`color.rs`).
+- **Tests:** `TestBackend` gives text snapshots of the grid and every frame's bytes.
 
 ## Rendering
 

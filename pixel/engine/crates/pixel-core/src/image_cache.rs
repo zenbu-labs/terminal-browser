@@ -487,6 +487,10 @@ fn make_scaled(
     Some(out)
 }
 
+pub fn scaled_rgba(src: &str, equal_to: &[String], w: u32, h: u32) -> Option<Vec<u8>> {
+    with_scaled_image(src, w, h, [0.0; 4], equal_to, |pixmap| pixmap.data().to_vec())
+}
+
 pub(crate) fn with_scaled_image<R>(
     src: &str,
     w: u32,

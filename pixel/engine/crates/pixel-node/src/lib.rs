@@ -307,6 +307,7 @@ impl PixelEngine {
             Some(env) => pixel_terminal::SessionEnv::of_session(env),
             None => pixel_terminal::SessionEnv::of_process(),
         };
+        let cells = host.is_none() && session_env.var("PIXEL_RENDERER").is_some_and(|renderer| renderer.trim() == "cells");
         let backend = TerminalBackend::new(pixel_terminal::TerminalOptions {
             tty,
             host: host.map(|host| pixel_terminal::HostOptions {
@@ -318,6 +319,7 @@ impl PixelEngine {
             wrapper: pixel_terminal::Wrapper::named(wrapper.as_deref()),
             session_env,
             watch_resize: false,
+            cells,
         })
         .map_err(err)?;
         Self::start_with(Box::new(backend))

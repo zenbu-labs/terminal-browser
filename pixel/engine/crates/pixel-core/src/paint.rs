@@ -2,20 +2,21 @@ use std::ops::Range;
 use std::time::Instant;
 
 use crate::canvas::{Canvas, measure_marked, measure_text};
-use crate::image_cache::ImageStatus;
+use crate::scene::{RectKind, Scene};
 use crate::style::{Color, Overflow, Paint};
-use crate::text_input::{
-    CaretShape, Mark, caret_char, caret_point, caret_thickness, caret_width,
-};
+use crate::text_input::{Mark, caret_char, caret_point, caret_width};
 use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
 
 mod opaque;
+mod painter;
 
 pub use opaque::{surface_covers, opaque_areas};
 pub use layer::{LayerCanvases, render_layer, scroll_layer};
+pub use painter::SceneRecorder;
 mod layer;
 use opaque::collect_surface_occluders;
+use painter::{CaretDraw, GlyphStyle, Glyphs, ImageDraw, Painter};
 
 #[derive(Default)]
 struct PaintStats {
@@ -85,6 +86,16 @@ pub fn paint(
     paint_skipping(tree, canvas, fonts, cursor, clear, None);
 }
 
+pub fn record_scene(tree: &Tree, fonts: &[crate::fonts::Font], cursor: Option<(f32, f32)>) -> Scene {
+    assert!(!fonts.is_empty());
+    crate::profiler::span("tree.scene", || {
+        let blocks = tree.doc_selection_blocks(fonts);
+        let mut recorder = SceneRecorder::default();
+        paint_node(tree, tree.root(), &mut recorder, fonts, cursor, &blocks, None, &mut Vec::new(), &mut None, None);
+        recorder.scene
+    })
+}
+
 pub(crate) struct Skip<'a> {
     pub nodes: &'a std::collections::HashSet<NodeId>,
     pub bar_of: NodeId,
@@ -135,13 +146,16 @@ pub(crate) fn paint_skipping(
         }
     });
 }
-// ah right, we also have new conditions if opaque vs transparent that ill need to think about
+
+fn rect_of(x: f32, y: f32, w: f32, h: f32) -> PxRect {
+    PxRect { x, y, w, h }
+}
 
 #[allow(clippy::too_many_arguments)]
-fn paint_node(
+fn paint_node<P: Painter>(
     tree: &Tree,
     id: NodeId,
-    canvas: &mut Canvas,
+    canvas: &mut P,
     fonts: &[crate::fonts::Font],
     cursor: Option<(f32, f32)>,
     blocks: &[(NodeId, Vec<PxRect>, Color)],
@@ -171,132 +185,60 @@ fn paint_node(
         if let Some(stats) = stats {
             stats.rect_count += background.is_some() as u64 + node.style.border.is_some() as u64;
         }
+        let rect = hairline(rect, &node.style, fonts[0].grid);
         timed(stats.as_mut().map(|s| &mut s.rects), || {
-            // painting background colors
             match &background {
-                Some(Paint::Solid(bg)) => canvas.fill_rounded_rect(
-                    rect.x,
-                    rect.y,
-                    rect.w,
-                    rect.h,
-                    node.style.corner_radius,
-                    *bg,
-                ),
-                Some(Paint::Gradient(gradient)) => canvas.fill_rounded_rect_gradient(
-                    rect.x,
-                    rect.y,
-                    rect.w,
-                    rect.h,
-                    node.style.corner_radius,
-                    gradient,
-                ),
+                Some(Paint::Solid(bg)) => canvas.rect(rect, node.style.corner_radius, *bg, RectKind::Fill),
+                Some(Paint::Gradient(gradient)) => canvas.gradient(rect, node.style.corner_radius, gradient),
                 None => {}
             }
-            // painting borders
             if let Some(border) = node.style.border {
                 match border.uniform() {
-                    Some(side) => canvas.stroke_rounded_rect(
-                        rect.x,
-                        rect.y,
-                        rect.w,
-                        rect.h,
-                        node.style.corner_radius,
-                        side.width,
-                        side.color,
-                    ),
+                    Some(side) => canvas.border(rect, node.style.corner_radius, side.width, side.color),
                     None => {
                         if let Some(s) = border.top {
-                            canvas.fill_rounded_rect(rect.x, rect.y, rect.w, s.width, [0.0; 4], s.color);
+                            canvas.rect(rect_of(rect.x, rect.y, rect.w, s.width), [0.0; 4], s.color, RectKind::Edge);
                         }
                         if let Some(s) = border.bottom {
                             let y = rect.y + rect.h - s.width;
-                            canvas.fill_rounded_rect(rect.x, y, rect.w, s.width, [0.0; 4], s.color);
+                            canvas.rect(rect_of(rect.x, y, rect.w, s.width), [0.0; 4], s.color, RectKind::Edge);
                         }
                         if let Some(s) = border.left {
-                            canvas.fill_rounded_rect(rect.x, rect.y, s.width, rect.h, [0.0; 4], s.color);
+                            canvas.rect(rect_of(rect.x, rect.y, s.width, rect.h), [0.0; 4], s.color, RectKind::Edge);
                         }
                         if let Some(s) = border.right {
                             let x = rect.x + rect.w - s.width;
-                            canvas.fill_rounded_rect(x, rect.y, s.width, rect.h, [0.0; 4], s.color);
+                            canvas.rect(rect_of(x, rect.y, s.width, rect.h), [0.0; 4], s.color, RectKind::Edge);
                         }
                     }
                 }
             }
         });
     }
-    // painting surfaces
     if let Some(surface) = node.surface {
         if let Some(at) = surface_occluders.iter().position(|(n, _)| *n == id) {
             let (_, token) = surface_occluders.swap_remove(at);
             canvas.remove_occluder(token);
         }
-        if tree.host_surfaces() && node.children.is_empty() && crate::surfaces::with(surface, |_| ()).is_none() {
-            let hole = crate::surfaces::Rect::covering(rect);
-            canvas.fill_rect(hole.x, hole.y, hole.w, hole.h, [0, 0, 0, 0]);
-        }
+        let hole = tree.host_surfaces() && node.children.is_empty() && crate::surfaces::with(surface, |_| ()).is_none();
         timed(stats.as_mut().map(|s| &mut s.surface), || {
-            crate::surfaces::with(surface, |s| {
-                // scaling? er
-                let unscaled = (rect.w.round().max(0.0) as u32, rect.h.round().max(0.0) as u32)
-                    == (s.width, s.height);
-                    // hint?
-                if unscaled {
-                    canvas.blit_bgra_rounded_hint(
-                        rect.x,
-                        rect.y,
-                        // pixels vs rgba, eh?
-                        &s.pixels,
-                        s.width,
-                        s.height,
-                        node.style.corner_radius,
-                    );
-                } else {
-                    let mut rgba = s.pixels.clone();
-                    for px in rgba.chunks_exact_mut(4) {
-                        px.swap(0, 2);
-                    }
-                    canvas.blit_scaled_rgba_rounded(
-                        rect.x,
-                        rect.y,
-                        rect.w,
-                        rect.h,
-                        &rgba,
-                        s.width,
-                        s.height,
-                        node.style.corner_radius,
-                    );
-                }
-            });
+            canvas.surface(rect, node.style.corner_radius, surface, hole);
         });
     }
-    // painting images
     if let Some(image) = &node.image {
         timed(stats.as_mut().map(|s| &mut s.images), || {
-            match crate::image_cache::status(&image.src, &image.equal_to) {
-                ImageStatus::Ready => {
-                    crate::image_cache::with_scaled_image(
-                        &image.src,
-                        rect.w.round().max(0.0) as u32,
-                        rect.h.round().max(0.0) as u32,
-                        node.style.corner_radius,
-                        &image.equal_to,
-                        |pixmap| canvas.blit_image(rect.x, rect.y, pixmap),
-                    );
-                }
-                ImageStatus::Failed => {
-                    let has_error_slot = node.children.iter().any(|&child| {
-                        tree.get(child)
-                            .is_some_and(|n| n.slot == Some(SlotKind::Error))
-                    });
-                    if !has_error_slot {
-                        paint_broken_image (canvas, rect, node.resolved.px, node.resolved.color);
-                    }
-                }
-                /**
-                 * the users pending ui can render here in place if they specified one in <Image/>
-                 */
-                ImageStatus::Pending => {}
-            }
+            let has_error_slot = node.children.iter().any(|&child| {
+                tree.get(child).is_some_and(|n| n.slot == Some(SlotKind::Error))
+            });
+            canvas.image(&ImageDraw {
+                rect,
+                radius: node.style.corner_radius,
+                image,
+                status: crate::image_cache::status(&image.src, &image.equal_to),
+                broken_icon: !has_error_slot,
+                px: node.resolved.px,
+                color: node.resolved.color,
+            });
         });
     }
 
@@ -304,14 +246,13 @@ fn paint_node(
         && (background.is_some() || node.style.border.is_some())
     {
         timed(stats.as_mut().map(|s| &mut s.selection), || {
-            // wait, whats a band?
             fill_bands(canvas, bands, visible, color);
         });
     }
 
     let clips_children = node.style.overflow != Overflow::Visible;
     if clips_children {
-        canvas.push_clip(rect.x, rect.y, rect.w, rect.h);
+        canvas.clip_push(rect);
     }
 
     let block = blocks.iter().find(|(container, _, _)| *container == id);
@@ -325,7 +266,6 @@ fn paint_node(
         .or(enclosing_block);
     let in_block = enclosing_block.is_some();
 
-    // painting text
     if let Some(text) = &node.text {
         let px = node.resolved.px;
         let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
@@ -345,7 +285,7 @@ fn paint_node(
                 .map_or(0.0, |state| state.input.scroll_x());
             let clips_text = node.input.is_some() && !node.style.wrap && !clips_children;
             if clips_text {
-                canvas.push_clip(rect.x, rect.y, rect.w, rect.h);
+                canvas.clip_push(rect);
             }
             let base_x = rect.x + padding.0;
             let origin = (base_x - scroll_x, rect.y + padding.1 + node.text_offset_y);
@@ -358,6 +298,7 @@ fn paint_node(
                 wrap_lines(text, font, px, wrap, marks)
             });
             let line_h = line_metrics.new_line_size;
+            let ascent = line_metrics.ascent;
             let focused = tree.focus() == Some(id) && !tree.inert(id);
             let caret_line = node.input.as_ref().and_then(|state| {
                 (state.gutter.is_some() || state.active_line.is_some()).then(|| {
@@ -383,7 +324,7 @@ fn paint_node(
                         if top + line_h < visible.y || top > visible.y + visible.h {
                             continue;
                         }
-                        canvas.fill_rounded_rect(rect.x, top, rect.w, line_h, [0.0; 4], active);
+                        canvas.rect(rect_of(rect.x, top, rect.w, line_h), [0.0; 4], active, RectKind::Fill);
                     }
                 });
             }
@@ -413,7 +354,7 @@ fn paint_node(
                             };
                             let x = origin.0 + measure_text(font, prefix, px);
                             let w = measure_text(font, segment, px);
-                            canvas.fill_rounded_rect(x, top, w, line_h, [0.0; 4], bg);
+                            canvas.rect(rect_of(x, top, w, line_h), [0.0; 4], bg, RectKind::Fill);
                         }
                     }
                 });
@@ -442,7 +383,6 @@ fn paint_node(
                     if top - line_h > visible.y + visible.h {
                         break;
                     }
-                    let baseline = (top + line_metrics.ascent) as i32;
                     if node.spans.is_empty() {
                         let cut = (node.style.ellipsis && !node.style.wrap && marks.is_empty() && node.input.is_none())
                             .then(|| {
@@ -450,69 +390,47 @@ fn paint_node(
                                 crate::wrap::ellipsize(&text[line.clone()], font, px, room)
                             })
                             .flatten();
-                        let passes: &[i32] = if font.synthetic_bold { &[0, (px / 24.0).max(1.0) as i32] } else { &[0] };
-                        let shear = if font.synthetic_italic { ITALIC_SHEAR } else { 0.0 };
-                        for &dx in passes {
-                            match &cut {
-                                Some(shown) => canvas.draw_marked_sheared(
-                                    font,
-                                    shown,
-                                    0..shown.len(),
-                                    origin.0 as i32 + dx,
-                                    baseline,
-                                    px,
-                                    color,
-                                    &[],
-                                    shear,
-                                ),
-                                None => canvas.draw_marked_sheared(
-                                    font,
-                                    text,
-                                    line.clone(),
-                                    origin.0 as i32 + dx,
-                                    baseline,
-                                    px,
-                                    color,
-                                    marks,
-                                    shear,
-                                ),
-                            }
-                        }
+                        let (shown, range, marks) = match &cut {
+                            Some(shown) => (shown.as_str(), 0..shown.len(), &[][..]),
+                            None => (text.as_str(), line.clone(), marks),
+                        };
+                        canvas.glyphs(&Glyphs {
+                            font,
+                            face: font,
+                            text: shown,
+                            range,
+                            x: origin.0,
+                            top,
+                            ascent,
+                            width: 0.0,
+                            px,
+                            color,
+                            marks,
+                            style: GlyphStyle::Marked,
+                        });
                         continue;
                     }
                     let mut x = origin.0;
                     for (range, span) in split_by_spans(line.clone(), &node.spans, color) {
-                        let Some(segment) = text.get(range) else {
+                        let Some(segment) = text.get(range.clone()) else {
                             continue;
                         };
                         let face = &fonts[font.variant(span.bold, span.italic).min(fonts.len() - 1)];
-                        let shear = if face.synthetic_italic { ITALIC_SHEAR } else { 0.0 };
-                        let passes: &[i32] = if face.synthetic_bold { &[0, (px / 24.0).max(1.0) as i32] } else { &[0] };
-                        for &dx in passes {
-                            canvas.draw_fitted(face, font, segment, x as i32 + dx, baseline, px, span.color, shear);
-                        }
                         let width = measure_text(font, segment, px);
-                        let thickness = (px / 14.0).max(1.0);
-                        if span.underline {
-                            canvas.fill_rounded_rect(
-                                x,
-                                top + line_metrics.ascent + thickness,
-                                width,
-                                thickness,
-                                [0.0; 4],
-                                span.color,
-                            );
-                        }
-                        if span.strikethrough {
-                            canvas.fill_rounded_rect(
-                                x,
-                                top + line_metrics.ascent - px * 0.28,
-                                width,
-                                thickness,
-                                [0.0; 4],
-                                span.color,
-                            );
-                        }
+                        canvas.glyphs(&Glyphs {
+                            font,
+                            face,
+                            text,
+                            range,
+                            x,
+                            top,
+                            ascent,
+                            width,
+                            px,
+                            color: span.color,
+                            marks: &[],
+                            style: GlyphStyle::Fitted { underline: span.underline, strikethrough: span.strikethrough },
+                        });
                         x += width;
                     }
                 }
@@ -545,14 +463,20 @@ fn paint_node(
                                 .is_some_and(|r| line.start >= r.start && line.start <= r.end);
                         let label = (logical + 1).to_string();
                         let w = measure_text(font, &label, px);
-                        canvas.draw_text(
+                        canvas.glyphs(&Glyphs {
                             font,
-                            &label,
-                            (gutter_right - w) as i32,
-                            (top + line_metrics.ascent) as i32,
+                            face: font,
+                            text: &label,
+                            range: 0..label.len(),
+                            x: gutter_right - w,
+                            top,
+                            ascent,
+                            width: w,
                             px,
-                            if active { gutter.active_color } else { gutter.color },
-                        );
+                            color: if active { gutter.active_color } else { gutter.color },
+                            marks: &[],
+                            style: GlyphStyle::Plain,
+                        });
                     }
                 });
             }
@@ -576,48 +500,25 @@ fn paint_node(
                 let cursor = state.input.cursor();
                 let shape = state.caret_shape;
                 let (x, y) = caret_point(shape, text, cursor, font, px, wrap, marks);
-                let (left, top) = (origin.0 + x, origin.1 + y);
-                let width = caret_width(shape, text, cursor, font, px, marks);
-                let color = state.caret_color;
-                match shape {
-                    CaretShape::Bar => {
-                        canvas.fill_rounded_rect(left, top, width, line_h, [1.5; 4], color)
-                    }
-                    CaretShape::Underscore => {
-                        let thickness = caret_thickness(px) / 2.0;
-                        canvas.fill_rounded_rect(
-                            left,
-                            top + line_h - thickness,
-                            width,
-                            thickness,
-                            [0.0; 4],
-                            color,
-                        )
-                    }
-                    CaretShape::Block => {
-                        canvas.fill_rounded_rect(left, top, width, line_h, [0.0; 4], color);
-                        if let Some(under) = caret_char(text, cursor)
-                            && color[3] > 0
-                        {
-                            canvas.draw_text(
-                                font,
-                                under.encode_utf8(&mut [0; 4]),
-                                left.round() as i32,
-                                (top + line_metrics.ascent) as i32,
-                                px,
-                                ink_on(color),
-                            );
-                        }
-                    }
-                }
+                canvas.caret(&CaretDraw {
+                    left: origin.0 + x,
+                    top: origin.1 + y,
+                    width: caret_width(shape, text, cursor, font, px, marks),
+                    line_h,
+                    ascent,
+                    shape,
+                    color: state.caret_color,
+                    under: caret_char(text, cursor),
+                    font,
+                    px,
+                });
             }
             if clips_text {
-                canvas.pop_clip();
+                canvas.clip_pop();
             }
         }
     }
 
-    // recursively applying to children
     for child in tree.paint_children(id) {
         if tree.get(child).is_some_and(|n| {
             n.offscreen || (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
@@ -650,17 +551,35 @@ fn paint_node(
         });
     }
     if clips_children {
-        canvas.pop_clip();
+        canvas.clip_pop();
     }
 }
 
-fn ink_on(color: Color) -> Color {
-    let [r, g, b, a] = color;
-    let luma = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
-    if luma > 150.0 { [0, 0, 0, a] } else { [255, 255, 255, a] }
+// On a grid a sub-cell line takes a whole row or column in layout; it paints as a thin strip across the middle
+// of it so the grid draws a line glyph rather than a block.
+fn hairline(rect: PxRect, style: &crate::style::Style, grid: Option<crate::fonts::GridMetrics>) -> PxRect {
+    let Some(grid) = grid else {
+        return rect;
+    };
+    let mut thin = rect;
+    if let crate::style::Dimension::Px(h) = style.height
+        && h > 0.0
+        && h < grid.cell.1 / 2.0
+    {
+        thin.y += (rect.h - h) / 2.0;
+        thin.h = h;
+    }
+    if let crate::style::Dimension::Px(w) = style.width
+        && w > 0.0
+        && w < grid.cell.0 / 2.0
+    {
+        thin.x += (rect.w - w) / 2.0;
+        thin.w = w;
+    }
+    thin
 }
 
-fn paint_shape(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
+fn paint_shape<P: Painter>(tree: &Tree, id: NodeId, canvas: &mut P) {
     let Some(node) = tree.get(id) else {
         return;
     };
@@ -670,62 +589,17 @@ fn paint_shape(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
     let Some(props) = &node.shape else {
         return;
     };
-    let rect = node.abs;
-    let scale = match props.view_box {
-        Some(view_box) if view_box > 0.0 => rect.w.min(rect.h) / view_box,
-        _ => 1.0,
-    };
-    if scale <= 0.0 {
-        return;
-    }
-    let Some(path) = crate::shape::build_path(&props.cmds) else {
-        return;
-    };
-    let to_screen = tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, rect.x, rect.y);
-    let Some(path) = path.transform(to_screen) else {
-        return;
-    };
-    canvas.stroke_path(
-        &path,
-        props.stroke.color,
-        crate::shape::skia_stroke(&props.stroke, scale),
-    );
+    canvas.shape(node.abs, props);
 }
 
-/**
- * i wish we had an internal UI node that represented this
- */
-fn paint_broken_image(canvas: &mut Canvas, rect: PxRect, px: f32, color: Color) {
-    let side = (px * 1.5).min(rect.w * 0.6).min(rect.h * 0.6);
-    if side < 4.0 {
-        return;
-    }
-    let muted = [color[0], color[1], color[2], 90];
-    let x = rect.x + (rect.w - side) / 2.0;
-    let y = rect.y + (rect.h - side) / 2.0;
-    let stroke = (side / 12.0).max(1.0);
-    canvas.stroke_rounded_rect(x, y, side, side, [side * 0.18; 4], stroke, muted);
-    let dot = side * 0.18;
-    canvas.fill_rounded_rect(
-        x + side * 0.3 - dot / 2.0,
-        y + side * 0.34 - dot / 2.0,
-        dot,
-        dot,
-        [dot; 4],
-        muted,
-    );
-}
-
-fn fill_bands(canvas: &mut Canvas, bands: &[PxRect], clip: PxRect, color: Color) {
+fn fill_bands<P: Painter>(canvas: &mut P, bands: &[PxRect], clip: PxRect, color: Color) {
     for band in bands {
         let band = band.intersect(clip);
         if band.w > 0.0 && band.h > 0.0 {
-            canvas.fill_rounded_rect(band.x, band.y, band.w, band.h, [0.0; 4], color);
+            canvas.rect(band, [0.0; 4], color, RectKind::Selection);
         }
     }
 }
-
-const ITALIC_SHEAR: f32 = 0.22;
 
 fn split_by_spans(
     line: Range<usize>,
@@ -774,7 +648,7 @@ pub(crate) fn paint_thumb(tree: &Tree, id: NodeId, canvas: &mut Canvas, offset: 
     canvas.fill_rounded_rect(r.x + offset.0, r.y + offset.1, r.w, r.h, [r.w / 2.0; 4], thumb);
 }
 
-pub(crate) fn paint_scrollbar(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
+pub(crate) fn paint_scrollbar<P: Painter>(tree: &Tree, id: NodeId, canvas: &mut P) {
     let Some(node) = tree.get(id) else {
         return;
     };
@@ -791,27 +665,13 @@ pub(crate) fn paint_scrollbar(tree: &Tree, id: NodeId, canvas: &mut Canvas) {
     let expand = node.bar.expand;
     if expand > 0.0 {
         let track = fade(bar.track_color, opacity * expand);
-        canvas.fill_rounded_rect(
-            rects.track.x,
-            rects.track.y,
-            rects.track.w,
-            rects.track.h,
-            [rects.track.w / 2.0; 4],
-            track,
-        );
+        canvas.rect(rects.track, [rects.track.w / 2.0; 4], track, RectKind::Scrollbar);
     }
     let thumb = fade(
         lerp_color(bar.thumb_color, bar.thumb_hover_color, expand),
         opacity,
     );
-    canvas.fill_rounded_rect(
-        rects.thumb.x,
-        rects.thumb.y,
-        rects.thumb.w,
-        rects.thumb.h,
-        [rects.thumb.w / 2.0; 4],
-        thumb,
-    );
+    canvas.rect(rects.thumb, [rects.thumb.w / 2.0; 4], thumb, RectKind::Scrollbar);
 }
 
 fn fade(color: Color, factor: f32) -> Color {
@@ -834,8 +694,8 @@ fn lerp_color(from: Color, to: Color, t: f32) -> Color {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_selection(
-    canvas: &mut Canvas,
+fn paint_selection<P: Painter>(
+    canvas: &mut P,
     text: &str,
     lines: &[Range<usize>],
     selection: &Range<usize>,
@@ -865,7 +725,7 @@ fn paint_selection(
             if selection.end > line.end && text[line.end..].starts_with('\n') {
                 x2 += newline_w;
             }
-            canvas.fill_rounded_rect(origin.0 + x1, top, (x2 - x1).max(1.0), line_h, [0.0; 4], color);
+            canvas.rect(rect_of(origin.0 + x1, top, (x2 - x1).max(1.0), line_h), [0.0; 4], color, RectKind::Selection);
         }
     }
 }
@@ -954,6 +814,7 @@ mod tests {
                 image: Some(crate::tree::ImageProps {
                     src: src.into(),
                     equal_to: Vec::new(),
+                    fallback: None,
                 }),
                 ..Desc::default()
             }],

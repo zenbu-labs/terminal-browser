@@ -189,6 +189,7 @@ impl Default for InputProps {
 pub struct ImageProps {
     pub src: String,
     pub equal_to: Vec<String>,
+    pub fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,6 +365,7 @@ pub struct Tree {
     focus: Option<NodeId>,
     doc: DocSelectionState,
     base_px: f32,
+    grid: Option<(f32, f32)>,
     needs_layout: bool,
     needs_place: bool,
     needs_paint: bool,
@@ -417,6 +419,7 @@ impl Tree {
             focus: None,
             doc: DocSelectionState::default(),
             base_px: 16.0,
+            grid: None,
             needs_layout: true,
             needs_place: true,
             needs_paint: true,
@@ -498,7 +501,7 @@ impl Tree {
         }
         let taffy = self
             .taffy
-            .new_leaf(to_taffy(&props.style, props.hidden, props.input.is_some()))
+            .new_leaf(to_taffy(&props.style, props.hidden, props.input.is_some(), self.grid))
             .expect("taffy leaf");
         let (text, static_marks) = match (&props.input, props.text) {
             (Some(input), _) => (Some(input.initial.clone()), Vec::new()),
@@ -906,7 +909,7 @@ impl Tree {
                 (node.taffy, node.style.clone(), node.hidden, node.input.is_some())
             };
             self.taffy
-                .set_style(taffy, to_taffy(&style, hidden, input))
+                .set_style(taffy, to_taffy(&style, hidden, input, self.grid))
                 .expect("taffy style");
             self.needs_layout = true;
         }
@@ -1063,7 +1066,7 @@ impl Tree {
         node.style.height = Dimension::Px(window.1);
         let (taffy, style, hidden) = (node.taffy, node.style.clone(), node.hidden);
         self.taffy
-            .set_style(taffy, to_taffy(&style, hidden, false))
+            .set_style(taffy, to_taffy(&style, hidden, false, self.grid))
             .expect("taffy style");
         self.needs_layout = true;
     }
@@ -1132,11 +1135,33 @@ impl Tree {
         self.order_stale = true;
     }
 
+    fn restyle_all(&mut self) {
+        let nodes: Vec<(taffy::NodeId, Style, bool, bool)> = self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .map(|node| (node.taffy, node.style.clone(), node.hidden, node.input.is_some()))
+            .collect();
+        for (taffy, style, hidden, input) in nodes {
+            self.taffy.set_style(taffy, to_taffy(&style, hidden, input, self.grid)).expect("taffy style");
+        }
+        self.mark_layout();
+    }
+
+    pub fn grid(&self) -> Option<(f32, f32)> {
+        self.grid
+    }
+
     pub fn flush_layout(&mut self, registry: &mut crate::fonts::FontRegistry, base_px: f32) {
         if base_px != self.base_px {
             self.mark_layout();
         }
         self.base_px = base_px;
+        let grid = registry.grid().map(|g| g.cell);
+        if grid != self.grid {
+            self.grid = grid;
+            self.restyle_all();
+        }
         let fonts_needed = self.needs_layout;
         if self.needs_layout {
             crate::profiler::span("tree.sync", || self.sync_dirty_children());
@@ -1482,7 +1507,7 @@ impl Tree {
         use taffy::prelude::length;
         let node = self.node(row);
         let taffy_id = node.taffy;
-        let mut style = to_taffy(&node.style, node.hidden, node.input.is_some());
+        let mut style = to_taffy(&node.style, node.hidden, node.input.is_some(), self.grid);
         style.size.width = length(width);
         if self.taffy.style(taffy_id).ok() != Some(&style) {
             self.taffy.set_style(taffy_id, style).expect("taffy style");
@@ -1656,7 +1681,7 @@ impl Tree {
                     let child = self.node(child);
                     (child.taffy, child.style.clone(), child.hidden)
                 };
-                let mut taffy_style = to_taffy(&style, hidden, false);
+                let mut taffy_style = to_taffy(&style, hidden, false, self.grid);
                 taffy_style.size = taffy::Size {
                     width: length(size.width),
                     height: length(size.height),
