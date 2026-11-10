@@ -103,7 +103,7 @@ fn covers(now: &[u8], sent: &[u8], rect: Rect, row_len: usize) -> bool {
     (rect.y..rect.y + rect.h).all(|y| {
         let at = y as usize * row_len + rect.x as usize * 4;
         let len = rect.w as usize * 4;
-        now[at..at + len].chunks_exact(4).zip(sent[at..at + len].chunks_exact(4)).all(|(n, o)| n[3] == 255 || o[3] == 0 || n == o)
+        now[at..at + len].chunks_exact(4).zip(sent[at..at + len].chunks_exact(4)).all(|(n, o)| n[3] == 255 || o[3] == 0)
     })
 }
 
@@ -228,7 +228,7 @@ impl Terminal {
                 continue;
             };
             let mut rect = diff;
-            for patch in entry.patches.iter().filter(|p| !intersect(p.rect, diff).is_empty()) {
+            while let Some(patch) = entry.patches.iter().find(|p| !intersect(p.rect, rect).is_empty() && union(rect, p.rect) != rect) {
                 rect = union(rect, patch.rect);
             }
             let whole = rect.area() * 2 >= u64::from(area.w * STRIPE_PX) || entry.patches.len() >= MAX_PATCHES || !covers(&entry.pixels, &entry.sent, rect, row_len);
@@ -239,7 +239,7 @@ impl Terminal {
             spent += cost;
             consolidated |= complete;
             entry.pending = None;
-            let (merged, kept): (Vec<Patch>, Vec<Patch>) = std::mem::take(&mut entry.patches).into_iter().partition(|p| !intersect(p.rect, diff).is_empty());
+            let (merged, kept): (Vec<Patch>, Vec<Patch>) = std::mem::take(&mut entry.patches).into_iter().partition(|p| !intersect(p.rect, rect).is_empty());
             entry.patches = kept;
             let mut freed: Vec<u32> = merged.iter().map(|p| p.placed.id).collect();
             if whole {
@@ -361,5 +361,234 @@ impl Terminal {
         state.overlays.truncate(layer.overlays.len());
         pixel_core::profiler::count("present.overlays", || sent);
         Ok(sent)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use pixel_core::backend::Canvas;
+    use std::collections::HashMap;
+
+    struct Image {
+        w: u32,
+        h: u32,
+        rgba: Vec<u8>,
+    }
+
+    struct Placement {
+        x: i64,
+        y: i64,
+        src_y: u32,
+        src_h: Option<u32>,
+        z: i32,
+        seq: u64,
+    }
+
+    #[derive(Default)]
+    struct KittyScreen {
+        cell: (u32, u32),
+        cursor: (i64, i64),
+        images: HashMap<u32, Image>,
+        placements: HashMap<(u32, u32), Placement>,
+        seq: u64,
+    }
+
+    impl KittyScreen {
+        fn new(cell: (u32, u32)) -> Self {
+            Self { cell, ..Self::default() }
+        }
+
+        fn feed(&mut self, bytes: &[u8]) {
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i..].starts_with(b"\x1b[") {
+                    let end = i + 2 + bytes[i + 2..].iter().position(|b| b.is_ascii_alphabetic()).unwrap();
+                    if bytes[end] == b'H' {
+                        let args = std::str::from_utf8(&bytes[i + 2..end]).unwrap();
+                        let (row, col) = args.split_once(';').unwrap();
+                        let (row, col): (i64, i64) = (row.parse().unwrap(), col.parse().unwrap());
+                        self.cursor = ((col - 1) * i64::from(self.cell.0), (row - 1) * i64::from(self.cell.1));
+                    }
+                    i = end + 1;
+                } else if bytes[i..].starts_with(b"\x1b_G") {
+                    let end = i + bytes[i..].windows(2).position(|w| w == b"\x1b\\").unwrap();
+                    let body = std::str::from_utf8(&bytes[i + 3..end]).unwrap();
+                    self.command(body);
+                    i = end + 2;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        fn command(&mut self, body: &str) {
+            let (keys, payload) = body.split_once(';').unwrap_or((body, ""));
+            let keys: HashMap<&str, &str> = keys.split(',').filter_map(|kv| kv.split_once('=')).collect();
+            let num = |k: &str| keys.get(k).map(|v| v.parse::<i64>().unwrap());
+            let id = num("i").unwrap_or(0) as u32;
+            match keys.get("a").copied().unwrap_or("t") {
+                "t" => {
+                    let path = String::from_utf8(base64::engine::general_purpose::STANDARD.decode(payload).unwrap()).unwrap();
+                    let rgba = std::fs::read(&path).unwrap();
+                    let _ = std::fs::remove_file(&path);
+                    let (w, h) = (num("s").unwrap() as u32, num("v").unwrap() as u32);
+                    assert_eq!(rgba.len(), (w * h * 4) as usize);
+                    self.images.insert(id, Image { w, h, rgba });
+                }
+                "p" => {
+                    self.seq += 1;
+                    let placement = Placement {
+                        x: self.cursor.0 + num("X").unwrap_or(0),
+                        y: self.cursor.1 + num("Y").unwrap_or(0),
+                        src_y: num("y").unwrap_or(0) as u32,
+                        src_h: num("h").map(|h| h as u32),
+                        z: num("z").unwrap_or(0) as i32,
+                        seq: self.seq,
+                    };
+                    self.placements.insert((id, num("p").unwrap_or(0) as u32), placement);
+                }
+                "d" => match keys.get("d").copied() {
+                    Some("I") => {
+                        self.images.remove(&id);
+                        self.placements.retain(|&(image, _), _| image != id);
+                    }
+                    Some("i") => {
+                        self.placements.remove(&(id, num("p").unwrap_or(0) as u32));
+                    }
+                    other => panic!("unhandled delete {other:?}"),
+                },
+                other => panic!("unhandled action {other}"),
+            }
+        }
+
+        fn pixel(&self, x: u32, y: u32, background: [u8; 3]) -> [u8; 3] {
+            let mut order: Vec<_> = self.placements.iter().collect();
+            order.sort_by_key(|(_, p)| (p.z, p.seq));
+            let mut px = background.map(f32::from);
+            for (&(id, _), p) in order {
+                let Some(image) = self.images.get(&id) else { continue };
+                let h = p.src_h.unwrap_or(image.h - p.src_y);
+                let (dx, dy) = (i64::from(x) - p.x, i64::from(y) - p.y);
+                if dx < 0 || dy < 0 || dx >= i64::from(image.w) || dy >= i64::from(h) {
+                    continue;
+                }
+                let at = (((dy as u32 + p.src_y) * image.w + dx as u32) * 4) as usize;
+                let s = &image.rgba[at..at + 4];
+                let a = f32::from(s[3]) / 255.0;
+                for c in 0..3 {
+                    px[c] = f32::from(s[c]) * a + px[c] * (1.0 - a);
+                }
+            }
+            px.map(|v| v.round() as u8)
+        }
+    }
+
+    fn expected(canvas: &Canvas, x: u32, y: u32, background: [u8; 3]) -> [u8; 3] {
+        let at = ((y * canvas.width + x) * 4) as usize;
+        let p = &canvas.pixels[at..at + 4];
+        let a = f32::from(p[3]) / 255.0;
+        [0, 1, 2].map(|c| (f32::from(p[c]) + f32::from(background[c]) * (1.0 - a)).round() as u8)
+    }
+
+    fn test_terminal(cell: (u32, u32)) -> Terminal {
+        let null = std::fs::OpenOptions::new().write(true).open("/dev/null").unwrap();
+        let mut term = Terminal::blank(crate::terminal::TtyHandle::File(null), None, crate::wrapper::Wrapper::None, None);
+        term.transport = crate::terminal::FrameTransport::File;
+        term.cell = Some(cell);
+        term
+    }
+
+    fn present(term: &mut Terminal, screen: &mut KittyScreen, canvas: &Canvas, layer: &ScrollLayer) {
+        if term.patches.layer.as_ref().map(|l| l.area) != Some(layer.area) {
+            term.patches.layer = Some(Layer::new(layer.area));
+        }
+        let frame = Frame {
+            canvas,
+            premultiplied: true,
+            changed: &[],
+            repainted: &[],
+            opaque: &[],
+            ui_over_surfaces: &[],
+            layer: Some(layer),
+            surfaces: None,
+        };
+        let mut out = Vec::new();
+        term.draw_layer(frame, layer, &mut out).unwrap();
+        screen.feed(&out);
+    }
+
+    fn wrong_pixels(screen: &KittyScreen, canvas: &Canvas, area: Rect) -> Vec<(u32, u32, [u8; 3], [u8; 3])> {
+        let background = [23, 20, 21];
+        let mut wrong = Vec::new();
+        for y in area.y..area.y + area.h {
+            for x in area.x..area.x + area.w {
+                let (got, want) = (screen.pixel(x, y, background), expected(canvas, x, y, background));
+                if got.iter().zip(want).any(|(a, b)| a.abs_diff(b) > 3) {
+                    wrong.push((x, y, got, want));
+                }
+            }
+        }
+        wrong
+    }
+
+
+    const FILL: [u8; 4] = [22, 22, 22, 22];
+    const INK: [u8; 4] = [220, 220, 220, 255];
+
+    fn set(canvas: &mut Canvas, x: u32, y: u32, px: [u8; 4]) {
+        let at = ((y * canvas.width + x) * 4) as usize;
+        canvas.pixels[at..at + 4].copy_from_slice(&px);
+    }
+
+    fn shows_every_frame(frames: &[Canvas]) {
+        let area = Rect::sized(200, 100);
+        let layer = ScrollLayer { area, origin_y: 0, under: Vec::new(), overlays: Vec::new() };
+        let mut term = test_terminal((10, 20));
+        let mut screen = KittyScreen::new((10, 20));
+        for (n, canvas) in frames.iter().enumerate() {
+            present(&mut term, &mut screen, canvas, &layer);
+            let wrong = wrong_pixels(&screen, canvas, area);
+            assert!(wrong.is_empty(), "frame {n}: {} pixels differ from the canvas, first {:?}", wrong.len(), wrong[0]);
+        }
+    }
+
+    #[test]
+    fn a_patch_over_an_unchanged_translucent_fill_does_not_draw_the_fill_twice() {
+        let mut card = Canvas::new(200, 100);
+        for y in 0..100 {
+            for x in 0..200 {
+                set(&mut card, x, y, FILL);
+            }
+        }
+        let mut typed = Canvas::new(200, 100);
+        typed.pixels.clone_from(&card.pixels);
+        set(&mut typed, 0, 5, INK);
+        set(&mut typed, 199, 5, INK);
+        shows_every_frame(&[card, typed]);
+    }
+
+    #[test]
+    fn a_patch_grown_over_another_patch_replaces_it_instead_of_stacking_on_it() {
+        let empty = Canvas::new(200, 100);
+        let mut left = Canvas::new(200, 100);
+        for y in 5..15 {
+            set(&mut left, 0, y, FILL);
+            set(&mut left, 9, y, FILL);
+        }
+        let mut right = Canvas::new(200, 100);
+        right.pixels.clone_from(&left.pixels);
+        for y in 3..7 {
+            set(&mut right, 30, y, FILL);
+            set(&mut right, 39, y, FILL);
+        }
+        let mut joined = Canvas::new(200, 100);
+        joined.pixels.clone_from(&right.pixels);
+        for y in 12..14 {
+            set(&mut joined, 5, y, INK);
+            set(&mut joined, 35, y, INK);
+        }
+        shows_every_frame(&[empty, left, right, joined]);
     }
 }
