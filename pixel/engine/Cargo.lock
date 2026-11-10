@@ -826,12 +826,24 @@ dependencies = [
  "openh264",
  "pixel-bridge",
  "pixel-core",
+ "pixel-raster",
  "pixel-terminal",
  "png",
  "rustix",
  "serde",
  "serde_json",
  "tiny-skia",
+]
+
+[[package]]
+name = "pixel-raster"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "image",
+ "pixel-core",
+ "tiny-skia",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -844,6 +856,7 @@ dependencies = [
  "miniz_oxide",
  "pixel-cells",
  "pixel-core",
+ "pixel-raster",
  "rayon",
  "rustix",
  "serde_json",

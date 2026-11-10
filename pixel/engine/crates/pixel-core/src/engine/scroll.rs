@@ -121,14 +121,14 @@ impl Engine {
         }
     }
 
-    pub(super) fn warm_glyphs(&mut self, busy: bool) {
+    pub(super) fn give_spare_time(&mut self, busy: bool) {
         let until = if busy {
             self.frame_slot + self.frame_interval().saturating_sub(super::ROW_CATCH_UP_MARGIN)
         } else {
             Instant::now() + super::ROW_CATCH_UP_BUDGET
         };
         if until > Instant::now() {
-            crate::canvas::warm_glyphs(&self.fonts, until);
+            self.backend.spare(&self.fonts, until);
         }
     }
 

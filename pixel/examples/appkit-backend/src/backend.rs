@@ -15,7 +15,8 @@ use objc2_app_kit::{
     NSEventType, NSImage, NSView,
 };
 use objc2_foundation::NSSize;
-use pixel_core::backend::{Frame, HostInfo, Metrics, Wants};
+use pixel_core::backend::{Frame, HostInfo, Metrics};
+use pixel_raster::{Raster, RasterOptions};
 use pixel_core::{Backend, Event, HostColors, Mods, Mouse, MouseButton, MouseKind, Waker};
 
 pub enum Msg {
@@ -48,11 +49,12 @@ pub struct AppKitBackend {
     rx: Receiver<Msg>,
     queued: VecDeque<Event>,
     latest: Arc<Mutex<Option<PendingFrame>>>,
+    raster: Raster,
 }
 
 impl AppKitBackend {
     pub fn new(shared: Arc<Shared>, tx: Sender<Msg>, rx: Receiver<Msg>) -> Self {
-        Self { shared, tx, rx, queued: VecDeque::new(), latest: Arc::new(Mutex::new(None)) }
+        Self { shared, tx, rx, queued: VecDeque::new(), latest: Arc::new(Mutex::new(None)), raster: Raster::new() }
     }
 }
 
@@ -60,7 +62,7 @@ impl Backend for AppKitBackend {
     fn start(&mut self) -> io::Result<HostInfo> {
         let size = *self.shared.size.lock().unwrap();
         let colors = HostColors { foreground: Some([235, 235, 240, 255]), background: Some([24, 24, 28, 255]), ..HostColors::default() };
-        Ok(HostInfo { metrics: self.shared.metrics(size), colors })
+        Ok(HostInfo { metrics: self.shared.metrics(size), colors, device: pixel_core::Device::default() })
     }
 
     fn waker(&mut self) -> io::Result<Waker> {
@@ -92,8 +94,9 @@ impl Backend for AppKitBackend {
     }
 
     fn present(&mut self, frame: Frame<'_>) -> io::Result<usize> {
-        let canvas = frame.canvas;
-        let pending = PendingFrame { width: canvas.width, height: canvas.height, premultiplied: frame.premultiplied, rgba: canvas.pixels.clone() };
+        let pixels = self.raster.render(&frame, RasterOptions::default());
+        let canvas = pixels.canvas;
+        let pending = PendingFrame { width: canvas.width, height: canvas.height, premultiplied: pixels.premultiplied, rgba: canvas.pixels.clone() };
         let bytes = pending.rgba.len();
         // Only the newest frame matters; the main thread is asked to draw only when none is waiting.
         if self.latest.lock().unwrap().replace(pending).is_none() {
@@ -106,10 +109,6 @@ impl Backend for AppKitBackend {
             });
         }
         Ok(bytes)
-    }
-
-    fn wants(&self) -> Wants {
-        Wants::default()
     }
 
     fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {

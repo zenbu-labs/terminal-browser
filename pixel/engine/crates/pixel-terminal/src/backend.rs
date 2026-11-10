@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pixel_core::backend::{
-    Backend, ClipboardRead, Event, Frame, HostInfo, Metrics, SystemClipboard, Wants, Waker,
+    Backend, ClipboardRead, Event, Frame, HostInfo, Metrics, SystemClipboard, Waker,
 };
 use pixel_core::fonts::Font;
 use pixel_core::logging;
@@ -64,6 +64,7 @@ pub struct TerminalBackend {
     queued: VecDeque<Event>,
     cells: Option<CellPresenter>,
     grid_size: (u16, u16),
+    raster: pixel_raster::Raster,
 }
 
 fn grid_of(ws: &WindowSize) -> (u16, u16) {
@@ -131,6 +132,7 @@ impl TerminalBackend {
             queued: VecDeque::new(),
             cells,
             grid_size: (80, 24),
+            raster: pixel_raster::Raster::new(),
         })
     }
 
@@ -490,7 +492,13 @@ impl Backend for TerminalBackend {
 
     fn present(&mut self, frame: Frame<'_>) -> io::Result<usize> {
         let Some(cells) = &mut self.cells else {
-            return self.term.draw(frame);
+            let options = pixel_raster::RasterOptions {
+                scroll_layer: self.term.draws_layers(),
+                direct: self.term.draws_locally(),
+                host_surfaces: false,
+            };
+            let pixels = self.raster.render(&frame, options);
+            return self.term.draw(pixels);
         };
         let mut out = Vec::new();
         pixel_core::profiler::span("cells.encode", || cells.present(&frame, &mut out));
@@ -505,18 +513,6 @@ impl Backend for TerminalBackend {
         }
         self.apply_overdue_window()?;
         Ok(self.resized.take())
-    }
-
-    fn wants(&self) -> Wants {
-        if self.cells.is_some() {
-            return Wants { scene: true, ..Wants::default() };
-        }
-        Wants {
-            scroll_layer: self.term.draws_layers(),
-            view_canvas: self.term.draws_locally(),
-            host_surfaces: false,
-            scene: false,
-        }
     }
 
     fn pending_present(&self) -> bool {
@@ -535,11 +531,17 @@ impl Backend for TerminalBackend {
         self.term.draw_overlay()
     }
 
-    fn idle(&mut self, last: Frame<'_>) -> io::Result<()> {
+    fn idle(&mut self) -> io::Result<()> {
         if self.cells.is_some() {
             return Ok(());
         }
-        self.term.flatten_if_idle(last)
+        self.term.flatten_if_idle(self.raster.last())
+    }
+
+    fn spare(&mut self, fonts: &[pixel_core::fonts::Font], until: Instant) {
+        if self.cells.is_none() {
+            pixel_raster::Raster::warm_glyphs(fonts, until);
+        }
     }
 
     fn deadline(&self) -> Option<Instant> {

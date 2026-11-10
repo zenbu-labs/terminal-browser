@@ -64,7 +64,7 @@ impl Task for FilmstripTask {
     fn compute(&mut self) -> Result<Vec<u8>> {
         let mut segment = capture::Segment::open(std::path::Path::new(&self.dir))
             .map_err(|e| Error::from_reason(format!("{}: {e}", self.dir)))?;
-        let mut strip = pixel_core::Canvas::new(self.width, self.height);
+        let mut strip = pixel_raster::Canvas::new(self.width, self.height);
         strip.fill([24, 24, 26, 255]);
         for (slot, &index) in self.frames.iter().enumerate() {
             let (pixels, w, h) = segment.frame(index as usize).map_err(err)?;

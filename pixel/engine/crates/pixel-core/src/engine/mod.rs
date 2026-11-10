@@ -671,9 +671,7 @@ impl Engine {
         if self.rows_pending() {
             self.catch_up_rows(input_pending || self.animating());
         }
-        if crate::canvas::glyphs_to_warm() {
-            self.warm_glyphs(input_pending || self.animating());
-        }
+        self.give_spare_time(input_pending || self.animating());
         self.sync_pointer_shape();
         self.drain_logs(&mut out);
         Ok(out)

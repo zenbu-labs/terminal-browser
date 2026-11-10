@@ -3,7 +3,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use super::super::Terminal;
-use pixel_core::backend::Canvas;
+use pixel_raster::Canvas;
 use crate::kitty::{Placement, Transmit};
 use pixel_core::surfaces::Rect;
 use crate::wrapper::Wrapper;

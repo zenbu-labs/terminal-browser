@@ -300,7 +300,7 @@ impl Engine {
         let current = input.scroll_x();
         let widest = crate::wrap::wrap_lines(text, font, px, None, marks)
             .into_iter()
-            .map(|line| crate::canvas::measure_marked(font, text, line, px, marks))
+            .map(|line| crate::text_metrics::measure_marked(font, text, line, px, marks))
             .fold(0.0f32, f32::max);
         let caret_w =
             crate::text_input::caret_width(geometry.caret, text, input.cursor(), font, px, marks);

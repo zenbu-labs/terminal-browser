@@ -1,5 +1,6 @@
 use pixel_core::CaretShape;
-use pixel_core::scene::{ImageState, RectKind, SceneOp, TextRun, ViewScene};
+use pixel_core::image_cache::ImageStatus;
+use pixel_core::scene::{Item, Op, Scrollbar, Text, TextStyle, ViewFrame};
 use pixel_core::{LinearGradient, MARK_CHAR, PxRect};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -51,8 +52,18 @@ pub struct ScenePainter<'a> {
     caret: Option<Caret>,
 }
 
-pub fn paint_view(grid: &mut CellGrid, palette: &Palette, cell: (f32, f32), view: &ViewScene<'_>) -> Option<Caret> {
-    let origin = ((view.origin.0 as f32 / cell.0).round() as i32, (view.origin.1 as f32 / cell.1).round() as i32);
+// The text a run draws and where, in the units the painter places it in.
+struct Run<'a> {
+    text: &'a str,
+    x: f32,
+    top: f32,
+    color: [u8; 4],
+    attrs: u8,
+    gaps: Vec<(usize, f32)>,
+}
+
+pub fn paint_view(grid: &mut CellGrid, palette: &Palette, cell: (f32, f32), view: &ViewFrame<'_>) -> Option<Caret> {
+    let origin = ((view.origin_x as f32 / cell.0).round() as i32, 0);
     let bounds = Area {
         x0: origin.0,
         y0: origin.1,
@@ -62,21 +73,7 @@ pub fn paint_view(grid: &mut CellGrid, palette: &Palette, cell: (f32, f32), view
     let mut painter = ScenePainter { grid, palette, cell, origin, clips: vec![bounds], caret: None };
     let clear = if view.clear[3] == 0 { [palette.background[0], palette.background[1], palette.background[2], 255] } else { view.clear };
     painter.fill(bounds, clear, false);
-    let ops = &view.scene.ops;
-    let mut bordered = None;
-    for (i, op) in ops.iter().enumerate() {
-        match (op, ops.get(i + 1)) {
-            (SceneOp::Rect { rect, color, kind: RectKind::Fill, .. }, Some(SceneOp::Border { rect: border, .. })) if rect == border => {
-                painter.inside_border(*rect, *color);
-            }
-            (SceneOp::PushClip(rect), _) if bordered == Some(*rect) => painter.clip_inside_border(*rect),
-            _ => painter.op(op),
-        }
-        bordered = match op {
-            SceneOp::Border { rect, .. } => Some(*rect),
-            _ => None,
-        };
-    }
+    painter.item(&view.scene.root);
     painter.caret
 }
 
@@ -127,41 +124,79 @@ impl ScenePainter<'_> {
             .then(|| self.grid.index(x as u16, y as u16))
     }
 
-    fn op(&mut self, op: &SceneOp) {
+    fn item(&mut self, item: &Item) {
+        let mut bordered = None;
+        for (i, op) in item.ops.iter().enumerate() {
+            match (op, item.ops.get(i + 1)) {
+                (Op::Rect { rect, color, .. }, Some(Op::Border { rect: border, .. })) if rect == border => self.inside_border(*rect, *color),
+                _ => self.op(op),
+            }
+            if let Op::Border { rect, .. } = op {
+                bordered = Some(*rect);
+            }
+        }
+        let clips = item.clips;
+        if clips {
+            match bordered {
+                Some(rect) if rect == item.bounds => self.clip_inside_border(rect),
+                _ => {
+                    let clip = self.clip().intersect(self.area(item.bounds));
+                    self.clips.push(clip);
+                }
+            }
+        }
+        for op in &item.inner {
+            self.op(op);
+        }
+        for child in &item.children {
+            self.item(child);
+        }
+        for op in &item.after {
+            self.op(op);
+        }
+        if clips && self.clips.len() > 1 {
+            self.clips.pop();
+        }
+    }
+
+    fn op(&mut self, op: &Op) {
         match op {
-            SceneOp::PushClip(rect) => {
+            Op::Clip(rect) => {
                 let clip = self.clip().intersect(self.area(*rect));
                 self.clips.push(clip);
             }
-            SceneOp::PopClip => {
+            Op::Unclip => {
                 if self.clips.len() > 1 {
                     self.clips.pop();
                 }
             }
-            SceneOp::Rect { rect, color, kind, .. } => self.rect(*rect, *color, *kind),
-            SceneOp::Gradient { rect, gradient, .. } => self.gradient(*rect, gradient),
-            SceneOp::Border { rect, radius, color, .. } => self.border(*rect, radius.iter().any(|r| *r > 0.0), *color),
-            SceneOp::Text(run) => self.text(run),
-            SceneOp::Caret { rect, shape, .. } => {
-                let (x, y) = (self.col(rect.x), self.row(rect.y));
+            Op::Rect { rect, color, .. } => self.fill_rect(*rect, *color, false),
+            Op::Selection { rect, color } => self.fill_rect(*rect, *color, true),
+            Op::Rule { rect, color } => self.rule(*rect, *color),
+            Op::Gradient { rect, gradient, .. } => self.gradient(*rect, gradient),
+            Op::Border { rect, radius, color, .. } => self.border(*rect, radius.iter().any(|r| *r > 0.0), *color),
+            Op::Text(text) => self.text_op(text),
+            Op::Caret(caret) => {
+                let (x, y) = (self.col(caret.rect.x), self.row(caret.rect.y));
                 if self.clip().contains(x, y) && self.at(x, y).is_some() {
-                    self.caret = Some(Caret { x: x as u16, y: y as u16, shape: *shape });
+                    self.caret = Some(Caret { x: x as u16, y: y as u16, shape: caret.shape });
                 }
             }
-            SceneOp::Shape { rect, color, fallback } => {
-                if let Some(text) = fallback {
-                    self.label(*rect, text, *color);
+            Op::Icon(icon) => {
+                if let Some(glyph) = &icon.glyph {
+                    self.label(icon.rect, glyph, icon.path.stroke.color);
                 }
             }
-            SceneOp::Image { rect, src, equal_to, state, fallback, color } => match (fallback, state) {
-                (Some(text), _) => self.label(*rect, text, *color),
-                (None, ImageState::Ready) => self.image(*rect, src, equal_to),
-                (None, _) => self.placeholder(*rect, IMAGE_LABEL, *color),
+            Op::Image(image) => match (&image.glyph, image.status) {
+                (Some(glyph), _) => self.label(image.rect, glyph, image.color),
+                (None, ImageStatus::Ready) => self.image(image.rect, &image.src, &image.equal_to),
+                (None, _) => self.placeholder(image.rect, IMAGE_LABEL, image.color),
             },
-            SceneOp::Surface { rect } => {
+            Op::Surface(surface) => {
                 let fg = self.palette.foreground;
-                self.placeholder(*rect, WEB_VIEW_LABEL, [fg[0], fg[1], fg[2], 160]);
+                self.placeholder(surface.rect, WEB_VIEW_LABEL, [fg[0], fg[1], fg[2], 160]);
             }
+            Op::Scrollbar(bar) => self.scrollbar(bar),
         }
     }
 
@@ -194,7 +229,7 @@ impl ScenePainter<'_> {
         let rows = area.y1 - area.y0;
         let inner = Area { x0: area.x0 + 1, x1: area.x1 - 1, y0: if rows > 1 { area.y0 + 1 } else { area.y0 }, y1: if rows > 1 { area.y1 - 1 } else { area.y1 } };
         if inner.is_empty() {
-            self.rect(rect, color, RectKind::Fill);
+            self.fill_rect(rect, color, false);
         } else {
             self.fill(inner, color, true);
         }
@@ -212,48 +247,40 @@ impl ScenePainter<'_> {
         self.clips.push(clip);
     }
 
-    fn rect(&mut self, rect: PxRect, color: [u8; 4], kind: RectKind) {
+    fn fill_rect(&mut self, rect: PxRect, color: [u8; 4], selection: bool) {
         let area = self.area(rect);
         let wide = area.x1 > area.x0 && rect.w >= self.cell.0 * 0.5;
         let tall = area.y1 > area.y0 && rect.h >= self.cell.1 * 0.5;
         if wide && tall {
             self.fill(area, color, true);
-            if kind == RectKind::Selection || self.mono_highlight(color) {
+            if selection || self.mono_highlight(color) {
                 self.mark_inverse(area);
             }
-            return;
-        }
-        if kind == RectKind::Edge {
-            if rect.w >= rect.h {
-                let y = ((rect.y + rect.h / 2.0) / self.cell.1).floor() as i32 + self.origin.1;
-                self.glyph_row(y, area.x0, area.x1.max(area.x0 + 1), '─', color);
-            } else {
-                let x = ((rect.x + rect.w / 2.0) / self.cell.0).floor() as i32 + self.origin.0;
-                self.glyph_column(x, area.y0, area.y1.max(area.y0 + 1), '│', color);
-            }
-            return;
-        }
-        if kind == RectKind::Scrollbar && tall {
-            let x = ((rect.x + rect.w / 2.0) / self.cell.0).floor() as i32 + self.origin.0;
-            self.glyph_column(x, area.y0, area.y1, '▐', color);
-            return;
-        }
-        let wide = wide || rect.w >= self.cell.0 * 0.5;
-        let tall = tall || rect.h >= self.cell.1 * 0.5;
-        if !wide && !tall && rect.w > 0.0 && rect.h > 0.0 {
+        } else if rect.w > 0.0 && rect.h > 0.0 && !wide && !tall {
             let x = ((rect.x + rect.w / 2.0) / self.cell.0).floor() as i32 + self.origin.0;
             let y = ((rect.y + rect.h / 2.0) / self.cell.1).floor() as i32 + self.origin.1;
             self.put_glyph(x, y, '■', color);
-            return;
+        } else if rect.w > 0.0 && rect.h > 0.0 {
+            self.rule(rect, color);
         }
-        if wide && rect.h > 0.0 {
-            let center = (rect.y + rect.h / 2.0) / self.cell.1;
-            let glyph = edge_glyph(center.fract(), ['▔', '─', '▁']);
-            self.glyph_row(center.floor() as i32 + self.origin.1, area.x0, area.x1, glyph, color);
-        } else if tall && rect.w > 0.0 {
-            let center = (rect.x + rect.w / 2.0) / self.cell.0;
-            let glyph = edge_glyph(center.fract(), ['▏', '│', '▕']);
-            self.glyph_column(center.floor() as i32 + self.origin.0, area.y0, area.y1, glyph, color);
+    }
+
+    fn rule(&mut self, rect: PxRect, color: [u8; 4]) {
+        let area = self.area(rect);
+        if rect.w >= rect.h {
+            let y = ((rect.y + rect.h / 2.0) / self.cell.1).floor() as i32 + self.origin.1;
+            self.glyph_row(y, area.x0, area.x1.max(area.x0 + 1), '─', color);
+        } else {
+            let x = ((rect.x + rect.w / 2.0) / self.cell.0).floor() as i32 + self.origin.0;
+            self.glyph_column(x, area.y0, area.y1.max(area.y0 + 1), '│', color);
+        }
+    }
+
+    fn scrollbar(&mut self, bar: &Scrollbar) {
+        for (rect, color) in bar.track.iter().chain(std::iter::once(&bar.thumb)) {
+            let area = self.area(*rect);
+            let x = ((rect.x + rect.w / 2.0) / self.cell.0).floor() as i32 + self.origin.0;
+            self.glyph_column(x, area.y0, area.y1.max(area.y0 + 1), '▐', *color);
         }
     }
 
@@ -346,25 +373,33 @@ impl ScenePainter<'_> {
         self.put_glyph(a.x1 - 1, a.y1 - 1, br, color);
     }
 
-    fn text(&mut self, run: &TextRun) {
+    fn text_op(&mut self, text: &Text) {
+        let mut attrs = 0;
+        if text.bold {
+            attrs |= BOLD;
+        }
+        if text.italic {
+            attrs |= ITALIC;
+        }
+        if let TextStyle::Span { underline, strikethrough } = text.style {
+            if underline {
+                attrs |= UNDERLINE;
+            }
+            if strikethrough {
+                attrs |= STRIKETHROUGH;
+            }
+        }
+        let gaps = text.marks.iter().map(|m| (m.offset, m.advance)).collect();
+        self.text(&Run { text: &text.text, x: text.x, top: text.top, color: text.color, attrs, gaps });
+    }
+
+    fn text(&mut self, run: &Run<'_>) {
         let y = self.row(run.top);
         let clip = self.clip();
         if y < clip.y0 || y >= clip.y1 {
             return;
         }
-        let mut attrs = 0;
-        if run.bold {
-            attrs |= BOLD;
-        }
-        if run.italic {
-            attrs |= ITALIC;
-        }
-        if run.underline {
-            attrs |= UNDERLINE;
-        }
-        if run.strikethrough {
-            attrs |= STRIKETHROUGH;
-        }
+        let attrs = run.attrs;
         let decorated = attrs & (UNDERLINE | STRIKETHROUGH) != 0;
         let mut pen = run.x;
         for (offset, cluster) in run.text.grapheme_indices(true) {
@@ -404,17 +439,7 @@ impl ScenePainter<'_> {
         let cx = (rect.x + rect.w / 2.0) / self.cell.0 - width as f32 / 2.0;
         let x = cx.round() as i32;
         let y = ((rect.y + rect.h / 2.0) / self.cell.1).floor();
-        self.text(&TextRun {
-            text: text.to_string(),
-            x: x as f32 * self.cell.0,
-            top: y * self.cell.1,
-            color,
-            bold: false,
-            italic: false,
-            underline: false,
-            strikethrough: false,
-            gaps: Vec::new(),
-        });
+        self.text(&Run { text, x: x as f32 * self.cell.0, top: y * self.cell.1, color, attrs: 0, gaps: Vec::new() });
     }
 
     fn placeholder(&mut self, rect: PxRect, text: &str, color: [u8; 4]) {
@@ -461,16 +486,6 @@ impl ScenePainter<'_> {
                 self.grid.put(i, "▀", 1);
             }
         }
-    }
-}
-
-fn edge_glyph(fraction: f32, glyphs: [char; 3]) -> char {
-    if fraction < 0.3 {
-        glyphs[0]
-    } else if fraction > 0.7 {
-        glyphs[2]
-    } else {
-        glyphs[1]
     }
 }
 

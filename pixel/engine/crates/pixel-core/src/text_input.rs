@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::Instant;
 
-use crate::canvas::{char_advance, measure_marked};
+use crate::text_metrics::{char_advance, measure_marked};
 use crate::selection::{
     ClickGesture, ClickTracker, line_end, line_range_at, line_start, next_char, next_word_boundary,
     prev_char, prev_word_boundary, snap_to_boundary, word_range_at,
@@ -94,7 +94,7 @@ impl InputGeometry {
     }
 }
 
-pub(crate) fn caret_thickness(px: f32) -> f32 {
+pub fn caret_thickness(px: f32) -> f32 {
     (px / 8.0).max(2.0)
 }
 
@@ -181,7 +181,7 @@ pub(crate) fn claim_marks(text: &str, marks: &[(u64, usize)]) -> (String, Vec<Ma
     (out, kept)
 }
 
-pub(crate) fn mark_advance_at(marks: &[Mark], offset: usize) -> f32 {
+pub fn mark_advance_at(marks: &[Mark], offset: usize) -> f32 {
     marks
         .binary_search_by_key(&offset, |m| m.offset)
         .ok()

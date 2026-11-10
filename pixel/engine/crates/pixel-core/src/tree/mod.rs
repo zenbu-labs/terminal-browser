@@ -40,7 +40,7 @@ impl NodeId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PxRect {
     pub x: f32,
     pub y: f32,
@@ -189,7 +189,7 @@ impl Default for InputProps {
 pub struct ImageProps {
     pub src: String,
     pub equal_to: Vec<String>,
-    pub fallback: Option<String>,
+    pub glyph: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,6 +318,14 @@ struct Slot {
     node: Option<RNode>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement {
+    pub abs: PxRect,
+    pub visible: PxRect,
+    pub offscreen: bool,
+    pub stuck: bool,
+}
+
 // Rounds a placed box's edges to the device lattice from their absolute positions, so neighbours share edges the
 // way rounding to whole pixels does. A box that paints keeps at least one lattice unit.
 fn snap(raw: PxRect, (x, y): (f32, f32), paints: bool) -> PxRect {
@@ -399,7 +407,6 @@ pub struct Tree {
     needs_place: bool,
     needs_paint: bool,
     changed_surfaces: Vec<u32>,
-    host_surfaces: bool,
 }
 
 pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
@@ -453,7 +460,6 @@ impl Tree {
             needs_place: true,
             needs_paint: true,
             changed_surfaces: Vec::new(),
-            host_surfaces: false,
         };
         let root = tree.create(Props {
             style: Style {
@@ -987,7 +993,7 @@ impl Tree {
         self.needs_layout = true;
     }
 
-    pub(crate) fn input_mut(&mut self, id: NodeId) -> Option<&mut TextInput> {
+    pub fn input_mut(&mut self, id: NodeId) -> Option<&mut TextInput> {
         self.get_mut(id)
             .and_then(|n| n.input.as_mut())
             .map(|s| &mut s.input)
@@ -1119,24 +1125,6 @@ impl Tree {
             .map(|node| (node.abs, node.visible))
     }
 
-    pub(crate) fn set_host_surfaces(&mut self, on: bool) {
-        if self.host_surfaces != on {
-            self.host_surfaces = on;
-            self.mark_paint();
-        }
-    }
-
-    pub(crate) fn host_surfaces(&self) -> bool {
-        self.host_surfaces
-    }
-
-    pub(crate) fn surface_nodes(&self) -> impl Iterator<Item = (u32, PxRect, PxRect)> + '_ {
-        self.slots
-            .iter()
-            .filter_map(|slot| slot.node.as_ref())
-            .filter_map(|node| Some((node.surface?, node.abs, node.visible)))
-    }
-
     pub(crate) fn take_changed_surfaces(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.changed_surfaces)
     }
@@ -1145,7 +1133,7 @@ impl Tree {
         self.changed_surfaces.push(surface);
     }
 
-    pub(crate) fn mark_paint(&mut self) {
+    pub fn mark_paint(&mut self) {
         self.needs_paint = true;
     }
 
@@ -1153,7 +1141,7 @@ impl Tree {
         self.needs_paint = false;
     }
 
-    pub(crate) fn mark_place(&mut self) {
+    pub fn mark_place(&mut self) {
         self.needs_place = true;
     }
 
@@ -1340,11 +1328,11 @@ impl Tree {
         }
     }
 
-    pub(crate) fn rows_pending(&self) -> bool {
+    pub fn rows_pending(&self) -> bool {
         !self.pending_lists.is_empty()
     }
 
-    pub(crate) fn catch_up_rows(&mut self, fonts: &[crate::fonts::Font], until: Instant) -> bool {
+    pub fn catch_up_rows(&mut self, fonts: &[crate::fonts::Font], until: Instant) -> bool {
         let measured = self.lay_out_lists(fonts, false, Some(until));
         if measured {
             self.layout_slots(fonts);
@@ -1553,7 +1541,7 @@ impl Tree {
         self.node_mut(row).measured_width = width;
     }
 
-    pub(crate) fn take_stick_changes(&mut self) -> Vec<(NodeId, bool)> {
+    pub fn take_stick_changes(&mut self) -> Vec<(NodeId, bool)> {
         std::mem::take(&mut self.stick_changes)
     }
 
@@ -2090,6 +2078,12 @@ impl Tree {
         Some(y)
     }
 
+    // Where the node was last placed, as it was placed, including rows the list skipped.
+    pub fn placement(&self, id: NodeId) -> Option<Placement> {
+        let node = self.get(id)?;
+        Some(Placement { abs: node.abs, visible: node.visible, offscreen: node.offscreen, stuck: node.stuck })
+    }
+
     pub fn rect(&self, id: NodeId) -> Option<PxRect> {
         let mut rect = self.get(id)?.abs;
         if let Some(y) = self.skipped_y(id) {
@@ -2250,7 +2244,7 @@ impl Tree {
         self.nodes_at(x, y).into_iter().any(|id| self.node(id).surface.is_some())
     }
 
-    pub(crate) fn selectable_text_leaf(&self, id: NodeId) -> bool {
+    pub fn selectable_text_leaf(&self, id: NodeId) -> bool {
         let Some(node) = self.get(id) else {
             return false;
         };
@@ -2342,7 +2336,7 @@ impl Tree {
         self.get(id).map(|n| &n.scroll)
     }
 
-    pub(crate) fn scroll_state_mut(&mut self, id: NodeId) -> Option<&mut ScrollState> {
+    pub fn scroll_state_mut(&mut self, id: NodeId) -> Option<&mut ScrollState> {
         self.get_mut(id).map(|n| &mut n.scroll)
     }
 

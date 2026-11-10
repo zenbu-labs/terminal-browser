@@ -3,7 +3,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use pixel_core::backend::{Backend, Event, Frame, HostInfo, Metrics, Wants, Waker};
+use pixel_core::backend::{Backend, Event, Frame, HostInfo, Metrics, Waker};
 use pixel_core::HostColors;
 
 use crate::{Caret, CellPresenter, ColorTier};
@@ -83,9 +83,5 @@ impl Backend for TestBackend {
         let written = out.len();
         shared.frames.push(out);
         Ok(written)
-    }
-
-    fn wants(&self) -> Wants {
-        Wants { scene: true, ..Wants::default() }
     }
 }

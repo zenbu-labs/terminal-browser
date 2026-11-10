@@ -1,44 +1,41 @@
+use pixel_core::scene::{Item, Op};
+use pixel_core::PxRect;
+
 use crate::canvas::Canvas;
-use crate::style::Overflow;
-use crate::tree::{NodeId, PxRect, Tree};
 
 pub struct Opaque {
-    pub areas: Vec<crate::surfaces::OpaqueArea>,
-    pub ui_over_surfaces: Vec<crate::surfaces::Rect>,
+    pub areas: Vec<pixel_core::surfaces::OpaqueArea>,
+    pub ui_over_surfaces: Vec<pixel_core::surfaces::Rect>,
 }
 
-pub fn opaque_areas(tree: &Tree) -> Opaque {
+pub fn opaque_areas(root: &Item) -> Opaque {
     let mut areas: Vec<(Option<u32>, PxRect, bool)> = Vec::new();
     let mut ui_over_surfaces: Vec<PxRect> = Vec::new();
-    collect_opaque_areas(tree, tree.root(), None, &mut areas, &mut ui_over_surfaces);
+    collect_opaque_areas(root, None, &mut areas, &mut ui_over_surfaces);
     Opaque {
         areas: areas
             .into_iter()
             .filter(|(surface, _, covered)| surface.is_none() || !covered)
-            .filter_map(|(surface, area, _)| whole_pixels(area).map(|rect| crate::surfaces::OpaqueArea { surface, rect }))
+            .filter_map(|(surface, area, _)| whole_pixels(area).map(|rect| pixel_core::surfaces::OpaqueArea { surface, rect }))
             .collect(),
         ui_over_surfaces: ui_over_surfaces.into_iter().filter_map(whole_pixels).collect(),
     }
 }
 
-pub fn surface_covers(tree: &Tree) -> Vec<(u32, PxRect, bool)> {
+pub fn surface_covers(root: &Item) -> Vec<(u32, PxRect, bool)> {
     let mut surfaces = Vec::new();
     let mut covers = Vec::new();
-    collect_surface_covers(tree, tree.root(), None, &mut surfaces, &mut covers);
+    collect_surface_covers(root, None, &mut surfaces, &mut covers);
     covers
 }
 
-fn collect_surface_covers(tree: &Tree, id: NodeId, clip: Option<PxRect>, surfaces: &mut Vec<(u32, PxRect)>, covers: &mut Vec<(u32, PxRect, bool)>) {
-    let Some(node) = tree.get(id) else { return };
-    if node.hidden {
-        return;
-    }
-    let rect = node.abs;
-    let mut painted = painted_rects(node);
+fn collect_surface_covers(item: &Item, clip: Option<PxRect>, surfaces: &mut Vec<(u32, PxRect)>, covers: &mut Vec<(u32, PxRect, bool)>) {
+    let rect = item.bounds;
+    let mut painted = painted_rects(item);
     if let Some(clip) = clip {
         painted = painted.into_iter().map(|p| p.intersect(clip)).filter(|p| p.w > 0.0 && p.h > 0.0).collect();
     }
-    let opaque = matches!(node.style.background, Some(crate::style::Paint::Solid(color)) if color[3] == 255);
+    let opaque = item.fills.solid;
     for &(surface, area) in surfaces.iter() {
         for p in &painted {
             let cut = area.intersect(*p);
@@ -47,14 +44,11 @@ fn collect_surface_covers(tree: &Tree, id: NodeId, clip: Option<PxRect>, surface
             }
         }
     }
-    let child_clip = if node.style.overflow != Overflow::Visible { Some(clip.map_or(rect, |c| c.intersect(rect))) } else { clip };
-    for &child in &node.children {
-        let skipped = tree.get(child).is_some_and(|n| (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible));
-        if !skipped {
-            collect_surface_covers(tree, child, child_clip, surfaces, covers);
-        }
+    let child_clip = if item.clips { Some(clip.map_or(rect, |c| c.intersect(rect))) } else { clip };
+    for child in &item.children {
+        collect_surface_covers(child, child_clip, surfaces, covers);
     }
-    if let Some(surface) = node.surface {
+    if let Some(surface) = item.surface {
         let area = clip.map_or(rect, |c| rect.intersect(c));
         if area.w > 0.0 && area.h > 0.0 {
             surfaces.push((surface, area));
@@ -62,47 +56,35 @@ fn collect_surface_covers(tree: &Tree, id: NodeId, clip: Option<PxRect>, surface
     }
 }
 
-fn painted_rects(node: &crate::tree::RNode) -> Vec<PxRect> {
-    let rect = node.abs;
-    let visible_background = match &node.style.background {
-        Some(crate::style::Paint::Solid(color)) => color[3] > 0, 
-        Some(crate::style::Paint::Gradient(_)) => true,
-        None => false,
-    };
-    let content = visible_background
-        || node.surface.is_some()
-        || node.text.is_some()
-        || !node.spans.is_empty()
-        || node.image.is_some()
-        || node.shape.is_some()
-        || node.input.is_some();
+fn painted_rects(item: &Item) -> Vec<PxRect> {
+    let rect = item.bounds;
     let mut painted: Vec<PxRect> = Vec::new();
-    if content {
+    if item.fills.content {
         painted.push(rect);
-    } else if let Some(border) = node.style.border {
-        let side = |s: Option<crate::style::BorderSide>| s.filter(|s| s.width > 0.0 && s.color[3] > 0).map(|s| s.width);
-        if let Some(w) = side(border.top) {
-            painted.push(PxRect { x: rect.x, y: rect.y, w: rect.w, h: w });
+    } else {
+        let [top, right, bottom, left] = item.fills.sides;
+        if top > 0.0 {
+            painted.push(PxRect { x: rect.x, y: rect.y, w: rect.w, h: top });
         }
-        if let Some(w) = side(border.bottom) {
-            painted.push(PxRect { x: rect.x, y: rect.y + rect.h - w, w: rect.w, h: w });
+        if bottom > 0.0 {
+            painted.push(PxRect { x: rect.x, y: rect.y + rect.h - bottom, w: rect.w, h: bottom });
         }
-        if let Some(w) = side(border.left) {
-            painted.push(PxRect { x: rect.x, y: rect.y, w, h: rect.h });
+        if left > 0.0 {
+            painted.push(PxRect { x: rect.x, y: rect.y, w: left, h: rect.h });
         }
-        if let Some(w) = side(border.right) {
-            painted.push(PxRect { x: rect.x + rect.w - w, y: rect.y, w, h: rect.h });
+        if right > 0.0 {
+            painted.push(PxRect { x: rect.x + rect.w - right, y: rect.y, w: right, h: rect.h });
         }
     }
     painted
 }
 
-fn whole_pixels(area: PxRect) -> Option<crate::surfaces::Rect> {
+fn whole_pixels(area: PxRect) -> Option<pixel_core::surfaces::Rect> {
     let x = area.x.ceil().max(0.0);
     let y = area.y.ceil().max(0.0);
     let right = (area.x + area.w).floor();
     let bottom = (area.y + area.h).floor();
-    (right > x && bottom > y).then_some(crate::surfaces::Rect {
+    (right > x && bottom > y).then_some(pixel_core::surfaces::Rect {
         x: x as u32,
         y: y as u32,
         w: (right - x) as u32,
@@ -134,13 +116,9 @@ fn without(rects: Vec<PxRect>, hole: PxRect) -> Vec<PxRect> {
     out
 }
 
-fn collect_opaque_areas(tree: &Tree, id: NodeId, clip: Option<PxRect>, areas: &mut Vec<(Option<u32>, PxRect, bool)>, ui_over_surfaces: &mut Vec<PxRect>) {
-    let Some(node) = tree.get(id) else { return };
-    if node.hidden {
-        return;
-    }
-    let rect = node.abs;
-    let mut painted = painted_rects(node);
+fn collect_opaque_areas(item: &Item, clip: Option<PxRect>, areas: &mut Vec<(Option<u32>, PxRect, bool)>, ui_over_surfaces: &mut Vec<PxRect>) {
+    let rect = item.bounds;
+    let mut painted = painted_rects(item);
     if let Some(clip) = clip {
         painted = painted.into_iter().map(|p| p.intersect(clip)).filter(|p| p.w > 0.0 && p.h > 0.0).collect();
     }
@@ -153,14 +131,14 @@ fn collect_opaque_areas(tree: &Tree, id: NodeId, clip: Option<PxRect>, areas: &m
             if cut.w <= 0.0 || cut.h <= 0.0 {
                 continue;
             }
-            if node.surface.is_some() {
+            if item.surface.is_some() {
                 *covered = true;
                 break;
             }
             ui_over_surfaces.push(cut);
         }
     }
-    if node.surface.is_none() && node.style.opaque {
+    if item.surface.is_none() && item.opaque {
         let mut area = rect;
         if let Some(clip) = clip {
             area = area.intersect(clip);
@@ -177,11 +155,11 @@ fn collect_opaque_areas(tree: &Tree, id: NodeId, clip: Option<PxRect>, areas: &m
             }
         }
     }
-    if let Some(surface) = node.surface
-        && node.style.opaque
-        && crate::surfaces::with(surface, |s| s.width > 0 && s.height > 0).unwrap_or(false)
+    if let Some(surface) = item.surface
+        && item.opaque
+        && pixel_core::surfaces::with(surface, |s| s.width > 0 && s.height > 0).unwrap_or(false)
     {
-        let radius = node.style.corner_radius.iter().fold(1.0f32, |a, &c| a.max(c)).ceil();
+        let radius = item.radius.iter().fold(1.0f32, |a, &c| a.max(c)).ceil();
         for mut area in opaque_bands(rect, radius) {
             if let Some(clip) = clip {
                 area = area.intersect(clip);
@@ -191,18 +169,9 @@ fn collect_opaque_areas(tree: &Tree, id: NodeId, clip: Option<PxRect>, areas: &m
             }
         }
     }
-    let child_clip = if node.style.overflow != Overflow::Visible {
-        Some(clip.map_or(rect, |c| c.intersect(rect)))
-    } else {
-        clip
-    };
-    for child in tree.paint_children(id) {
-        let skipped = tree.get(child).is_some_and(|n| {
-            n.offscreen || (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
-        });
-        if !skipped {
-            collect_opaque_areas(tree, child, child_clip, areas, ui_over_surfaces);
-        }
+    let child_clip = if item.clips { Some(clip.map_or(rect, |c| c.intersect(rect))) } else { clip };
+    for child in &item.children {
+        collect_opaque_areas(child, child_clip, areas, ui_over_surfaces);
     }
 }
 
@@ -214,25 +183,13 @@ fn opaque_bands(rect: PxRect, radius: f32) -> [PxRect; 3] {
     ]
 }
 
-pub(super) fn collect_surface_occluders(
-    tree: &Tree,
-    id: NodeId,
-    clip: Option<PxRect>,
-    canvas: &mut Canvas,
-    out: &mut Vec<(NodeId, u32)>,
-) {
-    let Some(node) = tree.get(id) else {
-        return;
-    };
-    if node.hidden {
-        return;
-    }
-    let rect = node.abs;
-    if let Some(surface) = node.surface
-        && node.style.opaque
-        && crate::surfaces::with(surface, |s| s.width > 0 && s.height > 0).unwrap_or(false)
+pub(crate) fn collect_surface_occluders(item: &Item, clip: Option<PxRect>, canvas: &mut Canvas, out: &mut Vec<(u64, u32)>) {
+    let rect = item.bounds;
+    if let Some(surface) = item.surface
+        && item.opaque
+        && pixel_core::surfaces::with(surface, |s| s.width > 0 && s.height > 0).unwrap_or(false)
     {
-        let inset = node.style.corner_radius.iter().fold(1.0f32, |a, &r| a.max(r));
+        let inset = item.radius.iter().fold(1.0f32, |a, &r| a.max(r));
         let mut area = PxRect {
             x: rect.x + inset,
             y: rect.y + inset,
@@ -244,42 +201,27 @@ pub(super) fn collect_surface_occluders(
         }
         if area.w > 0.0 && area.h > 0.0 {
             let token = canvas.add_occluder(area.x, area.y, area.w, area.h);
-            out.push((id, token));
+            out.push((item.node, token));
         }
     }
-    let child_clip = if node.style.overflow != Overflow::Visible {
-        Some(clip.map_or(rect, |c| c.intersect(rect)))
-    } else {
-        clip
-    };
-    for &child in &node.children {
-        let skipped = tree.get(child).is_some_and(|n| {
-            n.offscreen
-                || (n.slot.is_some() && !n.slot_visible)
-                || (n.mark.is_some() && !n.mark_visible)
-                || n.shape.is_some()
-        });
-        if !skipped {
-            collect_surface_occluders(tree, child, child_clip, canvas, out);
+    let child_clip = if item.clips { Some(clip.map_or(rect, |c| c.intersect(rect))) } else { clip };
+    for child in &item.children {
+        if !child.ops.iter().any(|op| matches!(op, Op::Icon(_))) {
+            collect_surface_occluders(child, child_clip, canvas, out);
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desc::Desc;
-    use crate::style::{Border, BorderSide, Dimension, Inset, InsetValue, Overflow, Position, Style};
+    use pixel_core::{Border, BorderSide, Desc, Dimension, Inset, InsetValue, Overflow, Position, Style, Tree};
 
     fn declare_surface(id: u32, w: u32, h: u32) {
         let pixels = vec![0u8; (w * h * 4) as usize];
-        crate::surfaces::write(id, w, h, None, &pixels, (w * 4) as usize);
+        pixel_core::surfaces::write(id, w, h, None, &pixels, (w * 4) as usize);
     }
 
-    static FONT_BYTES: &[u8] = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
-
-    fn page(children: Vec<Desc>) -> Tree {
-        let font = crate::fonts::Font::single(fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap());
+        fn page(children: Vec<Desc>) -> pixel_core::scene::Scene {
         let mut tree = Tree::new((400.0, 300.0));
         tree.reconcile(Desc {
             style: Style {
@@ -290,8 +232,9 @@ mod tests {
             children,
             ..Desc::default()
         });
-        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
-        tree
+        let mut fonts = crate::tests::fonts();
+        tree.flush_layout(&mut fonts, 16.0);
+        pixel_core::record_scene(&tree, &fonts, None)
     }
 
     fn opaque_page(surface: u32) -> Desc {
@@ -308,18 +251,18 @@ mod tests {
         }
     }
 
-    fn bands_of(tree: &Tree, surface: u32) -> Vec<crate::surfaces::Rect> {
-        opaque_areas(tree).areas.into_iter().filter(|a| a.surface == Some(surface)).map(|a| a.rect).collect()
+    fn bands_of(scene: &pixel_core::scene::Scene, surface: u32) -> Vec<pixel_core::surfaces::Rect> {
+        opaque_areas(&scene.root).areas.into_iter().filter(|a| a.surface == Some(surface)).map(|a| a.rect).collect()
     }
 
     #[test]
     fn a_rounded_opaque_surface_is_three_bands() {
         declare_surface(7, 400, 300);
-        let tree = page(vec![opaque_page(7)]);
-        let bands = bands_of(&tree, 7);
+        let scene = page(vec![opaque_page(7)]);
+        let bands = bands_of(&scene, 7);
         assert_eq!(bands.len(), 3, "{bands:?}");
-        assert_eq!(bands[1], crate::surfaces::Rect { x: 0, y: 10, w: 400, h: 280 });
-        crate::surfaces::remove(7);
+        assert_eq!(bands[1], pixel_core::surfaces::Rect { x: 0, y: 10, w: 400, h: 280 });
+        pixel_core::surfaces::remove(7);
     }
 
     #[test]
@@ -351,13 +294,13 @@ mod tests {
             }],
             ..Desc::default()
         };
-        let tree = page(vec![opaque_page(8), loading_bar]);
-        let opaque = opaque_areas(&tree);
-        assert_eq!(bands_of(&tree, 8).len(), 3, "the bands all stay opaque: {:?}", opaque.areas);
-        let strip = crate::surfaces::Rect { x: 10, y: 0, w: 190, h: 3 };
+        let scene = page(vec![opaque_page(8), loading_bar]);
+        let opaque = opaque_areas(&scene.root);
+        assert_eq!(bands_of(&scene, 8).len(), 3, "the bands all stay opaque: {:?}", opaque.areas);
+        let strip = pixel_core::surfaces::Rect { x: 10, y: 0, w: 190, h: 3 };
         assert!(opaque.ui_over_surfaces.contains(&strip), "{:?}", opaque.ui_over_surfaces);
         assert!(opaque.ui_over_surfaces.iter().all(|r| strip.contains(*r)), "only the strip is UI over the page: {:?}", opaque.ui_over_surfaces);
-        crate::surfaces::remove(8);
+        pixel_core::surfaces::remove(8);
     }
 
     #[test]
@@ -367,11 +310,11 @@ mod tests {
         let mut upper = opaque_page(10);
         upper.style.position = Position::Absolute;
         upper.style.inset = Inset { top: Some(InsetValue::Px(0.0)), left: Some(InsetValue::Px(0.0)), ..Inset::default() };
-        let tree = page(vec![opaque_page(9), upper]);
-        assert!(bands_of(&tree, 9).is_empty(), "the lower surface is fully covered");
-        assert_eq!(bands_of(&tree, 10).len(), 3);
-        crate::surfaces::remove(9);
-        crate::surfaces::remove(10);
+        let scene = page(vec![opaque_page(9), upper]);
+        assert!(bands_of(&scene, 9).is_empty(), "the lower surface is fully covered");
+        assert_eq!(bands_of(&scene, 10).len(), 3);
+        pixel_core::surfaces::remove(9);
+        pixel_core::surfaces::remove(10);
     }
 
     #[test]
@@ -383,21 +326,21 @@ mod tests {
                 inset: Inset { top: Some(InsetValue::Px(0.0)), left: Some(InsetValue::Px(0.0)), ..Inset::default() },
                 width: Dimension::Px(50.0),
                 height: Dimension::Px(50.0),
-                background: Some(crate::style::Paint::Solid([10, 10, 10, 255])),
+                background: Some(pixel_core::Paint::Solid([10, 10, 10, 255])),
                 opaque: true,
                 ..Style::default()
             },
             ..Desc::default()
         };
-        let tree = page(vec![opaque_page(11), card]);
-        let opaque = opaque_areas(&tree);
+        let scene = page(vec![opaque_page(11), card]);
+        let opaque = opaque_areas(&scene.root);
         let bands: Vec<_> = opaque.areas.iter().filter(|a| a.surface == Some(11)).collect();
         assert_eq!(bands.len(), 3, "the bands stay: {:?}", opaque.areas);
         let plain: Vec<_> = opaque.areas.iter().filter(|a| a.surface.is_none()).collect();
         assert_eq!(plain.len(), 1, "only the corner square the bands leave out is new: {:?}", opaque.areas);
-        assert_eq!(plain[0].rect, crate::surfaces::Rect { x: 0, y: 0, w: 10, h: 10 });
+        assert_eq!(plain[0].rect, pixel_core::surfaces::Rect { x: 0, y: 0, w: 10, h: 10 });
         let over: u64 = opaque.ui_over_surfaces.iter().map(|r| r.area()).sum();
         assert_eq!(over, 50 * 50 - 10 * 10, "the rest of the card is UI over the page: {:?}", opaque.ui_over_surfaces);
-        crate::surfaces::remove(11);
+        pixel_core::surfaces::remove(11);
     }
 }

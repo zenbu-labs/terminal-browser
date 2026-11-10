@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::io;
 
 use super::{FrameTransport, SessionEnv, Terminal};
-use pixel_core::backend::Canvas;
+use pixel_raster::Canvas;
 use pixel_core::surfaces::Rect;
 
 mod flash;

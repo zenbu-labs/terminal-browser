@@ -1,5 +1,5 @@
 
-use crate::canvas::measure_marked;
+use crate::text_metrics::measure_marked;
 use crate::style::{Align, Dimension, FlexDirection, InsetValue, Justify, Overflow, Paint, Position, Style};
 use crate::text_input::Mark;
 use crate::wrap::wrap_lines;
@@ -119,7 +119,7 @@ fn measure_wrapped_text(
         .map(|r| {
             if cell_caret {
                 let full = measure_marked(font, text, r.clone(), px, marks)
-                    + crate::canvas::measure_text(font, " ", px);
+                    + crate::text_metrics::measure_text(font, " ", px);
                 return max_width.map_or(full, |w| full.min(w));
             }
             let visible_len = text[r.clone()].trim_end_matches(' ').len();
@@ -129,7 +129,7 @@ fn measure_wrapped_text(
     let caret_line = cell_caret
         && max_width.zip(lines.last()).is_some_and(|(width, last)| {
             let end = measure_marked(font, text, last.clone(), px, marks);
-            end + crate::canvas::measure_text(font, " ", px) > width + crate::wrap::WRAP_SLACK
+            end + crate::text_metrics::measure_text(font, " ", px) > width + crate::wrap::WRAP_SLACK
         });
     taffy::Size {
         width: widest.ceil(),

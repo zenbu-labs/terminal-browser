@@ -3,7 +3,7 @@ use std::io;
 use super::Terminal;
 use super::merge::{IMAGE_OVERHEAD_PX, merge_rects};
 use super::transmit_strategy::{Flatten, MAX_PATCHES, Patch, Stats, TransmitStrategy};
-use pixel_core::backend::Frame;
+use pixel_raster::PixelFrame as Frame;
 use crate::kitty::FrameEdit;
 use pixel_core::surfaces::Rect;
 

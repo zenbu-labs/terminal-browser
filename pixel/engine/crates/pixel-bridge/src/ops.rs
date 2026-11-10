@@ -315,7 +315,7 @@ struct ShapeDto {
     #[serde(default)]
     view_box: Option<f32>,
     #[serde(default)]
-    fallback: Option<String>,
+    glyph: Option<String>,
 }
 
 impl ShapeDto {
@@ -323,7 +323,7 @@ impl ShapeDto {
         ShapeProps {
             cmds: parse_path_data(&self.d),
             view_box: self.view_box,
-            fallback: self.fallback,
+            glyph: self.glyph,
             stroke: ShapeStroke {
                 width: self.stroke.width,
                 color: self.stroke.color,
@@ -367,7 +367,7 @@ struct ImageDto {
     #[serde(default)]
     confirmed_equal_to: Vec<String>,
     #[serde(default)]
-    fallback: Option<String>,
+    glyph: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -770,7 +770,7 @@ impl PropsDto {
             image: self.image.map(|i| ImageProps {
                 src: i.src,
                 equal_to: i.confirmed_equal_to,
-                fallback: i.fallback,
+                glyph: i.glyph,
             }),
             surface: self.surface,
             slot: match self.slot.as_deref() {

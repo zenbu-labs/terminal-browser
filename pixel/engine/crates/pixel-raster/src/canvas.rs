@@ -1,11 +1,12 @@
-use crate::surfaces::{OpaqueArea, Rect};
-use crate::system_fonts::{self, Glyph};
-use crate::text_input::{MARK_CHAR, Mark, mark_advance_at};
-pub use crate::text_metrics::{char_advance, measure_marked, measure_text};
-use crate::text_metrics::{columns, draws_itself, monospace_advance};
+use pixel_core::surfaces::{OpaqueArea, Rect};
+use crate::glyphs::{self as system_fonts, Glyph};
+use pixel_core::{MARK_CHAR, Mark, mark_advance_at, rounded_rect_path};
+use pixel_core::text_metrics::{char_advance, columns, draws_itself, monospace_advance};
+#[cfg(test)]
+use pixel_core::text_metrics::measure_text;
 
 #[derive(Clone, Copy)]
-pub struct Frame<'a> {
+pub struct PixelFrame<'a> {
     pub canvas: &'a Canvas,
     pub premultiplied: bool,
     pub changed: &'a [Rect],
@@ -13,8 +14,7 @@ pub struct Frame<'a> {
     pub opaque: &'a [OpaqueArea],
     pub ui_over_surfaces: &'a [Rect],
     pub layer: Option<&'a ScrollLayer>,
-    pub surfaces: Option<&'a crate::surfaces::SurfaceLayout>,
-    pub scenes: &'a [crate::scene::ViewScene<'a>],
+    pub surfaces: Option<&'a pixel_core::surfaces::SurfaceLayout>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,11 +39,11 @@ pub struct Overlay {
 
 type GlyphKey = (usize, char, u32);
 
-fn glyph_key(font: &crate::fonts::Font, ch: char, px: f32) -> GlyphKey {
+fn glyph_key(font: &pixel_core::fonts::Font, ch: char, px: f32) -> GlyphKey {
     (font.id(), ch, px.to_bits())
 }
 
-fn rasterize_glyph(font: &crate::fonts::Font, ch: char, px: f32) -> Glyph {
+fn rasterize_glyph(font: &pixel_core::fonts::Font, ch: char, px: f32) -> Glyph {
     if draws_itself(font, ch) {
         let (metrics, pixels) = font.rasterize(ch, px);
         return Glyph { metrics, pixels, color: false };
@@ -70,7 +70,7 @@ fn rasterize_glyph(font: &crate::fonts::Font, ch: char, px: f32) -> Glyph {
     glyph
 }
 
-fn borrowed_glyph(font: &crate::fonts::Font, ch: char, px: f32) -> Option<Glyph> {
+fn borrowed_glyph(font: &pixel_core::fonts::Font, ch: char, px: f32) -> Option<Glyph> {
     if let Some(face) = font.fallback_for(ch) {
         let (metrics, pixels) = face.rasterize(ch, px);
         return Some(Glyph { metrics, pixels, color: false });
@@ -96,7 +96,7 @@ std::thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-fn note_size(font: &crate::fonts::Font, px: f32) {
+fn note_size(font: &pixel_core::fonts::Font, px: f32) {
     if SIZES_SEEN.with_borrow_mut(|seen| seen.insert((font.id(), px.to_bits()))) {
         TO_WARM.with_borrow_mut(|queue| queue.push((font.id(), px, ' ')));
     }
@@ -106,7 +106,7 @@ pub(crate) fn glyphs_to_warm() -> bool {
     TO_WARM.with_borrow(|queue| !queue.is_empty())
 }
 
-pub(crate) fn warm_glyphs(fonts: &[crate::fonts::Font], until: std::time::Instant) {
+pub(crate) fn warm_glyphs(fonts: &[pixel_core::fonts::Font], until: std::time::Instant) {
     while std::time::Instant::now() < until {
         let Some((id, px, ch)) = TO_WARM.with_borrow(|queue| queue.last().copied()) else { return };
         let Some(font) = fonts.iter().find(|f| f.id() == id) else {
@@ -327,6 +327,12 @@ pub struct Canvas {
     scratch: Vec<u8>,
 }
 
+impl Default for Canvas {
+    fn default() -> Self {
+        Self::new(0, 0)
+    }
+}
+
 impl Canvas {
     pub fn new(width: u32, height: u32) -> Self {
         Self {
@@ -516,7 +522,7 @@ impl Canvas {
 
     pub fn draw_text(
         &mut self,
-        font: &crate::fonts::Font,
+        font: &pixel_core::fonts::Font,
         text: &str,
         x: i32,
         baseline: i32,
@@ -529,7 +535,7 @@ impl Canvas {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text_sheared(
         &mut self,
-        font: &crate::fonts::Font,
+        font: &pixel_core::fonts::Font,
         text: &str,
         x: i32,
         baseline: i32,
@@ -555,8 +561,8 @@ impl Canvas {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_fitted(
         &mut self,
-        face: &crate::fonts::Font,
-        layout: &crate::fonts::Font,
+        face: &pixel_core::fonts::Font,
+        layout: &pixel_core::fonts::Font,
         text: &str,
         x: i32,
         baseline: i32,
@@ -577,7 +583,7 @@ impl Canvas {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_marked_sheared(
         &mut self,
-        font: &crate::fonts::Font,
+        font: &pixel_core::fonts::Font,
         text: &str,
         range: std::ops::Range<usize>,
         x: i32,
@@ -915,7 +921,7 @@ impl Canvas {
         w: f32,
         h: f32,
         radius: [f32; 4],
-        gradient: &crate::style::LinearGradient,
+        gradient: &pixel_core::LinearGradient,
     ) {
         if w <= 0.0 || h <= 0.0 || gradient.stops.is_empty() {
             return;
@@ -1057,7 +1063,7 @@ impl Canvas {
         };
         let dst_from = y1 as usize * dst_stride;
         let dst_region = &mut self.pixels[dst_from..y2 as usize * dst_stride];
-        crate::parallel::row_bands(
+        pixel_core::parallel::row_bands(
             dst_region,
             dst_stride,
             rows,
@@ -1118,7 +1124,7 @@ impl Canvas {
         };
         let dst_from = y1 as usize * dst_stride;
         let dst_region = &mut self.pixels[dst_from..y2 as usize * dst_stride];
-        crate::parallel::row_bands(
+        pixel_core::parallel::row_bands(
             dst_region,
             dst_stride,
             rows,
@@ -1202,12 +1208,12 @@ impl Canvas {
             return;
         }
         // resample?
-        crate::profiler::count("surface.resampled", || 1);
+        pixel_core::profiler::count("surface.resampled", || 1);
         LAST_RESAMPLE.with(|last| {
             let sizes = (src_w, src_h, dst_w, dst_h);
             if last.get() != Some(sizes) {
                 last.set(Some(sizes));
-                crate::logging::warn(
+                pixel_core::logging::warn(
                     "paint",
                     format!("resampling surface {src_w}x{src_h} into {dst_w}x{dst_h}"),
                 );
@@ -1409,54 +1415,6 @@ impl Canvas {
     }
 }
 
-pub(crate) fn rounded_rect_path(
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    radius: [f32; 4],
-) -> Option<tiny_skia::Path> {
-    if w <= 0.0 || h <= 0.0 {
-        return None;
-    }
-    let mut r = radius.map(|r| r.max(0.0).min(w / 2.0).min(h / 2.0));
-    for v in &mut r {
-        if *v < 0.5 {
-            *v = 0.0;
-        }
-    }
-    let [tl, tr, br, bl] = r;
-    if r == [0.0; 4] {
-        return Some(tiny_skia::PathBuilder::from_rect(
-            tiny_skia::Rect::from_xywh(x, y, w, h)?,
-        ));
-    }
-    const K: f32 = 0.552_284_8; // circle approximation
-    let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(x + tl, y);
-    pb.line_to(x + w - tr, y);
-    if tr > 0.0 {
-        let k = tr * (1.0 - K);
-        pb.cubic_to(x + w - k, y, x + w, y + k, x + w, y + tr);
-    }
-    pb.line_to(x + w, y + h - br);
-    if br > 0.0 {
-        let k = br * (1.0 - K);
-        pb.cubic_to(x + w, y + h - k, x + w - k, y + h, x + w - br, y + h);
-    }
-    pb.line_to(x + bl, y + h);
-    if bl > 0.0 {
-        let k = bl * (1.0 - K);
-        pb.cubic_to(x + k, y + h, x, y + h - k, x, y + h - bl);
-    }
-    pb.line_to(x, y + tl);
-    if tl > 0.0 {
-        let k = tl * (1.0 - K);
-        pb.cubic_to(x, y + k, x + k, y, x + tl, y);
-    }
-    pb.close();
-    pb.finish()
-}
 
 #[cfg(test)]
 mod tests {
@@ -1697,7 +1655,7 @@ mod tests {
     fn gradient_fill_fades_along_its_axis_and_respects_the_silhouette() {
         let mut canvas = Canvas::new(100, 100);
         canvas.fill([255, 255, 255, 255]);
-        let gradient = crate::style::LinearGradient {
+        let gradient = pixel_core::LinearGradient {
             from: (0.0, 0.0),
             to: (1.0, 0.0),
             stops: vec![(0.0, [93, 156, 255, 200]), (1.0, [93, 156, 255, 0])],
@@ -1715,7 +1673,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn borrowed_glyphs_follow_the_cell_grid() {
-        let font = crate::fonts::Font::single(fontdue::Font::from_bytes(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(), fontdue::FontSettings::default()).unwrap());
+        let font = pixel_core::fonts::Font::single(fontdue::Font::from_bytes(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(), fontdue::FontSettings::default()).unwrap());
         let cell = measure_text(&font, "a", 20.0);
         assert_eq!(measure_text(&font, "ᗜ", 20.0), cell);
         assert_eq!(measure_text(&font, "漢", 20.0), cell * 2.0);
@@ -1726,7 +1684,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn emoji_draw_in_colour_regardless_of_text_colour() {
-        let font = crate::fonts::Font::single(fontdue::Font::from_bytes(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(), fontdue::FontSettings::default()).unwrap());
+        let font = pixel_core::fonts::Font::single(fontdue::Font::from_bytes(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(), fontdue::FontSettings::default()).unwrap());
         let mut canvas = Canvas::new(40, 40);
         canvas.draw_text(&font, "🙂", 4, 30, 24.0, [255, 255, 255, 255]);
         let yellowish = canvas.pixels.chunks_exact(4).any(|p| p[0] > 150 && p[1] > 100 && p[2] < 80);

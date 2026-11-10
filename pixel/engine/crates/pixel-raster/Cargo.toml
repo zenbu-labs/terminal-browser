@@ -1,0 +1,15 @@
+[package]
+name = "pixel-raster"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+pixel-core = { workspace = true }
+fontdue = { workspace = true }
+tiny-skia = { workspace = true }
+image = { workspace = true }
+ttf-parser = { version = "0.21", default-features = false, features = ["std", "variable-fonts"] }
+
+[lints]
+workspace = true

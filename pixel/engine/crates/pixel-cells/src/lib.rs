@@ -83,7 +83,7 @@ impl CellPresenter {
     }
 
     pub fn present(&mut self, frame: &Frame<'_>, out: &mut Vec<u8>) {
-        let changed = frame.scenes.iter().any(|view| view.changed);
+        let changed = frame.views.iter().any(|view| view.damage != pixel_core::scene::Damage::None);
         if !changed && !self.stale {
             return;
         }
@@ -92,7 +92,7 @@ impl CellPresenter {
         }
         self.next.clear(self.palette.foreground, self.palette.background);
         let mut caret = None;
-        for view in frame.scenes {
+        for view in frame.views {
             if let Some(found) = paint::paint_view(&mut self.next, &self.palette, self.cell, view) {
                 caret = Some(found);
             }

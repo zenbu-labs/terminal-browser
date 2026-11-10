@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::time::Instant;
 
-use crate::canvas::measure_marked;
+use crate::text_metrics::measure_marked;
 use crate::selection::{
     ClickGesture, ClickTracker, DocPos, DocSelection, line_end, line_range_at, line_start,
     next_char, next_word_boundary, prev_char, prev_word_boundary, word_range_at,

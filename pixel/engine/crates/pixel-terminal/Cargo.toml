@@ -9,6 +9,7 @@ rayon = "1"
 arboard = { workspace = true }
 pixel-core = { workspace = true }
 pixel-cells = { workspace = true }
+pixel-raster = { workspace = true }
 rustix = { workspace = true }
 libc = { workspace = true }
 base64 = { workspace = true }

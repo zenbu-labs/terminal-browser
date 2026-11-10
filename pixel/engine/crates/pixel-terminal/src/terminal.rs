@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use rustix::termios::{self, OptionalActions, Termios};
 
-use pixel_core::backend::Canvas;
+use pixel_raster::Canvas;
 pub use pixel_core::backend::HostColors;
 pub use pixel_core::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
 use crate::wrapper::Wrapper;
@@ -730,7 +730,7 @@ impl Terminal {
         self.hosted.is_none() && self.herdr.is_none() && self.herdr_target.is_none()
     }
 
-    pub fn draw(&mut self, frame: pixel_core::backend::Frame<'_>) -> io::Result<usize> {
+    pub fn draw(&mut self, frame: pixel_raster::PixelFrame<'_>) -> io::Result<usize> {
         let canvas = frame.canvas;
         let embedded = self.is_embedded();
         if let Some(state) = &self.hosted {

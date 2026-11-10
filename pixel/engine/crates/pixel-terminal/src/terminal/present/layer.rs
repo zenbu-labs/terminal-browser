@@ -3,7 +3,7 @@ use std::io;
 
 use super::Terminal;
 use super::tiles::{TILE_Z, intersect, subtract};
-use pixel_core::backend::{Frame, ScrollLayer};
+use pixel_raster::{PixelFrame as Frame, ScrollLayer};
 use pixel_core::surfaces::Rect;
 
 const STRIPE_PX: u32 = 128;

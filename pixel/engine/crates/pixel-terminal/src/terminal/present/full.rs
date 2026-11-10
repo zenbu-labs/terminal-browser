@@ -1,7 +1,7 @@
 use std::io;
 
 use super::Terminal;
-use pixel_core::backend::Canvas;
+use pixel_raster::Canvas;
 use crate::kitty::Placement;
 use pixel_core::surfaces::Rect;
 

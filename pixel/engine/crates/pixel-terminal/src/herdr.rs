@@ -3,7 +3,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use pixel_core::backend::Canvas;
+use pixel_raster::Canvas;
 use crate::terminal::FrameFile;
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(12);
@@ -410,7 +410,7 @@ mod tests {
 #[cfg(test)]
 mod shared_process_tests {
     use super::*;
-    use pixel_core::backend::Canvas;
+    use pixel_raster::Canvas;
 
     #[test]
     fn engines_sharing_a_process_use_distinct_frame_files() {

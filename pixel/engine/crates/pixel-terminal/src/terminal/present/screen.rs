@@ -1,7 +1,7 @@
 
 use super::patched::Patched;
 use super::tiles::{intersect, subtract};
-use pixel_core::backend::{Canvas, Frame};
+use pixel_raster::{Canvas, PixelFrame as Frame};
 use pixel_core::surfaces::Rect;
 
 const DIFF_BLOCK: u32 = 64;

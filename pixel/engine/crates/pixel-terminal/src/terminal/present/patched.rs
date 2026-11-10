@@ -4,7 +4,7 @@ use super::Terminal;
 use super::merge;
 use super::transmit_strategy::{FIRST_PATCH_Z, Flatten, POOL, Patch, Stats, TERMINAL_IMAGE_BUDGET_BYTES, TransmitStrategy, choose_transmit_strategy};
 use super::tiles::{TILE_Z, Tile, intersect, mark_dirty, mask_outside, tiles_for};
-use pixel_core::backend::Frame;
+use pixel_raster::PixelFrame as Frame;
 use pixel_core::surfaces::{OpaqueArea, Rect};
 
 #[derive(Debug, Default)]

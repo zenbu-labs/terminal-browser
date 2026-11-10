@@ -540,6 +540,7 @@ dependencies = [
  "objc2-foundation",
  "pixel-bridge",
  "pixel-core",
+ "pixel-raster",
  "serde_json",
 ]
 
@@ -578,6 +579,17 @@ dependencies = [
  "tiny-skia",
  "ttf-parser 0.21.1",
  "unicode-width",
+]
+
+[[package]]
+name = "pixel-raster"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "image",
+ "pixel-core",
+ "tiny-skia",
+ "ttf-parser 0.21.1",
 ]
 
 [[package]]
