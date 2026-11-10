@@ -251,13 +251,13 @@ impl Engine {
     }
 
     pub(super) fn step_scrolls(&mut self, dt: f32) {
-        let profile = self.profile;
+        let profile = self.profile.clone();
         for view in self.comp.active_views() {
             let tree = &mut self.comp.views[view].tree;
             for id in tree.scroll_nodes() {
                 let max = tree.scroll_max(id);
                 if let Some(state) = tree.scroll_state_mut(id)
-                    && state.step(profile, dt, max)
+                    && state.step(profile.as_ref(), dt, max)
                 {
                     tree.mark_place();
                     tree.touch_bar(id);

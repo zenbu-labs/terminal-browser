@@ -68,13 +68,18 @@ export interface EngineInfo {
   cellWidth: number;
   cellHeight: number;
   basePx: number;
-  /** fixme: placeholder copy — true when the backend draws characters on a cell grid instead of pixels: text is one row per line and one cell per column. */
-  grid: boolean;
-  renderer?: "pixels" | "cells";
-  colorTier?: "truecolor" | "256" | "16" | "mono";
+  device: DeviceInfo;
   kittyKeyboard: boolean;
   hosted: boolean;
   colors: TerminalColors;
+}
+
+/** fixme: placeholder copy — the output device the backend draws on: layout edges land on `lattice` (device pixels are `[1, 1]`), and `colors`/`pointer` say what it can show and how precise pointer input is. */
+export interface DeviceInfo {
+  name: string;
+  lattice: [number, number];
+  colors: "truecolor" | "256" | "16" | "mono";
+  pointer: "precise" | "coarse";
 }
 
 export interface HostOptions {

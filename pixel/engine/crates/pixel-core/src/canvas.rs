@@ -1,6 +1,8 @@
 use crate::surfaces::{OpaqueArea, Rect};
 use crate::system_fonts::{self, Glyph};
 use crate::text_input::{MARK_CHAR, Mark, mark_advance_at};
+pub use crate::text_metrics::{char_advance, measure_marked, measure_text};
+use crate::text_metrics::{columns, draws_itself, monospace_advance};
 
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
@@ -41,47 +43,13 @@ fn glyph_key(font: &crate::fonts::Font, ch: char, px: f32) -> GlyphKey {
     (font.id(), ch, px.to_bits())
 }
 
-fn monospace_advance(font: &crate::fonts::Font, px: f32) -> Option<f32> {
-    let narrow = font.metrics('i', px).advance_width;
-    (narrow > 0.0 && narrow == font.metrics('M', px).advance_width).then_some(narrow)
-}
-
-fn draws_itself(font: &crate::fonts::Font, ch: char) -> bool {
-    ch.is_control() || font.lookup_glyph_index(ch) != 0 || (ch.is_whitespace() && font.fallback_for(ch).is_none())
-}
-
-fn cells(ch: char) -> usize {
-    unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1)
-}
-
-fn natural_fallback_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32 {
-    if let Some(face) = font.fallback_for(ch) {
-        return face.metrics(ch, px).advance_width;
-    }
-    // Matches `rasterize_glyph`, which draws nothing for a zero-width character no font has.
-    system_fonts::advance(ch, px).unwrap_or_else(|| if cells(ch) == 0 { 0.0 } else { font.metrics(ch, px).advance_width })
-}
-
-fn glyph_advance(font: &crate::fonts::Font, ch: char, px: f32) -> f32 {
-    if let Some(grid) = font.grid {
-        return grid.advance(ch);
-    }
-    if draws_itself(font, ch) {
-        return font.metrics(ch, px).advance_width;
-    }
-    match monospace_advance(font, px) {
-        Some(cell) => cell * cells(ch) as f32,
-        None => natural_fallback_advance(font, ch, px),
-    }
-}
-
 fn rasterize_glyph(font: &crate::fonts::Font, ch: char, px: f32) -> Glyph {
     if draws_itself(font, ch) {
         let (metrics, pixels) = font.rasterize(ch, px);
         return Glyph { metrics, pixels, color: false };
     }
     let cell = monospace_advance(font, px);
-    let span = cell.map(|cell| cell * cells(ch) as f32);
+    let span = cell.map(|cell| cell * columns(ch) as f32);
     let mut glyph = borrowed_glyph(font, ch, px);
     if let (Some(span), Some(drawn)) = (span, &glyph)
         && span > 0.0
@@ -90,7 +58,7 @@ fn rasterize_glyph(font: &crate::fonts::Font, ch: char, px: f32) -> Glyph {
         glyph = borrowed_glyph(font, ch, px * span / drawn.metrics.width as f32);
     }
     let mut glyph = glyph.unwrap_or_else(|| {
-        if cells(ch) == 0 {
+        if columns(ch) == 0 {
             return Glyph { metrics: fontdue::Metrics::default(), pixels: Vec::new(), color: false };
         }
         let (metrics, pixels) = font.rasterize(ch, px);
@@ -124,8 +92,6 @@ std::thread_local! {
     static GLYPH_CACHE: std::cell::RefCell<GlyphCache> = std::cell::RefCell::new(GlyphCache::new());
     static SIZES_SEEN: std::cell::RefCell<std::collections::HashSet<(usize, u32)>> = std::cell::RefCell::new(std::collections::HashSet::new());
     static TO_WARM: std::cell::RefCell<Vec<(usize, f32, char)>> = const { std::cell::RefCell::new(Vec::new()) };
-    static ADVANCE_CACHE: std::cell::RefCell<std::collections::HashMap<GlyphKey, f32>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
     static LAST_RESAMPLE: std::cell::Cell<Option<(u32, u32, u32, u32)>> =
         const { std::cell::Cell::new(None) };
 }
@@ -1490,49 +1456,6 @@ pub(crate) fn rounded_rect_path(
     }
     pb.close();
     pb.finish()
-}
-
-pub fn measure_text(font: &crate::fonts::Font, text: &str, px: f32) -> f32 {
-    measure_marked(font, text, 0..text.len(), px, &[])
-}
-
-pub(crate) fn measure_marked(
-    font: &crate::fonts::Font,
-    text: &str,
-    range: std::ops::Range<usize>,
-    px: f32,
-    marks: &[Mark],
-) -> f32 {
-    ADVANCE_CACHE.with_borrow_mut(|cache| {
-        text[range.clone()]
-            .char_indices()
-            .map(|(i, ch)| {
-                if ch == MARK_CHAR {
-                    return mark_advance_at(marks, range.start + i);
-                }
-                *cache
-                    .entry(glyph_key(font, ch, px))
-                    .or_insert_with(|| glyph_advance(font, ch, px))
-            })
-            .sum()
-    })
-}
-
-pub(crate) fn char_advance(
-    font: &crate::fonts::Font,
-    ch: char,
-    offset: usize,
-    px: f32,
-    marks: &[Mark],
-) -> f32 {
-    if ch == MARK_CHAR {
-        return mark_advance_at(marks, offset);
-    }
-    ADVANCE_CACHE.with_borrow_mut(|cache| {
-        *cache
-            .entry(glyph_key(font, ch, px))
-            .or_insert_with(|| glyph_advance(font, ch, px))
-    })
 }
 
 #[cfg(test)]

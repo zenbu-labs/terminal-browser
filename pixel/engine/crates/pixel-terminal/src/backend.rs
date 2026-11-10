@@ -134,17 +134,6 @@ impl TerminalBackend {
         })
     }
 
-    pub fn color_tier(&self) -> Option<ColorTier> {
-        self.cells.as_ref().map(CellPresenter::tier)
-    }
-
-    pub fn set_color_tier(&mut self, tier: ColorTier) {
-        if let Some(cells) = &mut self.cells {
-            cells.set_tier(tier);
-            self.queued.push_back(Event::Redraw);
-        }
-    }
-
     pub fn kitty_keyboard(&self) -> bool {
         self.term.kitty_keyboard()
     }
@@ -255,6 +244,11 @@ impl TerminalBackend {
             ),
         );
         self.hover_oracle.invalidate();
+        if cell != self.cell
+            && let Some(cells) = &self.cells
+        {
+            self.queued.push_back(Event::Device(pixel_cells::cell_device(cell, cells.tier())));
+        }
         self.window = window;
         self.cell = cell;
         self.resized = Some(Metrics { window, cell });
@@ -466,7 +460,11 @@ impl Backend for TerminalBackend {
                 if self.term.relayed() { ", tmux passthrough" } else { "" }
             ),
         );
-        Ok(HostInfo { metrics: Metrics { window: self.window, cell }, colors, grid: self.cells.is_some() })
+        let device = match &self.cells {
+            Some(cells) => pixel_cells::cell_device(cell, cells.tier()),
+            None => pixel_core::Device::default(),
+        };
+        Ok(HostInfo { metrics: Metrics { window: self.window, cell }, colors, device })
     }
 
     fn waker(&mut self) -> io::Result<Waker> {
@@ -601,10 +599,6 @@ impl Backend for TerminalBackend {
         let mut info = serde_json::Map::new();
         info.insert("kittyKeyboard".into(), self.term.kitty_keyboard().into());
         info.insert("hosted".into(), self.term.is_hosted().into());
-        info.insert("renderer".into(), if self.cells.is_some() { "cells" } else { "pixels" }.into());
-        if let Some(tier) = self.color_tier() {
-            info.insert("colorTier".into(), tier.name().into());
-        }
         info
     }
 }

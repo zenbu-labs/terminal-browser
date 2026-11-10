@@ -185,7 +185,7 @@ fn paint_node<P: Painter>(
         if let Some(stats) = stats {
             stats.rect_count += background.is_some() as u64 + node.style.border.is_some() as u64;
         }
-        let rect = hairline(rect, &node.style, fonts[0].grid);
+        let rect = hairline(rect, &node.style, tree.lattice());
         timed(stats.as_mut().map(|s| &mut s.rects), || {
             match &background {
                 Some(Paint::Solid(bg)) => canvas.rect(rect, node.style.corner_radius, *bg, RectKind::Fill),
@@ -277,7 +277,7 @@ fn paint_node<P: Painter>(
             let padding = tree
                 .taffy
                 .layout(node.taffy)
-                .map(|l| (l.padding.left, l.padding.top, l.padding.right))
+                .map(|l| (l.padding.left + l.border.left, l.padding.top + l.border.top, l.padding.right + l.border.right))
                 .unwrap_or((0.0, 0.0, 0.0));
             let scroll_x = node
                 .input
@@ -557,21 +557,18 @@ fn paint_node<P: Painter>(
 
 // On a grid a sub-cell line takes a whole row or column in layout; it paints as a thin strip across the middle
 // of it so the grid draws a line glyph rather than a block.
-fn hairline(rect: PxRect, style: &crate::style::Style, grid: Option<crate::fonts::GridMetrics>) -> PxRect {
-    let Some(grid) = grid else {
-        return rect;
-    };
+fn hairline(rect: PxRect, style: &crate::style::Style, (unit_x, unit_y): (f32, f32)) -> PxRect {
     let mut thin = rect;
     if let crate::style::Dimension::Px(h) = style.height
         && h > 0.0
-        && h < grid.cell.1 / 2.0
+        && h < unit_y
     {
         thin.y += (rect.h - h) / 2.0;
         thin.h = h;
     }
     if let crate::style::Dimension::Px(w) = style.width
         && w > 0.0
-        && w < grid.cell.0 / 2.0
+        && w < unit_x
     {
         thin.x += (rect.w - w) / 2.0;
         thin.w = w;

@@ -1202,7 +1202,7 @@ mod blur_tests {
 
     impl Backend for Quiet {
         fn start(&mut self) -> io::Result<HostInfo> {
-            Ok(HostInfo { metrics: Metrics { window: (400, 200), cell: (10, 20) }, colors: HostColors::default(), grid: false })
+            Ok(HostInfo { metrics: Metrics { window: (400, 200), cell: (10, 20) }, colors: HostColors::default(), device: pixel_core::Device::default() })
         }
         fn waker(&mut self) -> io::Result<Waker> {
             Ok(Waker::new(|| {}))

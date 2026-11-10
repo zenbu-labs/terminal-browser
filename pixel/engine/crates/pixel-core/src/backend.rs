@@ -23,11 +23,11 @@ pub struct Metrics {
     pub cell: (u32, u32),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HostInfo {
     pub metrics: Metrics,
     pub colors: HostColors,
-    pub grid: bool,
+    pub device: crate::device::Device,
 }
 
 #[derive(Clone)]
@@ -60,6 +60,7 @@ pub enum Event {
     Focus(bool),
     Resize(Metrics),
     Colors(HostColors),
+    Device(crate::device::Device),
     Visible(bool),
     Redraw,
     Closed,

@@ -318,7 +318,36 @@ struct Slot {
     node: Option<RNode>,
 }
 
+// Rounds a placed box's edges to the device lattice from their absolute positions, so neighbours share edges the
+// way rounding to whole pixels does. A box that paints keeps at least one lattice unit.
+fn snap(raw: PxRect, (x, y): (f32, f32), paints: bool) -> PxRect {
+    if (x, y) == (1.0, 1.0) {
+        return raw;
+    }
+    let edges = |start: f32, size: f32, unit: f32| {
+        let from = (start / unit).round() * unit;
+        let mut to = ((start + size) / unit).round() * unit;
+        if paints && size > 0.0 && to <= from {
+            to = from + unit;
+        }
+        (from, to - from)
+    };
+    let (left, w) = edges(raw.x, raw.w, x);
+    let (top, h) = edges(raw.y, raw.h, y);
+    PxRect { x: left, y: top, w, h }
+}
+
 impl RNode {
+    fn paints(&self) -> bool {
+        let background = match &self.style.background {
+            Some(crate::style::Paint::Solid(color)) => color[3] > 0,
+            Some(crate::style::Paint::Gradient(_)) => true,
+            None => false,
+        };
+        let border = self.style.border.is_some_and(|b| [b.top, b.right, b.bottom, b.left].iter().flatten().any(|s| s.width > 0.0 && s.color[3] > 0));
+        background || border || self.text.is_some() || self.image.is_some() || self.shape.is_some() || self.surface.is_some() || self.input.is_some()
+    }
+
     fn cell_caret(&self) -> bool {
         self.input.as_ref().is_some_and(|state| state.caret_shape != CaretShape::Bar)
     }
@@ -365,7 +394,7 @@ pub struct Tree {
     focus: Option<NodeId>,
     doc: DocSelectionState,
     base_px: f32,
-    grid: Option<(f32, f32)>,
+    lattice: (f32, f32),
     needs_layout: bool,
     needs_place: bool,
     needs_paint: bool,
@@ -419,7 +448,7 @@ impl Tree {
             focus: None,
             doc: DocSelectionState::default(),
             base_px: 16.0,
-            grid: None,
+            lattice: (1.0, 1.0),
             needs_layout: true,
             needs_place: true,
             needs_paint: true,
@@ -501,7 +530,7 @@ impl Tree {
         }
         let taffy = self
             .taffy
-            .new_leaf(to_taffy(&props.style, props.hidden, props.input.is_some(), self.grid))
+            .new_leaf(to_taffy(&props.style, props.hidden, props.input.is_some(), self.lattice))
             .expect("taffy leaf");
         let (text, static_marks) = match (&props.input, props.text) {
             (Some(input), _) => (Some(input.initial.clone()), Vec::new()),
@@ -909,7 +938,7 @@ impl Tree {
                 (node.taffy, node.style.clone(), node.hidden, node.input.is_some())
             };
             self.taffy
-                .set_style(taffy, to_taffy(&style, hidden, input, self.grid))
+                .set_style(taffy, to_taffy(&style, hidden, input, self.lattice))
                 .expect("taffy style");
             self.needs_layout = true;
         }
@@ -1066,7 +1095,7 @@ impl Tree {
         node.style.height = Dimension::Px(window.1);
         let (taffy, style, hidden) = (node.taffy, node.style.clone(), node.hidden);
         self.taffy
-            .set_style(taffy, to_taffy(&style, hidden, false, self.grid))
+            .set_style(taffy, to_taffy(&style, hidden, false, self.lattice))
             .expect("taffy style");
         self.needs_layout = true;
     }
@@ -1143,13 +1172,20 @@ impl Tree {
             .map(|node| (node.taffy, node.style.clone(), node.hidden, node.input.is_some()))
             .collect();
         for (taffy, style, hidden, input) in nodes {
-            self.taffy.set_style(taffy, to_taffy(&style, hidden, input, self.grid)).expect("taffy style");
+            self.taffy.set_style(taffy, to_taffy(&style, hidden, input, self.lattice)).expect("taffy style");
         }
         self.mark_layout();
     }
 
-    pub fn grid(&self) -> Option<(f32, f32)> {
-        self.grid
+    pub fn lattice(&self) -> (f32, f32) {
+        self.lattice
+    }
+
+    pub fn set_lattice(&mut self, lattice: (f32, f32)) {
+        if lattice != self.lattice {
+            self.lattice = lattice;
+            self.restyle_all();
+        }
     }
 
     pub fn flush_layout(&mut self, registry: &mut crate::fonts::FontRegistry, base_px: f32) {
@@ -1157,11 +1193,6 @@ impl Tree {
             self.mark_layout();
         }
         self.base_px = base_px;
-        let grid = registry.grid().map(|g| g.cell);
-        if grid != self.grid {
-            self.grid = grid;
-            self.restyle_all();
-        }
         let fonts_needed = self.needs_layout;
         if self.needs_layout {
             crate::profiler::span("tree.sync", || self.sync_dirty_children());
@@ -1507,7 +1538,7 @@ impl Tree {
         use taffy::prelude::length;
         let node = self.node(row);
         let taffy_id = node.taffy;
-        let mut style = to_taffy(&node.style, node.hidden, node.input.is_some(), self.grid);
+        let mut style = to_taffy(&node.style, node.hidden, node.input.is_some(), self.lattice);
         style.size.width = length(width);
         if self.taffy.style(taffy_id).ok() != Some(&style) {
             self.taffy.set_style(taffy_id, style).expect("taffy style");
@@ -1681,7 +1712,7 @@ impl Tree {
                     let child = self.node(child);
                     (child.taffy, child.style.clone(), child.hidden)
                 };
-                let mut taffy_style = to_taffy(&style, hidden, false, self.grid);
+                let mut taffy_style = to_taffy(&style, hidden, false, self.lattice);
                 taffy_style.size = taffy::Size {
                     width: length(size.width),
                     height: length(size.height),
@@ -1788,7 +1819,7 @@ impl Tree {
             return 0.0;
         }
         let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
-        let content = layout.size.height - layout.padding.top - layout.padding.bottom;
+        let content = layout.size.height - layout.padding.top - layout.padding.bottom - layout.border.top - layout.border.bottom;
         ((content - line_height(font, node.resolved.px)) / 2.0).max(0.0).round()
     }
 
@@ -1805,19 +1836,20 @@ impl Tree {
             return PxRect::ZERO;
         }
         let layout = *self.taffy.layout(self.node(id).taffy).expect("layout");
-        let mut rect = PxRect {
+        let mut raw = PxRect {
             x: origin.0 + layout.location.x,
             y: origin.1 + layout.location.y,
             w: layout.size.width,
             h: layout.size.height,
         };
         if self.node(id).style.position == Position::Sticky
-            && let Some((y, port_top)) = self.sticky_y(id, rect)
+            && let Some((y, port_top)) = self.sticky_y(id, raw)
         {
-            let stuck = y > rect.y + 0.5 && y + rect.h > port_top;
-            rect.y = y;
+            let stuck = y > raw.y + 0.5 && y + raw.h > port_top;
+            raw.y = y;
             self.set_stuck(id, stuck);
         }
+        let rect = snap(raw, self.lattice, self.node(id).paints());
         let visible = clip.map_or(rect, |c| rect.intersect(c));
         let moved_surface = {
             let node = self.node(id);
@@ -1853,12 +1885,12 @@ impl Tree {
 
         let node = self.node(id);
         let child_origin = if scrolls {
-            (rect.x, rect.y - node.scroll.shown())
+            (raw.x, raw.y - node.scroll.shown())
         } else {
-            (rect.x, rect.y)
+            (raw.x, raw.y)
         };
         let clips = node.style.overflow != Overflow::Visible;
-        let row_x = (node.style.layout == Layout::List).then(|| rect.x + layout.padding.left + layout.border.left);
+        let row_x = (node.style.layout == Layout::List).then(|| raw.x + layout.padding.left + layout.border.left);
         let child_clip = if clips { Some(visible) } else { clip };
         let image_src = node.image.clone();
         let mut extent = rect;
@@ -1897,7 +1929,7 @@ impl Tree {
                     );
                     self.node_mut(child).slot_visible = show;
                     if show {
-                        let placed = self.place_node(child, (rect.x, rect.y), Some(visible), fonts, skip);
+                        let placed = self.place_node(child, (raw.x, raw.y), Some(visible), fonts, skip);
                         extent = extent.union(placed);
                     } else {
                         self.zero_rects(child);
@@ -2372,7 +2404,7 @@ impl Tree {
     pub(crate) fn content_width(&self, id: NodeId) -> Option<f32> {
         let node = self.get(id)?;
         let layout = self.taffy.layout(node.taffy).ok()?;
-        Some((layout.size.width - layout.padding.left - layout.padding.right).max(0.0))
+        Some((layout.size.width - layout.padding.left - layout.padding.right - layout.border.left - layout.border.right).max(0.0))
     }
 
     pub fn text_geometry(&self, id: NodeId) -> Option<InputGeometry> {
@@ -2381,14 +2413,14 @@ impl Tree {
         let rect = self.rect(id)?;
         Some(InputGeometry {
             origin: (
-                rect.x + layout.padding.left,
-                rect.y + layout.padding.top + node.text_offset_y,
+                rect.x + layout.padding.left + layout.border.left,
+                rect.y + layout.padding.top + layout.border.top + node.text_offset_y,
             ),
             font: node.resolved.font,
             px: node.resolved.px,
             caret: CaretShape::Bar,
             max_width: node.style.wrap.then(|| {
-                (layout.size.width - layout.padding.left - layout.padding.right).max(0.0)
+                (layout.size.width - layout.padding.left - layout.padding.right - layout.border.left - layout.border.right).max(0.0)
                     + crate::wrap::WRAP_SLACK
             }),
         })

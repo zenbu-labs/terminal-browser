@@ -1,4 +1,5 @@
 pub mod color;
+pub mod device;
 pub mod encode;
 pub mod grid;
 pub mod paint;
@@ -8,6 +9,7 @@ use pixel_core::HostColors;
 use pixel_core::backend::Frame;
 
 pub use color::{CellColor, ColorTier, Palette};
+pub use device::{CellMetrics, cell_device};
 pub use encode::Encoder;
 pub use grid::CellGrid;
 pub use paint::Caret;

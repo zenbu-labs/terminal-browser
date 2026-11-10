@@ -1,4 +1,6 @@
 pub mod backend;
+pub mod device;
+pub mod text_metrics;
 mod canvas;
 pub mod clipboard_image;
 mod desc;
@@ -24,7 +26,9 @@ pub(crate) mod throttle;
 mod tree;
 mod wrap;
 
-pub use canvas::{Canvas, measure_text};
+pub use canvas::Canvas;
+pub use text_metrics::{FontMetrics, TextMetrics, measure_text};
+pub use device::{ColorDepth, Device, Pointer};
 pub use desc::Desc;
 pub use engine::{
     ChangeSource, DragPhase, Engine, EngineConfig, EngineEvent, FrameStats, HighlightArea,
@@ -36,7 +40,7 @@ pub use paint::{paint, record_scene};
 pub use image_cache::scaled_rgba;
 pub use profiler::{CounterRecord, ProfileData, SpanRecord};
 pub use shape::{LineCap, LineJoin, PathCmd, ShapeProps, ShapeStroke, build_path, parse_path_data, skia_stroke};
-pub use scroll::profiles::{Glide, Rows, Smooth};
+pub use scroll::profiles::{Glide, Smooth, Step};
 pub use scroll::{ScrollProfile, ScrollState};
 pub use scrollbar::ScrollbarRects;
 pub use selection::{DocPos, DocSelection};

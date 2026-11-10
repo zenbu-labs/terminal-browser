@@ -1,7 +1,7 @@
 mod glide;
-mod rows;
 mod smooth;
+mod step;
 
 pub use glide::Glide;
-pub use rows::Rows;
 pub use smooth::Smooth;
+pub use step::Step;

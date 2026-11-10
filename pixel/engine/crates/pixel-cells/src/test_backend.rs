@@ -58,7 +58,7 @@ impl Backend for TestBackend {
         Ok(HostInfo {
             metrics: Metrics { window: (self.size.0 as u32 * self.cell.0, self.size.1 as u32 * self.cell.1), cell: self.cell },
             colors: self.colors,
-            grid: true,
+            device: crate::cell_device(self.cell, self.presenter.tier()),
         })
     }
 

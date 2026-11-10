@@ -1,5 +1,4 @@
 use pixel_core::CaretShape;
-use pixel_core::fonts::GridMetrics;
 use pixel_core::scene::{ImageState, RectKind, SceneOp, TextRun, ViewScene};
 use pixel_core::{LinearGradient, MARK_CHAR, PxRect};
 use unicode_segmentation::UnicodeSegmentation;
@@ -373,7 +372,7 @@ impl ScenePainter<'_> {
                 pen += run.gaps.iter().find(|(at, _)| *at == offset).map_or(0.0, |(_, advance)| *advance);
                 continue;
             }
-            let width = cluster.chars().map(GridMetrics::columns).sum::<usize>();
+            let width = cluster.chars().map(crate::device::columns).sum::<usize>();
             let x = self.col(pen);
             pen += width as f32 * self.cell.0;
             if width == 0 {
@@ -401,7 +400,7 @@ impl ScenePainter<'_> {
     }
 
     fn label(&mut self, rect: PxRect, text: &str, color: [u8; 4]) {
-        let width: usize = text.chars().map(GridMetrics::columns).sum();
+        let width: usize = text.chars().map(crate::device::columns).sum();
         let cx = (rect.x + rect.w / 2.0) / self.cell.0 - width as f32 / 2.0;
         let x = cx.round() as i32;
         let y = ((rect.y + rect.h / 2.0) / self.cell.1).floor();

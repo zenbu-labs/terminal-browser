@@ -297,9 +297,9 @@ impl Engine {
                 if let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) {
                     let max = area.max_scroll();
                     let node = area.node;
-                    let profile = self.profile;
+                    let profile = self.profile.clone();
                     if let Some(state) = self.comp.views[view].tree.scroll_state_mut(node) {
-                        state.tick(profile, delta, max);
+                        state.tick(profile.as_ref(), delta, max);
                     }
                 }
             }

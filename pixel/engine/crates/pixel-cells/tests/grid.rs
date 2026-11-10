@@ -5,7 +5,7 @@ use pixel_core::backend::Event;
 use pixel_core::fonts::FontRegistry;
 use pixel_core::InputProps;
 use pixel_core::{
-    Border, CaretShape, Color, Desc, Dimension, Edges, Engine, EngineConfig, FlexDirection, HostColors, Key, KeyEvent,
+    Border, CaretShape, Color, Desc, Dimension, Engine, EngineConfig, FlexDirection, HostColors, Key, KeyEvent,
     Paint, Style,
 };
 
@@ -75,7 +75,6 @@ fn borders_become_box_drawing_around_the_content() {
         column(vec![Desc {
             style: Style {
                 width: Dimension::Px(100.0),
-                padding: Edges { left: 10.0, right: 10.0, top: 20.0, bottom: 20.0 },
                 border: Some(Border::hairline(FG)),
                 corner_radius: [6.0; 4],
                 ..Style::default()

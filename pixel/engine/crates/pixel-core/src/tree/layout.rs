@@ -1,6 +1,6 @@
 
 use crate::canvas::measure_marked;
-use crate::style::{Align, Dimension, Edges, FlexDirection, InsetValue, Justify, Overflow, Position, Style};
+use crate::style::{Align, Dimension, FlexDirection, InsetValue, Justify, Overflow, Paint, Position, Style};
 use crate::text_input::Mark;
 use crate::wrap::wrap_lines;
 
@@ -137,69 +137,44 @@ fn measure_wrapped_text(
     }
 }
 
-pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool, grid: Option<(f32, f32)>) -> taffy::Style {
-    match grid {
-        Some(cell) => to_taffy_px(&snap_to_grid(style, cell), hidden, input),
-        None => to_taffy_px(style, hidden, input),
+pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool, lattice: (f32, f32)) -> taffy::Style {
+    let mut taffy = to_taffy_px(&at_least_one_unit(style, lattice), hidden, input);
+    if let Some(border) = style.border {
+        // A border is drawn at least one lattice unit wide, so it keeps room for whatever of that unit its
+        // stroke doesn't cover.
+        let room = |side: Option<crate::style::BorderSide>, unit: f32| {
+            side.filter(|s| s.width > 0.0 && s.color[3] > 0).map_or(0.0, |s| (unit - s.width).max(0.0))
+        };
+        let (x, y) = lattice;
+        taffy.border = taffy::Rect {
+            left: taffy::LengthPercentage::length(room(border.left, x)),
+            right: taffy::LengthPercentage::length(room(border.right, x)),
+            top: taffy::LengthPercentage::length(room(border.top, y)),
+            bottom: taffy::LengthPercentage::length(room(border.bottom, y)),
+        };
     }
+    taffy
 }
 
-// On a character grid every length becomes whole cells. A length under half a cell is a hairline, which still
-// needs a whole row or column to draw its line in, and a visible border needs a cell of padding to be drawn in.
-// Vertical lengths round up only from 0.7 of a row, so rows sized 1.4 or 1.5 lines stay one row, as in a terminal UI.
-fn snap_to_grid(style: &Style, (cw, ch): (f32, f32)) -> Style {
-    let round_x = |v: f32| (v / cw).round().max(0.0) * cw;
-    let round_y = |v: f32| (v / ch - 0.2).round().max(0.0) * ch;
-    let size_x = |d: Dimension| match d {
-        Dimension::Px(v) if v > 0.0 => Dimension::Px(round_x(v).max(cw)),
-        other => other,
+// A box that paints never shrinks below one lattice unit, so a hairline still gets a row or column of its own.
+fn at_least_one_unit(style: &Style, (x, y): (f32, f32)) -> std::borrow::Cow<'_, Style> {
+    let paints = match &style.background {
+        Some(Paint::Solid(color)) => color[3] > 0,
+        Some(Paint::Gradient(_)) => true,
+        None => false,
     };
-    let size_y = |d: Dimension| match d {
-        Dimension::Px(v) if v > 0.0 => Dimension::Px(round_y(v).max(ch)),
-        other => other,
-    };
-    let inset_x = |v: Option<InsetValue>| match v {
-        Some(InsetValue::Px(v)) => Some(InsetValue::Px(round_x(v.abs()).copysign(v))),
-        other => other,
-    };
-    let inset_y = |v: Option<InsetValue>| match v {
-        Some(InsetValue::Px(v)) => Some(InsetValue::Px(round_y(v.abs()).copysign(v))),
-        other => other,
-    };
-    let visible = |side: Option<crate::style::BorderSide>| side.is_some_and(|s| s.width > 0.0 && s.color[3] > 0);
-    let border = style.border.unwrap_or_default();
-    let pad = |snapped: f32, step: f32, bordered: bool| if bordered { snapped.max(step) } else { snapped };
-    let padding = Edges {
-        left: pad(round_x(style.padding.left), cw, visible(border.left)),
-        right: pad(round_x(style.padding.right), cw, visible(border.right)),
-        top: pad(round_y(style.padding.top), ch, visible(border.top)),
-        bottom: pad(round_y(style.padding.bottom), ch, visible(border.bottom)),
-    };
-    let extra_w = padding.left - round_x(style.padding.left) + padding.right - round_x(style.padding.right);
-    let extra_h = padding.top - round_y(style.padding.top) + padding.bottom - round_y(style.padding.bottom);
-    let grown = |d: Dimension, extra: f32| match d {
-        Dimension::Px(v) => Dimension::Px(v + extra),
-        other => other,
-    };
-    let mut snapped = style.clone();
-    snapped.width = grown(size_x(style.width), extra_w);
-    snapped.height = grown(size_y(style.height), extra_h);
-    snapped.min_width = size_x(style.min_width);
-    snapped.max_width = size_x(style.max_width);
-    snapped.max_height = size_y(style.max_height);
-    snapped.padding = padding;
-    snapped.margin = Edges {
-        left: round_x(style.margin.left.abs()).copysign(style.margin.left),
-        right: round_x(style.margin.right.abs()).copysign(style.margin.right),
-        top: round_y(style.margin.top.abs()).copysign(style.margin.top),
-        bottom: round_y(style.margin.bottom.abs()).copysign(style.margin.bottom),
-    };
-    snapped.inset.left = inset_x(style.inset.left);
-    snapped.inset.right = inset_x(style.inset.right);
-    snapped.inset.top = inset_y(style.inset.top);
-    snapped.inset.bottom = inset_y(style.inset.bottom);
-    snapped.gap = if style.flex_direction == FlexDirection::Column { round_y(style.gap) } else { round_x(style.gap) };
-    snapped
+    let thin = |d: Dimension, unit: f32| matches!(d, Dimension::Px(v) if v > 0.0 && v < unit);
+    if !paints || !(thin(style.width, x) || thin(style.height, y)) {
+        return std::borrow::Cow::Borrowed(style);
+    }
+    let mut grown = style.clone();
+    if thin(style.width, x) {
+        grown.width = Dimension::Px(x);
+    }
+    if thin(style.height, y) {
+        grown.height = Dimension::Px(y);
+    }
+    std::borrow::Cow::Owned(grown)
 }
 
 fn to_taffy_px(style: &Style, hidden: bool, input: bool) -> taffy::Style {

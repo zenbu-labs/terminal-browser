@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::text_metrics::{FontMetrics, TextMetrics};
+
 pub type Face = Arc<fontdue::Font>;
 
 pub const REGULAR: u16 = 400;
@@ -16,33 +18,8 @@ pub struct Font {
     pub synthetic_italic: bool,
     pub bold: bool,
     pub italic: bool,
-    pub grid: Option<GridMetrics>,
+    metrics: Arc<dyn TextMetrics>,
     variants: [usize; 4],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GridMetrics {
-    pub cell: (f32, f32),
-}
-
-impl GridMetrics {
-    pub fn columns(ch: char) -> usize {
-        match ch {
-            '\u{FE0F}' => 1,
-            '\t' => 1,
-            _ if ch.is_control() => 0,
-            _ => unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0),
-        }
-    }
-
-    pub fn advance(&self, ch: char) -> f32 {
-        Self::columns(ch) as f32 * self.cell.0
-    }
-
-    pub fn line_metrics(&self) -> fontdue::LineMetrics {
-        let height = self.cell.1;
-        fontdue::LineMetrics { ascent: height * 0.8, descent: -height * 0.2, line_gap: 0.0, new_line_size: height }
-    }
 }
 
 static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -53,7 +30,7 @@ fn next_id() -> usize {
 
 impl Font {
     pub fn single(face: fontdue::Font) -> Font {
-        Font { faces: vec![Arc::new(face)], id: next_id(), synthetic_bold: false, synthetic_italic: false, bold: false, italic: false, grid: None, variants: [0; 4] }
+        Font { faces: vec![Arc::new(face)], id: next_id(), synthetic_bold: false, synthetic_italic: false, bold: false, italic: false, metrics: Arc::new(FontMetrics), variants: [0; 4] }
     }
 
     pub fn primary(&self) -> &fontdue::Font {
@@ -85,10 +62,11 @@ impl Font {
     }
 
     pub fn horizontal_line_metrics(&self, px: f32) -> Option<fontdue::LineMetrics> {
-        match self.grid {
-            Some(grid) => Some(grid.line_metrics()),
-            None => self.primary().horizontal_line_metrics(px),
-        }
+        Some(self.metrics.line(self, px))
+    }
+
+    pub fn text_metrics(&self) -> &dyn TextMetrics {
+        self.metrics.as_ref()
     }
 }
 
@@ -113,7 +91,7 @@ pub struct FontRegistry {
     family_ids: HashMap<Vec<String>, usize>,
     stacks: Vec<Font>,
     interned: HashMap<StackKey, usize>,
-    grid: Option<GridMetrics>,
+    metrics: Arc<dyn TextMetrics>,
 }
 
 pub const DEFAULT_FAMILIES: usize = 0;
@@ -124,7 +102,7 @@ const GENERIC_ALIASES: [(&str, &str); 2] = [("system-ui", SANS_SERIF), ("ui-mono
 
 impl FontRegistry {
     pub fn new(monospace: fontdue::Font, sans_serif: fontdue::Font) -> Self {
-        let mut registry = Self { faces: Vec::new(), family_lists: Vec::new(), family_ids: HashMap::new(), stacks: Vec::new(), interned: HashMap::new(), grid: None };
+        let mut registry = Self { faces: Vec::new(), family_lists: Vec::new(), family_ids: HashMap::new(), stacks: Vec::new(), interned: HashMap::new(), metrics: Arc::new(FontMetrics) };
         registry.add_face(MONOSPACE, REGULAR, false, monospace, "bundled:monospace");
         registry.add_face(SANS_SERIF, REGULAR, false, sans_serif, "bundled:sans-serif");
         registry.families(&[MONOSPACE.to_string()]);
@@ -142,17 +120,9 @@ impl FontRegistry {
         true
     }
 
-    pub fn grid(&self) -> Option<GridMetrics> {
-        self.grid
-    }
-
-    pub fn set_grid(&mut self, grid: Option<GridMetrics>) -> bool {
-        if self.grid == grid {
-            return false;
-        }
-        self.grid = grid;
+    pub fn set_text_metrics(&mut self, metrics: Arc<dyn TextMetrics>) {
+        self.metrics = metrics;
         self.rebuild();
-        true
     }
 
     fn rebuild(&mut self) {
@@ -208,7 +178,7 @@ impl FontRegistry {
             synthetic_italic: italic && primary.is_some_and(|r| !r.italic),
             bold: weight >= BOLD_THRESHOLD,
             italic,
-            grid: self.grid,
+            metrics: self.metrics.clone(),
             variants,
         }
     }
