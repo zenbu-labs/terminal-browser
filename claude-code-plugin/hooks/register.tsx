@@ -1,8 +1,9 @@
 /* @jsx h */
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderInput, StateWrite } from 'claude-code'
 import type { Browser } from './browser'
 import { MAX_IMAGE_CELLS } from './surface.tsx'
 import { normalizeUrl } from './urls.ts'
+import { fillSlot, isScrollIn, offerChoice, placementIn, readPlacement, readShownTab, scrollsKey } from './pane-grid.ts'
 import {
   isBridgeState,
   isInputMessage,
@@ -16,6 +17,8 @@ import {
 
 
 const PANE = 'browser'
+// the name in .claude-plugin/plugin.json, which pane-grid keys this plugin's cell by
+const PLUGIN = 'terminal-browser'
 const IMAGE_KEY = 'view'
 const IMAGE_ALT = ''
 const OPEN_TOOL = 'mcp__terminal-browser__open'
@@ -145,6 +148,32 @@ function fitsMounted(frame: Frame): boolean {
   return grid.cols === mounted.cols && grid.rows === mounted.rows
 }
 
+type TerminalPane = RenderInput<'Pane', 'terminal'>
+
+function paneSize(e: TerminalPane) {
+  const rows = e.props.scroll.bodyRows > 0 ? e.props.scroll.bodyRows : Math.max(8, (e.viewport?.rows ?? 30) - 8)
+  const cols = Math.max(1, e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 80))
+  return { cols, rows }
+}
+
+// draws the browser cols by rows, in its own pane or in a pane-grid cell
+async function drawBrowser($: EngineInterface, e: TerminalPane, cols: number, rows: number) {
+  const { Box, Client, Image } = await $.ui.resolve(e)
+  const frame = state.frame
+  const grid = frame ? imageGrid(frame, cols, rows) : null
+  state.mounted = grid
+  return (
+    <Box flexDirection="column" width={cols} height={rows}>
+      {frame && grid ? (
+        <Image key={IMAGE_KEY} source={imageSource(frame)} columns={grid.cols} rows={grid.rows} alt={IMAGE_ALT} />
+      ) : null}
+      <Box position="absolute" top={0} left={0} width={cols} height={rows}>
+        <Client key={viewKey()} module="./surface.tsx" width={cols} height={rows} />
+      </Box>
+    </Box>
+  )
+}
+
 async function watchBridge($: EngineInterface): Promise<void> {
   const watcher = ++state.watcher
   const live = () => state.watcher === watcher && state.port !== null
@@ -163,6 +192,8 @@ async function watchBridge($: EngineInterface): Promise<void> {
     state.last = fresh
     if (fresh.inbox > 0) await deliverAgentText($)
     if (!state.open) continue
+    // in a pane-grid cell the Image is drawn in the grid pane, not in this plugin's own pane
+    const placement = await readPlacement($, PLUGIN)
     const pictureGone = fresh.frame === null && state.frame !== null
     if (pictureGone) state.frame = null
     const paneChanged =
@@ -173,16 +204,18 @@ async function watchBridge($: EngineInterface): Promise<void> {
       || previous.error !== fresh.error
     if (paneChanged) {
       $.ui.invalidate('ui.render')
-      if (fresh.title) await $.ui.open({ id: PANE, title: fresh.title.slice(0, 40) })
+      if (fresh.title && !placement) await $.ui.open({ id: PANE, title: fresh.title.slice(0, 40) })
     }
     const frame = fresh.frame
     if (!frame || frame.generation === state.frame?.generation) continue
     state.frame = frame
+    // a hidden grid tab mounts no Image; the shown hook draws the last frame when the tab is shown again
+    if (placement && await readShownTab($) !== placement.tab) continue
     if (!fitsMounted(frame)) {
       $.ui.invalidate('ui.render')
       continue
     }
-    const result = await $.ui.blit({ requestId: PANE, key: IMAGE_KEY, source: imageSource(frame) })
+    const result = await $.ui.blit({ requestId: placement ? placement.requestId : PANE, key: IMAGE_KEY, source: imageSource(frame) })
     if (!result.deny) {
       denials = 0
       continue
@@ -206,7 +239,8 @@ async function openBrowser($: EngineInterface, raw: string | null): Promise<{ ok
   const url = raw ? normalizeUrl(raw) : (alive && state.last?.url ? state.last.url : START_URL)
   state.pendingUrl = url
   state.open = true
-  await $.ui.open({ id: PANE, title: 'browser', focus: true, rows: 24 })
+  // while placed in a pane-grid cell the browser is drawn there instead
+  if (!(await readPlacement($, PLUGIN))) await $.ui.open({ id: PANE, title: 'browser', focus: true, rows: 24 })
   $.ui.invalidate('ui.render')
   if (state.region) {
     state.pendingUrl = null
@@ -217,8 +251,28 @@ async function openBrowser($: EngineInterface, raw: string | null): Promise<{ ok
 
 async function closeBrowser($: EngineInterface): Promise<boolean> {
   if (!state.open) return false
+  if (await readPlacement($, PLUGIN)) {
+    // no pane of its own to close: the pane-grid cell goes back to its hint
+    await browserClosed($)
+    $.ui.invalidate('ui.render')
+    return true
+  }
   await $.ui.close({ id: PANE })
   return true
+}
+
+// Moves the open browser between its own pane and its pane-grid cell; the browser keeps running.
+// The pane opens again only when the cell was removed while the browser was open, so a closed browser stays closed.
+async function placeOwnPane($: EngineInterface, layout: unknown, previous: unknown): Promise<void> {
+  const isPlaced = placementIn(layout, PLUGIN) !== undefined
+  const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
+  if (isPlaced && isOpen) {
+    await $.ui.close({ id: PANE })
+    return
+  }
+  if (isPlaced || isOpen || !state.open || placementIn(previous, PLUGIN) === undefined) return
+  await $.ui.open({ id: PANE, title: state.last?.title ? state.last.title.slice(0, 40) : 'browser', rows: 24 })
+  $.ui.invalidate('ui.render')
 }
 
 async function browserClosed($: EngineInterface): Promise<void> {
@@ -298,7 +352,9 @@ export const register: Register = (on, options) => {
       return { text: 'Closed terminal-browser' }
     }
     const opened = await openBrowser($, arg || null)
-    return { text: opened.ok ? 'Opened terminal-browser' : opened.error }
+    if (!opened.ok) return { text: opened.error }
+    const placement = await readPlacement($, PLUGIN)
+    return { text: placement ? `Opened terminal-browser in pane-grid cell ${placement.cell} of ${placement.tab}` : 'Opened terminal-browser' }
   })
 
   on('tool.call', { tool: new RegExp(`^${OPEN_TOOL}$`) }, async ($, e) => {
@@ -318,26 +374,54 @@ export const register: Register = (on, options) => {
       const { Box } = await $.ui.resolve(e)
       return <Box />
     }
-    const { Box, Client, Image } = await $.ui.resolve(e)
-    const rows = e.props.scroll.bodyRows > 0 ? e.props.scroll.bodyRows : Math.max(8, (e.viewport?.rows ?? 30) - 8)
-    const cols = Math.max(1, e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 80))
-    const frame = state.frame
-    const grid = frame ? imageGrid(frame, cols, rows) : null
-    state.mounted = grid
-    return (
-      <Box flexDirection="column" width={cols} height={rows}>
-        {frame && grid ? (
-          <Image key={IMAGE_KEY} source={imageSource(frame)} columns={grid.cols} rows={grid.rows} alt={IMAGE_ALT} />
-        ) : null}
-        <Box position="absolute" top={0} left={0} width={cols} height={rows}>
-          <Client key={viewKey()} module="./surface.tsx" width={cols} height={rows} />
-        </Box>
+    const { cols, rows } = paneSize(e)
+    return drawBrowser($, e, cols, rows)
+  })
+
+  // the browser in a pane-grid cell: https://github.com/hwanyong/pane-grid/blob/main/docs/add-pane-grid-cell.md
+  on('ui.render', { component: 'Pane', requestId: /^grid-/ }, async ($, e, next) => {
+    const placement = await readPlacement($, PLUGIN)
+    const below = await next(e)
+    const { Box, Button, Text } = await $.ui.resolve(e)
+    const offered = offerChoice(below, PLUGIN, placement, choice => <Button key={choice.key} plain label={choice.label} hotkey={choice.hotkey} onPress={() => {}} />)
+    if (!placement || placement.requestId !== e.requestId) return offered
+    let content
+    if (e.surface !== 'terminal') content = <Box />
+    else if (!state.open) content = <Text dimColor>Run /browser [url] to open a page here</Text>
+    else {
+      const size = paneSize(e)
+      const cols = Math.max(1, placement.columns > 0 ? placement.columns : size.cols)
+      const rows = Math.max(1, placement.rows > 0 ? placement.rows : size.rows)
+      content = await drawBrowser($, e, cols, rows)
+    }
+    const cell = (
+      <Box key={`cell:${PLUGIN}`} flexDirection="column">
+        <Box key={scrollsKey(PLUGIN)} />
+        {content}
       </Box>
     )
+    return fillSlot(offered, PLUGIN, cell) ?? <Box flexDirection="column">{offered}{cell}</Box>
+  })
+
+  on('state.set', { plugin: 'pane-grid' as never, key: 'layout' as never }, async ($, e, next) => {
+    const write = e as StateWrite
+    const result = await next(e)
+    await placeOwnPane($, write.value, write.previous)
+    return result
+  })
+
+  on('state.set', { plugin: 'pane-grid' as never, key: 'shown' as never }, async ($, e, next) => {
+    const write = e as StateWrite
+    const result = await next(e)
+    const placement = await readPlacement($, PLUGIN)
+    // frames are not blitted while the cell's grid tab is hidden: draw the last one now that it shows
+    if (state.open && placement && write.value === placement.tab) $.ui.invalidate('ui.render')
+    return result
   })
 
   on('ui.message', async ($, e, next) => {
-    if (e.requestId !== PANE || state.port === null) return next(e)
+    const isOurs = e.requestId === PANE || e.requestId === (await readPlacement($, PLUGIN))?.requestId
+    if (!isOurs || state.port === null) return next(e)
     if (isSizeMessage(e.data)) {
       state.region = { cols: e.data.cols, rows: e.data.rows }
       if (state.pendingUrl) {
@@ -353,12 +437,15 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('ui.scroll', { requestId: PANE }, async ($, e) => {
+  on('ui.scroll', { requestId: [PANE, /^grid-/] }, async ($, e, next) => {
+    const placement = e.requestId === PANE ? undefined : await readPlacement($, PLUGIN)
+    if (e.requestId !== PANE && !isScrollIn(placement, e)) return next(e)
     if (state.port === null || !state.open || e.by === 0) return {}
     const kind = e.by < 0 ? 'scrollup' : 'scrolldown'
     const ticks = Math.min(Math.round(Math.abs(e.by)) || 1, 10)
-    const x = e.pointer?.column ?? Math.floor((state.region?.cols ?? 0) / 2)
-    const y = e.pointer?.row ?? Math.floor((state.region?.rows ?? 0) / 2)
+    // in a cell the pointer counts from the grid pane's body; the browser counts from the cell
+    const x = e.pointer ? e.pointer.column - (placement?.column ?? 0) : Math.floor((state.region?.cols ?? 0) / 2)
+    const y = e.pointer ? e.pointer.row - (placement?.row ?? 0) : Math.floor((state.region?.rows ?? 0) / 2)
     const events = Array.from({ length: ticks }, () => ({ type: 'mouse', kind, x, y }))
     await post($, '/input', { events })
     return {}
@@ -366,7 +453,8 @@ export const register: Register = (on, options) => {
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const r = await next(e)
-    await browserClosed($)
+    // the pane closes for a pane-grid cell: the browser goes on there
+    if (!(await readPlacement($, PLUGIN))) await browserClosed($)
     return r
   })
 }

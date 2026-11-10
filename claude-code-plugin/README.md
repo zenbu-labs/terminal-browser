@@ -71,6 +71,10 @@ You can configure the terminal-browser plugin to include a tool that claude can 
 ```
 
 
+### pane-grid
+
+With [pane-grid](https://github.com/hwanyong/pane-grid) installed, the browser can draw in a cell of a pane-grid layout instead of its own pane: `/grid place terminal-browser`. While it has a cell, `/browser [url]` opens the page there and its own pane stays closed; `/grid place -` moves an open browser back to its own pane. The wheel over the cell scrolls the page. Without pane-grid the plugin works as before.
+
 ## terminal-browser plugin API
 
 The terminal-browser plugin comes with an API you can use within another claude code plugin to programatically open the browser and load a URL. Some examples of useful plugins you can build with this are:
