@@ -155,3 +155,40 @@ fn a_webview_draws_as_a_labelled_box() {
     show(&mut engine, column(vec![surface]));
     assert_eq!(handle.snapshot(), "╭──────────╮\n│ web view │\n╰──────────╯\n\n");
 }
+
+#[test]
+fn wheel_scrolling_a_full_width_list_uses_a_scroll_region() {
+    let (mut engine, handle) = engine(12, 8, ColorTier::TrueColor);
+    let rows = (0..40).map(|i| text(&format!("row {i}"))).collect();
+    let list = Desc {
+        key: Some("list".into()),
+        style: Style {
+            height: Dimension::Px(120.0),
+            overflow: pixel_core::Overflow::Scroll,
+            layout: pixel_core::Layout::List,
+            flex_direction: FlexDirection::Column,
+            ..Style::default()
+        },
+        children: rows,
+        ..Desc::default()
+    };
+    show(&mut engine, column(vec![text("title"), list, text("footer")]));
+    assert!(handle.snapshot().starts_with("title\nrow 0\nrow 1\nrow 2\nrow 3\nrow 4\nrow 5\nfooter"), "{:?}", handle.snapshot());
+    let before = handle.frames().len();
+    handle.send(Event::Mouse(pixel_core::Mouse {
+        kind: pixel_core::MouseKind::ScrollDown,
+        button: pixel_core::MouseButton::Middle,
+        mods: pixel_core::Mods::default(),
+        x: 15,
+        y: 30,
+    }));
+    settle(&mut engine);
+    let shown: Vec<String> = handle.snapshot().lines().map(|l| l.trim_end_matches([' ', '▐']).to_string()).collect();
+    assert_eq!(shown[..8], ["title", "row 3", "row 4", "row 5", "row 6", "row 7", "row 8", "footer"]);
+    let frames = handle.frames();
+    let scrolled: Vec<u8> = frames[before..].concat();
+    let text = String::from_utf8_lossy(&scrolled);
+    assert!(text.contains("\x1b[2;7r\x1b[3S\x1b[r"), "rows 2-7 scroll up by three: {text:?}");
+    assert_eq!(text.matches("row").count(), 3, "only the three uncovered rows are written: {text:?}");
+    assert!(text.contains("\x1b[5;1H"), "writing starts at the first uncovered row: {text:?}");
+}

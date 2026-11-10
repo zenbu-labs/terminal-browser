@@ -13,6 +13,13 @@ struct Pen {
     attrs: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Scroll {
+    pub top: u16,
+    pub bottom: u16,
+    pub by: i32,
+}
+
 #[derive(Debug, Default)]
 pub struct Encoder {
     at: Option<(u16, u16)>,
@@ -41,6 +48,12 @@ impl Encoder {
     }
 
     pub fn diff(&mut self, prev: &CellGrid, next: &CellGrid, caret: Option<Caret>, out: &mut Vec<u8>) {
+        self.diff_scrolled(prev, next, &[], caret, out);
+    }
+
+    // `prev` is what the terminal shows after `scrolls` (each moves rows `top..bottom` up by `by`, down when
+    // negative) are applied to it; they are sent first, then the cells that still differ.
+    pub fn diff_scrolled(&mut self, prev: &CellGrid, next: &CellGrid, scrolls: &[Scroll], caret: Option<Caret>, out: &mut Vec<u8>) {
         let start = out.len();
         out.extend_from_slice(b"\x1b[?2026h");
         let body = out.len();
@@ -48,6 +61,16 @@ impl Encoder {
             out.extend_from_slice(b"\x1b[?25l");
         }
         let cells_start = out.len();
+        for scroll in scrolls {
+            let _ = write!(out, "\x1b[{};{}r", scroll.top + 1, scroll.bottom);
+            if scroll.by > 0 {
+                let _ = write!(out, "\x1b[{}S", scroll.by);
+            } else {
+                let _ = write!(out, "\x1b[{}T", -scroll.by);
+            }
+            out.extend_from_slice(b"\x1b[r");
+            self.at = None;
+        }
         self.cells(prev, next, out);
         let drew = out.len() > cells_start;
         if !drew {

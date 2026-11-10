@@ -13,6 +13,8 @@ pub const INVERSE: u8 = 1 << 5;
 
 const GRAPHEME: u32 = 1 << 31;
 pub const CONTINUATION: u32 = 0x0011_0000;
+// A cell whose content on the terminal is not known, so it never matches and is always written.
+pub const UNKNOWN: u32 = 0x0011_0001;
 pub const BLANK: u32 = ' ' as u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +104,9 @@ impl CellGrid {
 
     pub fn symbol(&self, i: usize) -> Symbol<'_> {
         let raw = self.chars[i];
-        if raw == CONTINUATION {
+        if raw == UNKNOWN {
+            Symbol::Char(' ')
+        } else if raw == CONTINUATION {
             Symbol::Continuation
         } else if raw & GRAPHEME != 0 {
             Symbol::Cluster(&self.graphemes.clusters[(raw & !GRAPHEME) as usize].0)
@@ -193,6 +197,32 @@ impl CellGrid {
             self.chars[k] = BLANK;
             k += 1;
         }
+    }
+
+    // Moves rows `top..bottom` up by `by` (down when negative), the way a terminal scrolls a region, and marks the
+    // rows it uncovers as unknown.
+    pub fn scroll(&mut self, top: u16, bottom: u16, by: i32) {
+        let width = self.width as usize;
+        let (top, bottom) = (top as usize, bottom as usize);
+        let rows = bottom - top;
+        let shift = by.unsigned_abs() as usize;
+        if shift >= rows {
+            self.chars[top * width..bottom * width].fill(UNKNOWN);
+            return;
+        }
+        let moved = (rows - shift) * width;
+        let (from, to, exposed) = if by > 0 {
+            ((top + shift) * width, top * width, (bottom - shift) * width..bottom * width)
+        } else {
+            (top * width, (top + shift) * width, top * width..(top + shift) * width)
+        };
+        self.chars.copy_within(from..from + moved, to);
+        self.fg.copy_within(from..from + moved, to);
+        self.bg.copy_within(from..from + moved, to);
+        self.attrs.copy_within(from..from + moved, to);
+        self.fg_rgb.copy_within(from..from + moved, to);
+        self.bg_rgb.copy_within(from..from + moved, to);
+        self.chars[exposed].fill(UNKNOWN);
     }
 
     pub fn text(&self) -> String {

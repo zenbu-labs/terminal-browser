@@ -106,3 +106,28 @@ fn the_cursor_is_placed_and_shaped_after_the_cells() {
     assert_eq!(diff(&b, &b.clone(), &mut encoder, Some(moved)), "\x1b[?2026h\x1b[1;1H\x1b[?2026l");
     assert_eq!(diff(&b, &b.clone(), &mut encoder, None), "\x1b[?2026h\x1b[?25l\x1b[?2026l");
 }
+
+#[test]
+fn a_scrolled_region_is_moved_by_the_terminal_and_only_the_uncovered_row_is_written() {
+    let a = grid(&["head", "one", "two", "three", "foot"]);
+    let b = grid(&["head", "two", "three", "four", "foot"]);
+    let mut encoder = primed(&a);
+    let mut shown = a.clone();
+    let scroll = pixel_cells::encode::Scroll { top: 1, bottom: 4, by: 1 };
+    shown.scroll(scroll.top, scroll.bottom, scroll.by);
+    let mut out = Vec::new();
+    encoder.diff_scrolled(&shown, &b, &[scroll], None, &mut out);
+    assert_eq!(String::from_utf8(out).unwrap(), "\x1b[?2026h\x1b[2;4r\x1b[1S\x1b[r\x1b[4;1Hfour  \x1b[?2026l");
+}
+
+#[test]
+fn scrolling_down_moves_rows_the_other_way() {
+    let a = grid(&["one", "two", "three"]);
+    let b = grid(&["zero", "one", "two"]);
+    let mut encoder = primed(&a);
+    let mut shown = a.clone();
+    shown.scroll(0, 3, -1);
+    let mut out = Vec::new();
+    encoder.diff_scrolled(&shown, &b, &[pixel_cells::encode::Scroll { top: 0, bottom: 3, by: -1 }], None, &mut out);
+    assert_eq!(String::from_utf8(out).unwrap(), "\x1b[?2026h\x1b[1;3r\x1b[1T\x1b[r\x1b[1;1Hzero  \x1b[?2026l");
+}

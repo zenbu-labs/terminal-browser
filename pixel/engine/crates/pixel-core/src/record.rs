@@ -421,21 +421,36 @@ fn same(a: &Item, b: &Item) -> bool {
         && a.children.iter().zip(&b.children).all(|(x, y)| x.node == y.node && same(x, y))
 }
 
-// The layer's content, moved back by how far it scrolled, matches what it showed before. Its scrollbar is left
+// The layer's content, moved back by how far it scrolled, matches what it showed before. Rows a virtual list
+// added or dropped count as long as they were out of sight on the side that lacks them. The scrollbar is left
 // out: it moves with every scroll and is drawn over the content.
 fn same_shifted(old: &Item, new: &Item, by: f32) -> bool {
-    if old.ops != new.ops || old.children.len() != new.children.len() {
+    if old.ops != new.ops {
         return false;
     }
-    let mut moved: Vec<Item> = new.children.clone();
-    for child in &mut moved {
-        shift(child, by);
+    let mut inner = new.inner.clone();
+    inner.iter_mut().for_each(|op| shift_op(op, by));
+    if inner != old.inner {
+        return false;
     }
-    old.children.iter().zip(&moved).all(|(a, b)| a.node == b.node && same(a, b)) && {
-        let mut inner = new.inner.clone();
-        inner.iter_mut().for_each(|op| shift_op(op, by));
-        inner == old.inner
+    let now_seen = PxRect { y: new.bounds.y + by, ..new.bounds };
+    let mut kept = old.children.iter().filter(|a| new.children.iter().any(|b| b.node == a.node));
+    for child in &new.children {
+        let mut moved = child.clone();
+        shift(&mut moved, by);
+        if old.children.iter().any(|a| a.node == child.node) {
+            if !kept.next().is_some_and(|a| a.node == child.node && same(a, &moved)) {
+                return false;
+            }
+        } else if overlaps(moved.bounds, old.bounds) {
+            return false;
+        }
     }
+    old.children.iter().all(|a| new.children.iter().any(|b| b.node == a.node) || !overlaps(a.bounds, now_seen))
+}
+
+fn overlaps(a: PxRect, b: PxRect) -> bool {
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
 
 fn shift(item: &mut Item, by: f32) {
