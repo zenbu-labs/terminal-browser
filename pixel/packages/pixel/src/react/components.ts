@@ -25,6 +25,7 @@ export interface NodeHandle {
   focus(): void;
   blur(): void;
   scrollTo(offset: number, smooth?: boolean): void;
+  scrollBy(delta: number): void;
   scrollIntoView(smooth?: boolean): void;
   splice(start: number, end: number, text: string): void;
   selectAll(): void;

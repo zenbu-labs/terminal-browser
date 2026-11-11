@@ -165,6 +165,10 @@ impl Engine {
         self.scroll_requests.push((view, ScrollRequest::To(id, offset), smooth));
     }
 
+    pub fn scroll_by(&mut self, view: usize, id: NodeId, delta: f32) {
+        self.scroll_requests.push((view, ScrollRequest::By(id, delta), false));
+    }
+
     pub(super) fn apply_scroll_requests(&mut self) {
         for (view, request, smooth) in std::mem::take(&mut self.scroll_requests) {
             if view >= self.comp.views.len() {
@@ -181,6 +185,7 @@ impl Engine {
                     }
                 }
                 ScrollRequest::To(id, offset) => set_scroll(tree, id, offset, smooth),
+                ScrollRequest::By(id, delta) => scroll_by(tree, id, delta),
             }
         }
     }
@@ -271,6 +276,7 @@ impl Engine {
 pub(super) enum ScrollRequest {
     IntoView(NodeId),
     To(NodeId, f32),
+    By(NodeId, f32),
 }
 
 fn scroll_ancestor_offset(tree: &crate::tree::Tree, id: NodeId) -> Option<(NodeId, f32)> {
@@ -282,6 +288,12 @@ fn scroll_ancestor_offset(tree: &crate::tree::Tree, id: NodeId) -> Option<(NodeI
         }
     }
     None
+}
+
+fn scroll_by(tree: &mut crate::tree::Tree, id: NodeId, delta: f32) {
+    if let Some(position) = tree.scroll_state(id).map(|state| state.position) {
+        set_scroll(tree, id, position + delta, false);
+    }
 }
 
 fn set_scroll(tree: &mut crate::tree::Tree, id: NodeId, offset: f32, smooth: bool) {
@@ -331,5 +343,29 @@ mod tests {
         assert_eq!((state.position, state.target), (1800.0, 1900.0));
         set_scroll(&mut tree, list, 1850.0, true);
         assert_eq!(tree.scroll_state(list).unwrap().position, 1800.0, "near targets animate the whole way");
+    }
+
+    #[test]
+    fn scrolls_by_add_up_from_where_the_list_is() {
+        let mut tree = crate::tree::Tree::new((40.0, 100.0));
+        let row = |i: usize| Desc { style: Style { height: Dimension::Px(20.0), ..Style::default() }, key: Some(format!("row{i}")), ..Desc::default() };
+        tree.reconcile(Desc {
+            children: vec![Desc {
+                style: Style { width: Dimension::Px(40.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, layout: Layout::List, ..Style::default() },
+                key: Some("list".into()),
+                children: (0..10).map(row).collect(),
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        });
+        let mut fonts = crate::fonts::FontRegistry::bundled();
+        tree.flush_layout(&mut fonts, 16.0);
+        let list = tree.find("list").unwrap();
+        set_scroll(&mut tree, list, 30.0, false);
+        scroll_by(&mut tree, list, 25.0);
+        scroll_by(&mut tree, list, 25.0);
+        assert_eq!(tree.scroll_state(list).unwrap().position, 80.0);
+        scroll_by(&mut tree, list, 500.0);
+        assert_eq!(tree.scroll_state(list).unwrap().position, 100.0, "stops at the end");
     }
 }

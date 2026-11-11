@@ -52,5 +52,12 @@ opt-level = 2
 # Full debuginfo is rarely needed and slows linking; backtraces still work.
 debug = "line-tables-only"
 
+[profile.release]
+# rustc strips with its bundled rust-objcopy, whose Mach-O writer leaves the
+# string table 4-byte aligned; macOS 27.2's dyld refuses to load that
+# ("mis-aligned LINKEDIT string pool"). Leave the linker output alone and let
+# scripts/build-native.mjs strip with Apple's strip instead.
+strip = "none"
+
 [patch.crates-io]
 taffy = { path = "vendor/taffy" }
