@@ -90,34 +90,6 @@ pub(crate) fn clipboard(text: &str) -> Value {
     json!({ "type": "clipboard", "text": text })
 }
 
-pub(crate) fn placed(image_id: u32, cols: u32, rows: u32, cell: Option<(u32, u32)>) -> Value {
-    json!({ "type": "placed", "imageId": image_id, "cols": cols, "rows": rows, "cell": cell.map(|(w, h)| [w, h]) })
-}
-
-pub(crate) struct HostFrame<'a> {
-    pub(crate) shm: &'a str,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) generation: u64,
-    pub(crate) cols: u32,
-    pub(crate) rows: u32,
-    pub(crate) cell: Option<(u32, u32)>,
-}
-
-pub(crate) fn frame(frame: HostFrame<'_>) -> Value {
-    json!({
-        "type": "frame",
-        "shm": frame.shm,
-        "format": "rgba",
-        "width": frame.width,
-        "height": frame.height,
-        "generation": frame.generation,
-        "cols": frame.cols,
-        "rows": frame.rows,
-        "cell": frame.cell.map(|(w, h)| [w, h]),
-    })
-}
-
 impl HostState {
     pub(crate) fn fill_pixel_size(&mut self) {
         if let Some((cw, ch)) = self.cell {
@@ -467,6 +439,7 @@ mod tests {
         let (socket, frames, control) = fake_owner(&dir);
 
         let mut term = Terminal::join_host(&socket, "pane-7", "hello").unwrap();
+        let mut kitty = pixel_kitty::Kitty::new(&mut term, &crate::terminal::SessionEnv::default()).unwrap();
         let joined: Value =
             serde_json::from_str(&control.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
         assert_eq!(joined["type"], "join");
@@ -504,19 +477,21 @@ mod tests {
                 .is_none()
         );
 
-        let mut canvas = pixel_core::backend::Canvas::new(4, 2);
+        let mut canvas = pixel_raster::Canvas::new(4, 2);
         canvas.pixels[..4].copy_from_slice(&[1, 2, 3, 255]);
         let whole = [pixel_core::surfaces::Rect::sized(canvas.width, canvas.height)];
-        term.draw(pixel_core::backend::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: None })
+        kitty.sync(&term);
+        kitty.draw(&mut term, pixel_raster::PixelFrame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: None })
             .unwrap();
         let header = frames.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(header.contains("\"format\":\"bgra\""), "{header}");
-        let path = super::super::herdr::tests_support::frame_path(&header);
+        let header: Value = serde_json::from_str(&header).unwrap();
+        let path = header["file"]["path"].as_str().unwrap();
         let written = std::fs::read(path).unwrap();
         assert_eq!(&written[..4], &[3, 2, 1, 255]);
 
         term.set_title("guest title").unwrap();
-        term.set_pointer_shape("pointer").unwrap();
+        term.set_pointer_shape("pointer", "pointer").unwrap();
         let sent: Vec<String> = (0..2)
             .map(|_| control.recv_timeout(Duration::from_secs(2)).unwrap())
             .collect();
@@ -525,6 +500,7 @@ mod tests {
             "{sent:?}"
         );
         assert!(sent[1].contains("\"pointer\""), "{sent:?}");
+        drop(kitty);
         drop(term);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -564,17 +540,19 @@ mod tests {
         std::fs::write(&tty, b"").unwrap();
 
         let mut term = Terminal::join_embedded(&socket, "pane-1", "hello", tty.to_str().unwrap()).unwrap();
+        let mut kitty = pixel_kitty::Kitty::new(&mut term, &crate::terminal::SessionEnv::default()).unwrap();
         let joined: Value = serde_json::from_str(&lines.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
         assert_eq!(joined["type"], "join");
         assert!(term.is_embedded());
         assert_eq!(term.cell_size().unwrap(), Some((10, 20)));
 
-        let mut canvas = pixel_core::backend::Canvas::new(25, 30);
+        let mut canvas = pixel_raster::Canvas::new(25, 30);
         canvas.pixels[..4].copy_from_slice(&[9, 8, 7, 255]);
         let whole = [pixel_core::surfaces::Rect::sized(canvas.width, canvas.height)];
-        let frame = pixel_core::backend::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: None };
-        term.draw(frame).unwrap();
-        term.draw(frame).unwrap();
+        let frame = pixel_raster::PixelFrame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: None };
+        kitty.sync(&term);
+        kitty.draw(&mut term, frame).unwrap();
+        kitty.draw(&mut term, frame).unwrap();
 
         let first: Value = serde_json::from_str(&lines.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
         let second: Value = serde_json::from_str(&lines.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
@@ -593,11 +571,12 @@ mod tests {
         // macOS rounds a shared-memory object up to whole pages
         assert!(rustix::fs::fstat(&object).unwrap().st_size >= 25 * 30 * 4);
 
+        kitty.close();
         drop(term);
         assert_eq!(std::fs::read(&tty).unwrap(), b"", "nothing may be written to the host's tty");
         assert!(
             rustix::shm::open(name, rustix::shm::OFlags::RDONLY, rustix::fs::Mode::empty()).is_err(),
-            "dropping the terminal unlinks the objects the terminal never read"
+            "closing the renderer unlinks the objects the terminal never read"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

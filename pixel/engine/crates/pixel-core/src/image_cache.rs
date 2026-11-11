@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ImageStatus {
+pub enum ImageStatus {
     Pending,
     Ready,
     Failed,
@@ -421,7 +421,7 @@ fn evict_over_budget(cache: &mut Cache, keep: &str) {
     }
 }
 
-pub(crate) fn status(src: &str, equal_to: &[String]) -> ImageStatus {
+pub fn status(src: &str, equal_to: &[String]) -> ImageStatus {
     CACHE.with_borrow_mut(|cache| {
         ensure(cache, src, equal_to);
         match cache.entries[src].state {
@@ -457,7 +457,7 @@ fn make_scaled(
     radius: [f32; 4],
 ) -> Option<tiny_skia::Pixmap> {
     let mut out = tiny_skia::Pixmap::new(w, h)?;
-    let path = crate::canvas::rounded_rect_path(0.0, 0.0, w as f32, h as f32, radius)?;
+    let path = crate::shape::rounded_rect_path(0.0, 0.0, w as f32, h as f32, radius)?;
     let to_rect = tiny_skia::Transform::from_row(
         w as f32 / full.width() as f32,
         0.0,
@@ -487,7 +487,11 @@ fn make_scaled(
     Some(out)
 }
 
-pub(crate) fn with_scaled_image<R>(
+pub fn scaled_rgba(src: &str, equal_to: &[String], w: u32, h: u32) -> Option<Vec<u8>> {
+    with_scaled_image(src, w, h, [0.0; 4], equal_to, |pixmap| pixmap.data().to_vec())
+}
+
+pub fn with_scaled_image<R>(
     src: &str,
     w: u32,
     h: u32,
@@ -558,20 +562,20 @@ pub(crate) fn insert_decoded(src: String, img: &image::RgbaImage) {
     });
 }
 
-pub(crate) fn set_waker(wake: impl Fn() + Send + 'static) {
+pub fn set_waker(wake: impl Fn() + Send + 'static) {
     CACHE.with_borrow_mut(|cache| {
         *cache.waker.lock().unwrap() = Some(Box::new(wake));
     });
 }
 
 #[derive(Default)]
-pub(crate) struct Drained {
+pub struct Drained {
     pub landed: bool,
     // queued pastes
     pub pastes: Vec<(u64, Option<crate::clipboard_image::PastedImage>)>,
 }
 
-pub(crate) fn drain_completed() -> Drained {
+pub fn drain_completed() -> Drained {
     CACHE.with_borrow_mut(|cache| {
         let mut drained = Drained::default();
         let completed: Vec<Done> = match &cache.results {

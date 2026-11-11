@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 pixel-core = { path = "../../engine/crates/pixel-core" }
 pixel-bridge = { path = "../../engine/crates/pixel-bridge" }
+pixel-raster = { path = "../../engine/crates/pixel-raster" }
 serde_json = "1"
 objc2 = "0.6"
 objc2-foundation = "0.3"

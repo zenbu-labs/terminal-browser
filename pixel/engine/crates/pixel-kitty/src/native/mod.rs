@@ -4,10 +4,13 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use crate::terminal::Waker;
-
 pub(crate) mod hover;
+mod input;
 pub(crate) mod pairing;
+
+pub use input::{NativeInput, Pane};
+
+pub type Waker = Box<dyn Fn() + Send>;
 
 pub const PHASE_BEGAN: u32 = 1;
 
@@ -185,7 +188,7 @@ fn read_lines(stdout: std::process::ChildStdout) {
                 })
                 .is_ok();
             if delivered && wakes && let Some(waker) = waker {
-                waker.wake();
+                waker();
             }
             delivered
         });

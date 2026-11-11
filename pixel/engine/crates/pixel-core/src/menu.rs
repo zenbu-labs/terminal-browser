@@ -1,5 +1,5 @@
 // remindme: in vscode terminal disable, since it overlaps with their context menu
-use crate::canvas::measure_text;
+use crate::text_metrics::measure_text;
 use crate::desc::Desc;
 use crate::style::{
     Align, Border, Color, Dimension, Edges, FlexDirection, Inset, Justify, Position, Style,

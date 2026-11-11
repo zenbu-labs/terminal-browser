@@ -5,13 +5,14 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-rayon = "1"
 arboard = { workspace = true }
 pixel-core = { workspace = true }
+pixel-cells = { workspace = true }
+pixel-kitty = { workspace = true }
+pixel-raster = { workspace = true }
 rustix = { workspace = true }
 libc = { workspace = true }
 base64 = { workspace = true }
-miniz_oxide = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

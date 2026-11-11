@@ -8,7 +8,8 @@ use openh264::encoder::{
     BitRate, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, QpRange, UsageType,
 };
 use openh264::formats::YUVSource;
-use pixel_core::{Canvas, PathCmd, build_path, fontdue, measure_text};
+use pixel_core::{PathCmd, build_path, fontdue, measure_text};
+use pixel_raster::Canvas;
 use serde::Deserialize;
 
 struct Yuv420 {

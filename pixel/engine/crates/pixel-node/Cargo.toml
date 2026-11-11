@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pixel-core = { workspace = true }
 pixel-terminal = { workspace = true }
+pixel-raster = { workspace = true }
 pixel-bridge = { workspace = true, features = ["napi"] }
 napi = { version = "2", default-features = false, features = ["napi8"] }
 napi-derive = "2"

@@ -1,4 +1,3 @@
-use crate::canvas::Canvas;
 use crate::style::Color;
 use crate::surfaces::Rect;
 use crate::tree::Tree;
@@ -7,36 +6,27 @@ const DIVIDER_W: u32 = 6;
 const DIVIDER_GRAB: f32 = 5.0;
 const MIN_PANE: u32 = 160;
 
-const DIVIDER_BG: Color = [32, 33, 38, 255];
-const DIVIDER_BG_ACTIVE: Color = [58, 96, 168, 255];
-const DIVIDER_GRIP: Color = [118, 122, 132, 255];
 
 pub struct View {
     pub tree: Tree,
-    pub canvas: Canvas,
     pub clear_color: Color,
     pub origin_x: u32,
     pub size: (u32, u32),
     pub damage_parts: Vec<Rect>,
-    pub opaque: Vec<crate::surfaces::OpaqueArea>,
-    pub ui_over_surfaces: Vec<Rect>,
-    pub layer: Option<crate::canvas::ScrollLayer>,
-    pub layer_canvases: Option<crate::paint::LayerCanvases>,
+    pub scene: crate::scene::Scene,
+    pub scene_size: (u32, u32),
 }
 
 impl View {
     fn new(window: (u32, u32)) -> Self {
         Self {
             tree: Tree::new((window.0 as f32, window.1 as f32)),
-            canvas: Canvas::new(window.0, window.1),
             clear_color: [0, 0, 0, 0],
             origin_x: 0,
             size: window,
             damage_parts: Vec::new(),
-            opaque: Vec::new(),
-            ui_over_surfaces: Vec::new(),
-            layer: None,
-            layer_canvases: None,
+            scene: crate::scene::Scene::default(),
+            scene_size: (0, 0),
         }
     }
 
@@ -52,21 +42,12 @@ impl View {
 pub struct Compositor {
     pub views: Vec<View>,
     pub window: (u32, u32),
-    pub frame: Canvas,
     pub dirty: bool,
     pub divider_drag: bool,
     pub split: Option<f32>,
     pub relayout: bool,
-    pub opaque: Vec<crate::surfaces::OpaqueArea>,
-    pub ui_over_surfaces: Vec<Rect>,
-    layer: Option<crate::canvas::ScrollLayer>,
-    pub surface_layout: Option<crate::surfaces::SurfaceLayout>,
-    changed: Vec<Rect>,
-    repainted: Vec<Rect>,
-    direct: Option<usize>,
     panes: [usize; 2],
     divider_hover: bool,
-    last_divider: Option<(u32, bool)>,
 }
 
 impl Compositor {
@@ -74,21 +55,12 @@ impl Compositor {
         Self {
             views: vec![View::new(window), View::new((0, 0))],
             window,
-            frame: Canvas::new(window.0, window.1),
             dirty: true,
             divider_drag: false,
             split: None,
             relayout: true,
-            opaque: Vec::new(),
-            ui_over_surfaces: Vec::new(),
-            layer: None,
-            surface_layout: None,
-            changed: Vec::new(),
-            repainted: Vec::new(),
-            direct: None,
             panes: [0, 1],
             divider_hover: false,
-            last_divider: None,
         }
     }
 
@@ -201,200 +173,7 @@ impl Compositor {
         self.apply_layout(false)
     }
 
-    pub(crate) fn compose(&mut self, painted: &[Painted], whole_frame: bool, direct: bool) {
-        let resized = (self.frame.width, self.frame.height) != self.window;
-        if resized {
-            self.frame = Canvas::new(self.window.0, self.window.1);
-        }
-        let everything = resized || whole_frame || std::mem::take(&mut self.relayout);
-        let active = self.active_views();
-        let alone = active.len() == 1
-            && self.views[active[0]].origin_x == 0
-            && self.views[active[0]].size == self.window
-            && !everything
-            && direct;
-        self.direct = alone.then(|| active[0]);
-        self.changed.clear();
-        self.repainted.clear();
-        let mut divider = None;
-        if !alone {
-            for &view in &active {
-                let size = self.views[view].size;
-                let origin = self.views[view].origin_x;
-                let straighten = self.views[view].clear_color[3] < 255;
-                let (canvas, frame) = (&self.views[view].canvas, &mut self.frame);
-                if everything {
-                    blit(frame, canvas, origin, Rect::sized(size.0, size.1), straighten);
-                    continue;
-                }
-                let Some(p) = painted.iter().find(|p| p.view == view) else {
-                    continue;
-                };
-                crate::profiler::count("compose.px", || p.parts.iter().map(|r| r.area()).sum());
-                for part in &p.parts {
-                    blit(frame, canvas, origin, *part, straighten);
-                }
-            }
-            divider = self.draw_divider();
-        }
-        self.collect_opaque();
-        let (width, height) = (self.frame.width, self.frame.height);
-        if everything {
-            self.repainted.push(Rect::sized(width, height));
-            return;
-        }
-        for p in painted {
-            let origin = self.views[p.view].origin_x;
-            let moved = |part: &Rect| Rect { x: part.x + origin, ..*part }.clamped(width, height);
-            if p.whole {
-                let size = self.views[p.view].size;
-                self.repainted.push(moved(&Rect::sized(size.0, size.1)));
-                self.changed.extend(p.surface_parts.iter().map(moved).filter(|r| !r.is_empty()));
-            } else {
-                self.changed.extend(p.parts.iter().map(moved).filter(|r| !r.is_empty()));
-            }
-        }
-        self.changed.extend(divider);
+    pub(crate) fn divider(&self) -> Option<crate::scene::Divider> {
+        self.divider_x().map(|x| crate::scene::Divider { x, width: DIVIDER_W, engaged: self.divider_hover || self.divider_drag })
     }
-
-    pub(crate) fn frame(&self) -> crate::canvas::Frame<'_> {
-        crate::canvas::Frame {
-            canvas: self.direct.map_or(&self.frame, |view| &self.views[view].canvas),
-            premultiplied: self.direct.is_some(),
-            changed: &self.changed,
-            repainted: &self.repainted,
-            opaque: &self.opaque,
-            ui_over_surfaces: &self.ui_over_surfaces,
-            layer: self.layer.as_ref(),
-            surfaces: self.surface_layout.as_ref(),
-        }
-    }
-
-    pub(crate) fn place_surfaces(&mut self) {
-        let rect = |r: crate::tree::PxRect, origin: f32| [r.x + origin, r.y, r.w, r.h];
-        let mut layout = crate::surfaces::SurfaceLayout::default();
-        for i in self.active_views() {
-            let view = &self.views[i];
-            let origin = view.origin_x as f32;
-            layout.placements.extend(view.tree.surface_nodes().map(|(surface, abs, visible)| crate::surfaces::SurfacePlacement {
-                surface,
-                rect: rect(abs, origin),
-                visible: rect(visible, origin),
-            }));
-            if view.tree.surface_nodes().next().is_some() {
-                layout.covers.extend(crate::paint::surface_covers(&view.tree).into_iter().map(|(surface, r, opaque)| {
-                    crate::surfaces::SurfaceCover { surface, rect: rect(r, origin), opaque }
-                }));
-            }
-        }
-        self.surface_layout = Some(layout);
-    }
-
-    fn collect_opaque(&mut self) {
-        self.opaque.clear();
-        self.ui_over_surfaces.clear();
-        let active = self.active_views();
-        self.layer = match active[..] {
-            [only] if self.direct == Some(only) => self.views[only].layer.clone(),
-            _ => None,
-        };
-        for view in self.active_views() {
-            let origin = self.views[view].origin_x;
-            for area in &self.views[view].opaque {
-                let moved = Rect { x: area.rect.x + origin, ..area.rect }.clamped(self.frame.width, self.frame.height);
-                if !moved.is_empty() {
-                    self.opaque.push(crate::surfaces::OpaqueArea { surface: area.surface, rect: moved });
-                }
-            }
-            for rect in &self.views[view].ui_over_surfaces {
-                let moved = Rect { x: rect.x + origin, ..*rect }.clamped(self.frame.width, self.frame.height);
-                if !moved.is_empty() {
-                    self.ui_over_surfaces.push(moved);
-                }
-            }
-        }
-    }
-
-    fn draw_divider(&mut self) -> Option<Rect> {
-        let Some(dx) = self.divider_x() else {
-            self.last_divider = None;
-            return None;
-        };
-        let engaged = self.divider_hover || self.divider_drag;
-        let bg = if engaged {
-            DIVIDER_BG_ACTIVE
-        } else {
-            DIVIDER_BG
-        };
-        self.frame.fill_rect(dx, 0, DIVIDER_W, self.window.1, bg);
-        let cx = dx as f32 + DIVIDER_W as f32 / 2.0;
-        let cy = self.window.1 as f32 / 2.0;
-        for i in -1..=1i32 {
-            self.frame.fill_rounded_rect(
-                cx - 1.0,
-                cy + (i as f32) * 7.0 - 1.0,
-                2.0,
-                2.0,
-                [1.0; 4],
-                DIVIDER_GRIP,
-            );
-        }
-        let changed = self.last_divider != Some((dx, engaged));
-        self.last_divider = Some((dx, engaged));
-        changed.then_some(Rect {
-            x: dx,
-            y: 0,
-            w: DIVIDER_W,
-            h: self.window.1,
-        })
-    }
-}
-
-pub(crate) struct Painted {
-    pub view: usize,
-    pub parts: Vec<Rect>,
-    pub whole: bool,
-    pub surface_parts: Vec<Rect>,
-}
-
-fn blit(dst: &mut Canvas, src: &Canvas, origin_x: u32, region: Rect, straighten: bool) {
-    let region = region.clamped(src.width, src.height);
-    let dst_x = origin_x + region.x;
-    if region.is_empty() || dst_x >= dst.width || region.y >= dst.height {
-        return;
-    }
-    let cols = (region.w.min(dst.width - dst_x)) as usize * 4;
-    let rows = region.h.min(dst.height - region.y) as usize;
-    let src_stride = src.width as usize * 4;
-    let dst_stride = dst.width as usize * 4;
-    let src_col = region.x as usize * 4;
-    let dst_col = dst_x as usize * 4;
-    let y0 = region.y as usize;
-    let dst_rows = &mut dst.pixels[y0 * dst_stride..(y0 + rows) * dst_stride];
-    crate::parallel::row_bands(
-        dst_rows,
-        dst_stride,
-        rows,
-        cols / 4,
-        1 << 20,
-        |band, first, count| {
-            for r in 0..count {
-                let src_start = (y0 + first + r) * src_stride + src_col;
-                let dst_start = r * dst_stride + dst_col;
-                let row = &mut band[dst_start..dst_start + cols];
-                row.copy_from_slice(&src.pixels[src_start..src_start + cols]);
-                if straighten {
-                    for px in row.chunks_exact_mut(4) {
-                        let a = px[3];
-                        if a != 0 && a != 255 {
-                            for c in &mut px[..3] {
-                                *c = ((u32::from(*c) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8;
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        |(), ()| (),
-    );
 }

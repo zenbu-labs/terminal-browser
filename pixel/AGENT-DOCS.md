@@ -29,11 +29,13 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | `packages/pixel/src/preload/index.ts` | `@zenbu-labs/pixel/preload` types for `window.pixel` |
 | `packages/pixel/src/electron/index.ts` | `@zenbu-labs/pixel/electron`, re-exports `electron` |
 | `packages/pixel/src/bin.ts` | the `pixel` CLI |
-| `engine/crates/pixel-core/` | Rust engine: layout, painting, compositing, input model; `src/backend.rs` is the backend trait |
-| `engine/crates/pixel-terminal/` | the terminal backend: tty, kitty/iTerm2/rex/tmux/herdr frames, cell and color probing, macOS native scroll |
+| `engine/crates/pixel-core/` | Rust engine: tree, layout, text, scrolling, input; records each view as a `Scene` (`src/scene.rs`); `src/backend.rs` is the backend trait, `src/device.rs` the device it draws for |
+| `engine/crates/pixel-raster/` | turns scenes into pixels: canvas, glyph and image rasterizing, compositing views, damage, opaque areas, scroll-layer canvases |
+| `engine/crates/pixel-cells/` | turns scenes into a cell grid and minimal ANSI for terminals without graphics |
+| `engine/crates/pixel-terminal/` | the terminal backend's shared layer: tty, input parsing, probing, colors, hosted and embedded panes, tmux wrapper, session env, window size; it holds one renderer (`src/presenter.rs`) |
+| `engine/crates/pixel-kitty/` | the pixel kitty renderer: kitty graphics frames for kitty, Ghostty, iTerm2, rex, tmux and herdr, the frame transports (shared memory, files, inline), macOS native scroll |
 | `engine/crates/pixel-bridge/` | the JSON op/event protocol between JS and the engine, shared by every host |
 | `engine/crates/pixel-node/` | the node addon; `register_backend` adds backends, `PixelEngine.withBackend` makes one |
-| `engine/crates/pixel-node/` | Node binding for the engine |
 
 ## Examples
 
@@ -102,7 +104,6 @@ function createRoot(options?: RootOptions): Root
 | `onKey?(event: EngineKeyEvent): boolean \| void` | called for every key; return `true` to stop it reaching the focused WebView or Input |
 | `onQuit?(view: WebViewHandle \| null)` | called when a page navigates to `pixel://quit` or calls `pixel.quit()`; default stops the root |
 | `onExit?(code: number)` | called after the root stops; default `app.exit(code)` |
-| `onUnsupportedTerminal?(terminal: Terminal \| null): string` | text written to the terminal when `pixel` found no graphics support; the process then exits 1 |
 | `onRightClick?({ x, y })` | right click outside a WebView |
 | `onPaste?(text)` | text paste |
 | `onPasteImage?(image: PastedImage)` | image paste |
@@ -126,7 +127,7 @@ function createRoot(options?: RootOptions): Root
 | `loadURL(url, options?: LoadOptions): WebViewHandle` | renders a full size WebView, or navigates the mounted one |
 | `loadFile(path, options?: LoadOptions): WebViewHandle` | same for a local file |
 | `stop(code?)` | unmounts, restores the terminal, calls `onExit` |
-| `info: EngineInfo` | `{ width, height, cellWidth, cellHeight, basePx, kittyKeyboard, hosted, colors }` |
+| `info: EngineInfo` | `{ width, height, cellWidth, cellHeight, basePx, device, renderer?, kittyKeyboard, hosted, colors }` (`renderer`: `"kitty"` or `"cells"` in a terminal); `device` is `{ name, lattice, colors, pointer }` (`name` `"pixels"` or `"cells"`, `lattice` the step layout edges land on: `[1, 1]` for pixels, the cell size for cells) |
 | `displayScale: number` | device pixel ratio |
 | `hosted: boolean` | true when running as a guest tab or embedded |
 | `setTitle(text)` | sets the terminal title |
@@ -206,8 +207,8 @@ Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/p
 | `Box` | `BoxProps` `:78`. `style`, `id`, `hidden`, `onClick(ClickEvent)`, `onClickOutside`, `modal` (while shown only this subtree takes clicks, hover, wheel, selection and keys; a click outside lands on it), `onPointer(PointerEvent)`, `onMouseEnter`, `onMouseLeave`, `onMouseMove({ x, y })`, `onDrag(DragEvent)`, `onScroll(ScrollEvent)`, `onStick(stuck)` (sticky boxes: called when one starts or stops being held at the top), `onWheel(WheelEvent)`, `onSelection(ContainerSelection)`, `contentHeight`, `surface: Surface` |
 | `Text` | `TextProps` `:128`. children must be strings or numbers. `spans: { start, end, color, background?, bold?, italic?, underline?, strikethrough? }[]`, `onClick`, `onMouseEnter`, `onMouseLeave` |
 | `Input` | `InputProps` `:177`. multi-line editor; with `style.wrap: false` it is single-line and its text is vertically centered when the box is taller than one line. `value`, `defaultValue`, `autoFocus` (only inputs take focus on click; clicking or selecting other content leaves focus where it is, so call `blur()` from `onClickOutside` to drop it), `onChange(text, ChangeInfo)`, `onSubmit(text, marks)`, `onCaret(CaretInfo)`, `onPasteImage`, `caretColor`, `caretShape: "bar" | "block" | "underscore"` (block and underscore are one character wide; block redraws the character under it in black or white for contrast), `selectionColor`, `spans`, `gutter: { color, activeColor }`, `activeLine`, `defaultMarks`, `renderMark(id)`, `serializeMark(id)` |
-| `Image` | `ImageProps` `:211`. `src` path or url, `placeholder`, `error`, `onClick` |
-| `Path` | `PathProps` `:104`. SVG path data. `d`, `viewBox`, `stroke: { width, color, cap?, join? }`, `onClick`, `onDrag` |
+| `Image` | `ImageProps` `:211`. `src` path or url, `placeholder`, `error`, `onClick`, `glyph` (the character a device that cannot draw pictures shows instead; without it the cells renderer draws half blocks) |
+| `Path` | `PathProps` `:104`. SVG path data. `d`, `viewBox`, `stroke: { width, color, cap?, join? }`, `onClick`, `onDrag`, `glyph` (the character a device that draws text, not paths, shows, e.g. `"›"`; without it nothing is drawn there) |
 | `MarkedText` | `MarkedTextProps` `:197`. `text`, `marks`, `renderMark`, `serializeMark` |
 | `Link` | `packages/pixel/src/react/link.tsx`. `href`, `children`, `style`, `onClick(ClickEvent)`. Opens `href` in the default browser on click (`onClick` replaces that), shows the pointer cursor on hover. String children render as `Text` with `style`; use `style.hoverColor` for a hover state |
 | `Markdown` | `packages/pixel/src/react/markdown.tsx:25`. `text`, `theme: MarkdownTheme`, `rem`, `streaming`, `codeFamily` (code blocks, default `"monospace"`), `onLinkClick(href)`, `highlight`, `highlightBg` |
@@ -412,22 +413,46 @@ host → { type: "size" | "paste" | "wheel" | "focus" | "colors" | "devtools", .
 
 `../claude-code-plugin` uses this path to show pixel frames in a Claude Code pane.
 
+## Architecture
+
+The engine is device-neutral. It knows how text measures and what step layout lands on, and hands back a description of what to draw; backends decide how it becomes pixels or characters.
+
+- **Device** (`pixel-core/src/device.rs`, given in `HostInfo.device`, changed later with `Event::Device`): `text: Arc<dyn TextMetrics>` (advance per character and line height; the default measures with the font), `lattice: (x, y)`, `scroll: Arc<dyn ScrollProfile>` (`Smooth` for pixels, `Step { per_tick }` for whole rows), `colors: ColorDepth`, `pointer: Pointer`.
+- **Lattice:** before layout, px lengths in styles become whole units (a positive size keeps at least one; vertical lengths under 0.7 of a unit round to nothing), a border is given a whole unit of room, and a fixed size that room would leave without a unit of content grows by it. After layout every box's edges are rounded to the lattice, cumulatively from the root so siblings stay flush. A box under half a unit thick draws as a `Rule` across the middle of its unit. At `(1, 1)` none of this applies.
+- **Scene** (`pixel-core/src/scene.rs`, recorded in `src/record.rs`): per view, a tree of items in paint order. Each item has its bounds, clip, opaque and fill hints, and ops: `Rect`, `Gradient`, `Border`, `Rule`, `Text`, `Image`, `Surface`, `Icon { path, glyph }`, `Caret`, `Selection`, `Scrollbar`. Items that scroll, stick or show a surface are layers, with z-order, scroll offset and extent, and a `Change` against the view's previous scene: `New`, `Content`, `Offset { by }` (only moved) or `None`. The engine paints nothing itself, not even the caret, selection or scrollbars.
+- **Frame** (`backend.rs`): the window size, fonts, each visible view's scene with its origin, clear color and damage (`None`, `Whole`, `Parts` for surface-only changes), the split divider, and overlay ops (inspector highlights). It carries no pixels.
+- **pixel-raster:** `Raster::render(&frame, RasterOptions)` paints scenes into canvases and composes them: `scroll_layer` paints the biggest list on its own canvases so a presenter can move it, `direct` keeps each view's canvas for presenting without a window copy, `host_surfaces` leaves surfaces transparent and lists their placements and the UI covering them. `pixel-kitty`, `pixel-node` recording and `examples/appkit-backend` use it.
+- **pixel-cells:** reads the same scenes with a cell lattice and its own `TextMetrics` (every grapheme is its display width in cells, every line one cell). See Cell rendering.
+
 ## Backends
 
-The engine draws through `pixel_core::backend::Backend` (`engine/crates/pixel-core/src/backend.rs`). The terminal is one backend (`pixel-terminal`); others live in their own repos and depend on `pixel-core` and `pixel-bridge`.
+The engine draws through `pixel_core::backend::Backend` (`engine/crates/pixel-core/src/backend.rs`). The terminal is one backend (`pixel-terminal`); others live in their own repos and depend on `pixel-core`, `pixel-bridge` and usually `pixel-raster`.
 
-- Required: `start` (first size and colors), `waker`, `poll(timeout)` (the only place the engine thread blocks), `present(Frame)`.
-- `Frame`: the composed canvas, damage (`changed`, `repainted`), opaque areas over surfaces, and what the backend asked for in `wants()`: `scroll_layer` (the biggest list scroller painted on its own so it can be moved), `view_canvas` (present the view's canvas directly), `host_surfaces` (the backend draws surfaces itself: they're left transparent and `Frame.surfaces` lists each surface's placement and the UI covering it; match them to JS surfaces with `surfaceId` from `@zenbu-labs/pixel/core`).
-- Optional hooks: `poll_metrics` (hosts that ask for their size), `pending_present`, `animating`, `before_frame`, `idle`, `deadline`, `schedule_present` / `take_presented_at` (pacing), `byte_rate_limit`, `set_title`, `set_pointer_shape`, clipboard reads and writes, `system_clipboard` (where image pastes are read from; the terminal uses arboard), `message` (app to backend), `describe` (extra `root.info` fields).
-- Backend events: input (`Key`, `Mouse`, `Wheel` steps, `Pinch`, `Paste`, `Focus`) and host changes (`Resize`, `Colors`, `Visible`, `Redraw`, `Closed`, `ClipboardData`). `Message(json)` reaches the app as an event with its own `type`; unknown types go to `onBackendMessage` on a `@zenbu-labs/pixel/core` root, and its `sendToBackend(message)` goes the other way.
+- Required: `start` (first size, colors and `Device`), `waker`, `poll(timeout)` (the only place the engine thread blocks), `present(Frame)`.
+- Optional hooks: `poll_metrics` (hosts that ask for their size), `pending_present`, `animating`, `before_frame`, `idle`, `spare` (idle time before a deadline, e.g. to warm glyphs), `deadline`, `schedule_present` / `take_presented_at` (pacing), `byte_rate_limit`, `set_title`, `set_pointer_shape`, clipboard reads and writes, `system_clipboard` (where image pastes are read from; the terminal uses arboard), `message` (app to backend), `describe` (extra `root.info` fields).
+- Backend events: input (`Key`, `Mouse`, `Wheel` steps, `Pinch`, `Paste`, `Focus`) and host changes (`Resize`, `Colors`, `Device`, `Visible`, `Redraw`, `Closed`, `ClipboardData`). `Message(json)` reaches the app as an event with its own `type`; unknown types go to `onBackendMessage` on a `@zenbu-labs/pixel/core` root, and its `sendToBackend(message)` goes the other way.
+- Surfaces drawn by the host: match them to JS surfaces with `surfaceId` from `@zenbu-labs/pixel/core`.
 - Binding code that knows its backend reaches it with `engine.backend.downcast_mut::<B>()` (pixel-node does this for retarget and the presenter overlay).
 - Node: a backend package ships its own `.node` built from `pixel-node` plus its crate, calls `register_backend`, and makes its engine with `PixelEngine.withBackend(name, options)`.
 - Hosts without node: install a binding with `setBinding` and use `createRoot({ engine })` from `@zenbu-labs/pixel/core`.
+- Terminal renderers: `TerminalBackend` holds one `Box<dyn Presenter>` and asks it everything that depends on how frames are drawn (presenting, idle work, deadlines, pointer shapes, the device, native scroll input). `KittyPresenter` wraps `pixel_kitty::Kitty`, which reaches the terminal through its `Tty` trait; `CellsPresenter` wraps `pixel_cells::CellPresenter`. `PIXEL_RENDERER=kitty|cells` picks one (kitty is the default, which `pixel` keeps when the graphics probe passes); `root.info.renderer` says which.
 - `examples/appkit-backend`: a macOS window as a backend (AppKit events in, frames onto a `CALayer`), driving the engine with the same JSON ops React sends. `cargo run` in that folder.
+
+## Cell rendering
+
+Terminals without kitty graphics get the cell backend (`engine/crates/pixel-cells`, one of the renderers `pixel-terminal` chooses between). `pixel` picks it when the graphics probe is refused or unanswered (the probe ends with a device-attributes request, so a terminal that ignores the graphics query answers "no" quickly); `PIXEL_RENDERER=cells` forces it. `root.info.device` is `{ name: "cells", lattice: [cellWidth, cellHeight], ... }`; apps size things in cells and give `Path`/`Image` a `glyph`.
+
+- **Device:** `cell_device(cell, tier)` (`device.rs`): cell text metrics, the cell lattice, `Step` scrolling of three rows per wheel tick, the color tier, a coarse pointer.
+- **Grid:** parallel arrays; a cell's character is a tagged u32 (character, pooled grapheme, the covered half of a wide one, or unknown after a scroll); colors are terminal default, palette index or RGB (`grid.rs`).
+- **Painter:** scene to grid with alpha blending (a translucent fill keeps the glyph under it and tints it), clips, box-drawing for `Border`, line glyphs for `Rule`, an `Icon`'s glyph, `■` for dots, `▐` for scrollbars, half blocks for images, a labelled box for webviews; the `Caret` becomes the hardware cursor (`paint.rs`).
+- **Scroll regions:** the presenter follows each scroll layer's offset. When one moved by whole rows, it sets `DECSTBM` over the layer's rows, scrolls them with `SU`/`SD` and resets the region, if that leaves fewer cells to write than repainting (whatever beside the layer shares its rows moves too and counts against it). Then it diffs as usual (`lib.rs`, `encode.rs`, `CellGrid::stale_cells`).
+- **Encoder:** diffs against the last grid (one compare skips an unchanged row), resends SGR and cursor moves only when they change, handles wide and variation-selector glyphs, wraps frames in `CSI ?2026h/l`, places the hardware cursor last with `DECSCUSR` for the caret shape, and writes nothing for an unchanged frame (`encode.rs`).
+- **Colors:** truecolor, 256, 16 (matched against the terminal's own palette from OSC 4, with its default colors as candidates) or none, from `NO_COLOR`, `COLORTERM`, `TERM`, `TERM_PROGRAM`; `PIXEL_COLORS=truecolor|256|16|mono` overrides (`color.rs`).
+- **Tests:** `TestBackend` gives text snapshots of the grid and every frame's bytes.
 
 ## Rendering
 
-Rust: `engine/crates/pixel-core/src/terminal/present/`. JS side: `packages/pixel/src/web/offscreen.ts`, `packages/pixel/src/web/paint.ts`.
+Rust: `engine/crates/pixel-kitty/src/present/`, drawing what `pixel-raster` painted. JS side: `packages/pixel/src/web/offscreen.ts`, `packages/pixel/src/web/paint.ts`.
 
 - **Frame capture:** WebView frames arrive as an IOSurface on macOS, or as shared memory on Linux, with Chromium's damage rect.
 - **Row diff:** each damaged row is compared with the last shown frame. Only changed spans are kept (`surfaces/mod.rs`, `surfaces/convert.rs`).
@@ -439,4 +464,4 @@ Rust: `engine/crates/pixel-core/src/terminal/present/`. JS side: `packages/pixel
 - **Atomic frames:** each frame is wrapped in synchronized output (`CSI ?2026h/l`).
 - **Patched mode:** used on Ghostty 1.2+ and kitty. Other terminals and tmux get full frames.
 - **tmux:** DCS passthrough plus unicode placeholders.
-- **herdr:** full frames over the herdr graphics socket (`engine/crates/pixel-core/src/herdr.rs`).
+- **herdr:** full frames over the herdr graphics socket (`engine/crates/pixel-kitty/src/herdr.rs`).

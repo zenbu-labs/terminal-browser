@@ -2,8 +2,8 @@
 use std::borrow::Cow;
 use std::io;
 
-use super::{FrameTransport, SessionEnv, Terminal};
-use pixel_core::backend::Canvas;
+use crate::{FrameTransport, Kitty, Tty, Vars, ask};
+use pixel_raster::Canvas;
 use pixel_core::surfaces::Rect;
 
 mod flash;
@@ -146,7 +146,7 @@ pub(super) fn transparent(canvas: &Canvas, rect: Rect) -> bool {
     })
 }
 
-pub(super) fn over_ssh(env: &SessionEnv) -> bool {
+pub(super) fn over_ssh(env: &dyn Vars) -> bool {
     ["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"]
         .iter()
         .any(|key| env.var(key).is_some_and(|value| !value.is_empty()))
@@ -197,8 +197,8 @@ fn parse_version(text: &str) -> (u32, u32, u32) {
     )
 }
 
-impl Terminal {
-    pub(super) fn probe_identity(&mut self, env: &SessionEnv) -> io::Result<Identity> {
+impl Kitty {
+    pub(super) fn probe_identity(&mut self, tty: &mut dyn Tty, env: &dyn Vars) -> io::Result<Identity> {
         if self.wrapper.relayed() {
             return Ok(Identity::Unknown);
         }
@@ -211,25 +211,24 @@ impl Terminal {
         }
         self.io.out().write_all(b"\x1b[>0q")?;
         self.io.out().flush()?;
-        Ok(self
-            .read_report(IDENTITY_PROBE_TIMEOUT_MS, parse_xtversion)?
+        Ok(ask(tty, IDENTITY_PROBE_TIMEOUT_MS, false, |buf| parse_xtversion(buf).map(|identity| (identity, 0..buf.len())))?
             .unwrap_or(Identity::Unknown))
     }
 
-    fn probe_frame_edits(&mut self) -> io::Result<bool> {
+    fn probe_frame_edits(&mut self, tty: &mut dyn Tty) -> io::Result<bool> {
         self.io.out().write_all(&self.wrapper.wrap(&crate::kitty::kitty_frame_edit_probe(FRAME_EDIT_PROBE_ID)))?;
         self.io.out().flush()?;
-        let reply = self.read_report(FRAME_EDIT_PROBE_TIMEOUT_MS, parse_frame_edit_reply)?;
+        let reply = ask(tty, FRAME_EDIT_PROBE_TIMEOUT_MS, false, |buf| parse_frame_edit_reply(buf).map(|ok| (ok, 0..buf.len())))?;
         self.io.out().write_all(&self.wrapper.wrap(&crate::kitty::kitty_delete_one(FRAME_EDIT_PROBE_ID)))?;
         self.io.out().flush()?;
         Ok(reply.unwrap_or(false))
     }
 
-    pub(super) fn choose_present(&mut self, env: &SessionEnv) -> io::Result<Presenter> {
+    pub(super) fn choose_present(&mut self, tty: &mut dyn Tty, env: &dyn Vars) -> io::Result<Presenter> {
         let forced = env.var("TERMINAL_BROWSER_PRESENT");
         let ssh = over_ssh(env);
         let wants_animation = forced.as_deref().map(str::trim) == Some("animation");
-        let frame_edits = wants_animation && self.probe_frame_edits()?;
+        let frame_edits = wants_animation && self.probe_frame_edits(tty)?;
         if wants_animation && !frame_edits {
             pixel_core::logging::warn("terminal", "animation was asked for but this terminal does not edit frames, choosing normally");
         }

@@ -121,14 +121,14 @@ impl Engine {
         }
     }
 
-    pub(super) fn warm_glyphs(&mut self, busy: bool) {
+    pub(super) fn give_spare_time(&mut self, busy: bool) {
         let until = if busy {
             self.frame_slot + self.frame_interval().saturating_sub(super::ROW_CATCH_UP_MARGIN)
         } else {
             Instant::now() + super::ROW_CATCH_UP_BUDGET
         };
         if until > Instant::now() {
-            crate::canvas::warm_glyphs(&self.fonts, until);
+            self.backend.spare(&self.fonts, until);
         }
     }
 
@@ -251,13 +251,13 @@ impl Engine {
     }
 
     pub(super) fn step_scrolls(&mut self, dt: f32) {
-        let profile = self.profile;
+        let profile = self.profile.clone();
         for view in self.comp.active_views() {
             let tree = &mut self.comp.views[view].tree;
             for id in tree.scroll_nodes() {
                 let max = tree.scroll_max(id);
                 if let Some(state) = tree.scroll_state_mut(id)
-                    && state.step(profile, dt, max)
+                    && state.step(profile.as_ref(), dt, max)
                 {
                     tree.mark_place();
                     tree.touch_bar(id);

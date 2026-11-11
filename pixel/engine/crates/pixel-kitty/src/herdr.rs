@@ -3,21 +3,21 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use pixel_core::backend::Canvas;
-use crate::terminal::FrameFile;
+use pixel_raster::Canvas;
+use crate::FrameFile;
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(12);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 const SLOTS: u64 = 3;
 
 #[derive(Clone, Debug)]
-pub(crate) struct HerdrTarget {
-    pub(crate) pane: String,
-    pub(crate) socket: String,
+pub struct HerdrTarget {
+    pub pane: String,
+    pub socket: String,
 }
 
 impl HerdrTarget {
-    pub(crate) fn from_env(env: &crate::terminal::SessionEnv) -> Option<Self> {
+    pub fn from_env(env: &dyn crate::Vars) -> Option<Self> {
         Some(Self {
             pane: env.var("HERDR_PANE_ID")?,
             socket: env.var("HERDR_SOCKET_PATH")?,
@@ -102,27 +102,6 @@ impl Herdr {
         self.cell
     }
 
-    pub(crate) fn mouse_position_px(
-        &self,
-        kind: crate::terminal::MouseKind,
-        x: u32,
-        y: u32,
-        focused: bool,
-        pixel_mouse: bool,
-        grid: impl FnOnce() -> Option<crate::terminal::WindowSize>,
-    ) -> (u32, u32) {
-        let (cell_w, cell_h) = self.cell;
-        let cell_center =
-            |x: u32, y: u32| ((x - 1) * cell_w + cell_w / 2, (y - 1) * cell_h + cell_h / 2);
-        if !pixel_mouse {
-            return cell_center(x, y);
-        }
-        if !focused && is_wheel(kind) && grid().is_some_and(|ws| within_grid(&ws, x, y)) {
-            return cell_center(x, y);
-        }
-        (x.saturating_sub(1), y.saturating_sub(1))
-    }
-
     pub(crate) fn present(&mut self, canvas: &Canvas) -> io::Result<usize> {
         let path = pixel_core::profiler::span("herdr.handoff", || self.write_frame(&canvas.pixels))?;
         let header = format!(
@@ -170,21 +149,6 @@ impl Herdr {
         }
         Ok(file.path().to_string_lossy().into_owned())
     }
-}
-
-fn is_wheel(kind: crate::terminal::MouseKind) -> bool {
-    use crate::terminal::MouseKind;
-    matches!(
-        kind,
-        MouseKind::ScrollUp
-            | MouseKind::ScrollDown
-            | MouseKind::ScrollLeft
-            | MouseKind::ScrollRight
-    )
-}
-
-fn within_grid(ws: &crate::terminal::WindowSize, x: u32, y: u32) -> bool {
-    x >= 1 && y >= 1 && x <= ws.cols && y <= ws.rows
 }
 
 fn request(socket: &str, line: &str) -> io::Result<String> {
@@ -250,13 +214,6 @@ fn field_u32(json: &str, key: &str) -> Option<u32> {
     let rest = value_after(json, key)?;
     let end = rest.find(|c: char| !c.is_ascii_digit())?;
     rest[..end].parse().ok()
-}
-
-#[cfg(test)]
-pub(crate) mod tests_support {
-    pub(crate) fn frame_path(header: &str) -> String {
-        super::field_str(header, "path").expect("frame header names its file")
-    }
 }
 
 #[cfg(test)]
@@ -410,7 +367,7 @@ mod tests {
 #[cfg(test)]
 mod shared_process_tests {
     use super::*;
-    use pixel_core::backend::Canvas;
+    use pixel_raster::Canvas;
 
     #[test]
     fn engines_sharing_a_process_use_distinct_frame_files() {
@@ -437,63 +394,5 @@ mod shared_process_tests {
         assert_eq!(std::fs::metadata(&path_a).unwrap().len(), 40 * 40 * 4);
         assert_eq!(std::fs::metadata(&path_b).unwrap().len(), 40 * 40 * 4);
         a.present(&canvas).unwrap();
-    }
-}
-
-#[cfg(test)]
-mod degraded_wheel_tests {
-    use super::*;
-    use crate::terminal::{MouseKind, WindowSize};
-
-    fn grid() -> Option<WindowSize> {
-        Some(WindowSize {
-            cols: 120,
-            rows: 40,
-            width_px: 1200,
-            height_px: 800,
-        })
-    }
-
-    #[test]
-    fn unfocused_in_grid_wheel_rescales_to_cell_centers() {
-        let (stream, _herdr_end) = UnixStream::pair().unwrap();
-        let herdr = Herdr {
-            frames: BufReader::new(stream),
-            directory: PathBuf::new(),
-            cell: (10, 20),
-            bgra: false,
-            files: Vec::new(),
-            retired: Vec::new(),
-            instance: 0,
-            generation: 0,
-            seq: 0,
-        };
-
-        // The bug case: an unfocused wheel arrives as cells (8, 9) and is
-        // rescaled to the cell center.
-        assert_eq!(
-            herdr.mouse_position_px(MouseKind::ScrollUp, 8, 9, false, true, grid),
-            (75, 170)
-        );
-        // Focused wheels are honest pixels; pass them through 0-based.
-        assert_eq!(
-            herdr.mouse_position_px(MouseKind::ScrollUp, 8, 9, true, true, grid),
-            (7, 8)
-        );
-        // Coordinates beyond the cell grid can only be pixels.
-        assert_eq!(
-            herdr.mouse_position_px(MouseKind::ScrollDown, 640, 9, false, true, grid),
-            (639, 8)
-        );
-        // Without pixel mouse mode every report is cells.
-        assert_eq!(
-            herdr.mouse_position_px(MouseKind::ScrollUp, 8, 9, false, false, grid),
-            (75, 170)
-        );
-        // Only wheels: clicks focus the pane first, so they stay untouched.
-        assert_eq!(
-            herdr.mouse_position_px(MouseKind::Down, 8, 9, false, true, grid),
-            (7, 8)
-        );
     }
 }

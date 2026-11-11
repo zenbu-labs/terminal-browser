@@ -48,12 +48,30 @@ pub fn engine_info(engine: &Engine) -> serde_json::Value {
         "cellWidth": cell_w,
         "cellHeight": cell_h,
         "basePx": engine.base_px,
+        "device": device_json(&engine.device),
         "colors": colors_json(&engine.colors),
         "protocol": PROTOCOL_VERSION,
         "backendApi": pixel_core::backend::API_VERSION,
     });
     info.as_object_mut().expect("info is an object").extend(engine.backend.describe());
     info
+}
+
+pub fn device_json(device: &pixel_core::Device) -> serde_json::Value {
+    json!({
+        "name": device.name,
+        "lattice": [device.lattice.0, device.lattice.1],
+        "colors": match device.colors {
+            pixel_core::ColorDepth::TrueColor => "truecolor",
+            pixel_core::ColorDepth::Indexed256 => "256",
+            pixel_core::ColorDepth::Indexed16 => "16",
+            pixel_core::ColorDepth::Monochrome => "mono",
+        },
+        "pointer": match device.pointer {
+            pixel_core::Pointer::Precise => "precise",
+            pixel_core::Pointer::Coarse => "coarse",
+        },
+    })
 }
 
 pub fn colors_json(colors: &HostColors) -> serde_json::Value {

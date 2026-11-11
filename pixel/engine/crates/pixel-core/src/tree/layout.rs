@@ -1,6 +1,6 @@
 
-use crate::canvas::measure_marked;
-use crate::style::{Align, Dimension, FlexDirection, InsetValue, Justify, Overflow, Position, Style};
+use crate::text_metrics::measure_marked;
+use crate::style::{Align, Dimension, Edges, FlexDirection, InsetValue, Justify, Overflow, Position, Style};
 use crate::text_input::Mark;
 use crate::wrap::wrap_lines;
 
@@ -119,7 +119,7 @@ fn measure_wrapped_text(
         .map(|r| {
             if cell_caret {
                 let full = measure_marked(font, text, r.clone(), px, marks)
-                    + crate::canvas::measure_text(font, " ", px);
+                    + crate::text_metrics::measure_text(font, " ", px);
                 return max_width.map_or(full, |w| full.min(w));
             }
             let visible_len = text[r.clone()].trim_end_matches(' ').len();
@@ -129,7 +129,7 @@ fn measure_wrapped_text(
     let caret_line = cell_caret
         && max_width.zip(lines.last()).is_some_and(|(width, last)| {
             let end = measure_marked(font, text, last.clone(), px, marks);
-            end + crate::canvas::measure_text(font, " ", px) > width + crate::wrap::WRAP_SLACK
+            end + crate::text_metrics::measure_text(font, " ", px) > width + crate::wrap::WRAP_SLACK
         });
     taffy::Size {
         width: widest.ceil(),
@@ -137,7 +137,80 @@ fn measure_wrapped_text(
     }
 }
 
-pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool) -> taffy::Style {
+pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool, lattice: (f32, f32)) -> taffy::Style {
+    if lattice == (1.0, 1.0) {
+        return to_taffy_px(style, hidden, input);
+    }
+    let room = border_room(style, lattice);
+    let mut taffy = to_taffy_px(&whole_units(style, lattice, room), hidden, input);
+    taffy.border = taffy::Rect {
+        left: taffy::LengthPercentage::length(room.left),
+        right: taffy::LengthPercentage::length(room.right),
+        top: taffy::LengthPercentage::length(room.top),
+        bottom: taffy::LengthPercentage::length(room.bottom),
+    };
+    taffy
+}
+
+fn border_room(style: &Style, (x, y): (f32, f32)) -> Edges {
+    let border = style.border.unwrap_or_default();
+    let room = |side: Option<crate::style::BorderSide>, unit: f32| {
+        side.filter(|s| s.width > 0.0 && s.color[3] > 0).map_or(0.0, |s| (unit - s.width).max(0.0))
+    };
+    Edges { left: room(border.left, x), right: room(border.right, x), top: room(border.top, y), bottom: room(border.bottom, y) }
+}
+
+fn whole_units(style: &Style, (x, y): (f32, f32), room: Edges) -> Style {
+    let round_x = |v: f32| (v / x).round().max(0.0) * x;
+    let round_y = |v: f32| (v / y - 0.2).round().max(0.0) * y;
+    let size_x = |d: Dimension| match d {
+        Dimension::Px(v) if v > 0.0 => Dimension::Px(round_x(v).max(x)),
+        other => other,
+    };
+    let size_y = |d: Dimension| match d {
+        Dimension::Px(v) if v > 0.0 => Dimension::Px(round_y(v).max(y)),
+        other => other,
+    };
+    let signed = |round: &dyn Fn(f32) -> f32, v: f32| round(v.abs()).copysign(v);
+    let inset = |round: &dyn Fn(f32) -> f32, v: Option<InsetValue>| match v {
+        Some(InsetValue::Px(v)) => Some(InsetValue::Px(signed(round, v))),
+        other => other,
+    };
+    let strokes = style.border.map_or((0.0, 0.0), |b| {
+        let w = |s: Option<crate::style::BorderSide>| s.map_or(0.0, |s| s.width);
+        (w(b.left) + w(b.right), w(b.top) + w(b.bottom))
+    });
+    let grow = |d: Dimension, room: f32, strokes: f32, unit: f32| match d {
+        Dimension::Px(v) if room > 0.0 && v - room - strokes < unit => Dimension::Px(v + room),
+        other => other,
+    };
+    let mut snapped = style.clone();
+    snapped.width = size_x(grow(style.width, room.left + room.right, strokes.0, x));
+    snapped.height = size_y(grow(style.height, room.top + room.bottom, strokes.1, y));
+    snapped.min_width = size_x(style.min_width);
+    snapped.max_width = size_x(style.max_width);
+    snapped.max_height = size_y(style.max_height);
+    snapped.padding = Edges {
+        left: round_x(style.padding.left),
+        right: round_x(style.padding.right),
+        top: round_y(style.padding.top),
+        bottom: round_y(style.padding.bottom),
+    };
+    snapped.margin = Edges {
+        left: signed(&round_x, style.margin.left),
+        right: signed(&round_x, style.margin.right),
+        top: signed(&round_y, style.margin.top),
+        bottom: signed(&round_y, style.margin.bottom),
+    };
+    snapped.inset.left = inset(&round_x, style.inset.left);
+    snapped.inset.right = inset(&round_x, style.inset.right);
+    snapped.inset.top = inset(&round_y, style.inset.top);
+    snapped.inset.bottom = inset(&round_y, style.inset.bottom);
+    snapped.gap = if style.flex_direction == FlexDirection::Column { round_y(style.gap) } else { round_x(style.gap) };
+    snapped
+}
+
+fn to_taffy_px(style: &Style, hidden: bool, input: bool) -> taffy::Style {
     use taffy::prelude::{auto, length, percent};
 
     fn dimension(d: Dimension) -> taffy::Dimension {

@@ -1,5 +1,6 @@
 use super::{Engine, EngineEvent};
-use crate::canvas::{Canvas, measure_text};
+use crate::scene::{Op, Text, TextStyle};
+use crate::text_metrics::measure_text;
 use crate::style::{Color, Edges};
 use crate::tree::{NodeId, PxRect};
 
@@ -39,7 +40,7 @@ impl Engine {
         });
     }
 
-    pub(super) fn draw_node_overlay(&mut self, view: usize, id: NodeId, area: HighlightArea, with_label: bool) {
+    pub(super) fn node_overlay(&self, view: usize, id: NodeId, area: HighlightArea, with_label: bool, ops: &mut Vec<Op>) {
         if !self.comp.is_active(view) {
             return;
         }
@@ -72,7 +73,7 @@ impl Engine {
         let padding_box = inset(border_box, metrics.border);
         let content_box = inset(padding_box, metrics.padding);
         let margin_box = outset(border_box, metrics.margin);
-        let frame = &mut self.comp.frame;
+        let frame = ops;
         match area {
             HighlightArea::All => {
                 fill_clipped(frame, content_box, clip, CONTENT_FILL);
@@ -103,19 +104,25 @@ impl Engine {
         if ly + h > self.comp.window.1 as f32 {
             ly = (border_box.y - h - 4.0).max(0.0);
         }
-        self.comp.frame
-            .fill_rounded_rect(lx, ly, w, h, [4.0; 4], [24, 26, 32, 245]);
-        self.comp.frame
-            .stroke_rounded_rect(lx, ly, w, h, [4.0; 4], 1.0, [72, 75, 86, 255]);
+        let label_box = PxRect { x: lx, y: ly, w, h };
+        frame.push(Op::Rect { rect: label_box, radius: [4.0; 4], color: [24, 26, 32, 245] });
+        frame.push(Op::Border { rect: label_box, radius: [4.0; 4], width: 1.0, color: [72, 75, 86, 255] });
         if let Some(metrics) = font.horizontal_line_metrics(px) {
-            self.comp.frame.draw_text(
-                font,
-                &label,
-                (lx + pad) as i32,
-                (ly + pad / 2.0 + metrics.ascent) as i32,
+            frame.push(Op::Text(Text {
+                text: label,
+                font: 0,
+                face: 0,
                 px,
-                [186, 210, 255, 255],
-            );
+                x: lx + pad,
+                top: ly + pad / 2.0,
+                ascent: metrics.ascent,
+                width: text_w,
+                color: [186, 210, 255, 255],
+                bold: false,
+                italic: false,
+                style: TextStyle::Label,
+                marks: Vec::new(),
+            }));
         }
     }
 }
@@ -138,14 +145,14 @@ fn outset(r: PxRect, e: Edges) -> PxRect {
     }
 }
 
-fn fill_clipped(frame: &mut Canvas, rect: PxRect, clip: PxRect, color: Color) {
+fn fill_clipped(frame: &mut Vec<Op>, rect: PxRect, clip: PxRect, color: Color) {
     let r = rect.intersect(clip);
     if r.w > 0.0 && r.h > 0.0 {
-        frame.fill_rounded_rect(r.x, r.y, r.w, r.h, [0.0; 4], color);
+        frame.push(Op::Rect { rect: r, radius: [0.0; 4], color });
     }
 }
 
-fn fill_ring(frame: &mut Canvas, outer: PxRect, inner: PxRect, clip: PxRect, color: Color) {
+fn fill_ring(frame: &mut Vec<Op>, outer: PxRect, inner: PxRect, clip: PxRect, color: Color) {
     let strips = [
         PxRect {
             x: outer.x,

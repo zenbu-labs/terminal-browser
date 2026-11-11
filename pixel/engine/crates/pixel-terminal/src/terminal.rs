@@ -3,19 +3,10 @@ use std::time::{Duration, Instant};
 
 use rustix::termios::{self, OptionalActions, Termios};
 
-use pixel_core::backend::Canvas;
 pub use pixel_core::backend::HostColors;
 pub use pixel_core::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
-use crate::wrapper::Wrapper;
-use crate::kitty::Placement;
-
-mod payload;
-mod present;
-mod shm_pool;
-
-use payload::Payloads;
-
-use present::{Identity, Presenter};
+pub(crate) use pixel_kitty::DEFAULT_CELL;
+use pixel_kitty::{HerdrTarget, Wrapper};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -176,7 +167,7 @@ pub struct Terminal {
     io: TtyHandle,
     saved: Option<Termios>,
     hosted: Option<crate::hosted::HostState>,
-    last_frame_size: Option<(u32, u32)>,
+    host_target: Option<HerdrTarget>,
     pointer_shape_written: bool,
     mouse_pixels: bool,
     mouse_pixels_pending: bool,
@@ -184,32 +175,11 @@ pub struct Terminal {
     cell: Option<(u32, u32)>,
     pending: Vec<u8>,
     lone_escape_since: Option<Instant>,
-    transport: FrameTransport,
-    transport_retry: TransportRetry,
-    herdr: Option<crate::herdr::Herdr>,
-    herdr_target: Option<crate::herdr::HerdrTarget>,
-    herdr_retry: Option<(Instant, Duration)>,
-    frame_files: Vec<FrameFile>,
-    frame_seq: u64,
-    payloads: Payloads,
+    relay_cell: Option<(u32, u32)>,
     wrapper: Wrapper,
-    image_id: u32,
-    placeholders: Option<(u32, u32)>,
-    placed_grid: Option<(u32, u32)>,
-    identity: Identity,
-    present: Presenter,
-    patches: present::Patched,
-    animation: present::Animation,
-    highlight_transmits: bool,
-    present_at: Option<Instant>,
-    ready_at: Option<Instant>,
-    shm_pool: Option<shm_pool::ShmPool>,
-    overlay: present::Overlay,
-    flashes: present::Flashes,
     wake_rx: Option<rustix::fd::OwnedFd>,
     waker: Option<Waker>,
     resize_slot: Option<usize>,
-    terminal_id: u64,
     // if the terminal supports https://sw.kovidgoyal.net/kitty/clipboard/
     clipboard_data: bool,
     clip_read: Option<ClipRead>,
@@ -217,6 +187,7 @@ pub struct Terminal {
     color_scheme_updates: bool,
     color_query: Option<ColorQuery>,
     kitty_keyboard: bool,
+    pixel_mouse: bool,
 }
 
 #[derive(Default)]
@@ -297,20 +268,30 @@ impl SessionEnv {
 }
 
 impl Terminal {
-    pub fn new(wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
+    pub fn new(wrapper: Wrapper, pixel_mouse: bool) -> io::Result<Self> {
         Self::with_handle(
             TtyHandle::Stdio {
                 stdin: io::stdin(),
                 stdout: io::stdout(),
             },
             wrapper,
-            env,
+            pixel_mouse,
         )
     }
 
-    pub fn open(tty_path: &str, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
+    pub fn open(tty_path: &str, wrapper: Wrapper, pixel_mouse: bool) -> io::Result<Self> {
         let file = std::fs::File::options().read(true).write(true).open(tty_path)?;
-        Self::with_handle(TtyHandle::File(file), wrapper, env)
+        Self::with_handle(TtyHandle::File(file), wrapper, pixel_mouse)
+    }
+
+    pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        pixel_core::profiler::span("term.write", || {
+            self.io.out().write_all(bytes)?;
+            self.io.out().flush()
+        })
     }
 
     pub fn join_host(socket: &str, pane: &str, name: &str) -> io::Result<Self> {
@@ -319,24 +300,21 @@ impl Terminal {
             state,
             pending,
         } = crate::hosted::join(socket, pane, name)?;
-        let target = crate::herdr::HerdrTarget {
-            pane: pane.to_string(),
-            socket: socket.to_string(),
-        };
         let io = TtyHandle::Hosted {
             stream,
             sink: io::sink(),
         };
-        let mut terminal = Self::blank(io, None, Wrapper::None, Some(target));
+        let mut terminal = Self::blank(io, None, Wrapper::None);
+        terminal.host_target = Some(HerdrTarget {
+            pane: pane.to_string(),
+            socket: socket.to_string(),
+        });
         terminal.focused = state.focused;
         terminal.hosted = Some(state);
         terminal.pending = pending;
         terminal.kitty_keyboard = true;
         terminal.mouse_pixels = true;
-        terminal.connect_herdr();
-        if terminal.herdr.is_none() {
-            return Err(io::Error::other("host did not accept the frame stream"));
-        }
+        terminal.pixel_mouse = true;
         Ok(terminal)
     }
 
@@ -361,20 +339,14 @@ impl Terminal {
         state.fill_pixel_size();
        
         rustix::fs::fcntl_setfl(&tty, rustix::fs::fcntl_getfl(&tty)? | rustix::fs::OFlags::NONBLOCK)?;
-        let mut terminal = Self::blank(TtyHandle::Embedded { stream, tty }, None, Wrapper::None, None);
-        terminal.transport = match state.transport.as_deref() {
-            Some("file") => FrameTransport::File,
-            Some("shm") | Some("shared") => FrameTransport::Shared,
-            Some("host") => FrameTransport::Host,
-            _ => FrameTransport::Inline,
-        };
-        terminal.image_id = state.image_id.unwrap_or_else(|| frame_image_id(true));
+        let mut terminal = Self::blank(TtyHandle::Embedded { stream, tty }, None, Wrapper::None);
         terminal.cell = state.cell;
         terminal.focused = state.focused;
         terminal.hosted = Some(state);
         terminal.pending = pending;
         terminal.kitty_keyboard = true;
         terminal.mouse_pixels = true;
+        terminal.pixel_mouse = true;
         Ok(terminal)
     }
 
@@ -382,9 +354,9 @@ impl Terminal {
         matches!(self.io, TtyHandle::Embedded { .. })
     }
 
-    pub fn retarget(&mut self, target: Retarget, env: SessionEnv) -> io::Result<()> {
+    pub fn retarget(&mut self, target: Retarget) -> io::Result<()> {
         let mut fresh = match target {
-            Retarget::Tty { path, wrapper } => Terminal::open(&path, wrapper, env)
+            Retarget::Tty { path, wrapper } => Terminal::open(&path, wrapper, self.pixel_mouse)
                 .map_err(|e| io::Error::new(e.kind(), format!("open {path}: {e}")))?,
             Retarget::Host { socket, pane, name } => Terminal::join_host(&socket, &pane, &name)?,
         };
@@ -395,7 +367,7 @@ impl Terminal {
         Ok(())
     }
 
-    fn with_handle(mut io: TtyHandle, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
+    fn with_handle(mut io: TtyHandle, wrapper: Wrapper, pixel_mouse: bool) -> io::Result<Self> {
         let step = |name: &str, error: io::Error| io::Error::new(error.kind(), format!("{name}: {error}"));
         let saved = retry_intr(|| termios::tcgetattr(io.read_fd())).map_err(|e| step("tcgetattr", e.into()))?;
         let mut raw = saved.clone();
@@ -403,42 +375,32 @@ impl Terminal {
         retry_intr(|| termios::tcsetattr(io.read_fd(), OptionalActions::Drain, &raw)).map_err(|e| step("tcsetattr", e.into()))?;
 
         // would prefer if they weren't magic and linked to some known doc on the internet
-        io.out().write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u",
-        )?; // enable many reporting modes so we get info about mouse/keyboard
+        io.out().write_all(if pixel_mouse {
+            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u"
+        } else {
+            b"\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[?2048h\x1b[>1u"
+        })?; // enable many reporting modes so we get info about mouse/keyboard
         io.out().flush()?;
 
-        let mut terminal = Self::blank(
-            io,
-            Some(saved),
-            wrapper,
-            crate::herdr::HerdrTarget::from_env(&env),
-        );
+        let mut terminal = Self::blank(io, Some(saved), wrapper);
+        terminal.pixel_mouse = pixel_mouse;
         terminal.kitty_keyboard = terminal.probe_kitty_keyboard()?;
         if !terminal.kitty_keyboard {
             terminal.io.out().write_all(b"\x1b[>4;2m")?;
             terminal.io.out().flush()?;
         }
-        let mouse_pixels = if wrapper.relayed() {
+        let mouse_pixels = if wrapper.relayed() || !pixel_mouse {
             Some(false)
         } else {
             terminal.probe_mouse_pixels()?
         };
         terminal.mouse_pixels = mouse_pixels == Some(true);
         terminal.mouse_pixels_pending = mouse_pixels.is_none();
-        if !terminal.mouse_pixels {
+        if !terminal.mouse_pixels && pixel_mouse {
             terminal.io.out().write_all(b"\x1b[?1016l\x1b[?1006h")?;
             terminal.io.out().flush()?;
         }
         terminal.clipboard_data = !wrapper.relayed() && terminal.probe_clipboard_data()?;
-        terminal.connect_herdr();
-        if terminal.herdr.is_none() && terminal.herdr_target.is_some() {
-            terminal.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
-        }
-        // these are a bit messy/sus
-        terminal.transport = terminal.probe_transport(&env)?;
-        terminal.identity = terminal.probe_identity(&env)?;
-        terminal.present = terminal.choose_present(&env)?;
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
         if terminal.color_scheme_updates {
             terminal.io.out().write_all(b"\x1b[?2031h")?;
@@ -447,17 +409,12 @@ impl Terminal {
         Ok(terminal)
     }
 
-    fn blank(
-        io: TtyHandle,
-        saved: Option<Termios>,
-        wrapper: Wrapper,
-        herdr_target: Option<crate::herdr::HerdrTarget>,
-    ) -> Self {
+    fn blank(io: TtyHandle, saved: Option<Termios>, wrapper: Wrapper) -> Self {
         Self {
             io,
             saved,
             hosted: None,
-            last_frame_size: None,
+            host_target: None,
             pointer_shape_written: false,
             mouse_pixels: false,
             mouse_pixels_pending: false,
@@ -465,37 +422,17 @@ impl Terminal {
             cell: None,
             pending: Vec::new(),
             lone_escape_since: None,
-            transport: FrameTransport::Inline,
-            transport_retry: TransportRetry::Settled,
-            herdr: None,
-            herdr_target,
-            herdr_retry: None,
-            frame_files: Vec::new(),
-            frame_seq: 0,
-            payloads: Payloads::default(),
+            relay_cell: None,
             wrapper,
-            image_id: frame_image_id(wrapper.relayed()),
-            placeholders: None,
-            placed_grid: None,
-            identity: Identity::Unknown,
-            present: Presenter::Full,
-            patches: present::Patched::default(),
-            animation: present::Animation::default(),
-            highlight_transmits: false,
-            present_at: None,
-            ready_at: None,
-            shm_pool: None,
-            overlay: present::Overlay::default(),
-            flashes: present::Flashes::default(),
             wake_rx: None,
             waker: None,
             resize_slot: None,
-            terminal_id: NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             clipboard_data: false,
             clip_read: None,
             color_scheme_updates: false,
             color_query: None,
             kitty_keyboard: false,
+            pixel_mouse: false,
         }
     }
 
@@ -530,372 +467,7 @@ impl Terminal {
         self.io.out().flush()
     }
 
-    fn probe_transport(&mut self, env: &SessionEnv) -> io::Result<FrameTransport> {
-        if let Some(forced) = env
-            .var("TERMINAL_BROWSER_FRAMES")
-            .and_then(|value| match value.trim() {
-                "file" => Some(FrameTransport::File),
-                "shared" | "shm" => Some(FrameTransport::Shared),
-                "inline" => Some(FrameTransport::Inline),
-                _ => None,
-            })
-        {
-            pixel_core::logging::info("terminal", format!("frame transport forced to {forced:?}"));
-            return Ok(forced);
-        }
-        let probe = self.probe_frames()?;
-        if probe == FrameProbe::Unanswered && self.wrapper.relayed() && !present::over_ssh(env) {
-            self.transport_retry = TransportRetry::Ready;
-        }
-        if let FrameProbe::Accepted(transport) = probe {
-            return Ok(transport);
-        }
-        // bad
-        pixel_core::logging::warn(
-            "terminal",
-            if self.wrapper.relayed() {
-                "no answer about file or shared memory frames under tmux, sending pixels inline — \
-                 check `tmux show -p allow-passthrough`, or set TERMINAL_BROWSER_FRAMES=file"
-            } else {
-                "terminal takes neither file nor shared memory frames, sending pixels inline"
-            },
-        );
-        Ok(FrameTransport::Inline)
-    }
 
-    fn probe_frames(&mut self) -> io::Result<FrameProbe> {
-        let shared = self.probe_shared_memory()?;
-        if shared == Some(true) {
-            pixel_core::logging::info("terminal", "frames go through shared memory");
-            return Ok(FrameProbe::Accepted(FrameTransport::Shared));
-        }
-        let file = self.probe_frame_file()?;
-        if file == Some(true) {
-            pixel_core::logging::info("terminal", "frames go through a file the terminal re-reads");
-            return Ok(FrameProbe::Accepted(FrameTransport::File));
-        }
-        if shared.is_none() && file.is_none() {
-            return Ok(FrameProbe::Unanswered);
-        }
-        Ok(FrameProbe::Refused)
-    }
-
-    pub(crate) fn retry_frame_transport(&mut self, client_present: bool) -> io::Result<()> {
-        let due = match self.transport_retry {
-            TransportRetry::Settled => false,
-            TransportRetry::Ready => true,
-            TransportRetry::NotBefore(at) => client_present || Instant::now() >= at,
-        };
-        if !due {
-            return Ok(());
-        }
-        self.transport_retry = match self.probe_frames()? {
-            FrameProbe::Accepted(transport) => {
-                self.transport = transport;
-                TransportRetry::Settled
-            }
-            FrameProbe::Unanswered if !client_present => {
-                TransportRetry::NotBefore(Instant::now() + TRANSPORT_RETRY_GAP)
-            }
-            FrameProbe::Unanswered | FrameProbe::Refused => TransportRetry::Settled,
-        };
-        Ok(())
-    }
-
-    fn probe_frame_file(&mut self) -> io::Result<Option<bool>> {
-        let path = self.frame_path(FRAME_SLOTS, 0);
-        if std::fs::write(&path, [0u8, 0, 0, 255]).is_err() {
-            return Ok(Some(false));
-        }
-        let name = path.to_string_lossy().into_owned();
-        self.io.out().write_all(&crate::kitty::kitty_query_medium(
-            FILE_PROBE_ID,
-            &name,
-            crate::kitty::Medium::File,
-            1,
-            1,
-            self.wrapper,
-        ))?;
-        self.io.out().flush()?;
-        let reply = self.read_report_keeping_input(FRAME_PROBE_TIMEOUT_MS, |buf| {
-            parse_probe_reply(buf, b"Gi=300;")
-        })?;
-        let _ = std::fs::remove_file(&path);
-        Ok(reply)
-    }
-
-    fn probe_shared_memory(&mut self) -> io::Result<Option<bool>> {
-        let name = self.shm_probe_name();
-        if write_shm(&name, &[0, 0, 0, 255]).is_err() {
-            return Ok(Some(false));
-        }
-        self.io.out().write_all(&crate::kitty::kitty_query_medium(
-            SHM_PROBE_ID,
-            &name,
-            crate::kitty::Medium::Shared,
-            1,
-            1,
-            self.wrapper,
-        ))?;
-        self.io.out().flush()?;
-        let reply = self.read_report_keeping_input(FRAME_PROBE_TIMEOUT_MS, |buf| {
-            parse_probe_reply(buf, b"Gi=299;")
-        })?;
-        let _ = rustix::shm::unlink(&name);
-        Ok(reply)
-    }
-
-
-    fn frame_path(&self, slot: u64, generation: u64) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "terminal-browser-{}-{}-{generation}-{slot}.rgba",
-            std::process::id(),
-            self.terminal_id
-        ))
-    }
-
-    fn write_frame_file(&mut self, data: &[u8]) -> io::Result<String> {
-        if self
-            .frame_files
-            .first()
-            .is_none_or(|file| file.len != data.len())
-        {
-            self.frame_files.clear();
-            let generation = self.frame_seq;
-            for slot in 0..FRAME_SLOTS {
-                self.frame_files
-                    .push(FrameFile::create(self.frame_path(slot, generation), data.len())?);
-            }
-        }
-        let index = (self.frame_seq % FRAME_SLOTS) as usize;
-        self.frame_seq += 1;
-        let file = &mut self.frame_files[index];
-        file.write(data);
-        Ok(file.path.to_string_lossy().into_owned())
-    }
-
-    fn connect_herdr(&mut self) {
-        self.herdr = self
-            .herdr_target
-            .as_ref()
-            .and_then(|target| crate::herdr::Herdr::open(target, self.terminal_id));
-        if let Some(cell) = self.herdr.as_ref().map(crate::herdr::Herdr::cell) {
-            self.cell = Some(cell);
-        }
-    }
-
-    pub fn present_at(&mut self, at: Option<Instant>) {
-        self.present_at = at;
-    }
-
-    pub fn take_ready_at(&mut self) -> Option<Instant> {
-        self.ready_at.take()
-    }
-
-    pub fn set_highlight_transmits(&mut self, on: bool) {
-        self.highlight_transmits = on;
-    }
-
-    pub fn holds_a_frame(&self) -> bool {
-        self.patches.holds_a_frame()
-    }
-
-    pub fn draws_layers(&self) -> bool {
-        self.draws_locally() && self.present == Presenter::Patched && self.patch_medium().is_some()
-    }
-
-    pub fn draws_locally(&self) -> bool {
-        self.hosted.is_none() && self.herdr.is_none() && self.herdr_target.is_none()
-    }
-
-    pub fn draw(&mut self, frame: pixel_core::backend::Frame<'_>) -> io::Result<usize> {
-        let canvas = frame.canvas;
-        let embedded = self.is_embedded();
-        if let Some(state) = &self.hosted {
-            if state.closed {
-                return Ok(0);
-            }
-            if embedded {
-                return self.draw_embedded(canvas);
-            }
-            let herdr = self
-                .herdr
-                .as_mut()
-                .ok_or_else(|| io::Error::other("host frame stream is gone"))?;
-            return herdr.present(canvas);
-        }
-        if self.herdr.is_none()
-            && let Some((at, backoff)) = self.herdr_retry
-            && Instant::now() >= at
-        {
-            self.connect_herdr();
-            match self.herdr {
-                Some(_) => self.herdr_retry = None,
-                None => {
-                    let backoff = (backoff * 2).min(HERDR_RETRY_MAX);
-                    self.herdr_retry = Some((Instant::now() + backoff, backoff));
-                }
-            }
-        }
-        if let Some(herdr) = self.herdr.as_mut() {
-            match herdr.present(canvas) {
-                Ok(written) => return Ok(written),
-                Err(err) => {
-                    pixel_core::logging::warn(
-                        "herdr",
-                        format!("{err}, drawing it ourselves until herdr is back"),
-                    );
-                    self.herdr = None;
-                    self.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
-                    self.last_frame_size = None;
-                    self.placeholders = None;
-                }
-            }
-        }
-        let mut out = Vec::new();
-        let drawn = match self.present {
-            Presenter::Full => {
-                let pixels = present::straight_pixels(canvas, frame.premultiplied);
-                self.draw_full(canvas, &pixels, &[], &mut out)
-            }
-            Presenter::Patched => self.draw_patched(frame, &mut out),
-            Presenter::Animation => self.draw_animation(frame, &mut out),
-        };
-        self.write_synchronized(&out)?;
-        drawn
-    }
-
-    pub(crate) fn cell(&self) -> (u32, u32) {
-        let (cw, ch) = self.cell.unwrap_or(DEFAULT_CELL);
-        (cw.max(1), ch.max(1))
-    }
-
-    fn draw_embedded(&mut self, canvas: &Canvas) -> io::Result<usize> {
-        if self.transport == FrameTransport::Host {
-            return self.hand_frame_to_host(canvas);
-        }
-        let shrank = self
-            .last_frame_size
-            .is_some_and(|(w, h)| canvas.width < w || canvas.height < h);
-        self.last_frame_size = Some((canvas.width, canvas.height));
-        let (cols, rows) = self.grid_for(canvas);
-        let placement = Placement::Cells { cols, rows };
-        let grid_changed = self.placed_grid.is_some_and(|grid| grid != (cols, rows));
-        let mut frame = Vec::new();
-        if shrank || grid_changed {
-            frame.extend_from_slice(&crate::kitty::kitty_delete_one(self.image_id));
-        }
-        let transmit = self.transmit(canvas, placement);
-        match self.hand_off_frame(&canvas.pixels)? {
-            Some((medium, name)) => {
-                frame.extend_from_slice(&crate::kitty::kitty_transmit_named(transmit, &name, medium, Wrapper::None));
-            }
-            None => frame.extend_from_slice(&crate::kitty::kitty_transmit_placed(transmit, &canvas.pixels, Wrapper::None)),
-        }
-        self.write_frame_gated(&frame)?;
-        self.placed_grid = Some((cols, rows));
-        if self.placeholders != Some((cols, rows)) {
-            self.placeholders = Some((cols, rows));
-            self.host_send(crate::hosted::placed(self.image_id, cols, rows, self.cell))?;
-        }
-        Ok(frame.len())
-    }
-
-    fn hand_frame_to_host(&mut self, canvas: &Canvas) -> io::Result<usize> {
-        let (cols, rows) = self.grid_for(canvas);
-        let generation = self.frame_seq;
-        self.frame_seq += 1;
-        let shm = self.hand_off_shm(&canvas.pixels)?;
-        self.host_send(crate::hosted::frame(crate::hosted::HostFrame {
-            shm: &shm,
-            width: canvas.width,
-            height: canvas.height,
-            generation,
-            cols,
-            rows,
-            cell: self.cell,
-        }))?;
-        Ok(canvas.pixels.len())
-    }
-
-   
-    fn wait_for_quiet_tty(&self) -> Option<()> {
-        let config = gate_config();
-        let mut unread = unread_output_of(&self.io)?;
-        let start = Instant::now();
-        let mut quiet_since: Option<Instant> = None;
-        loop {
-            let now = Instant::now();
-            if unread == 0 {
-                match quiet_since {
-                    None => quiet_since = Some(now),
-                    Some(since) if now.duration_since(since) >= config.quiet => return Some(()),
-                    Some(_) => {}
-                }
-            } else {
-                quiet_since = None;
-            }
-            if now.duration_since(start) >= config.timeout {
-                return Some(());
-            }
-            std::thread::sleep(EMBED_GATE_TICK);
-            unread = unread_output_of(&self.io)?;
-        }
-    }
-
-    fn write_frame_gated(&mut self, frame: &[u8]) -> io::Result<()> {
-        if self.wait_for_quiet_tty().is_none() {
-            self.io.out().write_all(frame)?;
-            return self.io.out().flush();
-        }
-        let start = Instant::now();
-        loop {
-            if unread_output_of(&self.io).is_some_and(|n| n > 0) {
-            } else {
-                match self.io.out().write(frame) {
-                    Ok(n) if n == frame.len() => break,
-                    Ok(n) => {
-                        pixel_core::logging::warn("embed", "the tty queue filled mid-write; a frame may have torn");
-                        self.write_rest_soon(&frame[n..])?;
-                        break;
-                    }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(e) => return Err(e),
-                }
-            }
-            if start.elapsed() >= gate_config().timeout {
-                pixel_core::logging::warn("embed", "the tty never went quiet; wrote into a busy tty, a frame may have torn");
-                self.write_rest_soon(frame)?;
-                break;
-            }
-            if self.wait_for_quiet_tty().is_none() {
-                break;
-            }
-        }
-        self.io.out().flush()
-    }
-
-    fn write_rest_soon(&mut self, mut rest: &[u8]) -> io::Result<()> {
-        while !rest.is_empty() {
-            match self.io.out().write(rest) {
-                Ok(n) => rest = &rest[n..],
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_micros(50)),
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-
-    fn grid_for(&self, canvas: &Canvas) -> (u32, u32) {
-        let (cw, ch) = self
-            .cell
-            .or_else(|| self.size().ok().and_then(|ws| ws.cell_size()))
-            .unwrap_or(DEFAULT_CELL);
-        (
-            canvas.width.div_ceil(cw).max(1),
-            canvas.height.div_ceil(ch).max(1),
-        )
-    }
 
     pub fn poll_event(&mut self, timeout: Option<Duration>) -> io::Result<Option<Event>> {
         if self.hosted.is_some() {
@@ -913,9 +485,6 @@ impl Terminal {
                     RawEvent::Paste(text) => Event::Paste(text),
                     RawEvent::Focus(focused) => {
                         self.focused = focused;
-                        if focused {
-                            self.retry_frame_transport(true)?;
-                        }
                         Event::Focus(focused)
                     }
                     RawEvent::WindowSize(ws) => Event::WindowSize(ws),
@@ -931,13 +500,14 @@ impl Terminal {
                     }
                     RawEvent::Mouse(kind, button, mods, x, y) => {
                         if self.mouse_pixels_pending
-                            && self.herdr.is_none()
+                            && self.relay_cell.is_none()
                             && self.is_past_cell_grid(x, y)
                         {
                             self.enable_mouse_pixels()?;
                         }
-                        let (x, y) = match &self.herdr {
-                            Some(herdr) => herdr.mouse_position_px(
+                        let (x, y) = match self.relay_cell {
+                            Some(cell) => relay_mouse_position_px(
+                                cell,
                                 kind,
                                 x,
                                 y,
@@ -1019,7 +589,6 @@ impl Terminal {
                             if state.cell.is_some() {
                                 self.cell = state.cell;
                             }
-                            self.placeholders = None;
                         }
                         _ => {}
                     }
@@ -1072,7 +641,8 @@ impl Terminal {
     }
 
     fn lone_escape_deadline(&mut self) -> Option<Instant> {
-        if !self.wrapper.relayed() || self.pending.first() != Some(&0x1b) {
+        let bare_escapes = self.wrapper.relayed() || !self.kitty_keyboard;
+        if !bare_escapes || self.pending.first() != Some(&0x1b) {
             self.lone_escape_since = None;
             return None;
         }
@@ -1189,9 +759,6 @@ impl Terminal {
         self.mouse_pixels
     }
 
-    pub fn frames_are_inline(&self) -> bool {
-        self.transport == FrameTransport::Inline
-    }
 
     pub fn set_cell_size(&mut self, cell: (u32, u32)) {
         self.cell = Some(cell);
@@ -1336,7 +903,7 @@ impl Terminal {
     fn read_report<T>(
         &mut self,
         timeout_ms: u64,
-        parse: impl Fn(&[u8]) -> Option<T>,
+        mut parse: impl FnMut(&[u8]) -> Option<T>,
     ) -> io::Result<Option<T>> {
         let start = self.pending.len();
         let report = self.read_report_keeping_input(timeout_ms, |buf| {
@@ -1349,7 +916,7 @@ impl Terminal {
     fn read_report_keeping_input<T>(
         &mut self,
         timeout_ms: u64,
-        find: impl Fn(&[u8]) -> Option<(T, std::ops::Range<usize>)>,
+        mut find: impl FnMut(&[u8]) -> Option<(T, std::ops::Range<usize>)>,
     ) -> io::Result<Option<T>> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let start = self.pending.len();
@@ -1381,7 +948,7 @@ impl Terminal {
         }
     }
 
-    pub fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {
+    pub fn set_pointer_shape(&mut self, shape: &str, drawn: &str) -> io::Result<()> {
         if !shape.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
             return Ok(());
         }
@@ -1391,15 +958,9 @@ impl Terminal {
                 return Ok(());
             }
         }
-        // we may want to enable this on all terminals if they have behave like ghostty, but at the least kitty does not need this and it would be a downgrade on it
-        let shape = if cfg!(target_os = "macos") && self.identity.is_ghostty() {
-            nearest_shape_ghostty_macos_draws(shape)
-        } else {
-            shape
-        };
         self.pointer_shape_written = true;
         self.io.out()
-            .write_all(format!("\x1b]22;{shape}\x1b\\").as_bytes())?;
+            .write_all(format!("\x1b]22;{drawn}\x1b\\").as_bytes())?;
         self.io.out().flush()
     }
 
@@ -1502,37 +1063,8 @@ impl Terminal {
 }
 
 
-const SHM_PROBE_ID: u32 = 299;
-const FILE_PROBE_ID: u32 = 300;
-const FRAME_PROBE_TIMEOUT_MS: u64 = 300;
-const TRANSPORT_RETRY_GAP: Duration = Duration::from_secs(1);
-
-const FRAME_SLOTS: u64 = 8;
-pub(crate) const DEFAULT_CELL: (u32, u32) = (16, 34);
 
 
-const EMBED_GATE_TICK: Duration = Duration::from_micros(20);
-
-struct GateConfig {
-    quiet: Duration,
-    timeout: Duration,
-}
-
-fn gate_config() -> &'static GateConfig {
-    static CONFIG: std::sync::OnceLock<GateConfig> = std::sync::OnceLock::new();
-    CONFIG.get_or_init(|| {
-        let millis = |name: &str, default: u64| {
-            std::env::var(name)
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .map_or(Duration::from_millis(default), Duration::from_millis)
-        };
-        GateConfig {
-            quiet: millis("EMBED_GATE_QUIET_MS", 20),
-            timeout: millis("EMBED_GATE_TIMEOUT_MS", 400),
-        }
-    })
-}
 
 fn cell_size_of_tty(tty: &std::fs::File) -> Option<(u32, u32)> {
     let ws = termios::tcgetwinsize(tty).ok()?;
@@ -1545,188 +1077,112 @@ fn cell_size_of_tty(tty: &std::fs::File) -> Option<(u32, u32)> {
     .cell_size()
 }
 
-#[allow(unsafe_code)]
-fn unread_output_of(handle: &TtyHandle) -> Option<usize> {
-    use rustix::fd::AsRawFd as _;
-    let fd = match handle {
-        TtyHandle::File(file) => file.as_raw_fd(),
-        TtyHandle::Embedded { tty, .. } => tty.as_raw_fd(),
-        _ => return None,
-    };
-    let mut count: libc::c_int = 0;
-    // SAFETY: TIOCOUTQ stores one c_int through the pointer; the fd is open and ours.
-    let rc = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut count) };
-    (rc == 0).then(|| count.max(0) as usize)
-}
-
-const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);
-const HERDR_RETRY_MAX: Duration = Duration::from_secs(10);
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameTransport {
-    File,
-    Shared,
-    Inline,
-    Host,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameProbe {
-    Accepted(FrameTransport),
-    Refused,
-    Unanswered,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TransportRetry {
-    Settled,
-    Ready,
-    NotBefore(Instant),
-}
-
-static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-
-fn frame_image_id(relayed: bool) -> u32 {
-    if !relayed {
-        return 1;
-    }
-    match std::process::id() & 0xff_ffff {
-        0 | SHM_PROBE_ID => SHM_PROBE_ID + 1,
-        id => id,
+impl Terminal {
+    pub fn set_relay_cell(&mut self, cell: Option<(u32, u32)>) {
+        self.relay_cell = cell;
     }
 }
 
-
-
-// tmux with extended-keys on re-encodes the reply's closing ESC \ as an alt+\ key
-const PROBE_REPLY_ENDS: [&[u8]; 3] = [b"\x1b\\", b"\x1b[27;3;92~", b"\x1b[92;3u"];
-
-fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<(bool, std::ops::Range<usize>)> {
-    let at = buf.windows(needle.len()).position(|w| w == needle)?;
-    let start = buf[..at].iter().rposition(|&b| b == 0x1b)?;
-    let body = &buf[at + needle.len()..];
-    let end = PROBE_REPLY_ENDS
-        .iter()
-        .filter_map(|close| {
-            let pos = body.windows(close.len()).position(|w| w == *close)?;
-            Some(pos + close.len())
-        })
-        .min()?;
-    Some((body.starts_with(b"OK"), start..at + needle.len() + end))
+impl pixel_kitty::Vars for SessionEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        SessionEnv::var(self, key)
+    }
 }
 
-#[allow(unsafe_code)]
-pub(crate) struct FrameFile {
-    path: std::path::PathBuf,
-    map: std::ptr::NonNull<u8>,
-    len: usize,
-}
-
-// SAFETY: the mapping is owned by this value alone, so moving it to another thread is fine.
-#[allow(unsafe_code)]
-unsafe impl Send for FrameFile {}
-
-#[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
-impl FrameFile {
-    pub(crate) fn create(path: std::path::PathBuf, len: usize) -> io::Result<Self> {
-        use std::os::unix::fs::OpenOptionsExt;
-        let _ = std::fs::remove_file(&path);
-        let file = std::fs::File::options()
-            .mode(0o600)
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        rustix::fs::ftruncate(&file, len as u64)?;
-        let map = unsafe {
-            rustix::mm::mmap(
-                std::ptr::null_mut(),
-                len,
-                rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE,
-                rustix::mm::MapFlags::SHARED,
-                &file,
-                0,
-            )?
+impl pixel_kitty::Tty for Terminal {
+    fn output(&self) -> io::Result<pixel_kitty::Output> {
+        let tty = |file: &std::fs::File| -> io::Result<pixel_kitty::Output> {
+            Ok(pixel_kitty::Output::new(Box::new(file.try_clone()?), Some(file.try_clone()?)))
         };
-        let map = std::ptr::NonNull::new(map.cast::<u8>())
-            .ok_or_else(|| io::Error::other("frame file mapped to nothing"))?;
-        unsafe { std::ptr::write_bytes(map.as_ptr(), 0, len) };
-        Ok(Self { path, map, len })
-    }
-
-    pub(crate) fn write(&mut self, data: &[u8]) {
-        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.map.as_ptr(), self.len) };
-    }
-
-    pub(crate) fn write_bgra(&mut self, data: &[u8]) {
-        use rayon::prelude::*;
-        let len = self.len.min(data.len());
-        let target = unsafe { std::slice::from_raw_parts_mut(self.map.as_ptr(), len) };
-        target
-            .par_chunks_mut(1 << 16)
-            .zip(data[..len].par_chunks(1 << 16))
-            .for_each(|(target, source)| {
-                for (t, s) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
-                    t[0] = s[2];
-                    t[1] = s[1];
-                    t[2] = s[0];
-                    t[3] = s[3];
-                }
-            });
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.len
-    }
-
-    pub(crate) fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-}
-
-#[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
-impl Drop for FrameFile {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = rustix::mm::munmap(self.map.as_ptr().cast(), self.len);
+        match &self.io {
+            TtyHandle::Stdio { .. } => {
+                let stdout = std::fs::File::from(rustix::io::dup(io::stdout())?);
+                Ok(pixel_kitty::Output::new(Box::new(stdout), None))
+            }
+            TtyHandle::File(file) => tty(file),
+            TtyHandle::Hosted { .. } => Ok(pixel_kitty::Output::new(Box::new(io::sink()), None)),
+            TtyHandle::Embedded { tty: file, .. } => tty(file),
         }
-        let _ = std::fs::remove_file(&self.path);
+    }
+
+    fn read_reply(
+        &mut self,
+        timeout_ms: u64,
+        keep_input: bool,
+        find: &mut dyn FnMut(&[u8]) -> Option<std::ops::Range<usize>>,
+    ) -> io::Result<bool> {
+        let found = if keep_input {
+            self.read_report_keeping_input(timeout_ms, |buf| find(buf).map(|range| ((), range)))?
+        } else {
+            self.read_report(timeout_ms, |buf| find(buf).map(|_| ()))?
+        };
+        Ok(found.is_some())
+    }
+
+    fn host_send(&mut self, message: serde_json::Value) -> io::Result<()> {
+        Terminal::host_send(self, message)
+    }
+
+    fn host(&self) -> Option<pixel_kitty::Host> {
+        let state = self.hosted.as_ref()?;
+        Some(pixel_kitty::Host {
+            embedded: self.is_embedded(),
+            closed: state.closed,
+            transport: state.transport.clone(),
+            image_id: state.image_id,
+            target: self.host_target.clone(),
+        })
+    }
+
+    fn wrapper(&self) -> Wrapper {
+        self.wrapper
+    }
+
+    fn cell(&self) -> Option<(u32, u32)> {
+        self.cell
+    }
+
+    fn screen(&self) -> Option<pixel_kitty::Screen> {
+        let ws = self.size().ok()?;
+        Some(pixel_kitty::Screen { cols: ws.cols, rows: ws.rows, cell: ws.cell_size() })
     }
 }
 
-pub(crate) fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
-    let fd = open_shm(name, data.len())?;
-    fill_shm(&fd, data.len(), |out| out.copy_from_slice(data))
-}
-
-
-fn open_shm(name: &str, len: usize) -> io::Result<rustix::fd::OwnedFd> {
-    let fd = rustix::shm::open(
-        name,
-        rustix::shm::OFlags::CREATE | rustix::shm::OFlags::EXCL | rustix::shm::OFlags::RDWR,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )?;
-    rustix::fs::ftruncate(&fd, len as u64)?;
-    Ok(fd)
-}
-
-#[allow(unsafe_code)]
-fn fill_shm(fd: &rustix::fd::OwnedFd, len: usize, fill: impl FnOnce(&mut [u8])) -> io::Result<()> {
-    unsafe {
-        let ptr = rustix::mm::mmap(
-            std::ptr::null_mut(),
-            len,
-            rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE,
-            rustix::mm::MapFlags::SHARED,
-            fd,
-            0,
-        )?;
-        fill(std::slice::from_raw_parts_mut(ptr.cast::<u8>(), len));
-        rustix::mm::munmap(ptr, len)?;
+fn relay_mouse_position_px(
+    cell: (u32, u32),
+    kind: MouseKind,
+    x: u32,
+    y: u32,
+    focused: bool,
+    pixel_mouse: bool,
+    grid: impl FnOnce() -> Option<WindowSize>,
+) -> (u32, u32) {
+    let (cell_w, cell_h) = cell;
+    let cell_center =
+        |x: u32, y: u32| ((x - 1) * cell_w + cell_w / 2, (y - 1) * cell_h + cell_h / 2);
+    if !pixel_mouse {
+        return cell_center(x, y);
     }
-    Ok(())
+    if !focused && is_wheel(kind) && grid().is_some_and(|ws| within_grid(&ws, x, y)) {
+        return cell_center(x, y);
+    }
+    (x.saturating_sub(1), y.saturating_sub(1))
+}
+
+fn is_wheel(kind: MouseKind) -> bool {
+    matches!(
+        kind,
+        MouseKind::ScrollUp
+            | MouseKind::ScrollDown
+            | MouseKind::ScrollLeft
+            | MouseKind::ScrollRight
+    )
+}
+
+fn within_grid(ws: &WindowSize, x: u32, y: u32) -> bool {
+    x >= 1 && y >= 1 && x <= ws.cols && y <= ws.rows
 }
 
 impl Drop for Terminal {
@@ -1735,18 +1191,10 @@ impl Drop for Terminal {
             RESIZE_WAKE_FDS[slot].store(-1, std::sync::atomic::Ordering::Release);
         }
         if self.is_embedded() {
-            if self.transport == FrameTransport::Host {
-                self.payloads.remove_all();
-                return;
-            }
             self.restore_pointer_shape();
-            let _ = self.io.out().write_all(&crate::kitty::kitty_delete_one(self.image_id));
             let _ = self.io.out().flush();
             return;
         }
-        self.payloads.remove_all();
-        let delete = crate::kitty::kitty_delete(self.image_id, self.wrapper);
-        let _ = self.io.out().write_all(&delete);
         if !self.kitty_keyboard {
             let _ = self.io.out().write_all(b"\x1b[>4;0m");
         }
@@ -1920,15 +1368,6 @@ fn parse_plain_bytes(buf: &[u8], kitty_active: bool) -> Option<(RawEvent, usize)
         return Some((RawEvent::Key(event), 1));
     }
     Some((RawEvent::Key(byte_key_event(b0)), 1))
-}
-
-fn nearest_shape_ghostty_macos_draws(shape: &str) -> &str {
-    match shape {
-        "nw-resize" | "ne-resize" => "n-resize",
-        "sw-resize" | "se-resize" => "s-resize",
-        "nwse-resize" | "nesw-resize" => "ns-resize",
-        _ => shape,
-    }
 }
 
 fn unrewrite_natural_editing(b: u8) -> Option<KeyEvent> {
@@ -2445,59 +1884,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn probe_replies_span_only_the_reply() {
-        for reply in [
-            b"\x1b_Gi=299;OK\x1b\\".as_slice(),
-            b"\x1b[27;3;95~Gi=299;OK\x1b[27;3;92~".as_slice(),
-            b"\x1b[95;3uGi=299;OK\x1b[92;3u".as_slice(),
-        ] {
-            for end in 0..reply.len() {
-                assert!(parse_probe_reply(&reply[..end], b"Gi=299;").is_none());
-            }
-            let mut input = [b"before".as_slice(), reply, b"after"].concat();
-            let (answer, range) = parse_probe_reply(&input, b"Gi=299;").unwrap();
-            assert!(answer);
-            input.drain(range);
-            assert_eq!(input, b"beforeafter");
-        }
-    }
-
-    #[test]
-    fn parses_probe_replies() {
-        let parse = |buf: &[u8]| parse_probe_reply(buf, b"Gi=299;").map(|(answer, _)| answer);
-        assert_eq!(parse(b"\x1b_Gi=299;OK\x1b\\"), Some(true));
-        assert_eq!(
-            parse(b"noise\x1b_Gi=299;ENOENT:not found\x1b\\"),
-            Some(false)
-        );
-        assert_eq!(parse(b"\x1b_Gi=299;O"), None, "partial");
-        assert_eq!(parse(b"\x1b[?1016;1$y"), None);
-        assert_eq!(
-            parse(b"\x1b[27;3;95~Gi=299;OK\x1b[27;3;92~"),
-            Some(true),
-            "reply re-encoded by tmux extended-keys"
-        );
-    }
-
-    #[test]
-    fn a_frame_file_is_rewritten_in_place_and_removed_on_drop() {
-        let path = std::env::temp_dir().join(format!("tb-frametest-{}.rgba", std::process::id()));
-        let first: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
-        let second: Vec<u8> = (0..4096).map(|i| (i % 97) as u8).collect();
-
-        let mut file = FrameFile::create(path.clone(), first.len()).unwrap();
-        file.write(&first);
-        assert_eq!(std::fs::read(&path).unwrap(), first);
-
-        // the same mapping serves every frame, which is the whole point of using a file
-        file.write(&second);
-        assert_eq!(std::fs::read(&path).unwrap(), second);
-
-        drop(file);
-        assert!(!path.exists(), "the frame file outlived the terminal");
-    }
-
-    #[test]
     fn parses_in_band_resize_reports() {
         let (event, used) = parse_event(b"\x1b[48;30;100;630;1000t").unwrap();
         assert_eq!(
@@ -2569,16 +1955,6 @@ mod tests {
         );
         let (_, _, mods, _, _) = parse_sgr_mouse(b"<28;1;1", true).unwrap();
         assert!(mods.shift && mods.alt && mods.ctrl && !mods.sup);
-    }
-
-    #[test]
-    fn diagonal_resize_shapes_fall_back_to_vertical_for_ghostty_macos() {
-        assert_eq!(nearest_shape_ghostty_macos_draws("se-resize"), "s-resize");
-        assert_eq!(nearest_shape_ghostty_macos_draws("nw-resize"), "n-resize");
-        assert_eq!(nearest_shape_ghostty_macos_draws("nwse-resize"), "ns-resize");
-        assert_eq!(nearest_shape_ghostty_macos_draws("nesw-resize"), "ns-resize");
-        assert_eq!(nearest_shape_ghostty_macos_draws("ew-resize"), "ew-resize");
-        assert_eq!(nearest_shape_ghostty_macos_draws("pointer"), "pointer");
     }
 
     #[test]
@@ -3011,142 +2387,9 @@ mod tty_tests {
     use std::io::{Read as _, Write as _};
 
     fn open(path: &str, wrapper: Wrapper) -> Terminal {
-        Terminal::open(path, wrapper, SessionEnv::of_session(Default::default())).unwrap()
+        Terminal::open(path, wrapper, true).unwrap()
     }
 
-    struct FakeTmuxClient {
-        master: std::fs::File,
-        attached: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        probes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    fn transport_terminal(
-        wrapper: Wrapper,
-        attached: bool,
-        shared: bool,
-        file: bool,
-    ) -> (Terminal, FakeTmuxClient) {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        use std::sync::Arc;
-        let (master, slave, _) = open_pty();
-        let mut raw = rustix::termios::tcgetattr(&slave).unwrap();
-        raw.make_raw();
-        rustix::termios::tcsetattr(&slave, rustix::termios::OptionalActions::Now, &raw).unwrap();
-        let term = Terminal::blank(TtyHandle::File(slave), None, wrapper, None);
-        let client = FakeTmuxClient {
-            master: master.try_clone().unwrap(),
-            attached: Arc::new(AtomicBool::new(attached)),
-            probes: Arc::new(AtomicUsize::new(0)),
-        };
-        let attached = client.attached.clone();
-        let probes = client.probes.clone();
-        let mut reader = master;
-        std::thread::spawn(move || {
-            let mut seen = Vec::new();
-            let mut byte = [0u8; 1];
-            while reader.read_exact(&mut byte).is_ok() {
-                seen.push(byte[0]);
-                if !seen.ends_with(b"\x1b\\") {
-                    continue;
-                }
-                if let Some(error) = graphics_error(&seen) {
-                    probes.fetch_add(1, Ordering::SeqCst);
-                    if attached.load(Ordering::SeqCst) {
-                        let (id, supported) = if parse_probe_reply(&error, b"Gi=299;").is_some() {
-                            (299, shared)
-                        } else {
-                            (300, file)
-                        };
-                        let answer = if supported { "OK" } else { "ENOENT:not found" };
-                        if reader
-                            .write_all(format!("x\x1b_Gi={id};{answer}\x1b\\").as_bytes())
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-                seen.clear();
-            }
-        });
-        (term, client)
-    }
-
-    #[test]
-    fn unanswered_tmux_transport_is_retried_on_focus() {
-        for (shared, expected) in [(true, FrameTransport::Shared), (false, FrameTransport::File)] {
-            let (mut term, mut client) = transport_terminal(Wrapper::Tmux, false, shared, true);
-            term.transport = term
-                .probe_transport(&SessionEnv::of_session(Default::default()))
-                .unwrap();
-            assert!(term.frames_are_inline());
-            assert_eq!(term.transport_retry, TransportRetry::Ready);
-            client.attached.store(true, std::sync::atomic::Ordering::SeqCst);
-            client.master.write_all(b"\x1b[I").unwrap();
-            assert_eq!(
-                term.poll_event(Some(Duration::from_secs(2))).unwrap(),
-                Some(Event::Focus(true))
-            );
-            assert_eq!(term.transport, expected);
-            assert_eq!(term.transport_retry, TransportRetry::Settled);
-            assert_eq!(
-                term.poll_event(Some(Duration::ZERO)).unwrap(),
-                Some(Event::Key(KeyEvent::plain(Key::Char('x')))),
-                "a key typed beside the reply still arrives"
-            );
-        }
-    }
-
-    #[test]
-    fn settled_transports_are_not_retried() {
-        for (wrapper, attached, setting, expected) in [
-            (Wrapper::Tmux, true, None, FrameTransport::Inline),
-            (Wrapper::None, false, None, FrameTransport::Inline),
-            (Wrapper::Tmux, false, Some(("SSH_CONNECTION", "remote")), FrameTransport::Inline),
-            (Wrapper::Tmux, false, Some(("TERMINAL_BROWSER_FRAMES", "inline")), FrameTransport::Inline),
-            (Wrapper::Tmux, false, Some(("TERMINAL_BROWSER_FRAMES", "shm")), FrameTransport::Shared),
-            (Wrapper::Tmux, false, Some(("TERMINAL_BROWSER_FRAMES", "file")), FrameTransport::File),
-        ] {
-            let (mut term, client) = transport_terminal(wrapper, attached, false, false);
-            let env = SessionEnv::of_session(
-                setting
-                    .into_iter()
-                    .map(|(key, value)| (key.into(), value.into()))
-                    .collect(),
-            );
-            term.transport = term.probe_transport(&env).unwrap();
-            assert_eq!(term.transport, expected, "{wrapper:?} {setting:?}");
-            assert_eq!(term.transport_retry, TransportRetry::Settled, "{wrapper:?} {setting:?}");
-            let probes = client.probes.load(std::sync::atomic::Ordering::SeqCst);
-            term.retry_frame_transport(true).unwrap();
-            term.retry_frame_transport(false).unwrap();
-            assert_eq!(client.probes.load(std::sync::atomic::Ordering::SeqCst), probes);
-            assert_eq!(term.transport, expected);
-        }
-    }
-
-    #[test]
-    fn unanswered_retries_are_bounded() {
-        use std::sync::atomic::Ordering;
-        let (mut term, client) = transport_terminal(Wrapper::Tmux, false, false, false);
-        term.transport = term
-            .probe_transport(&SessionEnv::of_session(Default::default()))
-            .unwrap();
-        assert_eq!(client.probes.load(Ordering::SeqCst), 2);
-
-        term.retry_frame_transport(false).unwrap();
-        assert_eq!(client.probes.load(Ordering::SeqCst), 4, "the first resize asks again");
-        term.retry_frame_transport(false).unwrap();
-        assert_eq!(client.probes.load(Ordering::SeqCst), 4, "a resize within a second does not");
-
-        term.retry_frame_transport(true).unwrap();
-        assert_eq!(client.probes.load(Ordering::SeqCst), 6, "a focus-in asks right away");
-        assert_eq!(term.transport_retry, TransportRetry::Settled);
-        term.retry_frame_transport(true).unwrap();
-        term.retry_frame_transport(false).unwrap();
-        assert_eq!(client.probes.load(Ordering::SeqCst), 6, "a silent focus-in ends the retries");
-        assert!(term.frames_are_inline());
-    }
 
     #[test]
     fn mouse_coordinates_match_the_negotiated_format() {
@@ -3344,9 +2587,6 @@ mod tty_tests {
         let mut a = open(&path_a, Wrapper::None);
         let mut b = open(&path_b, Wrapper::None);
 
-        assert_ne!(a.terminal_id, b.terminal_id);
-        assert_ne!(a.shm_name(0), b.shm_name(0));
-
         master_a.write_all(b"\x1b[97;;97u").unwrap();
         let got = a.poll_event(Some(Duration::from_millis(500))).unwrap();
         assert!(
@@ -3371,7 +2611,7 @@ mod tty_tests {
     }
 
     #[test]
-    fn a_bare_escape_resolves_on_its_own_only_under_tmux() {
+    fn a_bare_escape_resolves_on_its_own_under_tmux_or_without_kitty_keys() {
         let (mut master, _slave, path) = open_pty();
         let _terminal = fake_terminal(&master);
         let mut term = open(&path, Wrapper::Tmux);
@@ -3397,6 +2637,17 @@ mod tty_tests {
         master.write_all(b"\x1b").unwrap();
         let got = term.poll_event(Some(Duration::from_millis(200))).unwrap();
         assert!(got.is_none(), "outside tmux escape arrives as CSI-u: {got:?}");
+
+        let (mut master, _slave, path) = open_pty();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::None);
+        term.kitty_keyboard = false;
+        master.write_all(b"\x1b").unwrap();
+        let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
+        assert!(
+            matches!(&got, Some(Event::Key(key)) if key.key == Key::Escape),
+            "a terminal without kitty keys sends escape as a bare 0x1b: {got:?}"
+        );
     }
 
     #[test]
@@ -3417,5 +2668,50 @@ mod tty_tests {
             "the poll ran to its deadline instead of ending at the wake"
         );
         assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
+    }
+}
+
+#[cfg(test)]
+mod relay_mouse_tests {
+    use super::*;
+
+    fn grid() -> Option<WindowSize> {
+        Some(WindowSize {
+            cols: 120,
+            rows: 40,
+            width_px: 1200,
+            height_px: 800,
+        })
+    }
+
+    #[test]
+    fn unfocused_in_grid_wheel_rescales_to_cell_centers() {
+
+        // The bug case: an unfocused wheel arrives as cells (8, 9) and is
+        // rescaled to the cell center.
+        assert_eq!(
+            relay_mouse_position_px((10, 20), MouseKind::ScrollUp, 8, 9, false, true, grid),
+            (75, 170)
+        );
+        // Focused wheels are honest pixels; pass them through 0-based.
+        assert_eq!(
+            relay_mouse_position_px((10, 20), MouseKind::ScrollUp, 8, 9, true, true, grid),
+            (7, 8)
+        );
+        // Coordinates beyond the cell grid can only be pixels.
+        assert_eq!(
+            relay_mouse_position_px((10, 20), MouseKind::ScrollDown, 640, 9, false, true, grid),
+            (639, 8)
+        );
+        // Without pixel mouse mode every report is cells.
+        assert_eq!(
+            relay_mouse_position_px((10, 20), MouseKind::ScrollUp, 8, 9, false, false, grid),
+            (75, 170)
+        );
+        // Only wheels: clicks focus the pane first, so they stay untouched.
+        assert_eq!(
+            relay_mouse_position_px((10, 20), MouseKind::Down, 8, 9, false, true, grid),
+            (7, 8)
+        );
     }
 }

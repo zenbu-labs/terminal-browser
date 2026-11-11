@@ -1,7 +1,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use super::{FrameTransport, Terminal, fill_shm, open_shm};
+use crate::{FrameTransport, Kitty, fill_shm, open_shm};
 
 const HANDOFF_STALE_AFTER: Duration = Duration::from_secs(3);
 const HANDOFF_MAX_PENDING: usize = 4096;
@@ -63,7 +63,7 @@ impl Payloads {
     }
 }
 
-impl Terminal {
+impl Kitty {
     pub(super) fn shm_name(&self, seq: u64) -> String {
         format!("/px-{}-{}-{seq}", std::process::id(), self.terminal_id)
     }
@@ -82,7 +82,7 @@ impl Terminal {
 
     fn hand_off_shm_with(&mut self, len: usize, fill: impl FnOnce(&mut [u8])) -> io::Result<String> {
         let prefix = self.shm_name(0);
-        let pool = self.shm_pool.get_or_insert_with(|| super::shm_pool::ShmPool::new(prefix));
+        let pool = self.shm_pool.get_or_insert_with(|| crate::shm_pool::ShmPool::new(prefix));
         if let Some(mut region) = pool.take(len) {
             fill(&mut region.bytes()[..len]);
             let name = region.name.clone();

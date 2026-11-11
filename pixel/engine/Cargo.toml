@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pixel-core", "crates/pixel-terminal", "crates/pixel-bridge", "crates/pixel-node"]
+members = ["crates/pixel-core", "crates/pixel-cells", "crates/pixel-raster", "crates/pixel-kitty", "crates/pixel-terminal", "crates/pixel-bridge", "crates/pixel-node"]
 exclude = ["vendor"]
 
 [workspace.package]
@@ -10,6 +10,9 @@ publish = false
 
 [workspace.dependencies]
 pixel-core = { path = "crates/pixel-core" }
+pixel-cells = { path = "crates/pixel-cells" }
+pixel-raster = { path = "crates/pixel-raster" }
+pixel-kitty = { path = "crates/pixel-kitty" }
 pixel-terminal = { path = "crates/pixel-terminal" }
 pixel-bridge = { path = "crates/pixel-bridge" }
 rustix = { version = "1", features = ["termios", "stdio", "event", "fs", "shm", "mm", "process", "pipe"] }

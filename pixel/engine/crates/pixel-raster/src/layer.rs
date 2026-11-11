@@ -1,22 +1,26 @@
 use std::collections::HashSet;
 
+use pixel_core::fonts::Font;
+use pixel_core::scene::{Item, LayerKind, Op, Scroll};
+use pixel_core::surfaces::Rect;
+use pixel_core::{Color, PxRect};
+
 use crate::canvas::{Canvas, Overlay, ScrollLayer};
-use crate::style::{Color, Layout, Overflow, Paint, Position};
-use crate::surfaces::Rect;
-use crate::tree::{NodeId, PxRect, Tree};
+use crate::draw::{Skip, paint_scene, paint_subtree};
 
 const MIN_HEIGHT: f32 = 64.0;
 
-pub struct LayerPlan {
-    pub list: NodeId,
+pub struct LayerPlan<'a> {
+    list: &'a Item,
+    scroll: Scroll,
     pub area: Rect,
     pub origin_y: i64,
-    drawn: Vec<Drawn>,
-    skip: HashSet<NodeId>,
+    drawn: Vec<Drawn<'a>>,
+    skip: HashSet<u64>,
 }
 
-struct Drawn {
-    id: NodeId,
+struct Drawn<'a> {
+    item: &'a Item,
     clip: Option<PxRect>,
     rects: Vec<Rect>,
     inside_list: bool,
@@ -37,123 +41,99 @@ impl LayerCanvases {
     }
 }
 
-impl LayerPlan {
-    pub fn overlay_rects(&self) -> Vec<Rect> {
+impl LayerPlan<'_> {
+    pub(crate) fn overlay_rects(&self) -> Vec<Rect> {
         merge(self.drawn.iter().flat_map(|d| d.rects.iter().copied()).collect())
     }
 }
 
-pub fn scroll_layer(tree: &Tree) -> Option<LayerPlan> {
-    let size = |id: NodeId| tree.get(id).map_or(0.0, |n| n.visible.w * n.visible.h);
-    let list = tree
-        .scroll_nodes()
-        .into_iter()
-        .filter(|&id| tree.get(id).is_some_and(|n| n.style.layout == Layout::List && !n.hidden && !n.offscreen))
-        .max_by(|&a, &b| size(a).total_cmp(&size(b)))?;
-    let node = tree.get(list)?;
-    if node.visible.h < MIN_HEIGHT || node.visible.w <= 0.0 {
+pub fn scroll_layer(root: &Item) -> Option<LayerPlan<'_>> {
+    let mut lists = Vec::new();
+    find_lists(root, None, &mut lists);
+    let (list, visible, scroll) = lists.into_iter().max_by(|a, b| (a.1.w * a.1.h).total_cmp(&(b.1.w * b.1.h)))?;
+    if visible.h < MIN_HEIGHT || visible.w <= 0.0 {
         return None;
     }
-    let area = inner_pixels(node.visible)?;
+    let area = inner_pixels(visible)?;
     let mut plan = LayerPlan {
         list,
+        scroll,
         area,
-        origin_y: (node.abs.y - node.scroll.shown()).round() as i64 + node.scroll.anchored,
+        origin_y: (list.bounds.y - scroll.offset).round() as i64 + scroll.anchored,
         drawn: Vec::new(),
         skip: HashSet::new(),
     };
     let mut after = false;
-    collect(tree, tree.root(), None, &mut after, &mut plan);
+    collect(root, None, &mut after, &mut plan);
     Some(plan)
 }
 
-fn collect(tree: &Tree, id: NodeId, clip: Option<PxRect>, after: &mut bool, plan: &mut LayerPlan) {
-    let Some(node) = tree.get(id) else { return };
-    if node.hidden {
-        return;
+fn find_lists<'a>(item: &'a Item, clip: Option<PxRect>, out: &mut Vec<(&'a Item, PxRect, Scroll)>) {
+    if let Some(scroll) = item.scroll().filter(|s| s.list) {
+        out.push((item, clip.map_or(item.bounds, |c| item.bounds.intersect(c)), *scroll));
     }
+    let child_clip = child_clip(item, clip);
+    for child in &item.children {
+        find_lists(child, child_clip, out);
+    }
+}
+
+fn child_clip(item: &Item, clip: Option<PxRect>) -> Option<PxRect> {
+    if item.clips { Some(clip.map_or(item.bounds, |c| c.intersect(item.bounds))) } else { clip }
+}
+
+fn collect<'a>(item: &'a Item, clip: Option<PxRect>, after: &mut bool, plan: &mut LayerPlan<'a>) {
     if *after {
         let mut rects = Vec::new();
-        subtree_rects(tree, id, clip, &mut rects);
+        subtree_rects(item, clip, &mut rects);
         let rects: Vec<Rect> = rects.into_iter().filter_map(|r| outer_pixels(r, plan.area)).collect();
         if !rects.is_empty() {
-            plan.skip.insert(id);
-            plan.drawn.push(Drawn { id, clip, rects, inside_list: false });
+            plan.skip.insert(item.node);
+            plan.drawn.push(Drawn { item, clip, rects, inside_list: false });
         }
         return;
     }
-    let child_clip = if node.style.overflow != Overflow::Visible { Some(clip.map_or(node.abs, |c| c.intersect(node.abs))) } else { clip };
-    if id == plan.list {
-        stuck(tree, id, child_clip, plan);
+    let inner = child_clip(item, clip);
+    if item.node == plan.list.node {
+        stuck(item, inner, plan);
         *after = true;
         return;
     }
-    for child in tree.paint_children(id) {
-        if shown(tree, child) {
-            collect(tree, child, child_clip, after, plan);
-        }
+    for child in &item.children {
+        collect(child, inner, after, plan);
     }
 }
 
-fn shown(tree: &Tree, id: NodeId) -> bool {
-    tree.get(id).is_some_and(|n| !n.offscreen && (n.slot.is_none() || n.slot_visible) && (n.mark.is_none() || n.mark_visible))
-}
-
-fn stuck(tree: &Tree, id: NodeId, clip: Option<PxRect>, plan: &mut LayerPlan) {
-    for child in tree.paint_children(id) {
-        let Some(node) = tree.get(child) else { continue };
-        if node.hidden || node.offscreen {
-            continue;
-        }
-        if node.style.position == Position::Sticky && node.stuck {
+fn stuck<'a>(item: &'a Item, clip: Option<PxRect>, plan: &mut LayerPlan<'a>) {
+    for child in &item.children {
+        if matches!(child.layer.map(|l| l.kind), Some(LayerKind::Sticky { stuck: true })) {
             let mut rects = Vec::new();
-            subtree_rects(tree, child, clip, &mut rects);
+            subtree_rects(child, clip, &mut rects);
             let rects: Vec<Rect> = rects.into_iter().filter_map(|r| outer_pixels(r, plan.area)).collect();
             if !rects.is_empty() {
-                plan.skip.insert(child);
-                plan.drawn.push(Drawn { id: child, clip, rects, inside_list: true });
+                plan.skip.insert(child.node);
+                plan.drawn.push(Drawn { item: child, clip, rects, inside_list: true });
             }
         } else {
-            stuck(tree, child, clip, plan);
+            stuck(child, clip, plan);
         }
     }
 }
 
-fn subtree_rects(tree: &Tree, id: NodeId, clip: Option<PxRect>, out: &mut Vec<PxRect>) {
-    let Some(node) = tree.get(id) else { return };
-    if node.hidden {
-        return;
-    }
-    out.extend(painted(tree, id, clip));
-    let child_clip = if node.style.overflow != Overflow::Visible { Some(clip.map_or(node.abs, |c| c.intersect(node.abs))) } else { clip };
-    for child in tree.paint_children(id) {
-        if shown(tree, child) {
-            subtree_rects(tree, child, child_clip, out);
-        }
+fn subtree_rects(item: &Item, clip: Option<PxRect>, out: &mut Vec<PxRect>) {
+    out.extend(painted(item, clip));
+    let inner = child_clip(item, clip);
+    for child in &item.children {
+        subtree_rects(child, inner, out);
     }
 }
 
-fn painted(tree: &Tree, id: NodeId, clip: Option<PxRect>) -> Vec<PxRect> {
-    let Some(node) = tree.get(id) else { return Vec::new() };
-    let rect = node.abs;
-    let background = match &node.style.background {
-        Some(Paint::Solid(color)) => color[3] > 0,
-        Some(Paint::Gradient(_)) => true,
-        None => false,
-    };
-    let content = background
-        || node.style.hover_background.is_some()
-        || node.surface.is_some()
-        || node.text.is_some()
-        || !node.spans.is_empty()
-        || node.image.is_some()
-        || node.shape.is_some()
-        || node.input.is_some();
+fn painted(item: &Item, clip: Option<PxRect>) -> Vec<PxRect> {
     let mut rects = Vec::new();
-    if content || node.style.border.is_some() {
-        rects.push(rect);
+    if item.fills.content || item.fills.hover || item.fills.border {
+        rects.push(item.bounds);
     }
-    if let Some(bar) = tree.scrollbar_rects(id).filter(|_| tree.bar_opacity(id) > 0.0) {
+    if let Some(bar) = item.scroll().and_then(|s| s.bar).filter(|b| b.opacity > 0.0) {
         rects.push(bar.zone);
     }
     match clip {
@@ -162,17 +142,10 @@ fn painted(tree: &Tree, id: NodeId, clip: Option<PxRect>) -> Vec<PxRect> {
     }
 }
 
-pub fn render_layer(
-    tree: &Tree,
-    plan: &LayerPlan,
-    canvases: &mut LayerCanvases,
-    fonts: &[crate::fonts::Font],
-    cursor: Option<(f32, f32)>,
-    clear: Color,
-) -> ScrollLayer {
+pub fn render_layer(root: &Item, plan: &LayerPlan<'_>, canvases: &mut LayerCanvases, fonts: &[Font], host_surfaces: bool, clear: Color) -> ScrollLayer {
     let area = plan.area;
-    let bar = tree.scrollbar_rects(plan.list).filter(|_| tree.bar_opacity(plan.list) > 0.0);
-    let expanded = tree.get(plan.list).is_some_and(|n| n.bar.expand > 0.0);
+    let bar = plan.scroll.bar.filter(|b| b.opacity > 0.0);
+    let expanded = bar.is_some_and(|b| b.expand > 0.0);
     let mut rects = plan.overlay_rects();
     let thumb = bar.and_then(|b| {
         let x = b.thumb.x.floor();
@@ -191,12 +164,12 @@ pub fn render_layer(
         rects.push(zone);
         rects = merge(rects);
     }
-    let skip = crate::paint::Skip { nodes: &plan.skip, bar_of: plan.list };
+    let skip = Skip { nodes: &plan.skip, bar_of: plan.list.node };
     let mut under = Vec::new();
     for rect in rects.iter().copied().chain(thumb.map(|(r, _)| r)) {
         let content = &mut canvases.content;
         content.push_clip(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
-        crate::paint::paint_skipping(tree, content, fonts, cursor, Some((rect, clear)), Some(&skip));
+        paint_scene(content, root, fonts, host_surfaces, Some((rect, clear)), Some(&skip));
         content.pop_clip();
         under.push(content.raw_copy(rect));
     }
@@ -205,22 +178,32 @@ pub fn render_layer(
         let canvas = &mut canvases.overlays;
         canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, [0; 4]);
         canvas.push_clip(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
-        let (inside, after): (Vec<&Drawn>, Vec<&Drawn>) = plan.drawn.iter().partition(|d| d.inside_list);
+        let (inside, after): (Vec<&Drawn<'_>>, Vec<&Drawn<'_>>) = plan.drawn.iter().partition(|d| d.inside_list);
         for drawn in inside {
-            paint_drawn(tree, drawn, canvas, fonts, cursor);
+            paint_drawn(drawn, canvas, fonts, host_surfaces);
         }
         if bar_in_overlays {
-            crate::paint::paint_scrollbar(tree, plan.list, canvas);
+            for op in &plan.list.after {
+                if let Op::Scrollbar(bar) = op {
+                    crate::draw::scrollbar(canvas, bar);
+                }
+            }
         }
         for drawn in after {
-            paint_drawn(tree, drawn, canvas, fonts, cursor);
+            paint_drawn(drawn, canvas, fonts, host_surfaces);
         }
         canvas.pop_clip();
         overlays.push(Overlay { pixels: canvas.straight_copy(*rect), above: false });
     }
     if let Some((rect, (x, y))) = thumb {
         let mut canvas = Canvas::new(rect.w, rect.h);
-        crate::paint::paint_thumb(tree, plan.list, &mut canvas, (-x, -y));
+        let color = plan.list.after.iter().find_map(|op| match op {
+            Op::Scrollbar(bar) => Some(bar.thumb),
+            _ => None,
+        });
+        if let Some((r, color)) = color {
+            canvas.fill_rounded_rect(r.x - x, r.y - y, r.w, r.h, [r.w / 2.0; 4], color);
+        }
         let mut pixels = canvas.straight_copy(Rect::sized(rect.w, rect.h));
         pixels.rect = rect;
         overlays.push(Overlay { pixels, above: true });
@@ -228,11 +211,11 @@ pub fn render_layer(
     ScrollLayer { area, origin_y: plan.origin_y, under, overlays }
 }
 
-fn paint_drawn(tree: &Tree, drawn: &Drawn, canvas: &mut Canvas, fonts: &[crate::fonts::Font], cursor: Option<(f32, f32)>) {
+fn paint_drawn(drawn: &Drawn<'_>, canvas: &mut Canvas, fonts: &[Font], host_surfaces: bool) {
     if let Some(clip) = drawn.clip {
         canvas.push_clip(clip.x, clip.y, clip.w, clip.h);
     }
-    crate::paint::paint_subtree(tree, drawn.id, canvas, fonts, cursor);
+    paint_subtree(canvas, drawn.item, fonts, host_surfaces);
     if drawn.clip.is_some() {
         canvas.pop_clip();
     }
@@ -269,7 +252,7 @@ fn touches(a: Rect, b: Rect) -> bool {
 fn inner_pixels(r: PxRect) -> Option<Rect> {
     let (x, y) = (r.x.ceil().max(0.0), r.y.ceil().max(0.0));
     let (right, bottom) = ((r.x + r.w).floor(), (r.y + r.h).floor());
-    (right > x && bottom > y).then(|| Rect { x: x as u32, y: y as u32, w: (right - x) as u32, h: (bottom - y) as u32 })
+    (right > x && bottom > y).then_some(Rect { x: x as u32, y: y as u32, w: (right - x) as u32, h: (bottom - y) as u32 })
 }
 
 fn outer_pixels(r: PxRect, area: Rect) -> Option<Rect> {
@@ -277,5 +260,5 @@ fn outer_pixels(r: PxRect, area: Rect) -> Option<Rect> {
     let y = r.y.floor().max(area.y as f32);
     let right = (r.x + r.w).ceil().min((area.x + area.w) as f32);
     let bottom = (r.y + r.h).ceil().min((area.y + area.h) as f32);
-    (right > x && bottom > y).then(|| Rect { x: x as u32, y: y as u32, w: (right - x) as u32, h: (bottom - y) as u32 })
+    (right > x && bottom > y).then_some(Rect { x: x as u32, y: y as u32, w: (right - x) as u32, h: (bottom - y) as u32 })
 }

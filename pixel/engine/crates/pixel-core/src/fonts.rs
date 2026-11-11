@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::text_metrics::{FontMetrics, TextMetrics};
+
 pub type Face = Arc<fontdue::Font>;
 
 pub const REGULAR: u16 = 400;
@@ -14,6 +16,9 @@ pub struct Font {
     id: usize,
     pub synthetic_bold: bool,
     pub synthetic_italic: bool,
+    pub bold: bool,
+    pub italic: bool,
+    metrics: Arc<dyn TextMetrics>,
     variants: [usize; 4],
 }
 
@@ -25,7 +30,7 @@ fn next_id() -> usize {
 
 impl Font {
     pub fn single(face: fontdue::Font) -> Font {
-        Font { faces: vec![Arc::new(face)], id: next_id(), synthetic_bold: false, synthetic_italic: false, variants: [0; 4] }
+        Font { faces: vec![Arc::new(face)], id: next_id(), synthetic_bold: false, synthetic_italic: false, bold: false, italic: false, metrics: Arc::new(FontMetrics), variants: [0; 4] }
     }
 
     pub fn primary(&self) -> &fontdue::Font {
@@ -57,7 +62,11 @@ impl Font {
     }
 
     pub fn horizontal_line_metrics(&self, px: f32) -> Option<fontdue::LineMetrics> {
-        self.primary().horizontal_line_metrics(px)
+        Some(self.metrics.line(self, px))
+    }
+
+    pub fn text_metrics(&self) -> &dyn TextMetrics {
+        self.metrics.as_ref()
     }
 }
 
@@ -82,6 +91,7 @@ pub struct FontRegistry {
     family_ids: HashMap<Vec<String>, usize>,
     stacks: Vec<Font>,
     interned: HashMap<StackKey, usize>,
+    metrics: Arc<dyn TextMetrics>,
 }
 
 pub const DEFAULT_FAMILIES: usize = 0;
@@ -92,7 +102,7 @@ const GENERIC_ALIASES: [(&str, &str); 2] = [("system-ui", SANS_SERIF), ("ui-mono
 
 impl FontRegistry {
     pub fn new(monospace: fontdue::Font, sans_serif: fontdue::Font) -> Self {
-        let mut registry = Self { faces: Vec::new(), family_lists: Vec::new(), family_ids: HashMap::new(), stacks: Vec::new(), interned: HashMap::new() };
+        let mut registry = Self { faces: Vec::new(), family_lists: Vec::new(), family_ids: HashMap::new(), stacks: Vec::new(), interned: HashMap::new(), metrics: Arc::new(FontMetrics) };
         registry.add_face(MONOSPACE, REGULAR, false, monospace, "bundled:monospace");
         registry.add_face(SANS_SERIF, REGULAR, false, sans_serif, "bundled:sans-serif");
         registry.families(&[MONOSPACE.to_string()]);
@@ -106,13 +116,22 @@ impl FontRegistry {
             return false;
         }
         self.faces.push(Registered { family, weight, italic, source: source.to_string(), face: Arc::new(face) });
+        self.rebuild();
+        true
+    }
+
+    pub fn set_text_metrics(&mut self, metrics: Arc<dyn TextMetrics>) {
+        self.metrics = metrics;
+        self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
         let built: Vec<(StackKey, usize)> = self.interned.iter().map(|(&key, &base)| (key, base)).collect();
         for (key, base) in built {
             for (i, stack) in self.variant_stacks(key, base).into_iter().enumerate() {
                 self.stacks[base + i] = stack;
             }
         }
-        true
     }
 
     pub fn families(&mut self, names: &[String]) -> usize {
@@ -157,6 +176,9 @@ impl FontRegistry {
             id: next_id(),
             synthetic_bold: weight >= BOLD_THRESHOLD && primary.is_some_and(|r| r.weight < BOLD_THRESHOLD),
             synthetic_italic: italic && primary.is_some_and(|r| !r.italic),
+            bold: weight >= BOLD_THRESHOLD,
+            italic,
+            metrics: self.metrics.clone(),
             variants,
         }
     }

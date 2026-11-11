@@ -1,10 +1,10 @@
 use std::io;
 
-use super::Terminal;
+use crate::Kitty;
 use super::merge;
 use super::transmit_strategy::{FIRST_PATCH_Z, Flatten, POOL, Patch, Stats, TERMINAL_IMAGE_BUDGET_BYTES, TransmitStrategy, choose_transmit_strategy};
 use super::tiles::{TILE_Z, Tile, intersect, mark_dirty, mask_outside, tiles_for};
-use pixel_core::backend::Frame;
+use pixel_raster::PixelFrame as Frame;
 use pixel_core::surfaces::{OpaqueArea, Rect};
 
 #[derive(Debug, Default)]
@@ -54,9 +54,8 @@ fn rects(rs: impl Iterator<Item = Rect>) -> String {
     rs.map(|r| format!("{},{} {}x{}", r.x, r.y, r.w, r.h)).collect::<Vec<_>>().join(" ")
 }
 
-impl Terminal {
-    pub(in crate::terminal) fn draw_patched(&mut self, frame: Frame<'_>, out: &mut Vec<u8>) -> io::Result<usize> {
-        self.cell_size()?;
+impl Kitty {
+    pub(crate) fn draw_patched(&mut self, frame: Frame<'_>, out: &mut Vec<u8>) -> io::Result<usize> {
 
         let canvas = frame.canvas;
         let size = (canvas.width, canvas.height);
@@ -308,7 +307,7 @@ impl Terminal {
         self.draw_full(canvas, &pixels, &prelude, out)
     }
 
-    pub(crate) fn idle_flatten_at(&self) -> Option<std::time::Instant> {
+    pub fn idle_flatten_at(&self) -> Option<std::time::Instant> {
         if self.present != super::Presenter::Patched
             || self.patch_medium().is_none()
             || self.patches.live.len() <= IDLE_COMPACT_KEEP
@@ -332,7 +331,7 @@ impl Terminal {
         Ok(())
     }
 
-    pub(crate) fn flatten_if_idle(&mut self, frame: Frame<'_>) -> io::Result<()> {
+    pub fn flatten_if_idle(&mut self, frame: Frame<'_>) -> io::Result<()> {
         if self.idle_flatten_at().is_some_and(|at| std::time::Instant::now() >= at) {
             if self.patches.live.len() >= IDLE_FLATTEN_MIN_PATCHES {
                 let mut out = Vec::new();

@@ -9,7 +9,7 @@ import { appExecutable } from "./app-executable";
 import { announceGuest, findOwner, waitForOwners } from "./instances";
 import { RELAUNCH_FD, RELAUNCH_FD_ENV, parseRelaunchRequest, type RelaunchRequest } from "./relaunch";
 import { apparmorSetup, linuxSandboxError } from "./sandbox";
-import { UNSUPPORTED_ENV, checkTerminal, detect } from "./terminal";
+import { RENDERER_ENV, checkTerminal, detect } from "./terminal";
 
 function fail(message: string): never {
   process.stderr.write(`pixel: ${message}\n`);
@@ -36,7 +36,7 @@ function resolveEntry(given: string): string {
 }
 
 const TERMINAL_RESET =
-  "\x1b\\\x1b[?2026l\x1b_Ga=d,d=A,q=2\x1b\\\x1b[>4;0m\x1b[?2031l" +
+  "\x1b\\\x1b[?2026l\x1b_Ga=d,d=A,q=2\x1b\\\x1b[>4;0m\x1b[?2031l\x1b[0m\x1b[0 q" +
   "\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l";
 
 function resetTerminal(tty: string | undefined) {
@@ -118,12 +118,12 @@ async function main(): Promise<number> {
   const entry = resolveEntry(own[0] ?? ".");
 
   const tty = process.env.PIXEL_TTY ?? ownTty();
-  let unsupported = false;
+  let renderer = process.env[RENDERER_ENV];
   if (!findOwner(tty) && !process.env.PIXEL_EMBED) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       fail("tty required");
     }
-    unsupported = (await checkTerminal(detect())).graphics === "unsupported";
+    if (!renderer && (await checkTerminal(detect())).graphics === "unsupported") renderer = "cells";
   }
 
   const electron = electronBinary();
@@ -166,8 +166,7 @@ async function main(): Promise<number> {
     delete env.ELECTRON_RUN_AS_NODE;
     env.PIXEL_TTY = tty;
     env[RELAUNCH_FD_ENV] = String(RELAUNCH_FD);
-    if (unsupported) env[UNSUPPORTED_ENV] = "1";
-    else delete env[UNSUPPORTED_ENV];
+    if (renderer) env[RENDERER_ENV] = renderer;
     if (announced) env.PIXEL_PANE = announced.pane;
     else delete env.PIXEL_PANE;
     const stderr = fs.openSync(log, "a");
@@ -184,8 +183,8 @@ async function main(): Promise<number> {
         resolve(1);
       });
       spawned.on("close", (code, signal) => {
-        if (signal && !owner && !process.env.PIXEL_EMBED && !unsupported) resetTerminal(tty);
-        if (code && !unsupported) {
+        if (signal && !owner && !process.env.PIXEL_EMBED) resetTerminal(tty);
+        if (code) {
           process.stderr.write(`pixel crashed (exit code ${code}). Full logs: ${log}\n`);
         }
         resolve(code ?? (signal ? 128 : 0));

@@ -3,7 +3,8 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub use crate::canvas::{Canvas, Frame, Overlay, Pixels, ScrollLayer, measure_text};
+pub use crate::scene::{Frame, Scene};
+pub use crate::text_metrics::measure_text;
 pub use crate::input::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
 pub use crate::surfaces::{OpaqueArea, Rect, SurfaceCover, SurfaceLayout, SurfacePlacement};
 
@@ -22,10 +23,11 @@ pub struct Metrics {
     pub cell: (u32, u32),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HostInfo {
     pub metrics: Metrics,
     pub colors: HostColors,
+    pub device: crate::device::Device,
 }
 
 #[derive(Clone)]
@@ -58,6 +60,7 @@ pub enum Event {
     Focus(bool),
     Resize(Metrics),
     Colors(HostColors),
+    Device(crate::device::Device),
     Visible(bool),
     Redraw,
     Closed,
@@ -66,13 +69,6 @@ pub enum Event {
         ok: bool,
     },
     Message(serde_json::Value),
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Wants {
-    pub scroll_layer: bool,
-    pub view_canvas: bool,
-    pub host_surfaces: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,10 +100,6 @@ pub trait Backend: Any + Send {
         Ok(None)
     }
 
-    fn wants(&self) -> Wants {
-        Wants::default()
-    }
-
     fn pending_present(&self) -> bool {
         false
     }
@@ -120,9 +112,11 @@ pub trait Backend: Any + Send {
         Ok(())
     }
 
-    fn idle(&mut self, _last: Frame<'_>) -> io::Result<()> {
+    fn idle(&mut self) -> io::Result<()> {
         Ok(())
     }
+
+    fn spare(&mut self, _fonts: &[crate::fonts::Font], _until: Instant) {}
 
     fn deadline(&self) -> Option<Instant> {
         None

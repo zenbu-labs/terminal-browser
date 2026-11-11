@@ -2,8 +2,8 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use super::super::Terminal;
-use pixel_core::backend::Canvas;
+use crate::Kitty;
+use pixel_raster::Canvas;
 use crate::kitty::{Placement, Transmit};
 use pixel_core::surfaces::Rect;
 use crate::wrapper::Wrapper;
@@ -57,7 +57,7 @@ fn render(font: &pixel_core::fonts::Font, text: &str, px: f32, fg: [u8; 4], bg: 
     (width, height, canvas.pixels)
 }
 
-impl Terminal {
+impl Kitty {
     pub fn set_overlay_font(&mut self, font: pixel_core::fonts::Font) {
         self.overlay.font = Some(font);
     }
@@ -78,7 +78,7 @@ impl Terminal {
         self.write_overlay(&out)
     }
 
-    pub(crate) fn note(&mut self, text: impl Into<String>) {
+    pub fn note(&mut self, text: impl Into<String>) {
         if !self.overlay.on() {
             return;
         }
@@ -90,27 +90,27 @@ impl Terminal {
         self.overlay.notes.push(Note { id, text: text.into(), born: Instant::now(), placed: None });
     }
 
-    pub(in crate::terminal) fn set_status(&mut self, text: String) {
+    pub(crate) fn set_status(&mut self, text: String) {
         if self.overlay.on() {
             self.overlay.status = text;
         }
     }
 
-    pub(in crate::terminal) fn overlay_frame(&mut self, size: (u32, u32)) {
+    pub(crate) fn overlay_frame(&mut self, size: (u32, u32)) {
         self.overlay.frame = size;
     }
 
-    pub(crate) fn overlay_due(&self) -> Option<Instant> {
+    pub fn overlay_due(&self) -> Option<Instant> {
         self.overlay.notes.iter().map(|n| n.born + NOTE_LIFETIME).min()
     }
 
-    pub(crate) fn draw_overlay(&mut self) -> io::Result<()> {
+    pub fn draw_overlay(&mut self) -> io::Result<()> {
         let mut out = Vec::new();
         self.append_overlay(&mut out)?;
         self.write_overlay(&out)
     }
 
-    pub(in crate::terminal) fn append_overlay(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
+    pub(crate) fn append_overlay(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
         if !self.overlay.on() || self.overlay.frame.0 == 0 {
             return Ok(());
         }

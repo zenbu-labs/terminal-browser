@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::io;
 
-use super::Terminal;
+use crate::Kitty;
 use super::tiles::{TILE_Z, intersect, subtract};
-use pixel_core::backend::{Frame, ScrollLayer};
+use pixel_raster::{PixelFrame as Frame, ScrollLayer};
 use pixel_core::surfaces::Rect;
 
 const STRIPE_PX: u32 = 128;
@@ -113,7 +113,7 @@ fn union(a: Rect, b: Rect) -> Rect {
     Rect { x, y, w: (a.x + a.w).max(b.x + b.w) - x, h: (a.y + a.h).max(b.y + b.h) - y }
 }
 
-impl Terminal {
+impl Kitty {
     fn place_part(&self, out: &mut Vec<u8>, placed: &mut Placed, at: (u32, u32), rows: Option<(u32, u32)>, z: i32) {
         let (cw, ch) = self.cell();
         let want = (at.1, rows.map_or(0, |r| r.0), rows.map_or(0, |r| r.1));

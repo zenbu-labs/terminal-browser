@@ -68,9 +68,18 @@ export interface EngineInfo {
   cellWidth: number;
   cellHeight: number;
   basePx: number;
+  device: DeviceInfo;
+  renderer?: "kitty" | "cells";
   kittyKeyboard: boolean;
   hosted: boolean;
   colors: TerminalColors;
+}
+
+export interface DeviceInfo {
+  name: string;
+  lattice: [number, number];
+  colors: "truecolor" | "256" | "16" | "mono";
+  pointer: "precise" | "coarse";
 }
 
 export interface HostOptions {

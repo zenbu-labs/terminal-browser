@@ -38,6 +38,7 @@ pub struct ShapeProps {
     pub cmds: Vec<PathCmd>,
     pub stroke: ShapeStroke,
     pub view_box: Option<f32>,
+    pub glyph: Option<String>,
 }
 
 pub fn parse_path_data(d: &str) -> Vec<PathCmd> {
@@ -184,4 +185,53 @@ mod tests {
         );
     }
 
+}
+
+pub fn rounded_rect_path(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: [f32; 4],
+) -> Option<tiny_skia::Path> {
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let mut r = radius.map(|r| r.max(0.0).min(w / 2.0).min(h / 2.0));
+    for v in &mut r {
+        if *v < 0.5 {
+            *v = 0.0;
+        }
+    }
+    let [tl, tr, br, bl] = r;
+    if r == [0.0; 4] {
+        return Some(tiny_skia::PathBuilder::from_rect(
+            tiny_skia::Rect::from_xywh(x, y, w, h)?,
+        ));
+    }
+    const K: f32 = 0.552_284_8; // circle approximation
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x + tl, y);
+    pb.line_to(x + w - tr, y);
+    if tr > 0.0 {
+        let k = tr * (1.0 - K);
+        pb.cubic_to(x + w - k, y, x + w, y + k, x + w, y + tr);
+    }
+    pb.line_to(x + w, y + h - br);
+    if br > 0.0 {
+        let k = br * (1.0 - K);
+        pb.cubic_to(x + w, y + h - k, x + w - k, y + h, x + w - br, y + h);
+    }
+    pb.line_to(x + bl, y + h);
+    if bl > 0.0 {
+        let k = bl * (1.0 - K);
+        pb.cubic_to(x + k, y + h, x, y + h - k, x, y + h - bl);
+    }
+    pb.line_to(x, y + tl);
+    if tl > 0.0 {
+        let k = tl * (1.0 - K);
+        pb.cubic_to(x, y + k, x + k, y, x + tl, y);
+    }
+    pb.close();
+    pb.finish()
 }

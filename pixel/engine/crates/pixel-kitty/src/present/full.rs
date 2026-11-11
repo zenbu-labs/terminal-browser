@@ -1,12 +1,12 @@
 use std::io;
 
-use super::Terminal;
-use pixel_core::backend::Canvas;
+use crate::Kitty;
+use pixel_raster::Canvas;
 use crate::kitty::Placement;
 use pixel_core::surfaces::Rect;
 
-impl Terminal {
-    pub(in crate::terminal) fn draw_full(&mut self, canvas: &Canvas, pixels: &[u8], prelude: &[u8], out: &mut Vec<u8>) -> io::Result<usize> {
+impl Kitty {
+    pub(crate) fn draw_full(&mut self, canvas: &Canvas, pixels: &[u8], prelude: &[u8], out: &mut Vec<u8>) -> io::Result<usize> {
         let shrank = self
             .last_frame_size
             .is_some_and(|(w, h)| canvas.width < w || canvas.height < h);
@@ -17,9 +17,9 @@ impl Terminal {
         if shrank {
             out.extend_from_slice(&crate::kitty::kitty_delete(self.image_id, self.wrapper));
             out.extend_from_slice(b"\x1b[2J");
-            if let Ok(ws) = self.size() {
-                let blank_row = " ".repeat(ws.cols as usize);
-                for row in 1..=ws.rows {
+            if let Some(screen) = self.screen {
+                let blank_row = " ".repeat(screen.cols as usize);
+                for row in 1..=screen.rows {
                     out.extend_from_slice(format!("\x1b[{row};1H{blank_row}").as_bytes());
                 }
             }

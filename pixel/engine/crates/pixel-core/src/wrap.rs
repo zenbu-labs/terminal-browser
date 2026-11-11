@@ -1,9 +1,9 @@
 use std::ops::Range;
 
-use crate::canvas::{char_advance, measure_marked};
+use crate::text_metrics::{char_advance, measure_marked};
 use crate::text_input::Mark;
 
-pub(crate) const WRAP_SLACK: f32 = 1.0;
+pub const WRAP_SLACK: f32 = 1.0;
 
 pub fn wrap_lines(
     text: &str,
@@ -129,7 +129,7 @@ pub fn line_of_offset(lines: &[Range<usize>], offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canvas::measure_text;
+    use crate::text_metrics::measure_text;
 
     static FONT_BYTES: &[u8] =
         include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
@@ -247,7 +247,7 @@ mod tests {
 // label that is too wide reads as cut rather than as a different word. Returns
 // None when the whole line fits.
 pub fn ellipsize(text: &str, font: &crate::fonts::Font, px: f32, max_width: f32) -> Option<String> {
-    let measure = |s: &str| crate::canvas::measure_text(font, s, px);
+    let measure = |s: &str| crate::text_metrics::measure_text(font, s, px);
     if measure(text) <= max_width {
         return None;
     }

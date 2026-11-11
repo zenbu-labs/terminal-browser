@@ -6,7 +6,7 @@ export type GraphicsSupport = "supported" | "unsupported" | "unknown";
 
 export const SKIP_ENV = "PIXEL_SKIP_GRAPHICS_CHECK";
 
-export const UNSUPPORTED_ENV = "PIXEL_UNSUPPORTED_TERMINAL";
+export const RENDERER_ENV = "PIXEL_RENDERER";
 
 const PROBE_ID = 4207;
 
@@ -24,7 +24,7 @@ function probeSequence(wrap: boolean): string {
 function graphicsReply(buffer: string): boolean | null {
   const needle = `Gi=${PROBE_ID};`;
   const at = buffer.indexOf(needle);
-  if (at < 0) return null;
+  if (at < 0) return /\x1b\[\?[\d;]*c/.test(buffer) ? false : null;
   const rest = buffer.slice(at + needle.length);
   if (rest.length < 2) return null;
   return rest.startsWith("OK");

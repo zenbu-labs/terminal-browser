@@ -93,6 +93,7 @@ export type {
   Style,
   FontFace,
   FontFamily,
+  DeviceInfo,
   EngineInfo,
   EngineKeyEvent,
   KeyMods,

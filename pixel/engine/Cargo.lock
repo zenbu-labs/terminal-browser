@@ -787,6 +787,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixel-cells"
+version = "0.1.0"
+dependencies = [
+ "pixel-core",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "pixel-core"
 version = "0.1.0"
 dependencies = [
@@ -805,6 +814,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixel-kitty"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "libc",
+ "miniz_oxide",
+ "pixel-core",
+ "pixel-raster",
+ "rayon",
+ "rustix",
+ "serde_json",
+]
+
+[[package]]
 name = "pixel-node"
 version = "0.1.0"
 dependencies = [
@@ -817,6 +840,7 @@ dependencies = [
  "openh264",
  "pixel-bridge",
  "pixel-core",
+ "pixel-raster",
  "pixel-terminal",
  "png",
  "rustix",
@@ -826,15 +850,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixel-raster"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "image",
+ "pixel-core",
+ "tiny-skia",
+ "ttf-parser",
+]
+
+[[package]]
 name = "pixel-terminal"
 version = "0.1.0"
 dependencies = [
  "arboard",
  "base64",
  "libc",
- "miniz_oxide",
+ "pixel-cells",
  "pixel-core",
- "rayon",
+ "pixel-kitty",
+ "pixel-raster",
  "rustix",
  "serde_json",
 ]

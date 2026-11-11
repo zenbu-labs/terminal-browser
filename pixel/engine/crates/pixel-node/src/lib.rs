@@ -64,7 +64,7 @@ impl Task for FilmstripTask {
     fn compute(&mut self) -> Result<Vec<u8>> {
         let mut segment = capture::Segment::open(std::path::Path::new(&self.dir))
             .map_err(|e| Error::from_reason(format!("{}: {e}", self.dir)))?;
-        let mut strip = pixel_core::Canvas::new(self.width, self.height);
+        let mut strip = pixel_raster::Canvas::new(self.width, self.height);
         strip.fill([24, 24, 26, 255]);
         for (slot, &index) in self.frames.iter().enumerate() {
             let (pixels, w, h) = segment.frame(index as usize).map_err(err)?;
@@ -307,6 +307,7 @@ impl PixelEngine {
             Some(env) => pixel_terminal::SessionEnv::of_session(env),
             None => pixel_terminal::SessionEnv::of_process(),
         };
+        let renderer = pixel_terminal::Renderer::named(session_env.var("PIXEL_RENDERER").as_deref());
         let backend = TerminalBackend::new(pixel_terminal::TerminalOptions {
             tty,
             host: host.map(|host| pixel_terminal::HostOptions {
@@ -318,6 +319,7 @@ impl PixelEngine {
             wrapper: pixel_terminal::Wrapper::named(wrapper.as_deref()),
             session_env,
             watch_resize: false,
+            renderer,
         })
         .map_err(err)?;
         Self::start_with(Box::new(backend))

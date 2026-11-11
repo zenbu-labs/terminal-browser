@@ -1,9 +1,9 @@
 use std::io;
 
-use super::Terminal;
+use crate::Kitty;
 use super::merge::{IMAGE_OVERHEAD_PX, merge_rects};
 use super::transmit_strategy::{Flatten, MAX_PATCHES, Patch, Stats, TransmitStrategy};
-use pixel_core::backend::Frame;
+use pixel_raster::PixelFrame as Frame;
 use crate::kitty::FrameEdit;
 use pixel_core::surfaces::Rect;
 
@@ -33,8 +33,8 @@ fn choose_transmit_strategy(state: &Animation, frame: (u32, u32), damage: &[Rect
     }
 }
 
-impl Terminal {
-    pub(in crate::terminal) fn draw_animation(&mut self, frame: Frame<'_>, out: &mut Vec<u8>) -> io::Result<usize> {
+impl Kitty {
+    pub(crate) fn draw_animation(&mut self, frame: Frame<'_>, out: &mut Vec<u8>) -> io::Result<usize> {
         let canvas = frame.canvas;
         let size = (canvas.width, canvas.height);
         let single_edit = self.wrapper.relayed(); // tmux case 

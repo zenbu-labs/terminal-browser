@@ -97,6 +97,7 @@ export type {
 } from "./reconciler-config";
 export type { Color, Edges, FontFace, FontFamily, InsetEdges, InsetValue, PointerShape, ScrollbarStyle, Style } from "./styles";
 export type {
+  DeviceInfo,
   DiffEmphasis,
   DiffRow,
   EngineInfo,

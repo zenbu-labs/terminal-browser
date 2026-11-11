@@ -23,7 +23,6 @@ use crate::logging;
 use crate::menu::MenuController;
 use crate::profiler::ProfileData;
 use crate::scroll::ScrollProfile;
-use crate::scroll::profiles::Smooth;
 use crate::style::Color;
 use crate::backend::Event;
 use crate::input::{KeyEvent, Mods, Mouse, MouseButton, MouseKind};
@@ -31,10 +30,7 @@ use crate::text_input::InputReply;
 use crate::throttle::CpuThrottle;
 use crate::tree::{NodeId, PxRect};
 
-static DEFAULT_PROFILE: Smooth = Smooth {
-    tau: 0.08,
-    brake: 0.025,
-};
+
 
 pub struct EngineConfig {
     pub fonts: crate::fonts::FontRegistry,
@@ -252,12 +248,13 @@ pub struct Engine {
     pub cell: (u32, u32),
     pub base_px: f32,
     pub colors: HostColors,
+    pub device: crate::device::Device,
     cursor: Option<(f32, f32)>,
     hover: Option<(usize, NodeId)>,
     focus_view: usize,
     active_view: usize,
     host_focused: bool,
-    pub profile: &'static dyn ScrollProfile,
+    pub profile: std::sync::Arc<dyn ScrollProfile>,
     default_menu: bool,
     menu: MenuController,
     inspect_mode: bool,
@@ -321,7 +318,9 @@ impl Engine {
         let info = backend.start()?;
         let Metrics { window, cell } = info.metrics;
         let colors = info.colors;
-        let base_px = px_for_cell_height(&config.fonts[config.cell_metrics_font], cell.1 as f32);
+        let mut fonts = config.fonts;
+        fonts.set_text_metrics(info.device.text.clone());
+        let base_px = px_for_cell_height(&fonts[config.cell_metrics_font], cell.1 as f32);
         logging::info(
             "engine",
             format!(
@@ -329,20 +328,21 @@ impl Engine {
                 window.0, window.1, cell.0, cell.1
             ),
         );
-        let engine = Self {
+        let mut engine = Self {
             backend,
             comp: Compositor::new(window),
-            fonts: config.fonts,
+            fonts,
             cell_metrics_font: config.cell_metrics_font,
             cell,
             base_px,
             colors,
+            device: info.device.clone(),
             cursor: None,
             hover: None,
             focus_view: 0,
             active_view: 0,
             host_focused: true,
-            profile: &DEFAULT_PROFILE,
+            profile: info.device.scroll.clone(),
             default_menu: false,
             menu: MenuController::default(),
             inspect_mode: false,
@@ -385,6 +385,9 @@ impl Engine {
             scroll_requests: Vec::new(),
             stats: FrameStats::default(),
         };
+        for view in &mut engine.comp.views {
+            view.tree.set_lattice(engine.device.lattice);
+        }
         Ok(engine)
     }
 
@@ -399,6 +402,7 @@ impl Engine {
 
     pub fn add_view(&mut self) -> usize {
         let view = self.comp.add_view();
+        self.comp.views[view].tree.set_lattice(self.device.lattice);
         logging::info("engine", format!("view {view} created"));
         view
     }
@@ -667,9 +671,7 @@ impl Engine {
         if self.rows_pending() {
             self.catch_up_rows(input_pending || self.animating());
         }
-        if crate::canvas::glyphs_to_warm() {
-            self.warm_glyphs(input_pending || self.animating());
-        }
+        self.give_spare_time(input_pending || self.animating());
         self.sync_pointer_shape();
         self.drain_logs(&mut out);
         Ok(out)
@@ -726,6 +728,21 @@ impl Engine {
         }
         self.comp.dirty = true;
         out.push(EngineEvent::Colors { colors });
+    }
+
+    fn apply_device(&mut self, device: crate::device::Device) {
+        if device == self.device {
+            return;
+        }
+        logging::info("engine", format!("device {} lattice {:?}", device.name, device.lattice));
+        self.fonts.set_text_metrics(device.text.clone());
+        self.profile = device.scroll.clone();
+        for view in &mut self.comp.views {
+            view.tree.set_lattice(device.lattice);
+            view.tree.mark_layout();
+        }
+        self.device = device;
+        self.comp.dirty = true;
     }
 
     fn poll_metrics(&mut self, out: &mut Vec<EngineEvent>) -> io::Result<()> {
@@ -858,6 +875,7 @@ impl Engine {
                     .handle_clipboard_data(self.backend.as_mut(), items, ok)
             }
             Event::Colors(colors) => self.apply_colors(colors, out),
+            Event::Device(device) => self.apply_device(device),
             Event::Visible(visible) => out.push(EngineEvent::Visible { visible }),
         }
         self.emit_selection_change(out);
@@ -903,6 +921,7 @@ impl Engine {
 
 pub fn px_for_cell_height(font: &crate::fonts::Font, cell_height: f32) -> f32 {
     let probe = font
+        .primary()
         .horizontal_line_metrics(100.0)
         .expect("font has horizontal metrics");
     (cell_height * 100.0 / probe.new_line_size).clamp(6.0, 512.0)
