@@ -10,6 +10,7 @@ import type {
   NodeHandle,
   PointerEvent,
   PointerShape,
+  ProgramStatus,
   Surface,
   WheelEvent,
 } from "../react";
@@ -17,6 +18,10 @@ import { RootContext, useRegistryColors } from "../registry";
 import type { ViewEntry } from "../registry";
 import type { Guest, GuestFrame } from "./server";
 
+
+function statusRecord(guest: Guest): string {
+  return `pane-${guest.pane.replace(/[^A-Za-z0-9._-]/g, "")}`.slice(0, 32);
+}
 
 export function GuestView({ guest, active }: { guest: Guest; active: boolean }) {
   const registry = useContext(RootContext);
@@ -82,10 +87,18 @@ export function GuestView({ guest, active }: { guest: Guest; active: boolean }) 
       setPointerShape(shape as PointerShape);
     };
     guest.onClipboard = (text) => registry.root.setClipboard(text);
+    const record = statusRecord(guest);
+    let reported = false;
+    guest.onStatus = (status: ProgramStatus) => {
+      reported = true;
+      registry.root.setStatus({ ...status, id: status.id ? `${record}/${status.id}` : record });
+    };
     return () => {
       guest.onFrame = null;
       guest.onPointer = null;
       guest.onClipboard = null;
+      guest.onStatus = null;
+      if (reported) registry.root.setStatus({ state: "clear", id: record });
       registry.unregister(entry);
       created.close();
       surface.current = null;

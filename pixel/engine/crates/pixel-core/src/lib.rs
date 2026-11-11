@@ -47,7 +47,7 @@ pub use style::{
     Align, Border, BorderSide, Color, Dimension, Edges, FlexDirection, Inset, InsetValue, Justify,
     Layout, LinearGradient, Overflow, Paint, Position, ScrollAnchor, ScrollbarStyle, SelectionMode, Style,
 };
-pub use backend::{Backend, Event, HostColors, Metrics, Waker};
+pub use backend::{Backend, Event, HostColors, Metrics, ProgramStatus, Waker};
 pub use input::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
 pub use text_input::{
     caret_thickness, mark_advance_at, CaretShape, Granularity, InputAction, InputGeometry, InputReply, MARK_CHAR, Mark, TextInput,

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use rustix::termios::{self, OptionalActions, Termios};
 
-pub use pixel_core::backend::HostColors;
+pub use pixel_core::backend::{HostColors, ProgramStatus};
 pub use pixel_core::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
 pub(crate) use pixel_kitty::DEFAULT_CELL;
 use pixel_kitty::{HerdrTarget, Wrapper};
@@ -169,6 +169,7 @@ pub struct Terminal {
     hosted: Option<crate::hosted::HostState>,
     host_target: Option<HerdrTarget>,
     pointer_shape_written: bool,
+    status_written: bool,
     mouse_pixels: bool,
     mouse_pixels_pending: bool,
     focused: bool,
@@ -416,6 +417,7 @@ impl Terminal {
             hosted: None,
             host_target: None,
             pointer_shape_written: false,
+            status_written: false,
             mouse_pixels: false,
             mouse_pixels_pending: false,
             focused: true,
@@ -980,6 +982,18 @@ impl Terminal {
         self.io.out().flush()
     }
 
+    pub fn set_status(&mut self, status: &ProgramStatus) -> io::Result<()> {
+        if self.hosted.is_some() {
+            return self.host_send(crate::hosted::status(status));
+        }
+        let Some(report) = program_status_report(status) else {
+            return Ok(());
+        };
+        self.status_written = true;
+        self.io.out().write_all(report.as_bytes())?;
+        self.io.out().flush()
+    }
+
     pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
         if self.hosted.is_some() {
             return self.host_send(crate::hosted::clipboard(text));
@@ -1202,6 +1216,9 @@ impl Drop for Terminal {
             let _ = self.io.out().write_all(b"\x1b[?2031l");
         }
         self.restore_pointer_shape();
+        if self.status_written {
+            let _ = self.io.out().write_all(b"\x1b]7501;state=clear\x1b\\");
+        }
         let _ = self.io.out().write_all(
             b"\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l",
         );
@@ -1801,6 +1818,56 @@ fn parse_decrqm_5522(buf: &[u8]) -> Option<bool> {
     Some(ps == b'1' || ps == b'2' || ps == b'3')
 }
 
+const STATUS_STATES: [&str; 6] = ["idle", "working", "done", "blocked", "error", "clear"];
+const STATUS_KINDS: [&str; 3] = ["permission", "question", "auth"];
+
+fn program_status_report(status: &ProgramStatus) -> Option<String> {
+    use base64::Engine as _;
+    if !STATUS_STATES.contains(&status.state.as_str()) {
+        return None;
+    }
+    let token = |value: &str, max: usize| {
+        value.len() <= max && !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    };
+    let id_ok = |id: &str| id.split('/').count() <= 8 && id.len() <= 128 && id.split('/').all(|part| token(part, 32));
+    let text = |value: &str, max: usize| {
+        let mut clean: String = value.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        if clean.len() > max {
+            let mut end = max;
+            while !clean.is_char_boundary(end) {
+                end -= 1;
+            }
+            clean.truncate(end);
+        }
+        base64::engine::general_purpose::STANDARD.encode(clean.trim())
+    };
+    if status.id.as_deref().is_some_and(|id| !id_ok(id)) || status.app.as_deref().is_some_and(|app| !token(app, 32)) {
+        return None;
+    }
+    let mut pairs = vec![format!("state={}", status.state)];
+    if let Some(id) = &status.id {
+        pairs.push(format!("id={id}"));
+    }
+    if status.state != "clear" {
+        if let Some(app) = &status.app {
+            pairs.push(format!("app={app}"));
+        }
+        if let Some(kind) = status.kind.as_deref().filter(|kind| status.state == "blocked" && STATUS_KINDS.contains(kind)) {
+            pairs.push(format!("kind={kind}"));
+        }
+        if let Some(progress) = status.progress.filter(|_| status.state == "working" || status.state == "blocked") {
+            pairs.push(format!("progress={}", progress.min(100)));
+        }
+        if let Some(title) = status.title.as_deref().filter(|title| !title.trim().is_empty()) {
+            pairs.push(format!("title={}", text(title, 192)));
+        }
+        if let Some(msg) = status.msg.as_deref().filter(|msg| !msg.trim().is_empty()) {
+            pairs.push(format!("msg={}", text(msg, 2048)));
+        }
+    }
+    Some(format!("\x1b]7501;{}\x1b\\", pairs.join(":")))
+}
+
 fn parse_decrqm_2031(buf: &[u8]) -> Option<bool> {
     let start = buf.windows(8).position(|w| w == b"\x1b[?2031;")? + 8;
     let ps = *buf.get(start)?;
@@ -1882,6 +1949,22 @@ fn parse_cell_report(params: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_status_reports_encode_text_and_drop_bad_fields() {
+        let status = ProgramStatus {
+            state: "blocked".into(),
+            kind: Some("permission".into()),
+            app: Some("pixelcode".into()),
+            msg: Some("Run\nls?".into()),
+            ..ProgramStatus::default()
+        };
+        assert_eq!(program_status_report(&status).unwrap(), "\x1b]7501;state=blocked:app=pixelcode:kind=permission:msg=UnVuIGxzPw==\x1b\\");
+        let working = ProgramStatus { state: "working".into(), id: Some("job/1".into()), kind: Some("auth".into()), progress: Some(140), ..ProgramStatus::default() };
+        assert_eq!(program_status_report(&working).unwrap(), "\x1b]7501;state=working:id=job/1:progress=100\x1b\\");
+        assert_eq!(program_status_report(&ProgramStatus { state: "idle".into(), id: Some("a:b".into()), ..ProgramStatus::default() }), None);
+        assert_eq!(program_status_report(&ProgramStatus { state: "busy".into(), ..ProgramStatus::default() }), None);
+    }
 
     #[test]
     fn parses_in_band_resize_reports() {

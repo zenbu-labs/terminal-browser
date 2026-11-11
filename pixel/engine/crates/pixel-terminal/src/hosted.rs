@@ -82,6 +82,19 @@ pub(crate) fn title(text: &str) -> Value {
     json!({ "type": "title", "text": text })
 }
 
+pub(crate) fn status(status: &crate::terminal::ProgramStatus) -> Value {
+    json!({
+        "type": "status",
+        "id": status.id,
+        "state": status.state,
+        "kind": status.kind,
+        "progress": status.progress,
+        "app": status.app,
+        "title": status.title,
+        "msg": status.msg,
+    })
+}
+
 pub(crate) fn pointer(shape: &str) -> Value {
     json!({ "type": "pointer", "shape": shape })
 }

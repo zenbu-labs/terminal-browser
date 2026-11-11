@@ -174,6 +174,21 @@ enum Op {
     SetTitle {
         text: String,
     },
+    SetStatus {
+        #[serde(default)]
+        id: Option<String>,
+        state: String,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        progress: Option<u8>,
+        #[serde(default)]
+        app: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        msg: Option<String>,
+    },
     BackendMessage {
         message: serde_json::Value,
     },
@@ -983,6 +998,9 @@ fn apply_op(
         Op::RequestIdle { .. } => unreachable!("collected while applying the batch"),
         Op::SetKeyCapture { keys } => engine.key_capture = keys,
         Op::SetTitle { text } => engine.set_title(&text),
+        Op::SetStatus { id, state, kind, progress, app, title, msg } => {
+            engine.set_status(&pixel_core::ProgramStatus { id, state, kind, progress, app, title, msg })
+        }
         Op::BackendMessage { message } => engine.backend.message(message),
         Op::InputSplice {
             id,

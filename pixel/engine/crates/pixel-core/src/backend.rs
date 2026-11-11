@@ -17,6 +17,17 @@ pub struct HostColors {
     pub palette: [Option<[u8; 4]>; 16],
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProgramStatus {
+    pub id: Option<String>,
+    pub state: String,
+    pub kind: Option<String>,
+    pub progress: Option<u8>,
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub msg: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Metrics {
     pub window: (u32, u32),
@@ -133,6 +144,10 @@ pub trait Backend: Any + Send {
     }
 
     fn set_title(&mut self, _text: &str) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn set_status(&mut self, _status: &ProgramStatus) -> io::Result<()> {
         Ok(())
     }
 
