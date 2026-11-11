@@ -99,6 +99,39 @@ fn thin_rules_become_line_glyphs() {
 }
 
 #[test]
+fn a_box_nearly_a_cell_tall_fills_its_row_instead_of_becoming_a_rule() {
+    let (mut engine, handle) = engine(8, 2, ColorTier::TrueColor);
+    let chip = Desc {
+        style: Style { width: Dimension::Px(60.0), height: Dimension::Px(17.0), background: Some(Paint::Solid([60, 60, 60, 255])), ..Style::default() },
+        children: vec![text("chip")],
+        ..Desc::default()
+    };
+    show(&mut engine, column(vec![chip]));
+    assert_eq!(handle.snapshot(), "chip
+
+");
+}
+
+#[test]
+fn a_fixed_height_bar_keeps_its_row_and_draws_its_bottom_border_below() {
+    let (mut engine, handle) = engine(8, 3, ColorTier::TrueColor);
+    let bar = Desc {
+        style: Style {
+            height: Dimension::Px(28.0),
+            border: Some(Border { bottom: Some(pixel_core::BorderSide { width: 1.0, color: FG }), ..Border::default() }),
+            ..Style::default()
+        },
+        children: vec![text("tabs")],
+        ..Desc::default()
+    };
+    show(&mut engine, column(vec![bar, text("body")]));
+    assert_eq!(handle.snapshot(), "tabs
+────────
+body
+");
+}
+
+#[test]
 fn the_focused_input_reports_its_caret_as_the_hardware_cursor() {
     let (mut engine, handle) = engine(20, 2, ColorTier::TrueColor);
     let input = Desc {

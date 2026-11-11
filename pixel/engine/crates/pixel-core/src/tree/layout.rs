@@ -1,6 +1,6 @@
 
 use crate::text_metrics::measure_marked;
-use crate::style::{Align, Dimension, FlexDirection, InsetValue, Justify, Overflow, Paint, Position, Style};
+use crate::style::{Align, Dimension, Edges, FlexDirection, InsetValue, Justify, Overflow, Position, Style};
 use crate::text_input::Mark;
 use crate::wrap::wrap_lines;
 
@@ -138,43 +138,81 @@ fn measure_wrapped_text(
 }
 
 pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool, lattice: (f32, f32)) -> taffy::Style {
-    let mut taffy = to_taffy_px(&at_least_one_unit(style, lattice), hidden, input);
-    if let Some(border) = style.border {
-        // A border is drawn at least one lattice unit wide, so it keeps room for whatever of that unit its
-        // stroke doesn't cover.
-        let room = |side: Option<crate::style::BorderSide>, unit: f32| {
-            side.filter(|s| s.width > 0.0 && s.color[3] > 0).map_or(0.0, |s| (unit - s.width).max(0.0))
-        };
-        let (x, y) = lattice;
-        taffy.border = taffy::Rect {
-            left: taffy::LengthPercentage::length(room(border.left, x)),
-            right: taffy::LengthPercentage::length(room(border.right, x)),
-            top: taffy::LengthPercentage::length(room(border.top, y)),
-            bottom: taffy::LengthPercentage::length(room(border.bottom, y)),
-        };
+    if lattice == (1.0, 1.0) {
+        return to_taffy_px(style, hidden, input);
     }
+    let room = border_room(style, lattice);
+    let mut taffy = to_taffy_px(&whole_units(style, lattice, room), hidden, input);
+    taffy.border = taffy::Rect {
+        left: taffy::LengthPercentage::length(room.left),
+        right: taffy::LengthPercentage::length(room.right),
+        top: taffy::LengthPercentage::length(room.top),
+        bottom: taffy::LengthPercentage::length(room.bottom),
+    };
     taffy
 }
 
-// A box that paints never shrinks below one lattice unit, so a hairline still gets a row or column of its own.
-fn at_least_one_unit(style: &Style, (x, y): (f32, f32)) -> std::borrow::Cow<'_, Style> {
-    let paints = match &style.background {
-        Some(Paint::Solid(color)) => color[3] > 0,
-        Some(Paint::Gradient(_)) => true,
-        None => false,
+// A border is drawn a whole lattice unit wide, so it keeps room for whatever of that unit its stroke doesn't cover.
+fn border_room(style: &Style, (x, y): (f32, f32)) -> Edges {
+    let border = style.border.unwrap_or_default();
+    let room = |side: Option<crate::style::BorderSide>, unit: f32| {
+        side.filter(|s| s.width > 0.0 && s.color[3] > 0).map_or(0.0, |s| (unit - s.width).max(0.0))
     };
-    let thin = |d: Dimension, unit: f32| matches!(d, Dimension::Px(v) if v > 0.0 && v < unit);
-    if !paints || !(thin(style.width, x) || thin(style.height, y)) {
-        return std::borrow::Cow::Borrowed(style);
-    }
-    let mut grown = style.clone();
-    if thin(style.width, x) {
-        grown.width = Dimension::Px(x);
-    }
-    if thin(style.height, y) {
-        grown.height = Dimension::Px(y);
-    }
-    std::borrow::Cow::Owned(grown)
+    Edges { left: room(border.left, x), right: room(border.right, x), top: room(border.top, y), bottom: room(border.bottom, y) }
+}
+
+// Lengths given in px become whole lattice units, so equal boxes stay equal wherever they land. A positive size
+// keeps at least one unit, and vertical lengths under 0.7 of a unit round to nothing, which keeps tall units from
+// spreading the layout out. A fixed size that its borders' room would leave without a unit of content grows by
+// that room.
+fn whole_units(style: &Style, (x, y): (f32, f32), room: Edges) -> Style {
+    let round_x = |v: f32| (v / x).round().max(0.0) * x;
+    let round_y = |v: f32| (v / y - 0.2).round().max(0.0) * y;
+    let size_x = |d: Dimension| match d {
+        Dimension::Px(v) if v > 0.0 => Dimension::Px(round_x(v).max(x)),
+        other => other,
+    };
+    let size_y = |d: Dimension| match d {
+        Dimension::Px(v) if v > 0.0 => Dimension::Px(round_y(v).max(y)),
+        other => other,
+    };
+    let signed = |round: &dyn Fn(f32) -> f32, v: f32| round(v.abs()).copysign(v);
+    let inset = |round: &dyn Fn(f32) -> f32, v: Option<InsetValue>| match v {
+        Some(InsetValue::Px(v)) => Some(InsetValue::Px(signed(round, v))),
+        other => other,
+    };
+    let strokes = style.border.map_or((0.0, 0.0), |b| {
+        let w = |s: Option<crate::style::BorderSide>| s.map_or(0.0, |s| s.width);
+        (w(b.left) + w(b.right), w(b.top) + w(b.bottom))
+    });
+    let grow = |d: Dimension, room: f32, strokes: f32, unit: f32| match d {
+        Dimension::Px(v) if room > 0.0 && v - room - strokes < unit => Dimension::Px(v + room),
+        other => other,
+    };
+    let mut snapped = style.clone();
+    snapped.width = size_x(grow(style.width, room.left + room.right, strokes.0, x));
+    snapped.height = size_y(grow(style.height, room.top + room.bottom, strokes.1, y));
+    snapped.min_width = size_x(style.min_width);
+    snapped.max_width = size_x(style.max_width);
+    snapped.max_height = size_y(style.max_height);
+    snapped.padding = Edges {
+        left: round_x(style.padding.left),
+        right: round_x(style.padding.right),
+        top: round_y(style.padding.top),
+        bottom: round_y(style.padding.bottom),
+    };
+    snapped.margin = Edges {
+        left: signed(&round_x, style.margin.left),
+        right: signed(&round_x, style.margin.right),
+        top: signed(&round_y, style.margin.top),
+        bottom: signed(&round_y, style.margin.bottom),
+    };
+    snapped.inset.left = inset(&round_x, style.inset.left);
+    snapped.inset.right = inset(&round_x, style.inset.right);
+    snapped.inset.top = inset(&round_y, style.inset.top);
+    snapped.inset.bottom = inset(&round_y, style.inset.bottom);
+    snapped.gap = if style.flex_direction == FlexDirection::Column { round_y(style.gap) } else { round_x(style.gap) };
+    snapped
 }
 
 fn to_taffy_px(style: &Style, hidden: bool, input: bool) -> taffy::Style {

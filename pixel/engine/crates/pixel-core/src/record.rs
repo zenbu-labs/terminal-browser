@@ -507,8 +507,8 @@ fn fills(tree: &Tree, id: NodeId) -> Fills {
     Fills { content, solid, hover: node.style.hover_background.is_some(), border: node.style.border.is_some(), sides }
 }
 
-// A box narrower than one lattice unit was given a whole unit of room; it still draws as the thin line it is,
-// across the middle of that room.
+// A box under half a lattice unit thick was given a whole unit of room; it still draws as the thin line it is,
+// across the middle of that room. Thicker boxes fill their unit.
 fn thin(tree: &Tree, id: NodeId) -> Option<PxRect> {
     let node = tree.get(id)?;
     let (unit_x, unit_y) = tree.lattice();
@@ -516,7 +516,7 @@ fn thin(tree: &Tree, id: NodeId) -> Option<PxRect> {
     let mut narrowed = false;
     if let crate::style::Dimension::Px(h) = node.style.height
         && h > 0.0
-        && h < unit_y
+        && h < unit_y / 2.0
     {
         line.y += (line.h - h) / 2.0;
         line.h = h;
@@ -524,7 +524,7 @@ fn thin(tree: &Tree, id: NodeId) -> Option<PxRect> {
     }
     if let crate::style::Dimension::Px(w) = node.style.width
         && w > 0.0
-        && w < unit_x
+        && w < unit_x / 2.0
     {
         line.x += (line.w - w) / 2.0;
         line.w = w;

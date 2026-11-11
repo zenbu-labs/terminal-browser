@@ -152,7 +152,7 @@ impl Engine {
                 }
                 if whole {
                     let mut scene = crate::record::record_scene(&view.tree, fonts, cursor);
-                    crate::record::mark_changes(&view.scene, &mut scene);
+                    crate::profiler::span("scene.changes", || crate::record::mark_changes(&view.scene, &mut scene));
                     view.scene = scene;
                     view.scene_size = size;
                     view.tree.clear_paint_flag();
