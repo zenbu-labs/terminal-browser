@@ -655,6 +655,11 @@ const hostConfig = {
         b.push(instance.view, { op: "scrollTo", id: instance.id, offset, smooth });
         b.flush();
       },
+      scrollBy: (delta: number) => {
+        const b = instance.bridge;
+        b.push(instance.view, { op: "scrollBy", id: instance.id, delta });
+        b.flush();
+      },
       scrollIntoView: (smooth = false) => {
         const b = instance.bridge;
         b.push(instance.view, { op: "scrollIntoView", id: instance.id, smooth });

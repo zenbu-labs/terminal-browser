@@ -105,6 +105,10 @@ enum Op {
         #[serde(default)]
         smooth: bool,
     },
+    ScrollBy {
+        id: u32,
+        delta: f32,
+    },
     SetClearColor {
         color: Color,
     },
@@ -924,6 +928,11 @@ fn apply_op(
         Op::ScrollTo { id, offset, smooth } => {
             if let Some(node) = map.live(tree, id) {
                 engine.scroll_to(view, node, offset, smooth);
+            }
+        }
+        Op::ScrollBy { id, delta } => {
+            if let Some(node) = map.live(tree, id) {
+                engine.scroll_by(view, node, delta);
             }
         }
         Op::ScrollIntoView { id, smooth } => {

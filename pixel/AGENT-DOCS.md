@@ -200,7 +200,7 @@ Mounting thousands of rows in one commit still costs seconds of React and engine
 
 ## Components
 
-Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/pixel/src/react/components.ts`. Every component takes `ref` → `NodeHandle` (`components.ts:23`): `focus()`, `blur()`, `scrollTo(offset, smooth?)`, `scrollIntoView(smooth?)`, `splice(start, end, text)`, `selectAll()`, `addMark(mark, offset?)`, `removeMark(mark)`.
+Props: `packages/pixel/src/react/reconciler-config.ts`. Definitions: `packages/pixel/src/react/components.ts`. Every component takes `ref` → `NodeHandle` (`components.ts:23`): `focus()`, `blur()`, `scrollTo(offset, smooth?)`, `scrollBy(delta)`, `scrollIntoView(smooth?)`, `splice(start, end, text)`, `selectAll()`, `addMark(mark, offset?)`, `removeMark(mark)`.
 
 | component | props (file:line) |
 | --- | --- |

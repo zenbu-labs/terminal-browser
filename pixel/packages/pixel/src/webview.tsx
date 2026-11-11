@@ -70,6 +70,9 @@ export interface WebViewProps {
   proxy?: string;
   browserWindowOptions?: BrowserWindowOptions;
   autoFocus?: boolean;
+  // fixme: placeholder copy
+  // The wheel scrolls whatever is around the page instead of the page.
+  passWheel?: boolean;
   devtools?: boolean | DevtoolsDock;
   hidden?: boolean;
   keepFrame?: boolean;
@@ -568,10 +571,14 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
             hostRef.current?.pointer(event);
             propsRef.current.onPointer?.(event);
           }}
-          onWheel={(event: WheelEvent) => {
-            registry.focus(entry);
-            hostRef.current?.wheel(event);
-          }}
+          onWheel={
+            props.passWheel
+              ? undefined
+              : (event: WheelEvent) => {
+                  registry.focus(entry);
+                  hostRef.current?.wheel(event);
+                }
+          }
         />
       )}
       {devtoolsRect && surfaces.current && (
