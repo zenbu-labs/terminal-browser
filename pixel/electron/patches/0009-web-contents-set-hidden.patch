@@ -1,0 +1,72 @@
+diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
+--- a/docs/api/web-contents.md
++++ b/docs/api/web-contents.md
+@@ -2421,6 +2421,18 @@ changes:
+ Controls whether or not this WebContents will throttle animations and timers
+ when the page becomes backgrounded. This also affects the Page Visibility API.
+ 
++<!-- fixme: placeholder copy -->
++#### `contents.setHidden(hidden)`
++
++* `hidden` boolean
++
++Hides or shows the page without a window, as switching tabs does: a hidden page
++reports `document.visibilityState` as `hidden` and can be frozen. If background
++throttling is off, a hidden page keeps painting. A page that is being captured
++in a way that keeps it visible, such as with the DevTools Protocol's
++`Emulation.setFocusEmulationEnabled`, stays visible. The next visibility change
++of the owning window overrides this.
++
+ #### `contents.getType()`
+ 
+ Returns `string` - the type of the webContent. Can be `backgroundPage`, `window`, `browserView`, `remote`, `webview` or `offscreen`.
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -2921,6 +2921,27 @@ void WebContents::SetBackgroundThrottling(bool allowed) {
+   }
+ }
+ 
++void WebContents::SetHidden(bool hidden) {
++  if (!hidden) {
++    web_contents()->WasShown();
++    return;
++  }
++  web_contents()->WasHidden();
++
++  // With background throttling off the widget ignores WasHidden() and keeps
++  // painting, but its view was hidden. Show the view again so the two agree,
++  // the same way SetBackgroundThrottling(false) keeps a hidden page painting.
++  auto* rfh = web_contents()->GetPrimaryMainFrame();
++  auto* rwhv = static_cast<content::RenderWidgetHostViewBase*>(
++      rfh ? rfh->GetView() : nullptr);
++  if (!rwhv || rwhv->IsShowing() || rwhv->IsRenderWidgetHostViewChildFrame() ||
++      rwhv->host()->IsHidden())
++    return;
++  rwhv->ShowWithVisibility(content::PageVisibilityState::kHiddenButPainting);
++  static_cast<content::RenderFrameHostImpl*>(rfh)->SetVisibilityForChildViews(
++      true);
++}
++
+ int32_t WebContents::GetProcessID() const {
+   return web_contents()
+       ->GetPrimaryMainFrame()
+@@ -5245,6 +5266,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
+                  &WebContents::GetBackgroundThrottling)
+       .SetMethod("setBackgroundThrottling",
+                  &WebContents::SetBackgroundThrottling)
++      .SetMethod("setHidden", &WebContents::SetHidden)
+       .SetMethod("getProcessId", &WebContents::GetProcessID)
+       .SetMethod("getOSProcessId", &WebContents::GetOSProcessID)
+       .SetMethod("clone", &WebContents::Clone)
+diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/electron_api_web_contents.h
+--- a/shell/browser/api/electron_api_web_contents.h
++++ b/shell/browser/api/electron_api_web_contents.h
+@@ -200,6 +200,7 @@ class WebContents final : public ExclusiveAccessContext,
+   bool GetBackgroundThrottling() const override;
+ 
+   void SetBackgroundThrottling(bool allowed);
++  void SetHidden(bool hidden);
+   int32_t GetProcessID() const;
+   base::ProcessId GetOSProcessID() const;
+   [[nodiscard]] Type type() const { return type_; }
