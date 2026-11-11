@@ -814,6 +814,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixel-kitty"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "libc",
+ "miniz_oxide",
+ "pixel-core",
+ "pixel-raster",
+ "rayon",
+ "rustix",
+ "serde_json",
+]
+
+[[package]]
 name = "pixel-node"
 version = "0.1.0"
 dependencies = [
@@ -853,11 +867,10 @@ dependencies = [
  "arboard",
  "base64",
  "libc",
- "miniz_oxide",
  "pixel-cells",
  "pixel-core",
+ "pixel-kitty",
  "pixel-raster",
- "rayon",
  "rustix",
  "serde_json",
 ]

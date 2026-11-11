@@ -2,7 +2,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use super::super::Terminal;
+use crate::Kitty;
 use crate::kitty::{Placement, Transmit};
 use pixel_core::surfaces::Rect;
 use crate::wrapper::Wrapper;
@@ -55,7 +55,7 @@ fn solid(rect: Rect, color: [u8; 3], alpha: u8) -> Vec<u8> {
     px.repeat(rect.area() as usize)
 }
 
-impl Terminal {
+impl Kitty {
     pub(super) fn flash(&mut self, out: &mut Vec<u8>, rect: Rect, whole_frame: bool) {
         if self.wrapper.relayed() {
             return;
@@ -75,11 +75,11 @@ impl Terminal {
         self.flashes.live.push(flash);
     }
 
-    pub(crate) fn highlight_active(&self) -> bool {
+    pub fn highlight_active(&self) -> bool {
         !self.flashes.live.is_empty()
     }
 
-    pub(crate) fn tick_highlights(&mut self) -> io::Result<()> {
+    pub fn tick_highlights(&mut self) -> io::Result<()> {
         if self.flashes.live.is_empty() {
             return Ok(());
         }

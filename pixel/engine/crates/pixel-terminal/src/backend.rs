@@ -8,22 +8,16 @@ use pixel_core::backend::{
 };
 use pixel_core::fonts::Font;
 use pixel_core::logging;
-use pixel_core::{Mods, MouseKind};
+use pixel_kitty::Wrapper;
 use serde_json::json;
 
-use crate::native::NativeScroll;
-use crate::native::hover::{HoverOracle, Verdict};
-use crate::native::pairing::NativePairing;
+use crate::presenter::{CellsPresenter, KittyPresenter, Presenter};
 use crate::terminal::{self, Handoff, Retarget, SessionEnv, Terminal, WindowSize};
-use crate::wrapper::Wrapper;
-use pixel_cells::{CellPresenter, ColorTier};
 
 const CELL_REPLY_WAIT: Duration = Duration::from_millis(150);
 const COLOR_SETTLE_DELAY: Duration = Duration::from_millis(50);
 const COLOR_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const RELAYED_RESIZE_POLL: Duration = Duration::from_millis(500);
-const PINCH_HOVER_WINDOW: Duration = Duration::from_millis(2000);
-const INLINE_BYTES_PER_SEC: f32 = 3_000_000.0;
 
 #[derive(Debug, Clone)]
 pub struct HostOptions {
@@ -33,16 +27,34 @@ pub struct HostOptions {
     pub tty: Option<String>,
 }
 
+// How frames are drawn: kitty graphics images, or characters on the terminal's own cell grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Renderer {
+    #[default]
+    Kitty,
+    Cells,
+}
+
+impl Renderer {
+    pub fn named(name: Option<&str>) -> Self {
+        match name.map(str::trim) {
+            Some("cells") => Renderer::Cells,
+            _ => Renderer::Kitty,
+        }
+    }
+}
+
 pub struct TerminalOptions {
     pub tty: Option<String>,
     pub host: Option<HostOptions>,
     pub wrapper: Wrapper,
     pub session_env: SessionEnv,
     pub watch_resize: bool,
-    pub cells: bool,
+    pub renderer: Renderer,
 }
 
 pub struct TerminalBackend {
+    presenter: Box<dyn Presenter>,
     term: Terminal,
     session_env: SessionEnv,
     window: (u32, u32),
@@ -54,23 +66,9 @@ pub struct TerminalBackend {
     color_request_at: Option<Instant>,
     last_color_request: Option<Instant>,
     focused: bool,
-    native: Option<NativeScroll>,
-    use_native: bool,
-    native_delivering: bool,
-    pairing: NativePairing,
-    hover_oracle: HoverOracle,
     pointer: Option<(f32, f32)>,
     last_pointer_activity: Option<Instant>,
     queued: VecDeque<Event>,
-    cells: Option<CellPresenter>,
-    grid_size: (u16, u16),
-    raster: pixel_raster::Raster,
-}
-
-fn grid_of(ws: &WindowSize) -> (u16, u16) {
-    let cols = if ws.cols > 0 { ws.cols } else { 80 };
-    let rows = if ws.rows > 0 { ws.rows } else { 24 };
-    (cols.min(u16::MAX as u32) as u16, rows.min(u16::MAX as u32) as u16)
 }
 
 pub(crate) fn window_from(ws: &WindowSize, cell: (u32, u32), cell_is_exact: bool) -> (u32, u32) {
@@ -92,25 +90,31 @@ pub(crate) fn window_from(ws: &WindowSize, cell: (u32, u32), cell_is_exact: bool
 
 impl TerminalBackend {
     pub fn new(options: TerminalOptions) -> io::Result<Self> {
-        let mut term = match (&options.host, &options.tty) {
-            (Some(host), _) => match &host.tty {
-                Some(tty) => Terminal::join_embedded(&host.socket, &host.pane, &host.name, tty)?,
-                None => Terminal::join_host(&host.socket, &host.pane, &host.name)?,
-            },
-            (None, Some(path)) => {
-                Terminal::open(path, options.wrapper, options.session_env.clone(), options.cells)?
-            }
-            (None, None) => Terminal::new(options.wrapper, options.session_env.clone(), options.cells)?,
+        let open = |pixel_mouse: bool| match &options.tty {
+            Some(path) => Terminal::open(path, options.wrapper, pixel_mouse),
+            None => Terminal::new(options.wrapper, pixel_mouse),
         };
-        let cells = term.draws_cells().then(|| {
-            let env = options.session_env.clone();
-            let tier = ColorTier::detect(|key| env.var(key));
-            CellPresenter::new(tier, Default::default(), terminal::DEFAULT_CELL, (80, 24))
-        });
+        let (mut term, presenter): (Terminal, Box<dyn Presenter>) = match (&options.host, options.renderer) {
+            (Some(host), _) => {
+                let mut term = match &host.tty {
+                    Some(tty) => Terminal::join_embedded(&host.socket, &host.pane, &host.name, tty)?,
+                    None => Terminal::join_host(&host.socket, &host.pane, &host.name)?,
+                };
+                let presenter = KittyPresenter::new(&mut term, &options.session_env)?;
+                (term, Box::new(presenter))
+            }
+            (None, Renderer::Kitty) => {
+                let mut term = open(KittyPresenter::PIXEL_MOUSE)?;
+                let presenter = KittyPresenter::new(&mut term, &options.session_env)?;
+                (term, Box::new(presenter))
+            }
+            (None, Renderer::Cells) => (open(CellsPresenter::PIXEL_MOUSE)?, Box::new(CellsPresenter::new(&options.session_env))),
+        };
         if options.watch_resize {
             term.watch_resize()?;
         }
         Ok(Self {
+            presenter,
             term,
             session_env: options.session_env,
             window: (0, 0),
@@ -122,17 +126,9 @@ impl TerminalBackend {
             color_request_at: None,
             last_color_request: None,
             focused: true,
-            native: None,
-            use_native: false,
-            native_delivering: false,
-            pairing: NativePairing::new(),
-            hover_oracle: HoverOracle::new(),
             pointer: None,
             last_pointer_activity: None,
             queued: VecDeque::new(),
-            cells,
-            grid_size: (80, 24),
-            raster: pixel_raster::Raster::new(),
         })
     }
 
@@ -149,27 +145,24 @@ impl TerminalBackend {
     }
 
     pub fn set_highlight_transmits(&mut self, on: bool) {
-        self.term.set_highlight_transmits(on);
+        self.presenter.highlight_transmits(on);
     }
 
     pub fn note(&mut self, text: String) {
-        self.term.note(text);
+        self.presenter.note(text);
     }
 
     pub fn set_frame_events(&mut self, font: Option<Font>) {
-        match font {
-            Some(font) => self.term.set_overlay_font(font),
-            None => {
-                if let Err(error) = self.term.overlay_off() {
-                    logging::warn("engine", format!("could not clear the presenter overlay: {error}"));
-                }
-            }
+        if let Err(error) = self.presenter.overlay_font(font) {
+            logging::warn("engine", format!("could not clear the presenter overlay: {error}"));
         }
     }
 
     pub fn retarget(&mut self, target: Retarget) -> io::Result<()> {
-        self.term.retarget(target, self.session_env.clone())?;
-        self.spawn_native();
+        self.presenter.close(&mut self.term);
+        self.term.retarget(target)?;
+        self.presenter = self.presenter.renew(&mut self.term, &self.session_env)?;
+        self.presenter.start_input(&mut self.term);
         let colors = self.term.query_colors()?;
         self.queued.push_back(Event::Colors(colors));
         self.cell_estimate = None;
@@ -179,15 +172,6 @@ impl TerminalBackend {
             self.queued.push_back(Event::Resize(metrics));
         }
         Ok(())
-    }
-
-    fn spawn_native(&mut self) {
-        self.native = if self.cells.is_some() || self.term.is_hosted() && !self.term.is_embedded() {
-            None
-        } else {
-            NativeScroll::spawn(self.term.waker().ok())
-        };
-        self.use_native = self.native.is_some();
     }
 
     fn apply_window(&mut self, ws: &WindowSize, source: &str) -> io::Result<()> {
@@ -225,15 +209,12 @@ impl TerminalBackend {
 
     fn resize_to(&mut self, ws: &WindowSize, cell: (u32, u32), source: &str) -> io::Result<()> {
         self.term.set_cell_size(cell);
-        let window = window_from(ws, cell, self.cell_exact || self.cells.is_some());
-        if let Some(cells) = &mut self.cells {
-            self.grid_size = grid_of(ws);
-            cells.set_geometry(cell, self.grid_size);
-        }
+        let window = window_from(ws, cell, self.cell_exact || self.presenter.whole_cells());
+        self.presenter.geometry(ws, cell);
         if window == self.window && cell == self.cell {
             return Ok(());
         }
-        self.term.retry_frame_transport(false)?;
+        let device = self.presenter.resized(&mut self.term, cell != self.cell, cell)?;
         logging::info(
             "engine",
             format!(
@@ -245,11 +226,8 @@ impl TerminalBackend {
                 ws.cell_size()
             ),
         );
-        self.hover_oracle.invalidate();
-        if cell != self.cell
-            && let Some(cells) = &self.cells
-        {
-            self.queued.push_back(Event::Device(pixel_cells::cell_device(cell, cells.tier())));
+        if let Some(device) = device {
+            self.queued.push_back(Event::Device(device));
         }
         self.window = window;
         self.cell = cell;
@@ -293,64 +271,6 @@ impl TerminalBackend {
         )
     }
 
-    fn ingest_native(&mut self) {
-        let Some(native) = &mut self.native else {
-            return;
-        };
-        let events = native.drain();
-        let scale = native.scale;
-        if native.dead() {
-            logging::warn(
-                "engine",
-                "native scroll helper exited; falling back to wheel ticks",
-            );
-            self.native = None;
-            self.pairing.reset();
-            self.hover_oracle.invalidate();
-            return;
-        }
-        if !self.use_native {
-            return;
-        }
-        let now = Instant::now();
-        let (pane, pad) = self.pane_extent();
-        self.pairing
-            .ingest(events, scale, now, &mut self.hover_oracle, pane, pad);
-        let wants_cursor = self.term.reports_pixel_mouse() && self.hover_oracle.wants_cursor(now);
-        if let Some(native) = &mut self.native {
-            native.request_positions(wants_cursor);
-        }
-    }
-
-    fn drain_native(&mut self) {
-        self.ingest_native();
-        let (zoom, scrolls) = self.pairing.take();
-        let (pane, pad) = self.pane_extent();
-        let pinch_here = match self.hover_oracle.verdict(Instant::now(), pane, pad) {
-            Verdict::Deliver => true,
-            Verdict::Discard => false,
-            Verdict::Unknown => self
-                .last_pointer_activity
-                .is_some_and(|at| at.elapsed() < PINCH_HOVER_WINDOW),
-        };
-        let magnification = zoom - 1.0;
-        if magnification != 0.0 && pinch_here {
-            self.queued.push_back(Event::Pinch { at: self.pointer, magnification });
-        }
-        if scrolls.is_empty() {
-            return;
-        }
-        if !self.native_delivering {
-            self.native_delivering = true;
-            logging::info("engine", "native scroll delivering");
-        }
-        self.queued.push_back(Event::Wheel {
-            at: self.pointer,
-            steps: scrolls.into_iter().map(|(dx, dy)| (-dx, -dy)).collect(),
-            mods: Mods::default(),
-        });
-    }
-
     fn translate(&mut self, event: terminal::Event) -> io::Result<Option<Event>> {
         Ok(match event {
             terminal::Event::HostClosed => Some(Event::Closed),
@@ -372,29 +292,19 @@ impl TerminalBackend {
             }),
             terminal::Event::Key(key) => Some(Event::Key(key)),
             terminal::Event::Mouse(mouse) => {
-                let point = (mouse.x as f32, mouse.y as f32);
-                let now = Instant::now();
-                self.pointer = Some(point);
-                self.last_pointer_activity = Some(now);
-                let scrolling = matches!(
-                    mouse.kind,
-                    MouseKind::ScrollUp | MouseKind::ScrollDown | MouseKind::ScrollLeft | MouseKind::ScrollRight
-                );
-                if self.use_native && self.native.is_some() {
-                    self.ingest_native();
-                    let located = self.term.reports_pixel_mouse().then_some(point);
-                    if scrolling && mouse.mods == Mods::default() {
-                        if self.pairing.on_wheel_tick(located, now, &mut self.hover_oracle) {
-                            return Ok(None);
-                        }
-                    } else if let Some(located) = located {
-                        self.hover_oracle.note_local(located, now);
-                    }
+                self.pointer = Some((mouse.x as f32, mouse.y as f32));
+                self.last_pointer_activity = Some(Instant::now());
+                let extent = self.pane_extent();
+                if self.presenter.swallows(&mouse, extent, self.term.reports_pixel_mouse()) {
+                    return Ok(None);
                 }
                 Some(Event::Mouse(mouse))
             }
             terminal::Event::Paste(text) => Some(Event::Paste(text)),
             terminal::Event::Focus(focused) => {
+                if focused {
+                    self.presenter.focused(&mut self.term)?;
+                }
                 let gained = focused && !self.focused;
                 self.focused = focused;
                 if gained {
@@ -404,6 +314,7 @@ impl TerminalBackend {
             }
             terminal::Event::Visible(visible) => Some(Event::Visible(visible)),
             terminal::Event::WindowSize(ws) => {
+                self.presenter.window_reported();
                 self.apply_window(&ws, "in-band report")?;
                 if let Some(metrics) = self.resized.take() {
                     self.queued.push_back(Event::Resize(metrics));
@@ -428,9 +339,7 @@ impl TerminalBackend {
                 None
             }
             terminal::Event::Colors(colors) => {
-                if let Some(cells) = &mut self.cells {
-                    cells.set_colors(colors);
-                }
+                self.presenter.colors(colors);
                 Some(Event::Colors(colors))
             }
         })
@@ -443,29 +352,24 @@ impl Backend for TerminalBackend {
         let ws = self.term.size()?;
         let cell = self.term.cell_size()?.unwrap_or(terminal::DEFAULT_CELL);
         self.term.set_cell_size(cell);
-        self.window = window_from(&ws, cell, self.cells.is_some());
+        self.window = window_from(&ws, cell, self.presenter.whole_cells());
         self.cell = cell;
-        if let Some(cells) = &mut self.cells {
-            self.grid_size = grid_of(&ws);
-            cells.set_colors(colors);
-            cells.set_geometry(cell, self.grid_size);
-        }
+        self.presenter.colors(colors);
+        self.presenter.geometry(&ws, cell);
         self.cell_estimate = ws.cell_size();
-        self.spawn_native();
+        self.presenter.start_input(&mut self.term);
         logging::info(
             "engine",
             format!(
-                "terminal {}x{} cells, native scroll {}{}",
+                "terminal {}x{} cells, {} renderer, native scroll {}{}",
                 ws.cols,
                 ws.rows,
-                self.use_native,
+                self.presenter.name(),
+                self.presenter.native_scroll(),
                 if self.term.relayed() { ", tmux passthrough" } else { "" }
             ),
         );
-        let device = match &self.cells {
-            Some(cells) => pixel_cells::cell_device(cell, cells.tier()),
-            None => pixel_core::Device::default(),
-        };
+        let device = self.presenter.device(cell);
         Ok(HostInfo { metrics: Metrics { window: self.window, cell }, colors, device })
     }
 
@@ -485,25 +389,15 @@ impl Backend for TerminalBackend {
             return Ok(Some(event));
         }
         if self.queued.is_empty() {
-            self.drain_native();
+            let extent = self.pane_extent();
+            let pixel_mouse = self.term.reports_pixel_mouse();
+            self.presenter.drain_input(extent, pixel_mouse, self.pointer, self.last_pointer_activity, &mut self.queued);
         }
         Ok(self.queued.pop_front())
     }
 
     fn present(&mut self, frame: Frame<'_>) -> io::Result<usize> {
-        let Some(cells) = &mut self.cells else {
-            let options = pixel_raster::RasterOptions {
-                scroll_layer: self.term.draws_layers(),
-                direct: self.term.draws_locally(),
-                host_surfaces: false,
-            };
-            let pixels = self.raster.render(&frame, options);
-            return self.term.draw(pixels);
-        };
-        let mut out = Vec::new();
-        pixel_core::profiler::span("cells.encode", || cells.present(&frame, &mut out));
-        self.term.write_cells(&out)?;
-        Ok(out.len())
+        self.presenter.present(&mut self.term, frame)
     }
 
     fn poll_metrics(&mut self) -> io::Result<Option<Metrics>> {
@@ -516,40 +410,30 @@ impl Backend for TerminalBackend {
     }
 
     fn pending_present(&self) -> bool {
-        self.cells.is_none() && self.term.holds_a_frame()
+        self.presenter.pending_present()
     }
 
     fn animating(&self) -> bool {
-        self.cells.is_none() && self.term.highlight_active()
+        self.presenter.animating()
     }
 
     fn before_frame(&mut self) -> io::Result<()> {
-        if self.cells.is_some() {
-            return Ok(());
-        }
-        self.term.tick_highlights()?;
-        self.term.draw_overlay()
+        self.presenter.before_frame(&mut self.term)
     }
 
     fn idle(&mut self) -> io::Result<()> {
-        if self.cells.is_some() {
-            return Ok(());
-        }
-        self.term.flatten_if_idle(self.raster.last())
+        self.presenter.idle(&mut self.term)
     }
 
     fn spare(&mut self, fonts: &[pixel_core::fonts::Font], until: Instant) {
-        if self.cells.is_none() {
-            pixel_raster::Raster::warm_glyphs(fonts, until);
-        }
+        self.presenter.spare(fonts, until);
     }
 
     fn deadline(&self) -> Option<Instant> {
         [
             self.color_request_at,
             self.awaiting_cell.as_ref().map(|(_, at)| *at),
-            self.cells.is_none().then(|| self.term.idle_flatten_at()).flatten(),
-            self.cells.is_none().then(|| self.term.overlay_due()).flatten(),
+            self.presenter.deadline(),
             self.term.relayed().then(|| Instant::now() + RELAYED_RESIZE_POLL),
         ]
         .into_iter()
@@ -558,15 +442,15 @@ impl Backend for TerminalBackend {
     }
 
     fn schedule_present(&mut self, at: Option<Instant>) {
-        self.term.present_at(at);
+        self.presenter.schedule_present(at);
     }
 
     fn take_presented_at(&mut self) -> Option<Instant> {
-        self.term.take_ready_at()
+        self.presenter.take_presented_at()
     }
 
     fn byte_rate_limit(&self) -> Option<f32> {
-        self.term.frames_are_inline().then_some(INLINE_BYTES_PER_SEC)
+        self.presenter.byte_rate_limit()
     }
 
     fn set_title(&mut self, text: &str) -> io::Result<()> {
@@ -574,7 +458,8 @@ impl Backend for TerminalBackend {
     }
 
     fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {
-        self.term.set_pointer_shape(shape)
+        let drawn = self.presenter.pointer_shape(shape);
+        self.term.set_pointer_shape(shape, drawn)
     }
 
     fn write_clipboard(&mut self, text: &str) -> io::Result<()> {
@@ -601,7 +486,14 @@ impl Backend for TerminalBackend {
         let mut info = serde_json::Map::new();
         info.insert("kittyKeyboard".into(), self.term.kitty_keyboard().into());
         info.insert("hosted".into(), self.term.is_hosted().into());
+        info.insert("renderer".into(), self.presenter.name().into());
         info
+    }
+}
+
+impl Drop for TerminalBackend {
+    fn drop(&mut self) {
+        self.presenter.close(&mut self.term);
     }
 }
 

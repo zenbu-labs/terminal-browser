@@ -69,6 +69,8 @@ export interface EngineInfo {
   cellHeight: number;
   basePx: number;
   device: DeviceInfo;
+  /** fixme: placeholder copy — which terminal renderer draws the frames: kitty graphics images or characters on the cell grid. Absent outside a terminal. */
+  renderer?: "kitty" | "cells";
   kittyKeyboard: boolean;
   hosted: boolean;
   colors: TerminalColors;
