@@ -70,8 +70,6 @@ export interface WebViewProps {
   proxy?: string;
   browserWindowOptions?: BrowserWindowOptions;
   autoFocus?: boolean;
-  // fixme: placeholder copy
-  // The wheel scrolls whatever is around the page instead of the page.
   passWheel?: boolean;
   devtools?: boolean | DevtoolsDock;
   hidden?: boolean;
