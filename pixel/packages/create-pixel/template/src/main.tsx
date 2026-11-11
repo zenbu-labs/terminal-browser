@@ -1,31 +1,7 @@
 import { Box, Link, Text, createRoot, makeTheme, useTerminalColors } from "@zenbu-labs/pixel";
 import type { Theme } from "@zenbu-labs/pixel";
 
-const GRAPHICS_TERMINALS = [
-  "Ghostty",
-  "iTerm2",
-  "xterm.js",
-  "Konsole",
-  "WezTerm",
-  "Warp",
-  "noctty (Ghostty for Windows)",
-  "Mobile SSH",
-  "st (with a patch)",
-  "wayst",
-  "AbsoluteTelnet/SSH",
-];
-
 const root = createRoot({
-  onUnsupportedTerminal: () =>
-    [
-      "",
-      "  \x1b[1mThis terminal doesn't support graphics\x1b[0m",
-      "",
-      "  Example terminals that support graphics:",
-      ...GRAPHICS_TERMINALS.map((name) => `    - ${name}`),
-      "",
-      "",
-    ].join("\n"),
   onKey(event) {
     if (event.kind === "press" && event.mods.ctrl && event.key === "c") {
       root.stop();
