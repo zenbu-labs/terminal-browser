@@ -25,6 +25,7 @@ pub struct CellPresenter {
     encoder: Encoder,
     caret: Option<Caret>,
     stale: bool,
+    offsets: std::collections::HashMap<(usize, u64), f32>,
 }
 
 impl CellPresenter {
@@ -39,6 +40,7 @@ impl CellPresenter {
             encoder: Encoder::default(),
             caret: None,
             stale: true,
+            offsets: std::collections::HashMap::new(),
         }
     }
 
@@ -82,29 +84,40 @@ impl CellPresenter {
         self.caret
     }
 
-    // Scroll layers that span the whole width and only moved by whole rows since the last frame: the terminal can
-    // scroll those rows itself, leaving only the uncovered rows and what is drawn over the layer to repaint.
-    fn scrolls(&self, frame: &Frame<'_>) -> Vec<encode::Scroll> {
+    // Scroll layers whose offset moved by whole rows since the last frame, as the rows they cover and how far.
+    fn moved_layers(&mut self, frame: &Frame<'_>) -> Vec<encode::Scroll> {
         let mut out = Vec::new();
         for view in frame.views {
             if !matches!(view.damage, pixel_core::scene::Damage::Whole { .. }) {
                 continue;
             }
             let mut layers = Vec::new();
-            scrolled_layers(&view.scene.root, None, &mut layers);
-            for (visible, by) in layers {
-                let rows = by as f32 / self.cell.1;
+            scroll_layers(&view.scene.root, None, &mut layers);
+            for (node, visible, offset) in layers {
+                let Some(before) = self.offsets.insert((view.view, node), offset) else { continue };
+                let rows = (offset - before) / self.cell.1;
                 if rows.fract() != 0.0 || rows == 0.0 {
                     continue;
                 }
-                let x0 = ((view.origin_x as f32 + visible.x) / self.cell.0).round() as i32;
-                let x1 = ((view.origin_x as f32 + visible.x + visible.w) / self.cell.0).round() as i32;
                 let top = (visible.y / self.cell.1).round().max(0.0) as u16;
                 let bottom = ((visible.y + visible.h) / self.cell.1).round().min(self.size.1 as f32) as u16;
-                let full_width = x0 <= 0 && x1 >= self.size.0 as i32;
-                if full_width && bottom > top && (rows.abs() as u16) < bottom - top {
+                if bottom > top && (rows.abs() as u16) < bottom - top {
                     out.push(encode::Scroll { top, bottom, by: rows as i32 });
                 }
+            }
+        }
+        out
+    }
+
+    // The terminal can scroll a moved layer's rows itself. That is worth it when it leaves fewer cells to write
+    // than repainting, counting whatever changed inside the layer and whatever beside it shares its rows.
+    fn worth_scrolling(&mut self, moved: Vec<encode::Scroll>) -> Vec<encode::Scroll> {
+        let mut out = Vec::new();
+        for scroll in moved {
+            let (top, bottom) = (scroll.top, scroll.bottom);
+            if self.next.stale_cells(&self.current, top, bottom, scroll.by) < self.next.stale_cells(&self.current, top, bottom, 0) {
+                self.current.scroll(top, bottom, scroll.by);
+                out.push(scroll);
             }
         }
         out
@@ -118,6 +131,7 @@ impl CellPresenter {
         if (self.next.width, self.next.height) != self.size {
             self.next.resize(self.size.0, self.size.1);
         }
+        let moved = self.moved_layers(frame);
         self.next.clear(self.palette.foreground, self.palette.background);
         let mut caret = None;
         for view in frame.views {
@@ -129,10 +143,7 @@ impl CellPresenter {
         if self.stale || (self.current.width, self.current.height) != self.size {
             self.encoder.full(&self.next, caret, out);
         } else {
-            let scrolls = self.scrolls(frame);
-            for scroll in &scrolls {
-                self.current.scroll(scroll.top, scroll.bottom, scroll.by);
-            }
+            let scrolls = self.worth_scrolling(moved);
             self.encoder.diff_scrolled(&self.current, &self.next, &scrolls, caret, out);
         }
         self.stale = false;
@@ -141,14 +152,13 @@ impl CellPresenter {
     }
 }
 
-fn scrolled_layers(item: &pixel_core::scene::Item, clip: Option<pixel_core::PxRect>, out: &mut Vec<(pixel_core::PxRect, i64)>) {
+fn scroll_layers(item: &pixel_core::scene::Item, clip: Option<pixel_core::PxRect>, out: &mut Vec<(u64, pixel_core::PxRect, f32)>) {
     let visible = clip.map_or(item.bounds, |c| item.bounds.intersect(c));
-    if let Some(pixel_core::scene::Layer { change: pixel_core::scene::Change::Offset { by }, kind: pixel_core::scene::LayerKind::Scroll(_), .. }) = item.layer {
-        out.push((visible, by));
-        return;
+    if let Some(scroll) = item.scroll() {
+        out.push((item.node, visible, scroll.offset));
     }
     let inner = if item.clips { Some(visible) } else { clip };
     for child in &item.children {
-        scrolled_layers(child, inner, out);
+        scroll_layers(child, inner, out);
     }
 }

@@ -225,6 +225,21 @@ impl CellGrid {
         self.chars[exposed].fill(UNKNOWN);
     }
 
+    // How many cells in rows `top..bottom` would still need writing if `shown` scrolled those rows by `by` first.
+    pub fn stale_cells(&self, shown: &CellGrid, top: u16, bottom: u16, by: i32) -> usize {
+        let width = self.width as usize;
+        (top..bottom)
+            .map(|y| {
+                let from = y as i32 + by;
+                if from < top as i32 || from >= bottom as i32 {
+                    return width;
+                }
+                let (row, source) = (self.index(0, y), shown.index(0, from as u16));
+                (0..width).filter(|&x| !self.same_cell(row + x, shown, source + x)).count()
+            })
+            .sum()
+    }
+
     pub fn text(&self) -> String {
         let mut out = String::new();
         for y in 0..self.height {
