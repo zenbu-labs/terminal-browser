@@ -27,7 +27,6 @@ pub struct HostOptions {
     pub tty: Option<String>,
 }
 
-// How frames are drawn: kitty graphics images, or characters on the terminal's own cell grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Renderer {
     #[default]

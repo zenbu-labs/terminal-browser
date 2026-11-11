@@ -6,8 +6,6 @@ use crate::text_input::{MARK_CHAR, Mark, mark_advance_at};
 
 pub use fontdue::LineMetrics;
 
-// How far text advances and how tall its lines are, for a resolved font at a size. The device supplies it: a
-// pixel device measures the font's glyphs, a device that draws characters measures in its own units.
 pub trait TextMetrics: Send + Sync {
     fn advance(&self, font: &Font, ch: char, px: f32) -> f32;
     fn line(&self, font: &Font, px: f32) -> LineMetrics;
@@ -49,7 +47,6 @@ fn natural_fallback_advance(font: &Font, ch: char, px: f32) -> f32 {
     if let Some(face) = font.fallback_for(ch) {
         return face.metrics(ch, px).advance_width;
     }
-    // Matches the rasterizer, which draws nothing for a zero-width character no font has.
     system_fonts::advance(ch, px).unwrap_or_else(|| if columns(ch) == 0 { 0.0 } else { font.metrics(ch, px).advance_width })
 }
 

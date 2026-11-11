@@ -110,7 +110,6 @@ export interface PathProps {
   d: string;
   stroke: ShapeStroke;
   viewBox?: number;
-  /** fixme: placeholder copy — the character a renderer that draws text, not paths, shows for this icon, e.g. "›" for a chevron. */
   glyph?: string;
   onClick?: (event: ClickEvent) => void;
   onMouseEnter?: () => void;
@@ -219,7 +218,6 @@ export interface ImageProps {
   style?: Style;
   id?: string;
   src: string;
-  /** fixme: placeholder copy — the character a renderer that cannot draw pictures shows in place of this image. */
   glyph?: string;
   onClick?: (event: ClickEvent) => void;
   placeholder?: React.ReactNode;

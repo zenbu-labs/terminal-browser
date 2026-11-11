@@ -138,8 +138,6 @@ impl Palette {
         }
     }
 
-    // The terminal's own default color is one of the sixteen choices, so a faint tint of the background stays the
-    // background instead of jumping to black or gray.
     fn nearest_16(&self, rgb: Rgb, default: Rgb) -> CellColor {
         let best = (0..16u8).min_by_key(|&i| distance(rgb, self.ansi[i as usize])).unwrap_or(7);
         if distance(rgb, default) <= distance(rgb, self.ansi[best as usize]) {

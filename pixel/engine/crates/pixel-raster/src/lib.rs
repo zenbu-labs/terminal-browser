@@ -21,11 +21,8 @@ const DIVIDER_GRIP: Color = [118, 122, 132, 255];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RasterOptions {
-    // Keep the biggest scrolling list on its own layer so a presenter can move it without repainting it.
     pub scroll_layer: bool,
-    // When one view fills the window, hand out its canvas instead of copying it into the window's.
     pub direct: bool,
-    // The host draws surfaces itself: leave holes for them and report where they go.
     pub host_surfaces: bool,
 }
 
@@ -45,8 +42,6 @@ struct Painted {
     surface_parts: Vec<Rect>,
 }
 
-// Turns the engine's scenes into pixels: each view on its own canvas, painted where it changed, then composed into
-// the window with what changed and what covers surfaces.
 #[derive(Default)]
 pub struct Raster {
     views: Vec<ViewPixels>,
@@ -136,7 +131,6 @@ impl Raster {
         }
     }
 
-    // Rasterizes glyphs the frames are likely to need until `until`.
     pub fn warm_glyphs(fonts: &[Font], until: std::time::Instant) {
         if canvas::glyphs_to_warm() {
             canvas::warm_glyphs(fonts, until);

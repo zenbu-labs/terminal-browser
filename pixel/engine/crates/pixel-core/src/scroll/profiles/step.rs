@@ -1,7 +1,6 @@
 use super::super::{ScrollProfile, ScrollState};
 
 #[derive(Debug, Clone, Copy)]
-// Jumps straight to the target with no easing, moving `per_tick` times what one wheel tick asks for.
 pub struct Step {
     pub per_tick: f32,
 }

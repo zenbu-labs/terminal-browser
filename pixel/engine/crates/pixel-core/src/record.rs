@@ -19,7 +19,6 @@ struct Recorder<'a> {
     layers: u32,
 }
 
-// Records what the tree shows, in paint order. Requires `flush_layout` to have run first.
 pub fn record_scene(tree: &Tree, fonts: &[Font], cursor: Option<(f32, f32)>) -> Scene {
     assert!(!fonts.is_empty());
     crate::profiler::span("tree.scene", || {
@@ -377,8 +376,6 @@ impl Recorder<'_> {
     }
 }
 
-// Says, for each layer, whether it is new, unchanged, only moved by scrolling, or changed, against the scene the
-// view showed before.
 pub fn mark_changes(previous: &Scene, next: &mut Scene) {
     let mut before = std::collections::HashMap::new();
     collect(&previous.root, &mut before);
@@ -421,9 +418,6 @@ fn same(a: &Item, b: &Item) -> bool {
         && a.children.iter().zip(&b.children).all(|(x, y)| x.node == y.node && same(x, y))
 }
 
-// The layer's content, moved back by how far it scrolled, matches what it showed before. Rows a virtual list
-// added or dropped count as long as they were out of sight on the side that lacks them. The scrollbar is left
-// out: it moves with every scroll and is drawn over the content.
 fn same_shifted(old: &Item, new: &Item, by: f32) -> bool {
     if old.ops != new.ops {
         return false;
@@ -507,8 +501,6 @@ fn fills(tree: &Tree, id: NodeId) -> Fills {
     Fills { content, solid, hover: node.style.hover_background.is_some(), border: node.style.border.is_some(), sides }
 }
 
-// A box under half a lattice unit thick was given a whole unit of room; it still draws as the thin line it is,
-// across the middle of that room. Thicker boxes fill their unit.
 fn thin(tree: &Tree, id: NodeId) -> Option<PxRect> {
     let node = tree.get(id)?;
     let (unit_x, unit_y) = tree.lattice();

@@ -69,14 +69,12 @@ export interface EngineInfo {
   cellHeight: number;
   basePx: number;
   device: DeviceInfo;
-  /** fixme: placeholder copy — which terminal renderer draws the frames: kitty graphics images or characters on the cell grid. Absent outside a terminal. */
   renderer?: "kitty" | "cells";
   kittyKeyboard: boolean;
   hosted: boolean;
   colors: TerminalColors;
 }
 
-/** fixme: placeholder copy — the output device the backend draws on: layout edges land on `lattice` (device pixels are `[1, 1]`), and `colors`/`pointer` say what it can show and how precise pointer input is. */
 export interface DeviceInfo {
   name: string;
   lattice: [number, number];

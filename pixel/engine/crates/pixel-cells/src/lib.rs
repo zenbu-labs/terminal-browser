@@ -84,7 +84,6 @@ impl CellPresenter {
         self.caret
     }
 
-    // Scroll layers whose offset moved by whole rows since the last frame, as the rows they cover and how far.
     fn moved_layers(&mut self, frame: &Frame<'_>) -> Vec<encode::Scroll> {
         let mut out = Vec::new();
         for view in frame.views {
@@ -109,8 +108,6 @@ impl CellPresenter {
         out
     }
 
-    // The terminal can scroll a moved layer's rows itself. That is worth it when it leaves fewer cells to write
-    // than repainting, counting whatever changed inside the layer and whatever beside it shares its rows.
     fn worth_scrolling(&mut self, moved: Vec<encode::Scroll>) -> Vec<encode::Scroll> {
         let mut out = Vec::new();
         for scroll in moved {

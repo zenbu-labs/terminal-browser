@@ -175,7 +175,6 @@ pub struct Terminal {
     cell: Option<(u32, u32)>,
     pending: Vec<u8>,
     lone_escape_since: Option<Instant>,
-    // a relay that draws our frames reports mouse positions on its own cell grid
     relay_cell: Option<(u32, u32)>,
     wrapper: Wrapper,
     wake_rx: Option<rustix::fd::OwnedFd>,
@@ -269,7 +268,6 @@ impl SessionEnv {
 }
 
 impl Terminal {
-    // `pixel_mouse` asks the terminal for mouse positions in pixels, for renderers that draw with pixels.
     pub fn new(wrapper: Wrapper, pixel_mouse: bool) -> io::Result<Self> {
         Self::with_handle(
             TtyHandle::Stdio {
@@ -642,8 +640,6 @@ impl Terminal {
         Ok(())
     }
 
-    // Without the kitty keyboard protocol (or under tmux) the escape key is a bare 0x1b, which is only told apart
-    // from the start of a sequence by nothing following it.
     fn lone_escape_deadline(&mut self) -> Option<Instant> {
         let bare_escapes = self.wrapper.relayed() || !self.kitty_keyboard;
         if !bare_escapes || self.pending.first() != Some(&0x1b) {
@@ -952,7 +948,6 @@ impl Terminal {
         }
     }
 
-    // `drawn` is the shape the terminal is told to draw, which may stand in for one it lacks.
     pub fn set_pointer_shape(&mut self, shape: &str, drawn: &str) -> io::Result<()> {
         if !shape.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
             return Ok(());

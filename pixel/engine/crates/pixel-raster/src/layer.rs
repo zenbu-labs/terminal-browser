@@ -47,7 +47,6 @@ impl LayerPlan<'_> {
     }
 }
 
-// The biggest scrolling list, painted on its own so the presenter can move it, and what draws over it.
 pub fn scroll_layer(root: &Item) -> Option<LayerPlan<'_>> {
     let mut lists = Vec::new();
     find_lists(root, None, &mut lists);

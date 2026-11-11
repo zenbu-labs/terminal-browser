@@ -116,7 +116,6 @@ pub trait Backend: Any + Send {
         Ok(())
     }
 
-    // Time the engine has spare until `until`, for work that makes later frames cheaper.
     fn spare(&mut self, _fonts: &[crate::fonts::Font], _until: Instant) {}
 
     fn deadline(&self) -> Option<Instant> {

@@ -18,8 +18,6 @@ pub enum Pointer {
     Coarse,
 }
 
-// What a backend's output device is like: how it measures text, the lattice layout edges land on (whole device
-// pixels for a pixel display), how scrolling moves, and what it can show.
 #[derive(Clone)]
 pub struct Device {
     pub name: String,

@@ -22,12 +22,8 @@ use kitty::Placement;
 use payload::Payloads;
 use present::{Identity, Presenter};
 
-// What the kitty renderer needs from the terminal it draws on.
 pub trait Tty {
-    // A second handle on wherever frames are written, kept by the renderer.
     fn output(&self) -> io::Result<Output>;
-    // Waits up to `timeout_ms` for a reply that `find` locates in the input, and takes it out of the input.
-    // Without `keep_input`, everything read while waiting is dropped too.
     fn read_reply(
         &mut self,
         timeout_ms: u64,
@@ -45,7 +41,6 @@ pub trait Vars {
     fn var(&self, key: &str) -> Option<String>;
 }
 
-// The pane this process is drawn into when another terminal hosts it.
 #[derive(Debug, Clone)]
 pub struct Host {
     pub embedded: bool,
@@ -62,7 +57,6 @@ pub struct Screen {
     pub cell: Option<(u32, u32)>,
 }
 
-// Where frames are written, and the tty behind it when there is one, to tell how much output it still holds.
 pub struct Output {
     out: Box<dyn io::Write + Send>,
     tty: Option<std::fs::File>,
@@ -203,23 +197,19 @@ impl Kitty {
         }
     }
 
-    // Picks up the terminal's current cell size and window, which the drawing code reads from its own fields.
     pub fn sync(&mut self, tty: &dyn Tty) {
         self.cell = tty.cell();
         self.screen = tty.screen();
     }
 
-    // A cell size the frame relay reported since the last call, which the terminal should take on.
     pub fn take_cell_change(&mut self) -> Option<(u32, u32)> {
         self.cell_change.take()
     }
 
-    // The relay that draws our frames maps mouse positions with its own cell size.
     pub fn relay_cell(&self) -> Option<(u32, u32)> {
         self.herdr.as_ref().map(herdr::Herdr::cell)
     }
 
-    // The host resized the pane, so the placeholder cells it shows must be sent again.
     pub fn window_changed(&mut self) {
         if self.hosted {
             self.placeholders = None;
@@ -234,8 +224,6 @@ impl Kitty {
         &mut self.native
     }
 
-    // A pointer shape this terminal can draw. We may want this on every terminal that behaves like ghostty, but
-    // kitty at least does not need it and it would be a downgrade there.
     pub fn pointer_shape<'a>(&self, shape: &'a str) -> &'a str {
         if cfg!(target_os = "macos") && self.identity.is_ghostty() {
             nearest_shape_ghostty_macos_draws(shape)
@@ -244,7 +232,6 @@ impl Kitty {
         }
     }
 
-    // Deletes what the renderer left on screen and its shared payloads.
     pub fn close(&mut self) {
         if self.embedded {
             if self.transport == FrameTransport::Host {

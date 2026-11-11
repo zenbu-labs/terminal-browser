@@ -52,7 +52,6 @@ pub struct ScenePainter<'a> {
     caret: Option<Caret>,
 }
 
-// The text a run draws and where, in the units the painter places it in.
 struct Run<'a> {
     text: &'a str,
     x: f32,
@@ -222,8 +221,6 @@ impl ScenePainter<'_> {
         }
     }
 
-    // A box's border sits on its outermost cells, so those keep the background around the box and only the
-    // inside takes the box's own.
     fn inside_border(&mut self, rect: PxRect, color: [u8; 4]) {
         let area = self.area(rect);
         let rows = area.y1 - area.y0;
@@ -235,7 +232,6 @@ impl ScenePainter<'_> {
         }
     }
 
-    // Content scrolled inside a bordered box stays off the border's cells.
     fn clip_inside_border(&mut self, rect: PxRect) {
         let area = self.area(rect);
         let inner = if area.y1 - area.y0 >= 3 {

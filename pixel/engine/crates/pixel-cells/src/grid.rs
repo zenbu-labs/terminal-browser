@@ -13,7 +13,6 @@ pub const INVERSE: u8 = 1 << 5;
 
 const GRAPHEME: u32 = 1 << 31;
 pub const CONTINUATION: u32 = 0x0011_0000;
-// A cell whose content on the terminal is not known, so it never matches and is always written.
 pub const UNKNOWN: u32 = 0x0011_0001;
 pub const BLANK: u32 = ' ' as u32;
 
@@ -199,8 +198,6 @@ impl CellGrid {
         }
     }
 
-    // Moves rows `top..bottom` up by `by` (down when negative), the way a terminal scrolls a region, and marks the
-    // rows it uncovers as unknown.
     pub fn scroll(&mut self, top: u16, bottom: u16, by: i32) {
         let width = self.width as usize;
         let (top, bottom) = (top as usize, bottom as usize);
@@ -225,7 +222,6 @@ impl CellGrid {
         self.chars[exposed].fill(UNKNOWN);
     }
 
-    // How many cells in rows `top..bottom` would still need writing if `shown` scrolled those rows by `by` first.
     pub fn stale_cells(&self, shown: &CellGrid, top: u16, bottom: u16, by: i32) -> usize {
         let width = self.width as usize;
         (top..bottom)

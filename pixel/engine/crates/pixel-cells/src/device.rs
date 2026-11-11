@@ -6,7 +6,6 @@ use pixel_core::{ColorDepth, Device, Pointer, Step};
 
 use crate::ColorTier;
 
-// Every grapheme takes its display width in cells and every line one cell, whatever the font and size.
 #[derive(Debug, Clone, Copy)]
 pub struct CellMetrics {
     pub cell: (f32, f32),

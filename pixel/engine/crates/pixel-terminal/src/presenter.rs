@@ -12,19 +12,15 @@ use crate::terminal::{DEFAULT_CELL, SessionEnv, Terminal, WindowSize};
 
 const INLINE_BYTES_PER_SEC: f32 = 3_000_000.0;
 
-// How frames reach the terminal. The backend asks the renderer everything that depends on how it draws.
 pub(crate) trait Presenter: Send {
     fn name(&self) -> &'static str;
     fn device(&self, cell: (u32, u32)) -> Device;
-    // The window is exactly the terminal's grid of cells, not the pixel size the terminal reports.
     fn whole_cells(&self) -> bool;
-    // The same renderer, for the terminal the backend was moved to.
     fn renew(&self, term: &mut Terminal, env: &SessionEnv) -> io::Result<Box<dyn Presenter>>;
     fn close(&mut self, term: &mut Terminal);
 
     fn present(&mut self, term: &mut Terminal, frame: Frame<'_>) -> io::Result<usize>;
     fn geometry(&mut self, ws: &WindowSize, cell: (u32, u32));
-    // The window or cell changed; a new device when the renderer's depends on the cell.
     fn resized(&mut self, term: &mut Terminal, cell_changed: bool, cell: (u32, u32)) -> io::Result<Option<Device>>;
     fn window_reported(&mut self) {}
     fn focused(&mut self, _term: &mut Terminal) -> io::Result<()> {
@@ -63,7 +59,6 @@ pub(crate) trait Presenter: Send {
     fn native_scroll(&self) -> bool {
         false
     }
-    // Whether a mouse event is already delivered another way and should be dropped.
     fn swallows(&mut self, _mouse: &Mouse, _extent: Pane, _pixel_mouse: bool) -> bool {
         false
     }

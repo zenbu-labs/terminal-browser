@@ -13,7 +13,6 @@ impl Vars for Env {
     }
 }
 
-// A tty that only reads replies, enough to probe a fake terminal on the other end of a pty.
 struct PtyTty {
     file: std::fs::File,
     wrapper: Wrapper,

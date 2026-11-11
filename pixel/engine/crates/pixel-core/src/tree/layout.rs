@@ -152,7 +152,6 @@ pub(super) fn to_taffy(style: &Style, hidden: bool, input: bool, lattice: (f32, 
     taffy
 }
 
-// A border is drawn a whole lattice unit wide, so it keeps room for whatever of that unit its stroke doesn't cover.
 fn border_room(style: &Style, (x, y): (f32, f32)) -> Edges {
     let border = style.border.unwrap_or_default();
     let room = |side: Option<crate::style::BorderSide>, unit: f32| {
@@ -161,10 +160,6 @@ fn border_room(style: &Style, (x, y): (f32, f32)) -> Edges {
     Edges { left: room(border.left, x), right: room(border.right, x), top: room(border.top, y), bottom: room(border.bottom, y) }
 }
 
-// Lengths given in px become whole lattice units, so equal boxes stay equal wherever they land. A positive size
-// keeps at least one unit, and vertical lengths under 0.7 of a unit round to nothing, which keeps tall units from
-// spreading the layout out. A fixed size that its borders' room would leave without a unit of content grows by
-// that room.
 fn whole_units(style: &Style, (x, y): (f32, f32), room: Edges) -> Style {
     let round_x = |v: f32| (v / x).round().max(0.0) * x;
     let round_y = |v: f32| (v / y - 0.2).round().max(0.0) * y;

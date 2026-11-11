@@ -51,8 +51,6 @@ impl Encoder {
         self.diff_scrolled(prev, next, &[], caret, out);
     }
 
-    // `prev` is what the terminal shows after `scrolls` (each moves rows `top..bottom` up by `by`, down when
-    // negative) are applied to it; they are sent first, then the cells that still differ.
     pub fn diff_scrolled(&mut self, prev: &CellGrid, next: &CellGrid, scrolls: &[Scroll], caret: Option<Caret>, out: &mut Vec<u8>) {
         let start = out.len();
         out.extend_from_slice(b"\x1b[?2026h");

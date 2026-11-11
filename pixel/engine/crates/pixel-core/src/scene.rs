@@ -4,9 +4,6 @@ use crate::style::{Color, LinearGradient};
 use crate::text_input::{CaretShape, Mark};
 use crate::tree::PxRect;
 
-// What one view shows, as a tree of items in paint order. Each item is a box that paints or holds boxes that do:
-// its own ops are drawn first, then (inside its clip when it clips) its inner ops, its children, and its scrollbar.
-// Items that scroll, stick, or show a surface are the view's layers: `layers()` walks them.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Scene {
     pub root: Item,
@@ -28,7 +25,6 @@ pub struct Item {
     pub after: Vec<Op>,
 }
 
-// What part of the item's box paints, for working out what covers what.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Fills {
     pub content: bool,
@@ -71,7 +67,6 @@ pub struct BarState {
     pub thumb_hover_color: Color,
 }
 
-// How a layer differs from the same layer in the view's previous scene.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Change {
     #[default]
@@ -105,8 +100,6 @@ pub enum TextStyle {
     Label,
 }
 
-// One line's worth of glyphs from one font face. `font` lays the text out; `face` draws it, centred on the
-// layout font's advances when it is a bold or italic variant.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Text {
     pub text: String,
@@ -230,8 +223,6 @@ pub struct ViewFrame<'a> {
     pub damage: Damage<'a>,
 }
 
-// Everything the engine hands a backend to show: each visible view's scene with what changed since the last
-// frame, the divider between split views, and highlights drawn over everything.
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
     pub window: (u32, u32),

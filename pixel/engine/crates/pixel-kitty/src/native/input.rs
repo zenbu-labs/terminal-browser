@@ -12,7 +12,6 @@ use super::pairing::NativePairing;
 
 const PINCH_HOVER_WINDOW: Duration = Duration::from_millis(2000);
 
-// The pane's size and cell in pixels, which the helper's window-relative points are matched against.
 pub type Pane = ((f32, f32), (f32, f32));
 
 pub struct NativeInput {
@@ -82,7 +81,6 @@ impl NativeInput {
         }
     }
 
-    // Queues the pinches and scrolls the helper reported since the last call.
     pub fn drain_native(
         &mut self,
         extent: Pane,
@@ -118,7 +116,6 @@ impl NativeInput {
         });
     }
 
-    // Whether a mouse event is a wheel tick the helper already delivers as a smooth scroll.
     pub fn swallows(&mut self, mouse: &Mouse, extent: Pane, pixel_mouse: bool) -> bool {
         if !(self.use_native && self.native.is_some()) {
             return false;

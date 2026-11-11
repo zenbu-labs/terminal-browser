@@ -326,8 +326,6 @@ pub struct Placement {
     pub stuck: bool,
 }
 
-// Rounds a placed box's edges to the device lattice from their absolute positions, so neighbours share edges the
-// way rounding to whole pixels does. A box that paints keeps at least one lattice unit.
 fn snap(raw: PxRect, (x, y): (f32, f32), paints: bool) -> PxRect {
     if (x, y) == (1.0, 1.0) {
         return raw;
@@ -2078,7 +2076,6 @@ impl Tree {
         Some(y)
     }
 
-    // Where the node was last placed, as it was placed, including rows the list skipped.
     pub fn placement(&self, id: NodeId) -> Option<Placement> {
         let node = self.get(id)?;
         Some(Placement { abs: node.abs, visible: node.visible, offscreen: node.offscreen, stuck: node.stuck })

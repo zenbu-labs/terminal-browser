@@ -21,8 +21,6 @@ function probeSequence(wrap: boolean): string {
   return `${wrap ? passthrough(query) : query}\x1b[c`;
 }
 
-// The probe ends with a device attributes request every terminal answers, so its reply arriving first means
-// the graphics query was ignored.
 function graphicsReply(buffer: string): boolean | null {
   const needle = `Gi=${PROBE_ID};`;
   const at = buffer.indexOf(needle);

@@ -21,7 +21,6 @@ pub(crate) struct Painter<'a> {
     pub occluders: Vec<(u64, u32)>,
 }
 
-// Paints a whole scene the way the tree used to paint itself: clear, then every item in order.
 pub(crate) fn paint_scene(
     canvas: &mut Canvas,
     root: &Item,
