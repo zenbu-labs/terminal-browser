@@ -368,7 +368,7 @@ impl Terminal {
             Some("host") => FrameTransport::Host,
             _ => FrameTransport::Inline,
         };
-        terminal.image_id = state.image_id.unwrap_or_else(|| frame_image_id(true));
+        terminal.image_id = state.image_id.unwrap_or_else(|| frame_image_id(true, terminal.terminal_id));
         terminal.cell = state.cell;
         terminal.focused = state.focused;
         terminal.hosted = Some(state);
@@ -453,6 +453,7 @@ impl Terminal {
         wrapper: Wrapper,
         herdr_target: Option<crate::herdr::HerdrTarget>,
     ) -> Self {
+        let terminal_id = NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self {
             io,
             saved,
@@ -474,7 +475,7 @@ impl Terminal {
             frame_seq: 0,
             payloads: Payloads::default(),
             wrapper,
-            image_id: frame_image_id(wrapper.relayed()),
+            image_id: frame_image_id(wrapper.relayed(), terminal_id),
             placeholders: None,
             placed_grid: None,
             identity: Identity::Unknown,
@@ -490,7 +491,7 @@ impl Terminal {
             wake_rx: None,
             waker: None,
             resize_slot: None,
-            terminal_id: NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            terminal_id,
             clipboard_data: false,
             clip_read: None,
             color_scheme_updates: false,
@@ -1588,11 +1589,16 @@ enum TransportRetry {
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 
-fn frame_image_id(relayed: bool) -> u32 {
+// odd, so every terminal id of one process lands on its own 24-bit image id
+const IMAGE_ID_STRIDE: u32 = 0x9e_3779;
+
+// tmux relays every pane to one outer terminal, which keeps one image per id
+fn frame_image_id(relayed: bool, terminal_id: u64) -> u32 {
     if !relayed {
         return 1;
     }
-    match std::process::id() & 0xff_ffff {
+    let offset = (terminal_id as u32).wrapping_mul(IMAGE_ID_STRIDE);
+    match std::process::id().wrapping_add(offset) & 0xff_ffff {
         0 | SHM_PROBE_ID => SHM_PROBE_ID + 1,
         id => id,
     }
@@ -2443,6 +2449,23 @@ fn parse_cell_report(params: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminals_behind_tmux_in_one_process_get_their_own_image_ids() {
+        let null_tty = || TtyHandle::File(std::fs::File::options().read(true).write(true).open("/dev/null").unwrap());
+        let first = Terminal::blank(null_tty(), None, Wrapper::Tmux, None);
+        let second = Terminal::blank(null_tty(), None, Wrapper::Tmux, None);
+
+        assert_ne!(first.image_id, second.image_id);
+    }
+
+    #[test]
+    fn image_ids_behind_tmux_fit_a_placeholder_colour_and_skip_reserved_ids() {
+        for terminal_id in 0..4096 {
+            let id = frame_image_id(true, terminal_id);
+            assert!(id != 0 && id != SHM_PROBE_ID && id <= 0xff_ffff, "terminal {terminal_id} got {id}");
+        }
+    }
 
     #[test]
     fn probe_replies_span_only_the_reply() {
