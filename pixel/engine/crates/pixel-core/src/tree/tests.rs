@@ -1996,3 +1996,44 @@ fn laying_out_images_reads_their_headers_and_decodes_none() {
     assert!(!drained.landed && !drained.redraw, "layout decoded nothing");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn rows_on_screen_below_a_row_taller_than_the_screen_are_measured_again() {
+    let rows = |grown: usize, added: bool| {
+        let block = |key: &str, lines: usize| Desc {
+            key: Some(key.into()),
+            style: Style { flex_direction: FlexDirection::Column, flex_shrink: 0.0, ..Style::default() },
+            children: (0..lines).map(|k| Desc { key: Some(format!("{key}-{k}")), style: Style { height: Dimension::Px(10.0), ..Style::default() }, ..Desc::default() }).collect(),
+            ..Desc::default()
+        };
+        let mut children = vec![block("tall", 20), block("cards", 2 + grown)];
+        if added {
+            children.push(block("sent", 3));
+        }
+        vec![Desc {
+            style: Style { width: Dimension::Px(40.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, layout: Layout::List, ..Style::default() },
+            key: Some("list".into()),
+            children,
+            ..Desc::default()
+        }]
+    };
+    let mut tree = tree_of((40.0, 100.0), rows(0, false));
+    scroll_list(&mut tree, 150.0);
+    tree.reconcile(Desc { children: rows(4, false), ..Desc::default() });
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    tree.reconcile(Desc { children: rows(4, true), ..Desc::default() });
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    let cards = tree.rect(tree.find("cards").unwrap()).unwrap();
+    let sent = tree.rect(tree.find("sent").unwrap()).unwrap();
+    assert_eq!(cards.h, 60.0, "the grown row is drawn at its new height");
+    assert_eq!(sent.y, cards.y + cards.h, "the row after it starts where it ends, not over it");
+}
+
+#[test]
+fn a_list_following_its_end_measures_its_last_row_again_when_it_grows() {
+    let rows = |last: f32| list_of(20, move |i| if i == 19 { last } else { 20.0 }, Style { scroll_anchor: ScrollAnchor::End, ..Style::default() });
+    let mut tree = tree_of((40.0, 100.0), rows(20.0));
+    tree.reconcile(Desc { children: rows(60.0), ..Desc::default() });
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    assert_eq!(tree.rect(tree.find("row19").unwrap()).unwrap().h, 60.0);
+}
