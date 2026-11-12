@@ -1,4 +1,7 @@
 mod layout;
+mod text_layout;
+
+pub use text_layout::{TextLayout, TextLeaf, TextLine};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
