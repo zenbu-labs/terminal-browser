@@ -114,6 +114,7 @@ impl Engine {
             return Ok(());
         }
         let cpu = crate::profiler::cpu_us();
+        crate::image_cache::begin_frame();
         crate::profiler::span("frame", || -> io::Result<()> {
             let start = Instant::now();
             let interval = self.frame_interval();
