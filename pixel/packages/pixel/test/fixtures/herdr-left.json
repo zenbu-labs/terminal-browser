@@ -4,6 +4,7 @@
     "HERDR_TAB_ID": "w1:t1"
   },
   "exec": {
+    "herdr pane current --pane w1:p1": "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\",\"workspace_id\":\"w1\"}}}",
     "herdr pane split --pane w1:p1 --direction right --focus --right-click pane": "{\"result\":{\"pane\":{\"pane_id\":\"w1:p2\"}}}",
     "herdr pane swap --pane w1:p2 --direction left": "{}",
     "herdr pane run w1:p2 terminal-browser open": ""
@@ -23,6 +24,7 @@
         "tty": null
       },
       "commands": [
+        "herdr pane current --pane w1:p1",
         "herdr pane split --pane w1:p1 --direction right --focus --right-click pane",
         "herdr pane swap --pane w1:p2 --direction left",
         "herdr pane run w1:p2 terminal-browser open"
