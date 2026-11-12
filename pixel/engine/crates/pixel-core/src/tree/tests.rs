@@ -2028,3 +2028,12 @@ fn rows_on_screen_below_a_row_taller_than_the_screen_are_measured_again() {
     assert_eq!(cards.h, 60.0, "the grown row is drawn at its new height");
     assert_eq!(sent.y, cards.y + cards.h, "the row after it starts where it ends, not over it");
 }
+
+#[test]
+fn a_list_following_its_end_measures_its_last_row_again_when_it_grows() {
+    let rows = |last: f32| list_of(20, move |i| if i == 19 { last } else { 20.0 }, Style { scroll_anchor: ScrollAnchor::End, ..Style::default() });
+    let mut tree = tree_of((40.0, 100.0), rows(20.0));
+    tree.reconcile(Desc { children: rows(60.0), ..Desc::default() });
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    assert_eq!(tree.rect(tree.find("row19").unwrap()).unwrap().h, 60.0);
+}
