@@ -11,19 +11,33 @@ pub enum ImageStatus {
     Failed,
 }
 
-enum State {
-    Pending { queued: Instant, seq: u64 },
-    Ready(Arc<tiny_skia::Pixmap>),
-    Failed,
-}
-
 type ScaledKey = (u32, u32, [u32; 4]);
+
+struct Decoding {
+    queued: Instant,
+    seq: u64,
+}
 
 struct Entry {
     dims: Option<(u32, u32)>,
-    state: State,
+    status: ImageStatus,
+    pixels: Option<Arc<tiny_skia::Pixmap>>,
+    decoding: Option<Decoding>,
     scaled: HashMap<ScaledKey, Arc<tiny_skia::Pixmap>>,
-    last_use: u64,
+    drawn_in_frame: u64,
+}
+
+impl Entry {
+    fn new(dims: Option<(u32, u32)>) -> Self {
+        Entry {
+            dims,
+            status: ImageStatus::Pending,
+            pixels: None,
+            decoding: None,
+            scaled: HashMap::new(),
+            drawn_in_frame: 0,
+        }
+    }
 }
 
 type WakerFn = Box<dyn Fn() + Send>;
@@ -31,6 +45,7 @@ type WakerFn = Box<dyn Fn() + Send>;
 enum Job {
     Decode {
         src: String,
+        fit: Option<(u32, u32)>,
         queued: Instant,
         seq: u64,
     },
@@ -51,6 +66,7 @@ enum Job {
 struct DecodeResult {
     src: String,
     pixmap: Option<tiny_skia::Pixmap>,
+    full: Option<(u32, u32)>,
     queued: Instant,
     started: Instant,
     finished: Instant,
@@ -76,7 +92,7 @@ enum Done {
 
 struct Cache {
     entries: HashMap<String, Entry>,
-    tick: u64,
+    frame: u64,
     bytes: usize,
     next_seq: u64,
     jobs: Option<Sender<Job>>,
@@ -89,7 +105,7 @@ const BUDGET_BYTES: usize = 256 * 1024 * 1024;
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache {
         entries: HashMap::new(),
-        tick: 0,
+        frame: 1,
         bytes: 0,
         next_seq: 0,
         jobs: None,
@@ -112,15 +128,32 @@ fn premultiply(img: &image::RgbaImage) -> Option<tiny_skia::Pixmap> {
     Some(pixmap)
 }
 
-fn decode(src: &str) -> Option<tiny_skia::Pixmap> {
+fn decode(src: &str, fit: Option<(u32, u32)>) -> Option<(tiny_skia::Pixmap, (u32, u32))> {
     let img = image::ImageReader::open(src)
         .ok()?
         .with_guessed_format()
         .ok()?
         .decode()
-        .ok()?
-        .into_rgba8();
-    premultiply(&img)
+        .ok()?;
+    let full = (img.width(), img.height());
+    let img = match fit.and_then(|fit| cover_size(full, fit)) {
+        Some((w, h)) => img.resize_exact(w, h, image::imageops::FilterType::Triangle),
+        None => img,
+    };
+    Some((premultiply(&img.into_rgba8())?, full))
+}
+
+fn cover_size(full: (u32, u32), fit: (u32, u32)) -> Option<(u32, u32)> {
+    if full.0 == 0 || full.1 == 0 || fit.0 == 0 || fit.1 == 0 {
+        return None;
+    }
+    let scale = (fit.0 as f64 / full.0 as f64).max(fit.1 as f64 / full.1 as f64);
+    if scale >= 1.0 {
+        return None;
+    }
+    let w = ((full.0 as f64 * scale).ceil() as u32).clamp(1, full.0);
+    let h = ((full.1 as f64 * scale).ceil() as u32).clamp(1, full.1);
+    Some((w, h))
 }
 
 fn sniff_dims(src: &str) -> Option<(u32, u32)> {
@@ -146,16 +179,18 @@ const RETRY_DELAYS: [Duration; 3] = if cfg!(test) {
     ]
 };
 
-fn decode_with_retries(src: &str) -> (Option<tiny_skia::Pixmap>, u32) {
+type Decoded = Option<(tiny_skia::Pixmap, (u32, u32))>;
+
+fn decode_with_retries(src: &str, fit: Option<(u32, u32)>) -> (Decoded, u32) {
     let mut attempts = 0;
     for delay in RETRY_DELAYS {
         attempts += 1;
-        if let Some(pixmap) = decode(src) {
-            return (Some(pixmap), attempts);
+        if let Some(decoded) = decode(src, fit) {
+            return (Some(decoded), attempts);
         }
         std::thread::sleep(delay);
     }
-    (decode(src), attempts + 1)
+    (decode(src, fit), attempts + 1)
 }
 
 fn decode_worker(jobs: Receiver<Job>, results: Sender<Done>, waker: Arc<Mutex<Option<WakerFn>>>) {
@@ -167,12 +202,14 @@ fn decode_worker(jobs: Receiver<Job>, results: Sender<Done>, waker: Arc<Mutex<Op
     let send = |done: Done| results.send(done).is_ok();
     for job in jobs {
         match job {
-            Job::Decode { src, queued, seq } => {
+            Job::Decode { src, fit, queued, seq } => {
                 let started = Instant::now();
-                let (pixmap, attempts) = decode_with_retries(&src);
+                let (decoded, attempts) = decode_with_retries(&src, fit);
+                let full = decoded.as_ref().map(|(_, full)| *full);
                 let sent = send(Done::Pixels(DecodeResult {
                     src,
-                    pixmap,
+                    pixmap: decoded.map(|(pixmap, _)| pixmap),
+                    full,
                     queued,
                     started,
                     finished: Instant::now(),
@@ -206,6 +243,7 @@ fn decode_worker(jobs: Receiver<Job>, results: Sender<Done>, waker: Arc<Mutex<Op
                     let pixmap = premultiply(&rgba);
                     let sent = send(Done::Pixels(DecodeResult {
                         src: pasted.path.clone(),
+                        full: Some(rgba.dimensions()),
                         pixmap,
                         queued,
                         started,
@@ -273,6 +311,7 @@ fn decode_worker(jobs: Receiver<Job>, results: Sender<Done>, waker: Arc<Mutex<Op
                     let pixmap = premultiply(&rgba);
                     let sent = send(Done::Pixels(DecodeResult {
                         src: pasted.path.clone(),
+                        full: Some(rgba.dimensions()),
                         pixmap,
                         queued,
                         started,
@@ -315,29 +354,24 @@ fn jobs_sender(cache: &mut Cache) -> &Sender<Job> {
     cache.jobs.as_ref().expect("jobs sender just created")
 }
 
-fn ensure(cache: &mut Cache, src: &str, equal_to: &[String]) {
-    cache.tick += 1;
-    let tick = cache.tick;
-    if let Some(entry) = cache.entries.get_mut(src) {
-        entry.last_use = tick;
+fn known(cache: &mut Cache, src: &str, equal_to: &[String]) {
+    if cache.entries.contains_key(src) {
         return;
     }
-    for alias in equal_to {
-        let Some(entry) = cache.entries.get(alias.as_str()) else {
-            continue;
-        };
-        let State::Ready(pixmap) = &entry.state else {
-            continue;
-        };
+    let alias = equal_to
+        .iter()
+        .filter_map(|alias| cache.entries.get(alias.as_str()))
+        .find(|entry| entry.status == ImageStatus::Ready);
+    if let Some(alias) = alias {
         let seeded = Entry {
-            dims: entry.dims,
-            state: State::Ready(Arc::clone(pixmap)),
-            scaled: entry.scaled.clone(),
-            last_use: tick,
+            pixels: alias.pixels.clone(),
+            scaled: alias.scaled.clone(),
+            status: ImageStatus::Ready,
+            ..Entry::new(alias.dims)
         };
         cache.bytes += entry_bytes(&seeded);
         cache.entries.insert(src.to_string(), seeded);
-        evict_over_budget(cache, src);
+        evict_over_budget(cache);
         return;
     }
     let dims = crate::profiler::span_labeled(
@@ -345,23 +379,40 @@ fn ensure(cache: &mut Cache, src: &str, equal_to: &[String]) {
         || basename(src).to_string(),
         || sniff_dims(src),
     );
+    cache.entries.insert(src.to_string(), Entry::new(dims));
+    if dims.is_none() {
+        request_pixels(cache, src, None);
+    }
+}
+
+fn request_pixels(cache: &mut Cache, src: &str, fit: Option<(u32, u32)>) {
+    let Some(entry) = cache.entries.get(src) else {
+        return;
+    };
+    if entry.decoding.is_some() || entry.status == ImageStatus::Failed {
+        return;
+    }
     let queued = Instant::now();
     cache.next_seq += 1;
     let seq = cache.next_seq;
     let _ = jobs_sender(cache).send(Job::Decode {
         src: src.to_string(),
+        fit,
         queued,
         seq,
     });
-    cache.entries.insert(
-        src.to_string(),
-        Entry {
-            dims,
-            state: State::Pending { queued, seq },
-            scaled: HashMap::new(),
-            last_use: tick,
-        },
-    );
+    if let Some(entry) = cache.entries.get_mut(src) {
+        entry.decoding = Some(Decoding { queued, seq });
+    }
+}
+
+fn too_small(entry: &Entry, w: u32, h: u32) -> bool {
+    let Some(pixels) = &entry.pixels else {
+        return true;
+    };
+    let full = entry.dims.unwrap_or((pixels.width(), pixels.height()));
+    let wanted = cover_size(full, (w, h)).unwrap_or(full);
+    pixels.width() + 1 < wanted.0 || pixels.height() + 1 < wanted.1
 }
 
 pub(crate) fn queue_clipboard_read(clipboard: Option<Arc<dyn crate::backend::SystemClipboard>>) -> u64 {
@@ -397,44 +448,64 @@ pub(crate) fn queue_pasted_bytes(
 }
 
 fn entry_bytes(entry: &Entry) -> usize {
-    let full = match &entry.state {
-        State::Ready(pixmap) => pixmap.data().len(),
-        _ => 0,
-    };
-    full + entry.scaled.values().map(|p| p.data().len()).sum::<usize>()
+    let pixels = entry.pixels.as_ref().map_or(0, |p| p.data().len());
+    pixels + entry.scaled.values().map(|p| p.data().len()).sum::<usize>()
 }
 
-fn evict_over_budget(cache: &mut Cache, keep: &str) {
+fn evict_over_budget(cache: &mut Cache) {
     while cache.bytes > BUDGET_BYTES {
+        let frame = cache.frame;
         let Some(key) = cache
             .entries
             .iter()
-            .filter(|(k, e)| k.as_str() != keep && matches!(e.state, State::Ready(_)))
-            .min_by_key(|(_, e)| e.last_use)
+            .filter(|(_, e)| e.drawn_in_frame != frame && entry_bytes(e) > 0)
+            .min_by_key(|(_, e)| e.drawn_in_frame)
             .map(|(k, _)| k.clone())
         else {
             return;
         };
-        if let Some(entry) = cache.entries.remove(&key) {
-            cache.bytes -= entry_bytes(&entry);
+        if let Some(entry) = cache.entries.get_mut(&key) {
+            cache.bytes -= entry_bytes(entry);
+            entry.pixels = None;
+            entry.scaled.clear();
         }
     }
 }
 
+pub fn begin_frame() {
+    CACHE.with_borrow_mut(|cache| {
+        cache.frame += 1;
+        evict_over_budget(cache);
+    });
+}
+
 pub fn status(src: &str, equal_to: &[String]) -> ImageStatus {
     CACHE.with_borrow_mut(|cache| {
-        ensure(cache, src, equal_to);
-        match cache.entries[src].state {
-            State::Pending { .. } => ImageStatus::Pending,
-            State::Ready(_) => ImageStatus::Ready,
-            State::Failed => ImageStatus::Failed,
+        known(cache, src, equal_to);
+        cache.entries[src].status
+    })
+}
+
+pub fn drawn_status(src: &str, equal_to: &[String], w: u32, h: u32) -> ImageStatus {
+    CACHE.with_borrow_mut(|cache| {
+        known(cache, src, equal_to);
+        let frame = cache.frame;
+        let entry = cache.entries.get_mut(src).expect("known inserts the entry");
+        entry.drawn_in_frame = frame;
+        if entry.status == ImageStatus::Failed {
+            return ImageStatus::Failed;
         }
+        let ready = entry.pixels.is_some();
+        if w > 0 && h > 0 && too_small(entry, w, h) {
+            request_pixels(cache, src, Some((w, h)));
+        }
+        if ready { ImageStatus::Ready } else { ImageStatus::Pending }
     })
 }
 
 pub(crate) fn image_size(src: &str, equal_to: &[String]) -> Option<(u32, u32)> {
     CACHE.with_borrow_mut(|cache| {
-        ensure(cache, src, equal_to);
+        known(cache, src, equal_to);
         cache.entries[src].dims
     })
 }
@@ -442,11 +513,8 @@ pub(crate) fn image_size(src: &str, equal_to: &[String]) -> Option<(u32, u32)> {
 #[cfg(test)]
 fn with_image<R>(src: &str, f: impl FnOnce(tiny_skia::PixmapRef<'_>) -> R) -> Option<R> {
     CACHE.with_borrow_mut(|cache| {
-        ensure(cache, src, &[]);
-        match &cache.entries[src].state {
-            State::Ready(pixmap) => Some(f((**pixmap).as_ref())),
-            _ => None,
-        }
+        known(cache, src, &[]);
+        cache.entries[src].pixels.as_ref().map(|pixmap| f((**pixmap).as_ref()))
     })
 }
 
@@ -503,30 +571,32 @@ pub fn with_scaled_image<R>(
         return None;
     }
     CACHE.with_borrow_mut(|cache| {
-        ensure(cache, src, equal_to);
+        known(cache, src, equal_to);
         let key = (w, h, radius.map(f32::to_bits));
-        let entry = cache.entries.get(src)?;
-        if !matches!(entry.state, State::Ready(_)) {
+        let frame = cache.frame;
+        let entry = cache.entries.get_mut(src)?;
+        entry.drawn_in_frame = frame;
+        if entry.status == ImageStatus::Failed {
             return None;
         }
+        if too_small(entry, w, h) {
+            request_pixels(cache, src, Some((w, h)));
+        }
+        let entry = cache.entries.get(src)?;
         if !entry.scaled.contains_key(&key) {
-            let scaled = {
-                let State::Ready(full) = &entry.state else {
-                    return None;
-                };
-                crate::profiler::span_labeled(
-                    "image.scale",
-                    || format!("{} → {w}×{h}", basename(src)),
-                    || make_scaled((**full).as_ref(), w, h, radius),
-                )?
-            };
+            let pixels = entry.pixels.as_ref()?;
+            let scaled = crate::profiler::span_labeled(
+                "image.scale",
+                || format!("{} → {w}×{h}", basename(src)),
+                || make_scaled((**pixels).as_ref(), w, h, radius),
+            )?;
             cache.bytes += scaled.data().len();
             cache
                 .entries
                 .get_mut(src)?
                 .scaled
                 .insert(key, Arc::new(scaled));
-            evict_over_budget(cache, src);
+            evict_over_budget(cache);
         }
         let entry = cache.entries.get(src)?;
         Some(f((*entry.scaled[&key]).as_ref()))
@@ -543,8 +613,6 @@ pub(crate) fn insert_decoded(src: String, img: &image::RgbaImage) {
         return;
     };
     CACHE.with_borrow_mut(|cache| {
-        cache.tick += 1;
-        let tick = cache.tick;
         if let Some(old) = cache.entries.remove(&src) {
             cache.bytes -= entry_bytes(&old);
         }
@@ -552,13 +620,13 @@ pub(crate) fn insert_decoded(src: String, img: &image::RgbaImage) {
         cache.entries.insert(
             src.clone(),
             Entry {
-                dims: Some((pixmap.width(), pixmap.height())),
-                state: State::Ready(Arc::new(pixmap)),
-                scaled: HashMap::new(),
-                last_use: tick,
+                status: ImageStatus::Ready,
+                pixels: Some(Arc::new(pixmap)),
+                drawn_in_frame: cache.frame,
+                ..Entry::new(Some((img.width(), img.height())))
             },
         );
-        evict_over_budget(cache, &src);
+        evict_over_budget(cache);
     });
 }
 
@@ -571,6 +639,7 @@ pub fn set_waker(wake: impl Fn() + Send + 'static) {
 #[derive(Default)]
 pub struct Drained {
     pub landed: bool,
+    pub redraw: bool,
     // queued pastes
     pub pastes: Vec<(u64, Option<crate::clipboard_image::PastedImage>)>,
 }
@@ -585,24 +654,38 @@ pub fn drain_completed() -> Drained {
         for done in completed {
             match done {
                 Done::Pixels(result) => {
-                    let src = result.src.clone();
-                    let Some(entry) = cache.entries.get_mut(&src) else {
+                    let Some(entry) = cache.entries.get_mut(&result.src) else {
                         continue;
                     };
-                    if matches!(entry.state, State::Ready(_)) {
+                    if entry.decoding.as_ref().is_none_or(|d| d.seq != result.seq) {
                         continue;
                     }
-                    drained.landed = true;
+                    entry.decoding = None;
                     emit_lifecycle(&result);
+                    let was = entry.status;
                     match result.pixmap {
                         Some(pixmap) => {
-                            entry.dims = Some((pixmap.width(), pixmap.height()));
-                            cache.bytes += pixmap.data().len();
-                            entry.state = State::Ready(Arc::new(pixmap));
-                            evict_over_budget(cache, &src);
+                            let old = entry_bytes(entry);
+                            entry.dims = result.full.or(entry.dims);
+                            entry.status = ImageStatus::Ready;
+                            entry.pixels = Some(Arc::new(pixmap));
+                            entry.scaled.clear();
+                            let new = entry_bytes(entry);
+                            cache.bytes = cache.bytes - old + new;
                         }
-                        None => entry.state = State::Failed,
+                        None => {
+                            cache.bytes -= entry_bytes(entry);
+                            entry.status = ImageStatus::Failed;
+                            entry.pixels = None;
+                            entry.scaled.clear();
+                        }
                     }
+                    if entry.status == was {
+                        drained.redraw = true;
+                    } else {
+                        drained.landed = true;
+                    }
+                    evict_over_budget(cache);
                 }
                 Done::Clipboard {
                     seq,
@@ -611,15 +694,11 @@ pub fn drain_completed() -> Drained {
                     has_pixels,
                 } => {
                     if has_pixels && let Some(pasted) = &pasted {
-                        cache.tick += 1;
-                        let tick = cache.tick;
                         cache.entries.insert(
                             pasted.path.clone(),
                             Entry {
-                                dims: Some((pasted.width, pasted.height)),
-                                state: State::Pending { queued, seq },
-                                scaled: HashMap::new(),
-                                last_use: tick,
+                                decoding: Some(Decoding { queued, seq }),
+                                ..Entry::new(Some((pasted.width, pasted.height)))
                             },
                         );
                     }
@@ -695,7 +774,7 @@ pub(crate) fn emit_pending_waits() {
             return;
         };
         for (src, entry) in &cache.entries {
-            if let State::Pending { queued, seq } = entry.state {
+            if let Some(Decoding { queued, seq }) = entry.decoding {
                 let start = crate::profiler::ms_of(queued).unwrap_or(0.0);
                 crate::profiler::emit_span(
                     "image.wait",
@@ -753,6 +832,7 @@ mod tests {
         assert_eq!(image_size(&src, &[]), Some((4, 2)));
         assert_eq!(status(&src, &[]), ImageStatus::Pending);
         assert!(with_image(&src, |_| ()).is_none());
+        assert_eq!(drawn_status(&src, &[], 4, 2), ImageStatus::Pending);
         drain_until_landed();
         assert_eq!(status(&src, &[]), ImageStatus::Ready);
         let alpha_seen = with_image(&src, |p| p.pixels().iter().any(|px| px.alpha() < 255));
@@ -785,7 +865,7 @@ mod tests {
         };
 
         crate::profiler::start();
-        assert_eq!(status(&src, &[]), ImageStatus::Pending);
+        assert_eq!(drawn_status(&src, &[], 5, 4), ImageStatus::Pending);
         emit_pending_waits();
         let in_flight = crate::profiler::stop().unwrap();
         assert!(in_flight.spans.iter().any(|s| s.name == "image.sniff"));
@@ -850,5 +930,89 @@ mod tests {
         let missing = vec!["mem://never-existed".to_string()];
         assert_eq!(status("/nonexistent/other.png", &missing), ImageStatus::Pending);
     }
+
+    #[test]
+    fn layout_reads_only_headers_so_undrawn_images_are_never_decoded() {
+        let path = temp_png("undrawn.png", &checker(6, 3));
+        let src = path.to_string_lossy().to_string();
+        for _ in 0..3 {
+            assert_eq!(image_size(&src, &[]), Some((6, 3)));
+            assert_eq!(status(&src, &[]), ImageStatus::Pending);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!drain_completed().landed);
+        assert!(CACHE.with_borrow(|cache| cache.entries[&src].decoding.is_none()));
+    }
+
+    #[test]
+    fn images_drawn_small_are_decoded_small_and_refetched_when_drawn_larger() {
+        let path = temp_png("big.png", &image::RgbaImage::from_pixel(400, 800, image::Rgba([9, 9, 9, 255])));
+        let src = path.to_string_lossy().to_string();
+        assert_eq!(drawn_status(&src, &[], 100, 200), ImageStatus::Pending);
+        drain_until_landed();
+        assert_eq!(with_image(&src, |p| (p.width(), p.height())), Some((100, 200)));
+        assert_eq!(image_size(&src, &[]), Some((400, 800)), "layout keeps the file's own size");
+        assert_eq!(drawn_status(&src, &[], 100, 200), ImageStatus::Ready);
+        assert!(with_scaled_image(&src, 200, 400, [0.0; 4], &[], |p| p.width()).is_some(), "upscaled meanwhile");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !drain_completed().redraw {
+            assert!(Instant::now() < deadline, "the larger decode never landed");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(with_image(&src, |p| (p.width(), p.height())), Some((200, 400)));
+    }
+
+    #[test]
+    fn more_images_than_the_budget_settle_instead_of_decoding_in_a_loop() {
+        let side = 1200;
+        let count = BUDGET_BYTES / (side * side * 4) + 4;
+        let img = image::RgbaImage::from_pixel(side as u32, side as u32, image::Rgba([1, 2, 3, 255]));
+        let srcs: Vec<String> = (0..count)
+            .map(|i| temp_png(&format!("budget-{i}.png"), &img).to_string_lossy().to_string())
+            .collect();
+        let decodes = |srcs: &[String]| {
+            let mut landed = 0;
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while srcs.iter().any(|s| CACHE.with_borrow(|c| c.entries[s].decoding.is_some())) {
+                assert!(Instant::now() < deadline, "decodes never finished");
+                let drained = drain_completed();
+                landed += usize::from(drained.landed || drained.redraw);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            landed
+        };
+        let lay_out = || {
+            for src in &srcs {
+                status(src, &[]);
+                image_size(src, &[]);
+            }
+        };
+
+        begin_frame();
+        lay_out();
+        for src in &srcs {
+            drawn_status(src, &[], side as u32, side as u32);
+        }
+        decodes(&srcs);
+        assert!(CACHE.with_borrow(|c| c.bytes) <= BUDGET_BYTES + count * side * side * 4);
+
+        for _ in 0..5 {
+            begin_frame();
+            lay_out();
+            for src in &srcs[..2] {
+                drawn_status(src, &[], side as u32, side as u32);
+            }
+            std::thread::sleep(Duration::from_millis(30));
+            let drained = drain_completed();
+            assert!(!drained.landed, "layout asked for no decode, so nothing lands");
+            assert!(srcs.iter().all(|s| status(s, &[]) == ImageStatus::Ready), "evicted pixels keep their status");
+        }
+        assert!(CACHE.with_borrow(|c| c.bytes) <= BUDGET_BYTES, "undrawn images gave their pixels back");
+        assert!(srcs[..2].iter().all(|s| CACHE.with_borrow(|c| c.entries[s].pixels.is_some())), "drawn images keep theirs");
+        for src in &srcs {
+            let _ = std::fs::remove_file(src);
+        }
+    }
+
 
 }

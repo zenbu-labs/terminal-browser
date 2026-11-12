@@ -683,6 +683,10 @@ impl Engine {
             for view in &mut self.comp.views {
                 view.tree.mark_layout();
             }
+        } else if drained.redraw {
+            for view in &mut self.comp.views {
+                view.tree.mark_paint();
+            }
         }
         for (view, node, image) in self
             .clipboard

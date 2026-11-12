@@ -1968,3 +1968,31 @@ fn a_row_with_a_flex_shrink_0_child_pulled_up_by_a_negative_margin_keeps_its_hei
     let ys: Vec<f32> = (0..3).map(|i| tree.node(tree.find(&format!("row{i}")).unwrap()).list_y).collect();
     assert_eq!(ys, vec![0.0, 60.0, 120.0]);
 }
+
+#[test]
+fn laying_out_images_reads_their_headers_and_decodes_none() {
+    let dir = std::env::temp_dir().join(format!("pixel-tree-undrawn-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut tree = Tree::new((300.0, 200.0));
+    let mut images = Vec::new();
+    for i in 0..8 {
+        let path = dir.join(format!("shot-{i}.png"));
+        image::RgbaImage::from_pixel(30, 60, image::Rgba([0, 0, 200, 255])).save(&path).unwrap();
+        let image = tree.create(Props {
+            image: Some(ImageProps { src: path.to_string_lossy().to_string(), equal_to: Vec::new(), glyph: None }),
+            ..Props::default()
+        });
+        tree.append(tree.root(), image);
+        images.push(image);
+    }
+    for _ in 0..3 {
+        tree.mark_layout();
+        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    }
+    let rect = tree.rect(images[7]).unwrap();
+    assert!(rect.h > 0.0 && rect.h == rect.w * 2.0, "sized from the header before any pixels: {rect:?}");
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let drained = crate::image_cache::drain_completed();
+    assert!(!drained.landed && !drained.redraw, "layout decoded nothing");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

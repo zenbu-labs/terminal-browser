@@ -111,7 +111,11 @@ impl Recorder<'_> {
                 radius,
                 src: image.src.clone(),
                 equal_to: image.equal_to.clone(),
-                status: crate::image_cache::status(&image.src, &image.equal_to),
+                status: if visible.w > 0.0 && visible.h > 0.0 {
+                    crate::image_cache::drawn_status(&image.src, &image.equal_to, rect.w.round() as u32, rect.h.round() as u32)
+                } else {
+                    crate::image_cache::status(&image.src, &image.equal_to)
+                },
                 broken_icon,
                 px: node.resolved.px,
                 color: node.resolved.color,

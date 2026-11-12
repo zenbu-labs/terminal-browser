@@ -1650,16 +1650,9 @@ impl Tree {
                 if !children.is_empty() {
                     self.image_slot_parents.insert(id);
                 }
-                let has_placeholder = children
-                    .iter()
-                    .any(|&c| self.node(c).slot == Some(SlotKind::Placeholder));
                 let status = crate::image_cache::status(&image.src, &image.equal_to);
-                let size = if !has_placeholder && status == ImageStatus::Pending {
-                    None
-                } else {
-                    crate::image_cache::image_size(&image.src, &image.equal_to)
-                        .or((status == ImageStatus::Failed).then_some((32, 32)))
-                };
+                let size = crate::image_cache::image_size(&image.src, &image.equal_to)
+                    .or((status == ImageStatus::Failed).then_some((32, 32)));
                 Some(MeasureCtx::Image {
                     size,
                     src: image.src,
