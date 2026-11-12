@@ -2037,3 +2037,22 @@ fn a_list_following_its_end_measures_its_last_row_again_when_it_grows() {
     tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(tree.rect(tree.find("row19").unwrap()).unwrap().h, 60.0);
 }
+
+#[test]
+fn cards_that_exactly_fill_a_wrapping_row_stay_on_one_line() {
+    let cw = 14.0411f32;
+    let room = 59.0 * cw;
+    let card = ((room - cw) / 2.0).floor();
+    let grid = Desc {
+        key: Some("grid".into()),
+        style: Style { flex_direction: FlexDirection::Row, flex_wrap: true, gap: cw, ..Style::default() },
+        children: (0..2).map(|i| Desc { key: Some(format!("c{i}")), style: Style { width: Dimension::Px(card), height: Dimension::Px(281.0), flex_shrink: 0.0, ..Style::default() }, ..Desc::default() }).collect(),
+        ..Desc::default()
+    };
+    let holder = Desc { style: Style { padding: crate::style::Edges { left: 2.0 * cw, ..Default::default() }, ..Style::default() }, children: vec![grid], ..Desc::default() };
+    let width = 63.0 * cw;
+    let tree = tree_of((width, 1000.0), vec![Desc { style: Style { width: Dimension::Px(width), flex_direction: FlexDirection::Column, padding: crate::style::Edges { left: cw, right: cw, ..Default::default() }, ..Style::default() }, children: vec![holder], ..Desc::default() }]);
+    let rect = |key: &str| tree.rect(tree.find(key).unwrap()).unwrap();
+    assert_eq!(rect("c1").y, rect("c0").y, "the second card stays beside the first");
+    assert!(rect("c1").y + rect("c1").h <= rect("grid").y + rect("grid").h, "the row is as tall as its cards");
+}

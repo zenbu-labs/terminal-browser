@@ -836,6 +836,8 @@ fn determine_flex_base_size(
     }
 }
 
+const LINE_FIT_TOLERANCE: f32 = 0.01;
+
 /// Collect flex items into flex lines.
 ///
 /// # [9.3. Main Size Determination](https://www.w3.org/TR/css-flexbox-1/#main-sizing)
@@ -912,7 +914,7 @@ fn collect_flex_lines<'a>(
                             // So first item in the line does not contribute a gap to the line length
                             let gap_contribution = if idx == 0 { 0.0 } else { main_axis_gap };
                             line_length += child.hypothetical_outer_size.main(constants.dir) + gap_contribution;
-                            line_length > main_axis_available_space && idx != 0
+                            line_length > main_axis_available_space + LINE_FIT_TOLERANCE && idx != 0
                         })
                         .map(|(idx, _)| idx)
                         .unwrap_or(flex_items.len());
