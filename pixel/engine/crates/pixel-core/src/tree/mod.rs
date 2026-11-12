@@ -1410,7 +1410,7 @@ impl Tree {
         let (ahead, behind) = if follow_end { (0.25, 1.25) } else { (1.25, 0.25) };
         let (mut below, mut above) = (anchor, anchor);
         let ahead_until = Instant::now() + LOOK_AHEAD_BUDGET;
-        let mut reach = 0.0;
+        let mut reach = anchor_y - position;
         while below < rows.len() && reach < view * ahead {
             if !follow_end && reach >= view && Instant::now() > ahead_until {
                 break;
