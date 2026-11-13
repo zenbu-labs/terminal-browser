@@ -6,7 +6,7 @@ use pixel_core::{
     HighlightArea, ImageProps, InputProps, Inset, InsetValue, Justify, LineCap, LineJoin,
     Layout, LinearGradient, NodeId, Paint,
     Overflow, Position, Props, ScrollAnchor, ScrollbarStyle, SelectionMode, ShapeProps, ShapeStroke,
-    SlotKind, Style, TextSpan, Tree, parse_path_data,
+    SlotKind, Style, TextLink, TextSpan, Tree, parse_path_data,
 };
 use serde::Deserialize;
 
@@ -362,6 +362,8 @@ struct SpanDto {
     underline: bool,
     #[serde(default)]
     strikethrough: bool,
+    #[serde(default)]
+    link: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -795,6 +797,11 @@ impl PropsDto {
             drag_events: self.drag_events,
             selection_events: self.selection_events,
             move_events: self.move_events,
+            links: self
+                .spans
+                .iter()
+                .filter_map(|s| Some(TextLink { start: s.start, end: s.end, target: s.link.clone()? }))
+                .collect(),
             spans: self
                 .spans
                 .into_iter()
