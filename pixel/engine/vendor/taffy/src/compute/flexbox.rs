@@ -903,16 +903,13 @@ fn collect_flex_lines<'a>(
                 while !flex_items.is_empty() {
                     // Find index of the first item in the next line
                     // (or the last item if all remaining items are in the current line)
-                    let mut line_length = 0.0;
+                    let mut items_length = 0.0;
                     let index = flex_items
                         .iter()
                         .enumerate()
                         .find(|&(idx, child)| {
-                            // Gaps only occur between items (not before the first one or after the last one)
-                            // So first item in the line does not contribute a gap to the line length
-                            let gap_contribution = if idx == 0 { 0.0 } else { main_axis_gap };
-                            line_length += child.hypothetical_outer_size.main(constants.dir) + gap_contribution;
-                            line_length > main_axis_available_space && idx != 0
+                            items_length += child.hypothetical_outer_size.main(constants.dir);
+                            items_length + sum_axis_gaps(main_axis_gap, idx + 1) > main_axis_available_space && idx != 0
                         })
                         .map(|(idx, _)| idx)
                         .unwrap_or(flex_items.len());
