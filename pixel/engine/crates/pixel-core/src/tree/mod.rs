@@ -264,6 +264,15 @@ pub(crate) struct Resolved {
     pub selection_color: Color,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WidthAnchor {
+    leaf: NodeId,
+    start: usize,
+    into: f32,
+    row: NodeId,
+    into_row: f32,
+}
+
 pub(crate) struct RNode {
     pub style: Style,
     pub text: Option<String>,
@@ -308,6 +317,7 @@ pub(crate) struct RNode {
     pub measured_width: f32,
     pub list_height: f32,
     list_width: f32,
+    width_anchor: Option<WidthAnchor>,
     pub row_estimate: f32,
     pub placed_rows: std::ops::Range<usize>,
     pub stick_events: bool,
@@ -600,6 +610,7 @@ impl Tree {
             measured_width: f32::NAN,
             list_height: 0.0,
             list_width: f32::NAN,
+            width_anchor: None,
             row_estimate: 0.0,
             placed_rows: 0..0,
             stick_events: props.stick_events,
@@ -1391,6 +1402,19 @@ impl Tree {
             .min(rows.len().saturating_sub(1))
         };
         let anchor_y = rows.get(anchor).map_or(0.0, |&row| self.node(row).list_y);
+        let text_anchor = (!follow_end && node.list_width != width)
+            .then(|| {
+                let kept = node.width_anchor.filter(|kept| {
+                    self.get(kept.leaf).is_some()
+                        && self.get(kept.row).is_some_and(|row| row.parent == Some(id) && (position - row.list_y - kept.into_row).abs() < 0.5)
+                });
+                kept.map(|kept| (kept.leaf, kept.start, kept.into)).or_else(|| {
+                    let &row = rows.get(anchor)?;
+                    let cover = self.sticky_cover(row, position - anchor_y, view);
+                    self.text_line_at(row, position - anchor_y + cover, fonts)
+                })
+            })
+            .flatten();
         let top_row = rows
             .partition_point(|&row| {
                 let node = self.node(row);
@@ -1510,6 +1534,13 @@ impl Tree {
         node.scroll_max = (node.content_height.unwrap_or(node.list_height) - view).max(0.0);
         let new_position = if follow_end {
             (node.list_height - view).max(0.0)
+        } else if let Some((leaf, start, into, row, top)) =
+            text_anchor.and_then(|(leaf, start, into)| self.line_top_in(id, leaf, start, fonts).map(|(row, top)| (leaf, start, into, row, top)))
+        {
+            let shown = top + into;
+            let cover = self.sticky_cover(row, shown - self.sticky_cover(row, shown, view), view);
+            self.node_mut(id).width_anchor = Some(WidthAnchor { leaf, start, into, row, into_row: shown - cover });
+            self.node(row).list_y + shown - cover
         } else {
             rows.get(anchor).map_or(position, |&row| position + self.node(row).list_y - anchor_y)
         };
@@ -1521,6 +1552,88 @@ impl Tree {
             node.scroll.target += new_position - position;
         }
         measured
+    }
+
+    fn laid_lines(&self, id: NodeId, fonts: &[crate::fonts::Font]) -> Option<(f32, f32, Vec<std::ops::Range<usize>>)> {
+        let node = self.node(id);
+        let text = node.text.as_deref()?;
+        if fonts.is_empty() || node.input.is_some() {
+            return None;
+        }
+        let layout = self.taffy.layout(node.taffy).ok()?;
+        let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
+        let max_width = node.style.wrap.then(|| {
+            (layout.size.width - layout.padding.left - layout.padding.right - layout.border.left - layout.border.right).max(0.0)
+                + crate::wrap::WRAP_SLACK
+        });
+        let lines = crate::wrap::wrap_lines(text, font, node.resolved.px, max_width, node.marks());
+        Some((layout.padding.top + layout.border.top, line_height(font, node.resolved.px), lines))
+    }
+
+    fn sticky_cover(&self, row: NodeId, into: f32, view: f32) -> f32 {
+        let mut cover: f32 = 0.0;
+        let mut stack = vec![(row, 0.0, None::<(f32, f32)>)];
+        while let Some((id, parent_top, parent)) = stack.pop() {
+            let node = self.node(id);
+            let Ok(layout) = self.taffy.layout(node.taffy) else { continue };
+            if node.hidden {
+                continue;
+            }
+            let top = if id == row { 0.0 } else { parent_top + layout.location.y };
+            let h = layout.size.height;
+            if node.style.position == Position::Sticky
+                && let Some((_, parent_bottom)) = parent
+            {
+                let inset = match node.style.inset.top {
+                    Some(InsetValue::Px(v)) => v,
+                    Some(InsetValue::Percent(f)) => f * view,
+                    None => continue,
+                };
+                let shown = (top - into).max(inset).min(parent_bottom - into - h);
+                if shown <= inset + 0.5 && shown + h > 0.0 {
+                    cover = cover.max(shown + h);
+                }
+            }
+            stack.extend(node.children.iter().map(|&child| (child, top, Some((top, top + h)))));
+        }
+        cover
+    }
+
+    fn text_line_at(&self, row: NodeId, y: f32, fonts: &[crate::fonts::Font]) -> Option<(NodeId, usize, f32)> {
+        if y <= 0.0 {
+            return None;
+        }
+        let mut stack = vec![(row, 0.0)];
+        while let Some((id, parent_top)) = stack.pop() {
+            let node = self.node(id);
+            let Ok(layout) = self.taffy.layout(node.taffy) else { continue };
+            let top = if id == row { 0.0 } else { parent_top + layout.location.y };
+            if node.hidden || y < top || y >= top + layout.size.height {
+                continue;
+            }
+            if let Some((inset, line_h, lines)) = self.laid_lines(id, fonts) {
+                let into = y - top - inset;
+                let index = ((into / line_h).floor().max(0.0) as usize).min(lines.len().checked_sub(1)?);
+                return Some((id, lines[index].start, into - index as f32 * line_h));
+            }
+            stack.extend(node.children.iter().map(|&child| (child, top)));
+        }
+        None
+    }
+
+    fn line_top_in(&self, list: NodeId, leaf: NodeId, start: usize, fonts: &[crate::fonts::Font]) -> Option<(NodeId, f32)> {
+        let (inset, line_h, lines) = self.laid_lines(leaf, fonts)?;
+        let index = lines.iter().position(|line| line.end > start || line.start == start).unwrap_or(lines.len().saturating_sub(1));
+        let mut top = inset + index as f32 * line_h;
+        let mut id = leaf;
+        loop {
+            let parent = self.node(id).parent?;
+            if parent == list {
+                return Some((id, top));
+            }
+            top += self.taffy.layout(self.node(id).taffy).ok()?.location.y;
+            id = parent;
+        }
     }
 
     fn measure_row(&mut self, row: NodeId, width: f32, fonts: &[crate::fonts::Font]) {
