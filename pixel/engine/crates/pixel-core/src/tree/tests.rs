@@ -2056,3 +2056,154 @@ fn cards_that_exactly_fill_a_wrapping_row_stay_on_one_line() {
     assert_eq!(rect("c1").y, rect("c0").y, "the second card stays beside the first");
     assert!(rect("c1").y + rect("c1").h <= rect("grid").y + rect("grid").h, "the row is as tall as its cards");
 }
+
+fn paragraph_list(width: f32) -> Vec<Desc> {
+    paragraph_list_after(width, "a short row")
+}
+
+fn paragraph_list_after(width: f32, intro: &str) -> Vec<Desc> {
+    let words: Vec<String> = (0..400).map(|i| format!("word{i}")).collect();
+    let row = |key: &str, text: Option<String>| Desc {
+        key: Some(key.into()),
+        style: Style { padding: Edges { top: 8.0, left: 6.0, ..Edges::default() }, ..Style::default() },
+        children: vec![Desc {
+            key: Some(format!("{key}-text")),
+            text: Some(text.unwrap_or_else(|| "a short row".into())),
+            ..Desc::default()
+        }],
+        ..Desc::default()
+    };
+    vec![Desc {
+        style: Style { width: Dimension::Px(width), height: Dimension::Px(200.0), overflow: Overflow::Scroll, layout: Layout::List, ..Style::default() },
+        key: Some("list".into()),
+        children: vec![row("intro", Some(intro.into())), row("long", Some(words.join(" "))), row("after", None)],
+        ..Desc::default()
+    }]
+}
+
+fn text_at_top(tree: &Tree) -> (usize, f32) {
+    let list = tree.find("list").unwrap();
+    let row = tree.find("long").unwrap();
+    let fonts = crate::fonts::FontRegistry::bundled();
+    let into_row = tree.scroll_state(list).unwrap().position - tree.node(row).list_y;
+    let (_, start, into) = tree.text_line_at(row, into_row, &fonts).expect("the top of the screen is in the long row");
+    (start, into)
+}
+
+#[test]
+fn a_list_made_narrower_or_wider_keeps_the_line_at_the_top_of_the_screen() {
+    let mut tree = tree_of((400.0, 400.0), paragraph_list(300.0));
+    let row = tree.find("long").unwrap();
+    let into = 7.0;
+    let line_h = {
+        let fonts = crate::fonts::FontRegistry::bundled();
+        tree.laid_lines(tree.find("long-text").unwrap(), &fonts).unwrap().1
+    };
+    let top = tree.node(row).list_y + 8.0 + line_h * 12.0 + into;
+    scroll_list(&mut tree, top);
+    let (start, at) = text_at_top(&tree);
+    assert!(start > 0, "the screen starts mid-paragraph");
+    assert!((at - into).abs() < 0.01);
+    for width in [260.0, 220.0, 380.0, 300.0] {
+        tree.reconcile(Desc { children: paragraph_list(width), ..Desc::default() });
+        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+        let fonts = crate::fonts::FontRegistry::bundled();
+        let leaf = tree.find("long-text").unwrap();
+        let lines = tree.laid_lines(leaf, &fonts).unwrap().2;
+        let line = lines.iter().position(|l| l.end > start).unwrap();
+        let (now, now_into) = text_at_top(&tree);
+        assert_eq!(now, lines[line].start, "at {width} the line holding the old top's text is at the top");
+        assert!((now_into - into).abs() < 0.01, "at {width} it is as far into the line as before");
+    }
+}
+
+#[test]
+fn a_list_made_narrower_keeps_a_row_whose_top_shows_where_it_was() {
+    let mut tree = tree_of((400.0, 400.0), paragraph_list(300.0));
+    let row = tree.find("long").unwrap();
+    let top = tree.node(row).list_y - 10.0;
+    scroll_list(&mut tree, top);
+    let before = tree.node(row).list_y - tree.scroll_state(tree.find("list").unwrap()).unwrap().position;
+    tree.reconcile(Desc { children: paragraph_list(220.0), ..Desc::default() });
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    let after = tree.node(row).list_y - tree.scroll_state(tree.find("list").unwrap()).unwrap().position;
+    assert_eq!(before, after);
+}
+
+#[test]
+fn a_list_keeps_the_same_line_at_the_top_while_rows_above_it_change_between_widths() {
+    let mut tree = tree_of((400.0, 400.0), paragraph_list(300.0));
+    let row = tree.find("long").unwrap();
+    let line_h = {
+        let fonts = crate::fonts::FontRegistry::bundled();
+        tree.laid_lines(tree.find("long-text").unwrap(), &fonts).unwrap().1
+    };
+    let top = tree.node(row).list_y + 8.0 + line_h * 12.0 + 7.0;
+    scroll_list(&mut tree, top);
+    let (start, _) = text_at_top(&tree);
+    let mut intro = String::from("a short row");
+    for width in [260.0, 220.0, 380.0, 300.0] {
+        tree.reconcile(Desc { children: paragraph_list_after(width, &intro), ..Desc::default() });
+        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+        intro.push_str(" that grows");
+        tree.reconcile(Desc { children: paragraph_list_after(width, &intro), ..Desc::default() });
+        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    }
+    let (now, _) = text_at_top(&tree);
+    assert_eq!(now, start, "back at its first width, the same line is at the top");
+}
+
+fn pinned_paragraph_list(width: f32) -> Vec<Desc> {
+    let mut list = paragraph_list(width);
+    let long = list[0].children.iter_mut().find(|row| row.key.as_deref() == Some("long")).unwrap();
+    long.style.flex_direction = FlexDirection::Column;
+    long.children.insert(
+        0,
+        Desc {
+            key: Some("header".into()),
+            style: Style {
+                position: Position::Sticky,
+                inset: crate::style::Inset { top: Some(crate::style::InsetValue::Px(0.0)), ..Default::default() },
+                background: Some(Paint::Solid([9, 9, 9, 255])),
+                ..Style::default()
+            },
+            children: vec![Desc { key: Some("header-text".into()), text: Some("the prompt this answers, which wraps when narrow".into()), ..Desc::default() }],
+            ..Desc::default()
+        },
+    );
+    list
+}
+
+#[test]
+fn a_list_keeps_the_line_just_below_a_stuck_header_where_it_was() {
+    let mut tree = tree_of((400.0, 400.0), pinned_paragraph_list(300.0));
+    let list = tree.find("list").unwrap();
+    let row = tree.find("long").unwrap();
+    let line_h = {
+        let fonts = crate::fonts::FontRegistry::bundled();
+        tree.laid_lines(tree.find("long-text").unwrap(), &fonts).unwrap().1
+    };
+    let top = tree.node(row).list_y + 8.0 + line_h * 14.0 + 7.0;
+    scroll_list(&mut tree, top);
+    let first_shown = |tree: &Tree| {
+        let fonts = crate::fonts::FontRegistry::bundled();
+        let position = tree.scroll_state(list).unwrap().position;
+        let into_row = position - tree.node(row).list_y;
+        let cover = tree.sticky_cover(row, into_row, 400.0);
+        assert!(cover > 0.0, "the header is stuck over the top");
+        let (_, start, into) = tree.text_line_at(row, into_row + cover, &fonts).unwrap();
+        (start, -into)
+    };
+    let (start, y) = first_shown(&tree);
+    for width in [260.0, 200.0, 380.0, 300.0] {
+        tree.reconcile(Desc { children: pinned_paragraph_list(width), ..Desc::default() });
+        tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+        let fonts = crate::fonts::FontRegistry::bundled();
+        let lines = tree.laid_lines(tree.find("long-text").unwrap(), &fonts).unwrap().2;
+        let held = lines[lines.iter().position(|l| l.end > start).unwrap()].start;
+        let (now, now_y) = first_shown(&tree);
+        assert_eq!(now, held, "at {width} the line that showed first below the header still does");
+        assert!((now_y - y).abs() < 0.01, "at {width} as far below the header");
+    }
+    assert_eq!(first_shown(&tree).0, start, "back at its first width, it's the same line");
+}
