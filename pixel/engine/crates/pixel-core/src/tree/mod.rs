@@ -433,18 +433,17 @@ pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
 };
 
 const LOOK_AHEAD_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
-const RESERVED_NODES: usize = 1 << 20;
 
 impl Tree {
     pub fn new(window: (f32, f32)) -> Self {
         let mut tree = Self {
-            slots: Vec::with_capacity(RESERVED_NODES),
+            slots: Vec::new(),
             free: Vec::new(),
             root: NodeId {
                 index: 0,
                 generation: 0,
             },
-            taffy: TaffyTree::with_capacity(RESERVED_NODES),
+            taffy: TaffyTree::new(),
             keys: HashMap::new(),
             children_dirty: HashSet::new(),
             lists_changed: HashSet::new(),

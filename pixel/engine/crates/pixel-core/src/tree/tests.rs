@@ -2207,3 +2207,23 @@ fn a_list_keeps_the_line_just_below_a_stuck_header_where_it_was() {
     }
     assert_eq!(first_shown(&tree).0, start, "back at its first width, it's the same line");
 }
+
+#[test]
+fn a_new_tree_reserves_little_and_grows_on_demand() {
+    let mut tree = Tree::new((800.0, 600.0));
+    assert!(tree.slots.capacity() <= 64, "a new tree reserved {} node slots", tree.slots.capacity());
+    let root = tree.root;
+    let ids: Vec<NodeId> = (0..20_000)
+        .map(|i| {
+            let id = tree.create(Props { key: Some(format!("n{i}")), ..Props::default() });
+            tree.append(root, id);
+            id
+        })
+        .collect();
+    for (i, id) in ids.iter().enumerate().step_by(997) {
+        assert_eq!(tree.get(*id).and_then(|n| n.key.as_deref()), Some(format!("n{i}").as_str()));
+    }
+    tree.remove(ids[5]);
+    assert!(tree.get(ids[5]).is_none());
+    assert_eq!(tree.node(root).children.len(), 19_999);
+}
