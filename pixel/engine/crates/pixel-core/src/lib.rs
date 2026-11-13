@@ -56,7 +56,7 @@ pub use text_input::{
 pub use throttle::CpuThrottle;
 pub use tree::{
     Placement, BoxMetrics, Gutter, HitTarget, ImageProps, InputProps, NodeId, Props, PxRect, ScrollArea,
-    SlotKind, TextLayout, TextLeaf, TextLine, TextSpan, Tree,
+    SlotKind, TextLayout, TextLeaf, TextLine, TextLink, TextSpan, Tree,
 };
 pub use wrap::{WRAP_SLACK, line_of_offset, wrap_lines};
 

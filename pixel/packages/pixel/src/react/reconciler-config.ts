@@ -126,6 +126,7 @@ export interface TextSpan {
   italic?: boolean;
   underline?: boolean;
   strikethrough?: boolean;
+  link?: string;
 }
 
 export interface TextProps {
@@ -368,6 +369,7 @@ function serializeProps(
       italic: s.italic,
       underline: s.underline,
       strikethrough: s.strikethrough,
+      link: s.link,
     }));
   }
   if (type === "shape-path" && props.stroke) {

@@ -370,6 +370,7 @@ function styledSpans(
     italic: s.italic,
     underline: Boolean(s.link),
     strikethrough: s.strikethrough,
+    link: s.link ?? undefined,
   }));
   if (!opts.cover) return styled;
   const bytes = Buffer.byteLength(text);

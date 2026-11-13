@@ -201,6 +201,13 @@ pub enum SlotKind {
     Error,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TextLink {
+    pub start: usize,
+    pub end: usize,
+    pub target: String,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TextSpan {
     pub start: usize,
@@ -239,6 +246,7 @@ pub struct Props {
     pub selection_events: bool,
     pub move_events: bool,
     pub spans: Vec<TextSpan>,
+    pub links: Vec<TextLink>,
 }
 
 pub(crate) struct InputState {
@@ -306,6 +314,7 @@ pub(crate) struct RNode {
     pub selection_events: bool,
     pub move_events: bool,
     pub spans: Vec<TextSpan>,
+    pub links: Vec<TextLink>,
     pub last_scroll_emit: f32,
     pub bar: BarState,
     pub resolved: Resolved,
@@ -599,6 +608,7 @@ impl Tree {
             selection_events: props.selection_events,
             move_events: props.move_events,
             spans: props.spans,
+            links: props.links,
             last_scroll_emit: 0.0,
             bar: BarState::default(),
             resolved: DEFAULT_RESOLVED,
@@ -805,6 +815,7 @@ impl Tree {
             node.spans = props.spans;
             changed = true;
         }
+        node.links = props.links;
         let mut swapped_surface = None;
         let mut image_changed = false;
         if node.image != props.image {

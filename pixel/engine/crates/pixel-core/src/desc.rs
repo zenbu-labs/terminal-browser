@@ -45,6 +45,7 @@ impl Desc {
             selection_events: false,
             move_events: false,
             spans: Vec::new(),
+            links: Vec::new(),
         }
     }
 

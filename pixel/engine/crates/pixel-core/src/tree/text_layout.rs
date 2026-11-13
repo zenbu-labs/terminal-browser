@@ -15,6 +15,7 @@ pub struct TextLeaf {
     pub node: NodeId,
     pub text: String,
     pub lines: Vec<TextLine>,
+    pub links: Vec<super::TextLink>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,7 +43,12 @@ impl Tree {
             }
             stack.extend(node.children.iter().rev());
             if self.selectable_text_leaf(id) {
-                leaves.push(TextLeaf { node: id, text: self.text_of(id).unwrap_or_default().to_string(), lines: self.drawn_lines(id, clip, fonts) });
+                leaves.push(TextLeaf {
+                    node: id,
+                    text: self.text_of(id).unwrap_or_default().to_string(),
+                    lines: self.drawn_lines(id, clip, fonts),
+                    links: self.node(id).links.clone(),
+                });
             }
         }
         Some(TextLayout { scope, clip, leaves })
