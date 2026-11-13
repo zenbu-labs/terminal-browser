@@ -60,6 +60,26 @@ test("keymap matches defaults, overrides, and unbinding", () => {
   assert.equal(custom.match(press("f", { super: true, shift: true })), null);
 });
 
+test("page copy has an alternate shortcut and supports override, unbind, and reset", () => {
+  assert.deepEqual(defaultKeys("page.copy", "linux"), ["alt+shift+c"]);
+  assert.deepEqual(defaultKeys("page.copy", "darwin"), ["alt+shift+c"]);
+  const defaults = new Keymap({}, { noSuper: false });
+  assert.equal(defaults.match(press("c", { alt: true, shift: true })), "page.copy");
+  assert.equal(defaults.match(press("c", { ctrl: true })), null);
+
+  const store = tempStore();
+  store.setShortcut("page.copy", ["alt+shift+y"]);
+  let keymap = new Keymap(store.load().shortcuts, { noSuper: false });
+  assert.equal(keymap.match(press("y", { alt: true, shift: true })), "page.copy");
+  assert.equal(keymap.match(press("c", { alt: true, shift: true })), null);
+  store.setShortcut("page.copy", null);
+  keymap = new Keymap(store.load().shortcuts, { noSuper: false });
+  assert.deepEqual(keymap.labels("page.copy"), []);
+  store.setShortcut("page.copy", undefined);
+  keymap = new Keymap(store.load().shortcuts, { noSuper: false });
+  assert.equal(keymap.match(press("c", { alt: true, shift: true })), "page.copy");
+});
+
 test("keymap swaps super for alt when the terminal cannot report super", () => {
   const noSuper = new Keymap({}, { noSuper: true });
   const macNewTab = new Keymap({}, { noSuper: false }).match(press("t", { super: true }));
