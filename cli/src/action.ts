@@ -8,6 +8,7 @@ import type { Terminal } from "@zenbu-labs/pixel/terminal";
 import { control } from "./control";
 import { browsers, describe, recordKey, targets } from "./instances";
 import type { Browser, TabTarget } from "./instances";
+import { resolveOutputPaths } from "./output-paths";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
 
@@ -284,7 +285,8 @@ export async function actionCommand(terminal: Terminal | null, options: ActionOp
     await control(browser.socket, { cmd: "activate-tab", tab: tab.id });
   }
 
-  const child = spawnSync(binary, ["--session", session, ...options.passthrough], {
+  const passthrough = resolveOutputPaths(options.passthrough, process.cwd());
+  const child = spawnSync(binary, ["--session", session, ...passthrough], {
     env: childEnv(),
     stdio: "inherit",
   });
