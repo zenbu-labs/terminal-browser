@@ -898,6 +898,12 @@ impl Engine {
         }
     }
 
+    pub fn set_status(&mut self, status: &crate::backend::ProgramStatus) {
+        if let Err(error) = self.backend.set_status(status) {
+            logging::warn("engine", format!("status write failed: {error}"));
+        }
+    }
+
     pub fn request_clipboard_image(&mut self, view: usize) {
         let root = self.comp.views[view].tree.root();
         self.clipboard.request_paste(self.backend.as_ref(), view, root);

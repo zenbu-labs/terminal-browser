@@ -217,6 +217,16 @@ export interface RenderSettings {
   frameEvents?: boolean;
 }
 
+export interface ProgramStatus {
+  id?: string;
+  state: "idle" | "working" | "done" | "blocked" | "error" | "clear";
+  kind?: "permission" | "question" | "auth";
+  progress?: number;
+  app?: string;
+  title?: string;
+  msg?: string;
+}
+
 export interface PixelRoot {
   info: EngineInfo;
   sharedTextures: boolean;
@@ -241,6 +251,7 @@ export interface PixelRoot {
   requestClipboardImage(): void;
   setClipboard(text: string): void;
   setTitle(text: string): void;
+  setStatus(status: ProgramStatus): void;
   retarget(target: RetargetTarget): Promise<void>;
 }
 
@@ -859,6 +870,11 @@ export function createEngineRoot(options: EngineRootOptions, platform: RootPlatf
     },
     setTitle(text: string) {
       bridge.push(APP_VIEW, { op: "setTitle", text });
+      bridge.flush();
+    },
+    setStatus(status: ProgramStatus) {
+      const progress = status.progress === undefined ? undefined : Math.round(Math.min(100, Math.max(0, status.progress)));
+      bridge.push(APP_VIEW, { op: "setStatus", ...status, progress });
       bridge.flush();
     },
     sendToBackend(message) {
