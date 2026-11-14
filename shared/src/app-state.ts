@@ -57,3 +57,27 @@ export function lastActiveDay(): string | null {
 export function setLastActiveDay(day: string): void {
   setAppState("last-active-day", day);
 }
+
+export function adblockEnabled(): boolean {
+  return getAppState("adblock-enabled") !== "0";
+}
+
+export function setAdblockEnabled(enabled: boolean): void {
+  setAppState("adblock-enabled", enabled ? "1" : "0");
+}
+
+export function adblockAllowlist(): string[] {
+  const raw = getAppState("adblock-allowlist");
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((host): host is string => typeof host === "string");
+  } catch {
+    return [];
+  }
+}
+
+export function setAdblockAllowlist(hosts: string[]): void {
+  setAppState("adblock-allowlist", JSON.stringify(hosts));
+}
