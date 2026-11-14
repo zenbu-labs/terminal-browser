@@ -980,3 +980,25 @@ fn label_items(a: &str, b: &str) -> Vec<Desc> {
         },
     ]
 }
+
+#[test]
+fn a_round_box_hosting_a_native_view_leaves_a_round_hole_in_what_is_drawn_under_it() {
+    let mut tree = Tree::new((100.0, 100.0));
+    let page = tree.create(Props { style: Style { width: Dimension::Px(100.0), height: Dimension::Px(100.0), background: Some(Paint::Solid([60, 60, 60, 255])), ..Style::default() }, ..Props::default() });
+    let button = tree.create(Props {
+        style: Style { position: Position::Absolute, inset: pixel_core::Inset::top_left(20.0, 20.0), width: Dimension::Px(40.0), height: Dimension::Px(40.0), corner_radius: [20.0; 4], ..Style::default() },
+        surface: Some(9),
+        ..Props::default()
+    });
+    tree.append(tree.root(), page);
+    tree.append(tree.root(), button);
+    let mut fonts = crate::tests::fonts();
+    tree.flush_layout(&mut fonts, 16.0);
+    let scene = record_scene(&tree, &fonts, None);
+    let mut canvas = Canvas::new(100, 100);
+    crate::draw::paint_scene(&mut canvas, &scene.root, &[font()], true, None, None);
+    let alpha = |x: u32, y: u32| canvas.pixels[((y * 100 + x) * 4 + 3) as usize];
+    assert_eq!(alpha(40, 40), 0, "the native view shows through the middle");
+    assert_eq!(alpha(21, 21), 255, "the box's corner outside the circle keeps the page");
+    assert_eq!(alpha(58, 58), 255, "so does the opposite corner");
+}
