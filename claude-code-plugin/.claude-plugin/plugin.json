@@ -1,6 +1,6 @@
 {
   "name": "terminal-browser",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A browser running directly inside claude code. Preview websites, view HTML documents, and let your agent control the built in browser.",
   "author": {
     "name": "zenbu-labs"
