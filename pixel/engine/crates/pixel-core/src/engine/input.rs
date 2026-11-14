@@ -4,7 +4,7 @@ use super::{ChangeSource, Engine, EngineEvent, MarkRef};
 use crate::logging;
 use crate::input::Mouse;
 use crate::text_input::{InputAction, InputReply};
-use crate::tree::{NodeId, PxRect};
+use crate::tree::{Invalidation, NodeId, PxRect};
 
 impl Engine {
     pub fn splice_input(&mut self, view: usize, id: NodeId, start: usize, end: usize, text: &str) {
@@ -39,7 +39,7 @@ impl Engine {
             return;
         };
         input.select_all();
-        self.comp.views[view].tree.mark_paint();
+        self.comp.views[view].tree.invalidate(id, Invalidation::Paint);
         let mut events = Vec::new();
         self.push_caret(view, id, &mut events);
         self.pending.append(&mut events);
@@ -96,12 +96,12 @@ impl Engine {
             InputReply::None => {}
             InputReply::Selected => {
                 self.reveal = true;
-                self.comp.views[view].tree.mark_paint();
+                self.comp.views[view].tree.invalidate(id, Invalidation::Paint);
                 self.push_caret(view, id, out);
             }
             InputReply::Moved => {
                 self.reveal = true;
-                self.comp.views[view].tree.mark_paint();
+                self.comp.views[view].tree.invalidate(id, Invalidation::Paint);
                 self.push_caret(view, id, out);
             }
             InputReply::Edited => {
@@ -333,7 +333,7 @@ impl Engine {
             let tree = &mut self.comp.views[view].tree;
             if let Some(input) = tree.input_mut(focus) {
                 input.set_scroll_x(target);
-                tree.mark_paint();
+                tree.invalidate(focus, Invalidation::Paint);
             }
         }
     }

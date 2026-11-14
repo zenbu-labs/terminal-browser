@@ -124,6 +124,42 @@ const MAX_CHANGED_RECTS: usize = 32;
 fn wasted(a: Rect, b: Rect) -> u64 {
     a.union(b).area().saturating_sub(a.area() + b.area())
 }
+const MAX_DAMAGE_RECTS: usize = 16;
+const DAMAGE_MERGE_SLACK_PX: u64 = 8_192;
+
+pub fn merge_damage(mut rects: Vec<Rect>) -> Vec<Rect> {
+    rects.retain(|r| !r.is_empty());
+    let mut merged = true;
+    while merged {
+        merged = false;
+        'search: for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                if rects[i].intersects(rects[j]) || wasted(rects[i], rects[j]) <= DAMAGE_MERGE_SLACK_PX {
+                    rects[i] = rects[i].union(rects[j]);
+                    rects.swap_remove(j);
+                    merged = true;
+                    break 'search;
+                }
+            }
+        }
+    }
+    while rects.len() > MAX_DAMAGE_RECTS {
+        let mut best = (0, 1, u64::MAX);
+        for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                let cost = wasted(rects[i], rects[j]);
+                if cost < best.2 {
+                    best = (i, j, cost);
+                }
+            }
+        }
+        rects[best.0] = rects[best.0].union(rects[best.1]);
+        rects.swap_remove(best.1);
+    }
+    rects.sort_by_key(|r| (r.y, r.x));
+    rects
+}
+
 pub fn group_rects(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
     let mut out: Vec<Rect> = Vec::new();
     for rect in rects {

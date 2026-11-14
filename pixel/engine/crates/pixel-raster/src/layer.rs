@@ -5,7 +5,7 @@ use pixel_core::scene::{Item, LayerKind, Op, Scroll};
 use pixel_core::surfaces::Rect;
 use pixel_core::{Color, PxRect};
 
-use crate::canvas::{Canvas, Overlay, ScrollLayer};
+use crate::canvas::{Canvas, Overlay, Pixels, ScrollLayer};
 use crate::draw::{Skip, paint_scene, paint_subtree};
 
 const MIN_HEIGHT: f32 = 64.0;
@@ -106,7 +106,7 @@ fn collect<'a>(item: &'a Item, clip: Option<PxRect>, after: &mut bool, plan: &mu
 
 fn stuck<'a>(item: &'a Item, clip: Option<PxRect>, plan: &mut LayerPlan<'a>) {
     for child in &item.children {
-        if matches!(child.layer.map(|l| l.kind), Some(LayerKind::Sticky { stuck: true })) {
+        if matches!(child.layer, Some(LayerKind::Sticky { stuck: true })) {
             let mut rects = Vec::new();
             subtree_rects(child, clip, &mut rects);
             let rects: Vec<Rect> = rects.into_iter().filter_map(|r| outer_pixels(r, plan.area)).collect();
@@ -142,7 +142,26 @@ fn painted(item: &Item, clip: Option<PxRect>) -> Vec<PxRect> {
     }
 }
 
-pub fn render_layer(root: &Item, plan: &LayerPlan<'_>, canvases: &mut LayerCanvases, fonts: &[Font], host_surfaces: bool, clear: Color) -> ScrollLayer {
+pub struct Unchanged<'a> {
+    pub previous: Option<&'a ScrollLayer>,
+    pub damage: &'a [Rect],
+}
+
+impl Unchanged<'_> {
+    fn under(&self, rect: Rect) -> Option<Pixels> {
+        self.kept(rect).then(|| self.previous?.under.iter().find(|u| u.rect == rect).cloned()).flatten()
+    }
+
+    fn overlay(&self, rect: Rect) -> Option<Overlay> {
+        self.kept(rect).then(|| self.previous?.overlays.iter().find(|o| o.pixels.rect == rect && !o.above).cloned()).flatten()
+    }
+
+    fn kept(&self, rect: Rect) -> bool {
+        !self.damage.iter().any(|d| d.intersects(rect))
+    }
+}
+
+pub fn render_layer(root: &Item, plan: &LayerPlan<'_>, canvases: &mut LayerCanvases, fonts: &[Font], host_surfaces: bool, clear: Color, unchanged: Unchanged<'_>) -> ScrollLayer {
     let area = plan.area;
     let bar = plan.scroll.bar.filter(|b| b.opacity > 0.0);
     let expanded = bar.is_some_and(|b| b.expand > 0.0);
@@ -167,14 +186,20 @@ pub fn render_layer(root: &Item, plan: &LayerPlan<'_>, canvases: &mut LayerCanva
     let skip = Skip { nodes: &plan.skip, bar_of: plan.list.node };
     let mut under = Vec::new();
     for rect in rects.iter().copied().chain(thumb.map(|(r, _)| r)) {
+        if let Some(kept) = unchanged.under(rect) {
+            under.push(kept);
+            continue;
+        }
         let content = &mut canvases.content;
-        content.push_clip(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
-        paint_scene(content, root, fonts, host_surfaces, Some((rect, clear)), Some(&skip));
-        content.pop_clip();
+        paint_scene(content, root, fonts, host_surfaces, &[rect], Some(clear), Some(&skip));
         under.push(content.raw_copy(rect));
     }
     let mut overlays = Vec::new();
     for rect in &rects {
+        if let Some(kept) = unchanged.overlay(*rect) {
+            overlays.push(kept);
+            continue;
+        }
         let canvas = &mut canvases.overlays;
         canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, [0; 4]);
         canvas.push_clip(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);

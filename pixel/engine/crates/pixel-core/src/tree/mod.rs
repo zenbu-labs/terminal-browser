@@ -78,11 +78,11 @@ impl PxRect {
         cut.w > 0.0 && cut.h > 0.0
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.w <= 0.0 || self.h <= 0.0
     }
 
-    fn union(self, other: PxRect) -> PxRect {
+    pub fn union(self, other: PxRect) -> PxRect {
         if other.is_empty() {
             return self;
         }
@@ -99,8 +99,12 @@ impl PxRect {
         }
     }
 
-    fn offset(self, dx: f32, dy: f32) -> PxRect {
+    pub fn offset(self, dx: f32, dy: f32) -> PxRect {
         PxRect { x: self.x + dx, y: self.y + dy, ..self }
+    }
+
+    pub fn outset(self, by: f32) -> PxRect {
+        PxRect { x: self.x - by, y: self.y - by, w: self.w + by * 2.0, h: self.h + by * 2.0 }
     }
 }
 
@@ -348,6 +352,10 @@ pub struct Placement {
     pub stuck: bool,
 }
 
+fn hover_styled(style: &Style) -> bool {
+    style.hover_background.is_some() || style.hover_color.is_some()
+}
+
 fn snap(raw: PxRect, (x, y): (f32, f32), paints: bool) -> PxRect {
     if (x, y) == (1.0, 1.0) {
         return raw;
@@ -425,8 +433,31 @@ pub struct Tree {
     lattice: (f32, f32),
     needs_layout: bool,
     needs_place: bool,
-    needs_paint: bool,
+    repaint: HashSet<NodeId>,
+    repaint_all: bool,
+    hover_styled: HashSet<NodeId>,
+    cursor: Option<(f32, f32)>,
+    selection_moved: bool,
+    pub(crate) painted_selection: PaintedSelection,
     changed_surfaces: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Invalidation {
+    Layout,
+    Place,
+    Paint,
+}
+
+#[derive(Default)]
+pub(crate) struct PaintedSelection {
+    pub ranges: Vec<(NodeId, std::ops::Range<usize>)>,
+    pub blocks: Vec<(NodeId, Vec<PxRect>, Color)>,
+}
+
+pub(crate) struct Repaint {
+    pub nodes: HashSet<NodeId>,
+    pub all: bool,
 }
 
 pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
@@ -477,7 +508,12 @@ impl Tree {
             lattice: (1.0, 1.0),
             needs_layout: true,
             needs_place: true,
-            needs_paint: true,
+            repaint: HashSet::new(),
+            repaint_all: true,
+            hover_styled: HashSet::new(),
+            cursor: None,
+            selection_moved: false,
+            painted_selection: PaintedSelection::default(),
             changed_surfaces: Vec::new(),
         };
         let root = tree.create(Props {
@@ -513,9 +549,13 @@ impl Tree {
             {
                 input.set_scroll_x(0.0);
             }
-            self.focus = id;
-            self.needs_paint = true;
+            self.move_focus(id);
         }
+    }
+
+    fn move_focus(&mut self, id: Option<NodeId>) {
+        self.repaint.extend(self.focus.into_iter().chain(id));
+        self.focus = id;
     }
 
     pub fn contains(&self, id: NodeId) -> bool {
@@ -656,8 +696,11 @@ impl Tree {
         if self.node(id).style.layout == Layout::List {
             self.lists.insert(id);
         }
+        if hover_styled(&self.node(id).style) {
+            self.hover_styled.insert(id);
+        }
         if props.input.as_ref().is_some_and(|p| p.auto_focus) {
-            self.focus = Some(id);
+            self.move_focus(Some(id));
         }
         self.needs_layout = true;
         if modal {
@@ -685,7 +728,8 @@ impl Tree {
         self.restyled.insert(child);
         self.reshaped.insert(parent);
         self.order_stale = true;
-        self.needs_layout = true;
+        self.invalidate(parent, Invalidation::Layout);
+        self.invalidate(child, Invalidation::Layout);
     }
 
     pub fn append(&mut self, parent: NodeId, child: NodeId) {
@@ -698,6 +742,7 @@ impl Tree {
         };
         self.node_mut(parent).children.retain(|&c| c != child);
         self.node_mut(child).parent = None;
+        self.repaint.insert(parent);
         self.children_dirty.insert(parent);
         self.reshaped.insert(parent);
         self.order_stale = true;
@@ -751,15 +796,17 @@ impl Tree {
                 self.keys.remove(&key);
             }
             if self.focus == Some(id) {
-                self.focus = None;
+                self.move_focus(None);
             }
             self.image_slot_parents.remove(&id);
             self.mark_parents.remove(&id);
             self.scrollables.remove(&id);
             self.lists.remove(&id);
+            self.hover_styled.remove(&id);
+            self.repaint.remove(&id);
             self.modals.remove(&id);
             if self.modal == Some(id) {
-                self.modal = None;
+                self.set_modal(None);
             }
             self.doc.invalidate(id);
         }
@@ -906,7 +953,7 @@ impl Tree {
             (None, None) => {}
         }
         if input_removed && self.focus == Some(id) {
-            self.focus = None;
+            self.move_focus(None);
         }
         if caret_reshaped {
             self.refresh_input_measure(id);
@@ -993,11 +1040,16 @@ impl Tree {
         if style_changed {
             self.restyled.insert(id);
             self.order_stale = true;
+            if hover_styled(&self.node(id).style) {
+                self.hover_styled.insert(id);
+            } else {
+                self.hover_styled.remove(&id);
+            }
         } else if changed {
             self.reshaped.insert(id);
         }
         if changed {
-            self.needs_paint = true;
+            self.repaint.insert(id);
         }
     }
 
@@ -1012,10 +1064,11 @@ impl Tree {
         state.input.replace_all(text);
         node.text = Some(text.to_string());
         self.reshaped.insert(id);
-        self.needs_layout = true;
+        self.invalidate(id, Invalidation::Layout);
     }
 
     pub fn input_mut(&mut self, id: NodeId) -> Option<&mut TextInput> {
+        self.repaint.insert(id);
         self.get_mut(id)
             .and_then(|n| n.input.as_mut())
             .map(|s| &mut s.input)
@@ -1046,7 +1099,7 @@ impl Tree {
                 self.needs_layout = true;
             }
         }
-        self.needs_paint = true;
+        self.repaint.insert(id);
     }
 
     pub fn text_of(&self, id: NodeId) -> Option<&str> {
@@ -1072,7 +1125,11 @@ impl Tree {
             return false;
         };
         let scroll_max = node.scroll_max;
-        scrollbar::step(&mut node.bar, engaged, scroll_max, dt, now)
+        let stepped = scrollbar::step(&mut node.bar, engaged, scroll_max, dt, now);
+        if stepped {
+            self.repaint.insert(id);
+        }
+        stepped
     }
 
     pub(crate) fn bar_animating(&self, id: NodeId, now: Instant) -> bool {
@@ -1129,14 +1186,64 @@ impl Tree {
     }
 
     pub fn dirty(&self) -> bool {
-        self.needs_layout || self.needs_place || self.needs_paint
+        self.needs_layout || self.needs_place || self.repaint_all || self.selection_moved || !self.repaint.is_empty()
     }
 
-    pub fn uses_surface(&self, surface: u32) -> bool {
-        self.slots
+    pub fn invalidate(&mut self, id: NodeId, why: Invalidation) {
+        match why {
+            Invalidation::Layout => self.needs_layout = true,
+            Invalidation::Place => self.needs_place = true,
+            Invalidation::Paint => {}
+        }
+        self.repaint.insert(id);
+    }
+
+    pub fn invalidate_all(&mut self) {
+        self.repaint_all = true;
+    }
+
+    pub fn invalidate_surface(&mut self, surface: u32) {
+        let users: Vec<NodeId> = self.nodes().filter(|(_, node)| node.surface == Some(surface)).map(|(id, _)| id).collect();
+        self.repaint.extend(users);
+    }
+
+    pub fn invalidate_images(&mut self, landed: bool) {
+        let users: Vec<NodeId> = self.nodes().filter(|(_, node)| node.image.is_some()).map(|(id, _)| id).collect();
+        if landed {
+            self.reshaped.extend(users.iter().copied());
+            self.needs_layout = true;
+        }
+        self.repaint.extend(users);
+    }
+
+    pub(crate) fn take_repaint(&mut self) -> Repaint {
+        self.selection_moved = false;
+        Repaint { nodes: std::mem::take(&mut self.repaint), all: std::mem::take(&mut self.repaint_all) }
+    }
+
+    pub fn cursor(&self) -> Option<(f32, f32)> {
+        self.cursor
+    }
+
+    pub fn set_cursor(&mut self, cursor: Option<(f32, f32)>) {
+        if cursor == self.cursor {
+            return;
+        }
+        let over = |node: &RNode, at: Option<(f32, f32)>| at.is_some_and(|(x, y)| node.visible.contains(x, y));
+        let flipped: Vec<NodeId> = self
+            .hover_styled
             .iter()
-            .filter_map(|slot| slot.node.as_ref())
-            .any(|node| node.surface == Some(surface))
+            .copied()
+            .filter(|&id| self.get(id).is_some_and(|node| over(node, self.cursor) != over(node, cursor)))
+            .collect();
+        self.repaint.extend(flipped);
+        self.cursor = cursor;
+    }
+
+    fn nodes(&self) -> impl Iterator<Item = (NodeId, &RNode)> + '_ {
+        self.slots.iter().enumerate().filter_map(|(index, slot)| {
+            slot.node.as_ref().map(|node| (NodeId { index: index as u32, generation: slot.generation }, node))
+        })
     }
 
     pub fn surface_rects(&self, surface: u32) -> impl Iterator<Item = (PxRect, PxRect)> + '_ {
@@ -1155,20 +1262,9 @@ impl Tree {
         self.changed_surfaces.push(surface);
     }
 
-    pub fn mark_paint(&mut self) {
-        self.needs_paint = true;
-    }
-
-    pub(crate) fn clear_paint_flag(&mut self) {
-        self.needs_paint = false;
-    }
-
-    pub fn mark_place(&mut self) {
-        self.needs_place = true;
-    }
-
     pub(crate) fn mark_layout(&mut self) {
         self.needs_layout = true;
+        self.repaint_all = true;
         self.resolve_all = true;
         self.full_place = true;
         self.order_stale = true;
@@ -1240,7 +1336,6 @@ impl Tree {
             self.needs_place = false;
             self.full_place = false;
             self.touched.clear();
-            self.needs_paint = true;
         }
         if self.doc.has_selection() {
             self.ensure_order();
@@ -1258,7 +1353,7 @@ impl Tree {
 
     fn rebuild_order(&mut self) {
         self.paint_order.clear();
-        self.modal = None;
+        let mut modal = None;
         let mut stack = vec![self.root];
         while let Some(id) = stack.pop() {
             let node = self.node(id);
@@ -1268,15 +1363,25 @@ impl Tree {
             if !shown {
                 continue;
             }
-            let modal = node.modal;
+            let is_modal = node.modal;
             stack.extend(node.children.iter().rev());
-            if modal {
-                self.modal = Some(id);
+            if is_modal {
+                modal = Some(id);
             }
             let order = self.paint_order.len() as u32;
             self.node_mut(id).order = order;
             self.paint_order.push(id);
         }
+        self.set_modal(modal);
+    }
+
+    fn set_modal(&mut self, modal: Option<NodeId>) {
+        if self.modal != modal
+            && let Some(focus) = self.focus
+        {
+            self.repaint.insert(focus);
+        }
+        self.modal = modal;
     }
 
     fn nodes_at(&self, x: f32, y: f32) -> Vec<NodeId> {
@@ -1489,6 +1594,7 @@ impl Tree {
                     node.scroll.position = moved;
                     node.scroll.target += moved - position;
                 }
+                self.repaint.insert(id);
             }
             return false;
         }
@@ -1561,6 +1667,7 @@ impl Tree {
             node.scroll.position = new_position;
             node.scroll.target += new_position - position;
         }
+        self.repaint.insert(id);
         measured
     }
 
@@ -1744,6 +1851,7 @@ impl Tree {
                 .selection_color
                 .unwrap_or(inherited.selection_color),
         };
+        let restyled = node.resolved != resolved;
         node.resolved = resolved;
         let taffy = node.taffy;
         let children = node.children.clone();
@@ -1753,6 +1861,9 @@ impl Tree {
         let cell_caret = node.cell_caret();
         let marks = node.marks().to_vec();
         let node_text = node.text.clone();
+        if restyled {
+            self.repaint.insert(id);
+        }
         let non_flow_only = children.iter().all(|&c| {
             let child = self.node(c);
             child.slot.is_some() || child.mark.is_some()
@@ -1879,6 +1990,7 @@ impl Tree {
             }
             if changed {
                 self.refresh_input_measure(id);
+                self.repaint.insert(id);
             }
         }
     }
@@ -1965,6 +2077,7 @@ impl Tree {
         }
         let text_offset_y = self.single_line_offset(id, &layout, fonts);
         let node = self.node_mut(id);
+        let placed_before = (node.abs, node.visible, node.text_offset_y, node.scroll_max, node.scroll.shown());
         node.abs = rect;
         node.visible = visible;
         node.text_offset_y = text_offset_y;
@@ -1986,6 +2099,9 @@ impl Tree {
             if node.scroll.target > max {
                 node.scroll.target = max;
             }
+        }
+        if placed_before != (node.abs, node.visible, node.text_offset_y, node.scroll_max, node.scroll.shown()) {
+            self.repaint.insert(id);
         }
 
         let node = self.node(id);
@@ -2013,12 +2129,12 @@ impl Tree {
             if let Some(mark_id) = self.node(child).mark {
                 match self.mark_child_origin(id, child, mark_id, fonts) {
                     Some(at) => {
-                        self.node_mut(child).mark_visible = true;
+                        self.show_mark(child, true);
                         let placed = self.place_node(child, at, Some(visible), fonts, skip);
                         extent = extent.union(placed);
                     }
                     None => {
-                        self.node_mut(child).mark_visible = false;
+                        self.show_mark(child, false);
                         self.zero_rects(child);
                     }
                 }
@@ -2032,7 +2148,7 @@ impl Tree {
                         (SlotKind::Placeholder, ImageStatus::Pending)
                             | (SlotKind::Error, ImageStatus::Failed)
                     );
-                    self.node_mut(child).slot_visible = show;
+                    self.show_slot(child, show);
                     if show {
                         let placed = self.place_node(child, (raw.x, raw.y), Some(visible), fonts, skip);
                         extent = extent.union(placed);
@@ -2041,7 +2157,7 @@ impl Tree {
                     }
                 }
                 (Some(_), None) => {
-                    self.node_mut(child).slot_visible = false;
+                    self.show_slot(child, false);
                     self.zero_rects(child);
                 }
                 (None, _) => {
@@ -2078,7 +2194,7 @@ impl Tree {
         for row in left {
             if !self.node(row).offscreen && self.node(row).style.position != Position::Sticky {
                 self.hide_offscreen(row);
-                self.node_mut(row).offscreen = true;
+                self.set_offscreen(row, true);
             }
         }
         chosen
@@ -2104,13 +2220,31 @@ impl Tree {
                 if !node.offscreen {
                     self.hide_offscreen(child);
                 }
-                self.node_mut(child).offscreen = true;
+                self.set_offscreen(child, true);
                 return extent;
             }
         }
         let extent = self.place_node(child, origin, clip, fonts, skip);
-        self.node_mut(child).offscreen = clip.is_some_and(|c| !extent.intersects(c));
+        self.set_offscreen(child, clip.is_some_and(|c| !extent.intersects(c)));
         extent
+    }
+
+    fn set_offscreen(&mut self, id: NodeId, offscreen: bool) {
+        if std::mem::replace(&mut self.node_mut(id).offscreen, offscreen) != offscreen {
+            self.repaint.insert(id);
+        }
+    }
+
+    fn show_slot(&mut self, id: NodeId, show: bool) {
+        if std::mem::replace(&mut self.node_mut(id).slot_visible, show) != show {
+            self.repaint.insert(id);
+        }
+    }
+
+    fn show_mark(&mut self, id: NodeId, show: bool) {
+        if std::mem::replace(&mut self.node_mut(id).mark_visible, show) != show {
+            self.repaint.insert(id);
+        }
     }
 
     fn set_stuck(&mut self, id: NodeId, stuck: bool) {
@@ -2120,6 +2254,7 @@ impl Tree {
             if node.stick_events {
                 self.stick_changes.push((id, stuck));
             }
+            self.repaint.insert(id);
         }
     }
 
@@ -2127,7 +2262,10 @@ impl Tree {
         self.set_stuck(id, false);
         let node = self.node_mut(id);
         let hidden_surface = node.surface.filter(|_| node.visible != PxRect::ZERO);
-        node.visible = PxRect::ZERO;
+        if node.visible != PxRect::ZERO {
+            node.visible = PxRect::ZERO;
+            self.repaint.insert(id);
+        }
         if let Some(surface) = hidden_surface {
             self.changed_surfaces.push(surface);
         }
@@ -2166,8 +2304,12 @@ impl Tree {
 
     fn zero_rects(&mut self, id: NodeId) {
         let node = self.node_mut(id);
-        node.abs = PxRect::ZERO;
-        node.visible = PxRect::ZERO;
+        if (node.abs, node.visible) != (PxRect::ZERO, PxRect::ZERO) {
+            node.abs = PxRect::ZERO;
+            node.visible = PxRect::ZERO;
+            self.repaint.insert(id);
+        }
+        let node = self.node(id);
         for child in node.children.clone() {
             self.zero_rects(child);
         }
@@ -2632,6 +2774,13 @@ impl Tree {
         self.doc.selected_rich(self)
     }
 
+    pub(crate) fn doc_selection_ranges(&self) -> Vec<(NodeId, std::ops::Range<usize>)> {
+        if !self.doc.has_selection() {
+            return Vec::new();
+        }
+        self.paint_order.iter().filter_map(|&id| Some((id, self.doc_selection_range(id)?))).collect()
+    }
+
     pub fn doc_selection_blocks(
         &self,
         fonts: &[crate::fonts::Font],
@@ -2657,7 +2806,7 @@ impl Tree {
             self.ensure_order();
         }
         if selected {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
         selected
     }
@@ -2665,14 +2814,14 @@ impl Tree {
     pub fn doc_select_down_near(&mut self, point: (f32, f32), fonts: &[crate::fonts::Font]) -> bool {
         let selected = self.with_doc_unordered(|doc, tree| doc.select_down_near(tree, point, fonts));
         if selected {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
         selected
     }
 
     pub fn doc_select_drag(&mut self, point: (f32, f32), fonts: &[crate::fonts::Font]) {
         if self.with_doc(|doc, tree| doc.select_drag(tree, point, fonts)) {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
     }
 
@@ -2683,7 +2832,7 @@ impl Tree {
     pub fn doc_select_all(&mut self) -> bool {
         let selected = self.with_doc(|doc, tree| doc.select_all(tree));
         if selected {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
         selected
     }
@@ -2695,7 +2844,7 @@ impl Tree {
             self.with_doc_unordered(|doc, tree| doc.collapse(tree))
         };
         if changed {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
         had
     }
@@ -2703,7 +2852,7 @@ impl Tree {
     pub fn doc_extend(&mut self, left: bool, granularity: Granularity) -> bool {
         let moved = self.with_doc(|doc, tree| doc.extend(tree, left, granularity));
         if moved {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
         moved
     }
@@ -2711,7 +2860,7 @@ impl Tree {
     pub fn doc_extend_edge(&mut self, up: bool) -> bool {
         let moved = self.with_doc(|doc, tree| doc.extend_edge(tree, up));
         if moved {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
         moved
     }
@@ -2719,7 +2868,7 @@ impl Tree {
     pub fn doc_extend_vertical(&mut self, up: bool, fonts: &[crate::fonts::Font]) -> bool {
         let moved = self.with_doc(|doc, tree| doc.extend_vertical(tree, up, fonts));
         if moved {
-            self.needs_paint = true;
+            self.selection_moved = true;
         }
         moved
     }

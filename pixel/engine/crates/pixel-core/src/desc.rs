@@ -1,7 +1,7 @@
 use crate::style::Style;
 use crate::tree::{ImageProps, InputProps, NodeId, Props, SlotKind, Tree};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Desc {
     pub style: Style,
     pub text: Option<String>,

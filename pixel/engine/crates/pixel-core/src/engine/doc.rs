@@ -187,7 +187,7 @@ impl Engine {
             && let Some(input) = self.comp.views[focus_view].tree.input_mut(focus)
             && input.collapse()
         {
-            self.comp.views[focus_view].tree.mark_paint();
+            self.comp.views[focus_view].tree.invalidate(focus, crate::tree::Invalidation::Paint);
         }
     }
 

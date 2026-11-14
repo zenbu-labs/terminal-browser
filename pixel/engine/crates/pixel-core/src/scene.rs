@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::image_cache::ImageStatus;
 use crate::shape::ShapeProps;
 use crate::style::{Color, LinearGradient};
@@ -6,22 +8,23 @@ use crate::tree::PxRect;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Scene {
-    pub root: Item,
+    pub root: Arc<Item>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Item {
     pub node: u64,
     pub bounds: PxRect,
+    pub extent: PxRect,
     pub clips: bool,
     pub opaque: bool,
     pub radius: [f32; 4],
     pub fills: Fills,
     pub surface: Option<u32>,
-    pub layer: Option<Layer>,
+    pub layer: Option<LayerKind>,
     pub ops: Vec<Op>,
     pub inner: Vec<Op>,
-    pub children: Vec<Item>,
+    pub children: Vec<Arc<Item>>,
     pub after: Vec<Op>,
 }
 
@@ -32,13 +35,6 @@ pub struct Fills {
     pub hover: bool,
     pub border: bool,
     pub sides: [f32; 4],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Layer {
-    pub z: u32,
-    pub kind: LayerKind,
-    pub change: Change,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,15 +61,6 @@ pub struct BarState {
     pub expand: f32,
     pub thumb_color: Color,
     pub thumb_hover_color: Color,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Change {
-    #[default]
-    New,
-    Content,
-    Offset { by: i64 },
-    None,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,9 +180,46 @@ impl Item {
 
     pub fn scroll(&self) -> Option<&Scroll> {
         match &self.layer {
-            Some(Layer { kind: LayerKind::Scroll(scroll), .. }) => Some(scroll),
+            Some(LayerKind::Scroll(scroll)) => Some(scroll),
             _ => None,
         }
+    }
+}
+
+impl Text {
+    pub fn reach(&self) -> PxRect {
+        PxRect { x: self.x - self.px * 0.5, y: self.top - self.px * 0.5, w: self.width + self.px * 1.5, h: self.ascent + self.px * 1.5 }
+    }
+}
+
+impl Op {
+    /// The area this op can touch on the canvas, with room for antialiasing and glyph overhang.
+    pub fn reach(&self) -> Option<PxRect> {
+        let rect = match self {
+            Op::Rect { rect, .. } | Op::Gradient { rect, .. } | Op::Rule { rect, .. } | Op::Selection { rect, .. } => *rect,
+            Op::Border { rect, width, .. } => rect.outset(*width),
+            Op::Text(text) => text.reach(),
+            Op::Image(image) => image.rect,
+            Op::Surface(surface) => surface.rect,
+            Op::Icon(icon) => {
+                let scale = match icon.path.view_box {
+                    Some(view_box) if view_box > 0.0 => icon.rect.w.min(icon.rect.h) / view_box,
+                    _ => 1.0,
+                };
+                let path = crate::build_path(&icon.path.cmds).map(|path| path.bounds()).map(|b| PxRect {
+                    x: icon.rect.x + b.left() * scale,
+                    y: icon.rect.y + b.top() * scale,
+                    w: b.width() * scale,
+                    h: b.height() * scale,
+                });
+                path.map_or(icon.rect, |path| path.union(icon.rect)).outset(icon.path.stroke.width * scale * 2.0)
+            }
+            Op::Caret(caret) => caret.rect.outset(caret.px * 0.5),
+            Op::Scrollbar(bar) => bar.track.map_or(bar.thumb.0, |(track, _)| track.union(bar.thumb.0)),
+            Op::Clip(_) | Op::Unclip => return None,
+        };
+        let rect = rect.outset(2.0);
+        (!rect.is_empty()).then_some(rect)
     }
 }
 
@@ -209,7 +233,7 @@ pub struct Divider {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Damage<'a> {
     None,
-    Whole { surfaces: &'a [crate::surfaces::Rect] },
+    Whole,
     Parts(&'a [crate::surfaces::Rect]),
 }
 

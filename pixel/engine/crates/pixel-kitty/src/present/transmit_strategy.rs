@@ -129,8 +129,6 @@ pub(crate) struct Stats {
     patches: u64,
     pixels: u64,
     full_pixels: u64,
-    repaints: u64,
-    surface_draws: u64,
 }
 
 const SUMMARY_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
@@ -138,24 +136,19 @@ const SUMMARY_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 impl Stats {
     pub(super) fn line(&self, live: usize, tiles: usize) -> String {
         format!(
-            "patches {live}/{POOL}  tiles {tiles}  full frames {}  sent {:.1}% of whole frames over {} draws ({} ui, {} browser)",
+            "patches {live}/{POOL}  tiles {tiles}  full frames {}  sent {:.1}% of whole frames over {} draws",
             self.flattens,
             self.pixels as f64 * 100.0 / self.full_pixels.max(1) as f64,
             self.frames,
-            self.repaints,
-            self.surface_draws,
         )
     }
 
-    // record what? 
-    pub(crate) fn record(&mut self, strategy: &TransmitStrategy, frame: (u32, u32), ui: bool, browser: bool) {
+    pub(crate) fn record(&mut self, strategy: &TransmitStrategy, frame: (u32, u32)) {
         let now = std::time::Instant::now();
         let since = *self.since.get_or_insert(now);
         let full = u64::from(frame.0) * u64::from(frame.1);
         self.frames += 1;
         self.full_pixels += full;
-        self.repaints += u64::from(ui);
-        self.surface_draws += u64::from(browser);
         match strategy {
             TransmitStrategy::Flatten(_) => {
                 self.flattens += 1;

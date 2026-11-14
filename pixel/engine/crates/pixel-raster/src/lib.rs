@@ -5,6 +5,7 @@ mod layer;
 mod opaque;
 #[cfg(test)]
 mod tree_tests;
+mod verify;
 
 use pixel_core::Color;
 use pixel_core::fonts::Font;
@@ -12,7 +13,7 @@ use pixel_core::scene::{Damage, Divider, Frame, Item};
 use pixel_core::surfaces::{OpaqueArea, Rect, SurfaceCover, SurfaceLayout, SurfacePlacement};
 
 pub use canvas::{Canvas, Overlay, Pixels, PixelFrame, ScrollLayer};
-pub use layer::{LayerCanvases, render_layer, scroll_layer};
+pub use layer::{LayerCanvases, Unchanged, render_layer, scroll_layer};
 pub use opaque::{Opaque, opaque_areas, surface_covers};
 
 const DIVIDER_BG: Color = [32, 33, 38, 255];
@@ -38,8 +39,6 @@ struct ViewPixels {
 struct Painted {
     view: usize,
     parts: Vec<Rect>,
-    whole: bool,
-    surface_parts: Vec<Rect>,
 }
 
 #[derive(Default)]
@@ -47,13 +46,13 @@ pub struct Raster {
     views: Vec<ViewPixels>,
     frame: Canvas,
     changed: Vec<Rect>,
-    repainted: Vec<Rect>,
     direct: Option<usize>,
     opaque: Vec<OpaqueArea>,
     ui_over_surfaces: Vec<Rect>,
     layer: Option<ScrollLayer>,
     surface_layout: Option<SurfaceLayout>,
     last_divider: Option<(u32, bool)>,
+    overlaid: bool,
 }
 
 impl Raster {
@@ -67,46 +66,50 @@ impl Raster {
             if self.views.len() <= view.view {
                 self.views.resize_with(view.view + 1, ViewPixels::default);
             }
-            let (parts, whole, surface_parts) = match view.damage {
+            let (parts, whole) = match view.damage {
                 Damage::None => continue,
-                Damage::Whole { surfaces } => (vec![Rect::sized(view.size.0, view.size.1)], true, surfaces.to_vec()),
-                Damage::Parts(parts) => (parts.to_vec(), false, Vec::new()),
+                Damage::Whole => (vec![Rect::sized(view.size.0, view.size.1)], true),
+                Damage::Parts(parts) => (parts.to_vec(), false),
             };
             if view.size.0 == 0 || view.size.1 == 0 {
                 continue;
             }
             pixel_core::profiler::set_view(view.view as u32);
             let pixels = &mut self.views[view.view];
-            if (pixels.canvas.width, pixels.canvas.height) != view.size {
+            let resized = (pixels.canvas.width, pixels.canvas.height) != view.size;
+            if resized {
                 pixels.canvas = Canvas::new(view.size.0, view.size.1);
             }
+            let (parts, whole) = if resized { (vec![Rect::sized(view.size.0, view.size.1)], true) } else { (parts, whole) };
             let root = &view.scene.root;
             pixel_core::profiler::count("paint.px", || parts.iter().map(|p| p.area()).sum());
-            for part in &parts {
-                pixels.canvas.push_clip(part.x as f32, part.y as f32, part.w as f32, part.h as f32);
-                draw::paint_scene(&mut pixels.canvas, root, frame.fonts, options.host_surfaces, Some((*part, view.clear)), None);
-                pixels.canvas.pop_clip();
+            draw::paint_scene(&mut pixels.canvas, root, frame.fonts, options.host_surfaces, &parts, Some(view.clear), None);
+            if verify::enabled() {
+                verify::check(view.view, &pixels.canvas, root, frame.fonts, options.host_surfaces, view.clear, &parts);
             }
             let opaque = opaque_areas(root);
             pixels.opaque = opaque.areas;
             pixels.ui_over_surfaces = opaque.ui_over_surfaces;
+            let previous = pixels.layer.take().filter(|_| !whole);
             pixels.layer = options.scroll_layer.then(|| scroll_layer(root)).flatten().map(|plan| {
                 pixel_core::profiler::span("paint.layer", || {
                     let canvases = pixels.layer_canvases.get_or_insert_with(|| LayerCanvases::new(view.size.0, view.size.1));
                     if canvases.size() != view.size {
                         *canvases = LayerCanvases::new(view.size.0, view.size.1);
                     }
-                    render_layer(root, &plan, canvases, frame.fonts, options.host_surfaces, view.clear)
+                    let unchanged = Unchanged { previous: previous.as_ref(), damage: &parts };
+                    render_layer(root, &plan, canvases, frame.fonts, options.host_surfaces, view.clear, unchanged)
                 })
             });
-            painted.push(Painted { view: view.view, parts, whole, surface_parts });
+            painted.push(Painted { view: view.view, parts });
         }
         pixel_core::profiler::set_view(0);
         let overlays = !frame.overlay.is_empty();
         pixel_core::profiler::span("compose", || {
-            self.compose(frame, &painted, overlays || frame.relayout, options.direct);
+            let overlaid = std::mem::replace(&mut self.overlaid, overlays);
+            self.compose(frame, &painted, overlays || overlaid || frame.relayout, options.direct);
             if overlays {
-                let mut painter = draw::Painter { canvas: &mut self.frame, fonts: frame.fonts, host_surfaces: options.host_surfaces, occluders: Vec::new() };
+                let mut painter = draw::Painter { canvas: &mut self.frame, fonts: frame.fonts, host_surfaces: options.host_surfaces, occluders: Vec::new(), only: None };
                 for op in frame.overlay {
                     painter.op(op);
                 }
@@ -123,7 +126,6 @@ impl Raster {
             canvas: self.direct.map_or(&self.frame, |view| &self.views[view].canvas),
             premultiplied: self.direct.is_some(),
             changed: &self.changed,
-            repainted: &self.repainted,
             opaque: &self.opaque,
             ui_over_surfaces: &self.ui_over_surfaces,
             layer: self.layer.as_ref(),
@@ -150,7 +152,6 @@ impl Raster {
         };
         self.direct = alone.then(|| frame.views[0].view);
         self.changed.clear();
-        self.repainted.clear();
         let mut divider = None;
         if !alone {
             for view in frame.views {
@@ -178,19 +179,13 @@ impl Raster {
         self.collect_opaque(frame);
         let (width, height) = (self.frame.width, self.frame.height);
         if everything {
-            self.repainted.push(Rect::sized(width, height));
+            self.changed.push(Rect::sized(width, height));
             return;
         }
         for p in painted {
             let origin = frame.views.iter().find(|v| v.view == p.view).map_or(0, |v| v.origin_x);
             let moved = |part: &Rect| Rect { x: part.x + origin, ..*part }.clamped(width, height);
-            if p.whole {
-                let size = frame.views.iter().find(|v| v.view == p.view).map_or((0, 0), |v| v.size);
-                self.repainted.push(moved(&Rect::sized(size.0, size.1)));
-                self.changed.extend(p.surface_parts.iter().map(moved).filter(|r| !r.is_empty()));
-            } else {
-                self.changed.extend(p.parts.iter().map(moved).filter(|r| !r.is_empty()));
-            }
+            self.changed.extend(p.parts.iter().map(moved).filter(|r| !r.is_empty()));
         }
         self.changed.extend(divider);
     }

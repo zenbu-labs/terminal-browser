@@ -18,6 +18,7 @@ mod scrollbar;
 mod selection;
 mod style;
 pub mod surfaces;
+pub mod verify;
 pub mod system_fonts;
 mod text_input;
 pub(crate) mod throttle;
@@ -34,7 +35,7 @@ pub use engine::{
 pub use logging::{LogEntry, LogLevel};
 pub use menu::{CONTEXT_MENU_KEY, MenuEntry, MenuItem, MenuStyle, context_menu};
 mod record;
-pub use record::record_scene;
+pub use record::{record_changes, record_scene};
 pub use image_cache::scaled_rgba;
 pub use shape::rounded_rect_path;
 pub use profiler::{CounterRecord, ProfileData, SpanRecord};
@@ -55,7 +56,7 @@ pub use text_input::{
 };
 pub use throttle::CpuThrottle;
 pub use tree::{
-    Placement, BoxMetrics, Gutter, HitTarget, ImageProps, InputProps, NodeId, Props, PxRect, ScrollArea,
+    Placement, BoxMetrics, Gutter, HitTarget, ImageProps, InputProps, Invalidation, NodeId, Props, PxRect, ScrollArea,
     SlotKind, TextLayout, TextLeaf, TextLine, TextLink, TextSpan, Tree,
 };
 pub use wrap::{WRAP_SLACK, line_of_offset, wrap_lines};

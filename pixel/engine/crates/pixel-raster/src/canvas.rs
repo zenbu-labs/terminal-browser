@@ -10,7 +10,6 @@ pub struct PixelFrame<'a> {
     pub canvas: &'a Canvas,
     pub premultiplied: bool,
     pub changed: &'a [Rect],
-    pub repainted: &'a [Rect],
     pub opaque: &'a [OpaqueArea],
     pub ui_over_surfaces: &'a [Rect],
     pub layer: Option<&'a ScrollLayer>,

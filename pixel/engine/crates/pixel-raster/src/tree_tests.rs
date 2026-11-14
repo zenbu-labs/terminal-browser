@@ -1,6 +1,7 @@
 use pixel_core::*;
 use std::time::Instant;
 use crate::canvas::Canvas;
+use pixel_core::surfaces::Rect;
 use pixel_core::text_metrics::measure_text;
 
 static FONT_BYTES: &[u8] =
@@ -23,8 +24,9 @@ fn tree_of(window: (f32, f32), children: Vec<Desc>) -> Tree {
 fn painted(tree: &mut Tree, window: (u32, u32), cursor: Option<(f32, f32)>) -> Canvas {
     let mut canvas = Canvas::new(window.0, window.1);
     tree.flush_layout(&mut crate::tests::fonts(), 16.0);
-    let scene = record_scene(tree, &[font()], cursor);
-    crate::draw::paint_scene(&mut canvas, &scene.root, &[font()], false, None, None);
+    tree.set_cursor(cursor);
+    let scene = record_scene(tree, &[font()]);
+    crate::draw::paint_scene(&mut canvas, &scene.root, &[font()], false, &[Rect::sized(window.0, window.1)], None, None);
     canvas
 }
 
@@ -109,7 +111,7 @@ fn scroll_offset_shifts_children_and_clips_painting() {
     let mut tree = tree_of((40.0, 60.0), scroller(false));
     let id = tree.find("scroller").unwrap();
     tree.scroll_state_mut(id).unwrap().position = 10.0;
-    tree.mark_place();
+    tree.invalidate(id, Invalidation::Place);
     let canvas = painted(&mut tree, (40, 60), None);
     // Offset 10 scrolls the red/green boundary from y=40 up to y=30.
     assert_eq!(pixel(&canvas, 0, 29), [10, 0, 0, 255]);
@@ -235,7 +237,6 @@ fn a_transparent_block_caret_draws_nothing() {
     tree.input_mut(id).unwrap().set_cursor(1, false);
     let unfocused = painted(&mut tree, (200, 60), None);
     tree.set_focus(Some(id));
-    tree.mark_paint();
     let focused = painted(&mut tree, (200, 60), None);
     assert!(unfocused.pixels == focused.pixels, "no letter redrawn under an invisible caret");
 }
@@ -288,7 +289,6 @@ fn input_nodes_paint_caret_and_selection_and_expose_geometry() {
     let mut tree = tree_of((200.0, 60.0), editor("hello"));
     let id = tree.find("in").unwrap();
     tree.input_mut(id).unwrap().set_cursor(2, false);
-    tree.mark_paint();
 
     let geometry = tree.input_geometry(id).unwrap();
     assert_eq!(geometry.origin, (4.0, 4.0), "origin is inside the padding");
@@ -313,7 +313,6 @@ fn input_nodes_paint_caret_and_selection_and_expose_geometry() {
     );
 
     tree.input_mut(id).unwrap().set_cursor(4, true);
-    tree.mark_paint();
     let canvas = painted(&mut tree, (200, 60), None);
     let selected = geometry.caret_rect("hello", &[], 3, &fonts);
     let [r, g, b, _] = pixel(&canvas, selected.x as u32 + 1, selected.y as u32 + 1);
@@ -598,7 +597,7 @@ fn placeholder_slot_fills_the_image_rect_until_the_decode_lands() {
     assert_eq!(pixel(&canvas, 20, 10), [50, 50, 50, 255]);
 
     wait_for_decode(&decoded);
-    tree.mark_place();
+    tree.invalidate_images(true);
     let canvas = painted(&mut tree, (200, 100), None);
     assert_eq!(tree.rect(ph).unwrap(), PxRect::ZERO, "placeholder retires");
     assert_eq!(pixel(&canvas, 20, 10), [0, 200, 0, 255]);
@@ -668,8 +667,8 @@ fn static_text_marks_place_widgets_like_inputs() {
 
 fn paint_now(tree: &Tree, window: (u32, u32)) -> Canvas {
     let mut canvas = Canvas::new(window.0, window.1);
-    let scene = record_scene(tree, &[font()], None);
-    crate::draw::paint_scene(&mut canvas, &scene.root, &[font()], false, None, None);
+    let scene = record_scene(tree, &[font()]);
+    crate::draw::paint_scene(&mut canvas, &scene.root, &[font()], false, &[Rect::sized(window.0, window.1)], None, None);
     canvas
 }
 
@@ -806,7 +805,7 @@ fn a_sticky_header_holds_the_top_of_its_section_until_the_next_section_pushes_it
 fn a_scrolled_list_is_described_as_content_that_moves_with_what_is_drawn_over_it() {
     let mut tree = tree_of((40.0, 100.0), list_of(300, |_| 20.0, Style::default()));
     scroll_list(&mut tree, 4000.4);
-    let scene = record_scene(&tree, &[font()], None);
+    let scene = record_scene(&tree, &[font()]);
     let layer = crate::scroll_layer(&scene.root).expect("a tall list is shown as a layer");
     assert_eq!(layer.origin_y, -4000, "content moves in whole pixels");
     assert_eq!((layer.area.y, layer.area.h, layer.area.w), (0, 100, 40));
@@ -816,7 +815,7 @@ fn a_scrolled_list_is_described_as_content_that_moves_with_what_is_drawn_over_it
     list[0].style.height = Dimension::Px(100.0);
     let mut tree = tree_of((40.0, 100.0), list);
     scroll_list(&mut tree, 230.0);
-    let scene = record_scene(&tree, &[font()], None);
+    let scene = record_scene(&tree, &[font()]);
     let layer = crate::scroll_layer(&scene.root).unwrap();
     assert_eq!(layer.overlay_rects(), vec![pixel_core::surfaces::Rect { x: 0, y: 0, w: 40, h: 10 }], "the stuck header is drawn over the content");
 }
@@ -845,7 +844,7 @@ fn a_host_drawn_surface_reports_where_it_sits_and_what_covers_it() {
     let mut fonts = crate::tests::fonts();
     tree.flush_layout(&mut fonts, 16.0);
 
-    let scene = record_scene(&tree, &fonts, None);
+    let scene = record_scene(&tree, &fonts);
     let mut placed = Vec::new();
     crate::surface_items(&scene.root, None, &mut placed);
     let placed: Vec<_> = placed.into_iter().map(|(id, rect, _)| (id, rect.w, rect.h)).collect();
@@ -887,7 +886,7 @@ fn scroll_list(tree: &mut Tree, position: f32) {
     let state = tree.scroll_state_mut(id).unwrap();
     state.position = position;
     state.set_target(position);
-    tree.mark_place();
+    tree.invalidate(id, Invalidation::Place);
     tree.flush_layout(&mut crate::tests::fonts(), 16.0);
 }
 
@@ -934,7 +933,7 @@ fn rows(count: u8, overflow_from: Option<u8>) -> Vec<Desc> {
 fn scroll_on_screen(tree: &mut Tree, position: f32) {
     let id = tree.find("scroller").unwrap();
     tree.scroll_state_mut(id).unwrap().position = position;
-    tree.mark_place();
+    tree.invalidate(id, Invalidation::Place);
     assert!(tree.dirty());
     tree.flush_layout(&mut crate::tests::fonts(), 16.0);
 }

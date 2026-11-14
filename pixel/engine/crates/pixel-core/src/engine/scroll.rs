@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::{Engine, EngineEvent};
 use crate::input::Mods;
-use crate::tree::NodeId;
+use crate::tree::{Invalidation, NodeId};
 
 const PINCH_WHEEL_SCALE: f32 = 100.0;
 
@@ -67,7 +67,7 @@ impl Engine {
         {
             state.position = position;
             state.set_target(position);
-            tree.mark_place();
+            tree.invalidate(id, Invalidation::Place);
             tree.touch_bar(id);
         }
     }
@@ -82,10 +82,7 @@ impl Engine {
             for id in self.comp.views[view].tree.scroll_nodes() {
                 let engaged = self.bar_hover == Some((view, id))
                     || self.bar_drag.map(|(v, d, _)| (v, d)) == Some((view, id));
-                let tree = &mut self.comp.views[view].tree;
-                if tree.step_bar(id, engaged, dt, now) {
-                    tree.mark_paint();
-                }
+                self.comp.views[view].tree.step_bar(id, engaged, dt, now);
             }
         }
     }
@@ -243,7 +240,7 @@ impl Engine {
             }
         }
         if moved {
-            self.comp.views[view].tree.mark_place();
+            self.comp.views[view].tree.invalidate(node, Invalidation::Place);
         }
         self.touch_bar(view, node);
     }
@@ -264,7 +261,7 @@ impl Engine {
                 if let Some(state) = tree.scroll_state_mut(id)
                     && state.step(profile.as_ref(), dt, max)
                 {
-                    tree.mark_place();
+                    tree.invalidate(id, Invalidation::Place);
                     tree.touch_bar(id);
                 }
             }
@@ -303,14 +300,14 @@ fn set_scroll(tree: &mut crate::tree::Tree, id: NodeId, offset: f32, smooth: boo
         if smooth {
             if (offset - state.position).abs() > view {
                 state.position = offset - view.copysign(offset - state.position);
-                tree.mark_place();
+                tree.invalidate(id, Invalidation::Place);
             }
             let Some(state) = tree.scroll_state_mut(id) else { return };
             state.set_target(offset);
         } else {
             state.position = offset;
             state.set_target(offset);
-            tree.mark_place();
+            tree.invalidate(id, Invalidation::Place);
         }
         tree.touch_bar(id);
     }
