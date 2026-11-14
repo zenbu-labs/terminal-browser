@@ -250,7 +250,6 @@ pub struct Engine {
     pub colors: HostColors,
     pub device: crate::device::Device,
     cursor: Option<(f32, f32)>,
-    hover: Option<(usize, NodeId)>,
     focus_view: usize,
     active_view: usize,
     host_focused: bool,
@@ -338,7 +337,6 @@ impl Engine {
             colors,
             device: info.device.clone(),
             cursor: None,
-            hover: None,
             focus_view: 0,
             active_view: 0,
             host_focused: true,
@@ -427,7 +425,7 @@ impl Engine {
         };
         if v.clear_color != color {
             v.clear_color = color;
-            v.tree.mark_paint();
+            v.tree.invalidate_all();
         }
     }
 
@@ -679,13 +677,9 @@ impl Engine {
 
     fn drain_images(&mut self) {
         let drained = crate::image_cache::drain_completed();
-        if drained.landed {
+        if drained.landed || drained.redraw {
             for view in &mut self.comp.views {
-                view.tree.mark_layout();
-            }
-        } else if drained.redraw {
-            for view in &mut self.comp.views {
-                view.tree.mark_paint();
+                view.tree.invalidate_images(drained.landed);
             }
         }
         for (view, node, image) in self
@@ -728,7 +722,7 @@ impl Engine {
             format!("colors changed, background {:?}", colors.background),
         );
         for view in &mut self.comp.views {
-            view.tree.mark_paint();
+            view.tree.invalidate_all();
         }
         self.comp.dirty = true;
         out.push(EngineEvent::Colors { colors });

@@ -87,7 +87,7 @@ impl CellPresenter {
     fn moved_layers(&mut self, frame: &Frame<'_>) -> Vec<encode::Scroll> {
         let mut out = Vec::new();
         for view in frame.views {
-            if !matches!(view.damage, pixel_core::scene::Damage::Whole { .. }) {
+            if view.damage == pixel_core::scene::Damage::None {
                 continue;
             }
             let mut layers = Vec::new();

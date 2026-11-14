@@ -181,7 +181,7 @@ function connectDaemon(): Promise<net.Socket> {
 function spawnDaemon() {
   const { command, cwd } = browserLaunchCommand(["--daemon"]);
   const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
+    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_") || key.startsWith("PIXEL_VERIFY_DAMAGE")),
   );
   env.NODE_ENV ??= "production";
   const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });

@@ -1252,3 +1252,57 @@ mod blur_tests {
         assert_eq!(engine.comp.views[0].tree.focus(), None);
     }
 }
+
+#[cfg(test)]
+mod frame_damage_tests {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use pixel_core::backend::{Frame, HostInfo, Metrics};
+    use pixel_core::scene::Damage;
+    use pixel_core::{Backend, Engine, EngineConfig, Event, HostColors, Waker};
+
+    use super::{IdMap, NoHostOps, apply_ops};
+
+    struct Recording(Arc<Mutex<Vec<Option<u64>>>>);
+
+    impl Backend for Recording {
+        fn start(&mut self) -> io::Result<HostInfo> {
+            Ok(HostInfo { metrics: Metrics { window: (400, 200), cell: (10, 20) }, colors: HostColors::default(), device: pixel_core::Device::default() })
+        }
+        fn waker(&mut self) -> io::Result<Waker> {
+            Ok(Waker::new(|| {}))
+        }
+        fn poll(&mut self, _: Option<Duration>) -> io::Result<Option<Event>> {
+            Ok(None)
+        }
+        fn present(&mut self, frame: Frame<'_>) -> io::Result<usize> {
+            let painted = match frame.views[0].damage {
+                Damage::None => Some(0),
+                Damage::Whole => None,
+                Damage::Parts(parts) => Some(parts.iter().map(|r| r.area()).sum()),
+            };
+            self.0.lock().unwrap().push(painted);
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn a_small_change_after_the_first_frame_damages_only_what_changed() {
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let backend = Box::new(Recording(frames.clone()));
+        let mut engine = Engine::new(EngineConfig { fonts: crate::default_fonts(), cell_metrics_font: 0, backend }).unwrap();
+        let mut ids: Vec<IdMap> = vec![IdMap::new(engine.comp.views[0].tree.root())];
+        let mut run = |engine: &mut Engine, ops: &str| {
+            let outcome = apply_ops(engine, &mut ids, &format!(r#"{{"view":0,"ops":[{ops}]}}"#), &mut NoHostOps);
+            assert!(outcome.error.is_none(), "{:?}", outcome.error);
+            engine.pump(Some(Duration::ZERO)).unwrap();
+        };
+        run(&mut engine, r#"{"op":"create","id":1,"props":{"text":"hello","style":{"width":100,"height":20}}},{"op":"insertBefore","parent":0,"child":1}"#);
+        assert_eq!(frames.lock().unwrap().last(), Some(&None), "the first frame is drawn whole");
+        run(&mut engine, r#"{"op":"update","id":1,"props":{"text":"help!","style":{"width":100,"height":20}}}"#);
+        let painted = frames.lock().unwrap().last().copied().flatten().expect("a text change is not a whole repaint");
+        assert!(painted > 0 && painted < 400 * 200 / 10, "painted {painted}px for one word");
+    }
+}

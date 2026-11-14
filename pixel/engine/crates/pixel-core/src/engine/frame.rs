@@ -89,6 +89,7 @@ impl Engine {
             self.frame_deferred = false;
         }
         self.frame_due = None;
+        self.sync_cursor();
         self.backend.before_frame()?;
         if !self.draws_something() {
             self.backend.idle()?;
@@ -98,13 +99,8 @@ impl Engine {
             .iter()
             .filter_map(|&i| {
                 let view = &self.comp.views[i];
-                if view.tree.dirty() || view.scene_size != view.size {
-                    Some((i, true))
-                } else if view.damage_parts.is_empty() {
-                    None
-                } else {
-                    Some((i, false))
-                }
+                let resized = view.scene_size != view.size;
+                (resized || view.tree.dirty() || !view.damage_parts.is_empty()).then_some((i, resized))
             })
             .collect();
         if self.backend.pending_present() {
@@ -121,49 +117,57 @@ impl Engine {
             let next_slot = self.frame_slot + interval;
             let slot = if !interval.is_zero() && start >= next_slot && start < next_slot + interval { next_slot } else { start };
             self.backend.schedule_present((!interval.is_zero()).then(|| slot + self.present_after));
-            let mut damage: Vec<(usize, bool, Vec<Rect>)> = Vec::new();
-            for (i, whole) in work {
+            let mut damage: Vec<(usize, Option<Vec<Rect>>)> = Vec::new();
+            for (i, resized) in work {
                 let size = self.comp.views[i].size;
                 if size.0 == 0 || size.1 == 0 {
                     continue;
                 }
                 crate::profiler::set_view(i as u32);
-                let cursor = self
-                    .cursor
-                    .filter(|&(x, _)| self.comp.view_at(x) == i)
-                    .map(|c| self.comp.to_local(i, c));
                 let fonts = &mut self.fonts;
                 let base_px = self.base_px;
                 let view = &mut self.comp.views[i];
                 let mut parts = std::mem::take(&mut view.damage_parts);
-                let mut surface_parts = Vec::new();
-                if whole {
-                    surface_parts = std::mem::take(&mut parts);
-                    surface_parts.retain(|r| !r.is_empty());
-                }
                 view.tree.flush_layout(fonts, base_px);
                 for surface in view.tree.take_changed_surfaces() {
                     for (abs, visible) in view.tree.surface_rects(surface) {
                         let whole_node = Rect::sized(abs.w.max(0.0) as u32, abs.h.max(0.0) as u32);
-                        let rect = super::embed::offset(whole_node, abs, visible).clamped(size.0, size.1);
-                        if !rect.is_empty() {
-                            if whole { surface_parts.push(rect) } else { parts.push(rect) }
-                        }
+                        parts.push(super::embed::offset(whole_node, abs, visible));
                     }
                 }
-                if whole {
-                    let mut scene = crate::record::record_scene(&view.tree, fonts, cursor);
-                    crate::profiler::span("scene.changes", || crate::record::mark_changes(&view.scene, &mut scene));
+                let mut everything = resized.then_some("resized");
+                if resized || view.tree.dirty() {
+                    let (scene, changed) = crate::record::record_changes(&mut view.tree, fonts, &view.scene, resized);
+                    if crate::verify::enabled() {
+                        let drift = crate::verify::drifted(&crate::record::record_scene(&view.tree, fonts).root, &scene.root);
+                        if let Some(drift) = drift {
+                            crate::verify::report(&format!("view {i} MISMATCH kept a stale recording of {drift}"), false);
+                        }
+                    }
                     view.scene = scene;
                     view.scene_size = size;
-                    view.tree.clear_paint_flag();
-                    damage.push((i, true, surface_parts));
-                } else {
-                    view.tree.clear_paint_flag();
-                    damage.push((i, false, parts));
+                    match changed {
+                        Some(changed) => parts.extend(changed.into_iter().map(|r| Rect::covering(r.outset(1.0)))),
+                        None => everything = everything.or(Some("everything was invalidated")),
+                    }
                 }
-                self.comp.dirty = true;
+                let parts: Vec<Rect> = parts.into_iter().map(|r| r.clamped(size.0, size.1)).filter(|r| !r.is_empty()).collect();
+                let parts = crate::surfaces::merge_damage(parts);
+                let area: u64 = parts.iter().map(|r| r.area()).sum();
+                crate::profiler::count("damage.px", || area);
+                if area * 10 > u64::from(size.0) * u64::from(size.1) * 9 {
+                    everything = everything.or(Some("the damage covers most of the view"));
+                }
+                if let Some(why) = everything {
+                    if crate::verify::enabled() {
+                        crate::verify::report(&format!("view {i} whole: {why} ({area}px in {} rects)", parts.len()), true);
+                    }
+                    damage.push((i, None));
+                } else if !parts.is_empty() {
+                    damage.push((i, Some(parts)));
+                }
             }
+            self.comp.dirty |= !damage.is_empty();
             crate::profiler::set_view(0);
             if !self.comp.dirty {
                 return Ok(());
@@ -174,9 +178,9 @@ impl Engine {
                 .iter()
                 .map(|&i| {
                     let view = &self.comp.views[i];
-                    let damage = match damage.iter().find(|(v, _, _)| *v == i) {
-                        Some((_, true, surfaces)) => Damage::Whole { surfaces },
-                        Some((_, false, parts)) => Damage::Parts(parts),
+                    let damage = match damage.iter().find(|(v, _)| *v == i) {
+                        Some((_, None)) => Damage::Whole,
+                        Some((_, Some(parts))) => Damage::Parts(parts),
                         None => Damage::None,
                     };
                     ViewFrame { view: i, origin_x: view.origin_x, size: view.size, clear: view.clear_color, scene: &view.scene, damage }
@@ -235,6 +239,13 @@ impl Engine {
     fn note_frame_wanted(&self) {
         if let Some(now) = crate::profiler::now_ms() {
             crate::profiler::emit("frame.wanted", now, 0.0, None);
+        }
+    }
+
+    pub(super) fn sync_cursor(&mut self) {
+        for i in self.comp.active_views() {
+            let cursor = self.cursor.filter(|&(x, _)| self.comp.view_at(x) == i).map(|c| self.comp.to_local(i, c));
+            self.comp.views[i].tree.set_cursor(cursor);
         }
     }
 

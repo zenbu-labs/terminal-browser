@@ -169,10 +169,12 @@ impl Engine {
                 }
                 let bar_hover = self.bar_at(view, local).map(|id| (view, id));
                 if bar_hover != self.bar_hover {
+                    for (bar_view, bar) in self.bar_hover.into_iter().chain(bar_hover) {
+                        self.comp.views[bar_view].tree.invalidate(bar, crate::tree::Invalidation::Paint);
+                    }
                     self.bar_hover = bar_hover;
-                    self.comp.views[view].tree.mark_paint();
                 }
-                self.track_hover(view, local);
+                self.sync_cursor();
                 self.update_hover_target(view, local, out);
                 if let Some(id) = self.comp.views[view].tree.hit_move(local.0, local.1) {
                     out.push(EngineEvent::MouseMove {
@@ -484,22 +486,5 @@ impl Engine {
             }
         }
         Ok(true)
-    }
-
-    pub(super) fn track_hover(&mut self, view: usize, local: (f32, f32)) {
-        let hover = self.comp.views[view]
-            .tree
-            .hover_at(local.0, local.1)
-            .map(|id| (view, id));
-        if hover == self.hover {
-            return;
-        }
-        if let Some((old, _)) = self.hover {
-            self.comp.views[old].tree.mark_paint();
-        }
-        if let Some((new, _)) = hover {
-            self.comp.views[new].tree.mark_paint();
-        }
-        self.hover = hover;
     }
 }

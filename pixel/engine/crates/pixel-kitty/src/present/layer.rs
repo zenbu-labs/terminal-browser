@@ -24,6 +24,7 @@ pub(crate) struct Layer {
     free_ids: Vec<u32>,
     next_id: u32,
     holding: u32,
+    origin_y: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -64,7 +65,7 @@ pub(super) struct LayerReport {
 
 impl Layer {
     pub(super) fn new(area: Rect) -> Self {
-        Self { area, stripes: BTreeMap::new(), overlays: Vec::new(), free_ids: Vec::new(), next_id: FIRST_STRIPE_ID, holding: 0 }
+        Self { area, stripes: BTreeMap::new(), overlays: Vec::new(), free_ids: Vec::new(), next_id: FIRST_STRIPE_ID, holding: 0, origin_y: None }
     }
 
     pub(super) fn holding(&self) -> bool {
@@ -175,9 +176,12 @@ impl Kitty {
         let on_screen = state.stripes.values().any(|s| s.ids().next().is_some() && s.image.iter().chain(s.patches.iter().map(|p| &p.placed)).any(|p| p.shown.is_some()));
         let jump = (state.holding > 0 && state.holding < MAX_HOLD_FRAMES)
             || (state.holding == 0 && on_screen && visible.clone().all(|k| state.stripes.get(&k).is_none_or(|s| s.image.is_none() && s.patches.is_empty())));
+        let moved = state.origin_y.replace(layer.origin_y) != Some(layer.origin_y);
+        let changed: Vec<Rect> = frame.changed.iter().map(|r| intersect(*r, area)).filter(|r| !r.is_empty()).collect();
         for k in visible.clone() {
             let (_, shown_top, band) = band_of(k);
-            if !state.stripes.contains_key(&k) {
+            let fresh = !state.stripes.contains_key(&k);
+            if fresh {
                 let unknown = vec![Rect::sized(area.w, STRIPE_PX)];
                 state.stripes.insert(k, Stripe { pixels: vec![0; (area.w * STRIPE_PX * 4) as usize], sent: Vec::new(), unknown, pending: None, image: None, patches: Vec::new() });
             }
@@ -187,6 +191,9 @@ impl Kitty {
             let mut diff = entry.pending.take();
             for r in 0..band.h {
                 let y = screen.y + r;
+                if !moved && !fresh && !changed.iter().any(|c| y >= c.y && y < c.y + c.h) {
+                    continue;
+                }
                 let start = y as usize * stride + area.x as usize * 4;
                 let mut row = &canvas.pixels[start..start + row_len];
                 if unders.iter().any(|u| y >= u.rect.y && y < u.rect.y + u.rect.h) {

@@ -86,7 +86,7 @@ impl Kitty {
             });
             self.patches.opaque_shape_changed = true;
         }
-        let damage = self.patches.refine_damage(frame, &previous_ui);
+        let damage = self.patches.damage(frame, &previous_ui);
         let opaque_rects = self.patches.opaque_rects();
         let mut opaque_damage = Vec::new();
         for rect in &damage {
@@ -104,7 +104,7 @@ impl Kitty {
             choose_transmit_strategy(&self.patches, size, &opaque_damage)
         };
         self.overlay_frame(size);
-        self.patches.stats.record(&strategy, size, !frame.repainted.is_empty(), !frame.changed.is_empty());
+        self.patches.stats.record(&strategy, size);
         self.patches.last_draw = Some(std::time::Instant::now());
         let recording = pixel_core::profiler::is_recording();
         let strategy_line = recording.then(|| match &strategy {
@@ -140,11 +140,9 @@ impl Kitty {
             pixel_core::logging::debug(
                 "present",
                 format!(
-                    "draw: in changed {} ({} px) repainted {} ({} px); refined {} ({} px): {}; opaque {} ({} px); shape changed {}; {}; tiles dirty {} unchanged {} cleared {} sent {} ({} px): {}",
+                    "draw: changed {} ({} px); damage {} ({} px): {}; opaque {} ({} px); shape changed {}; {}; tiles dirty {} unchanged {} cleared {} sent {} ({} px): {}",
                     frame.changed.len(),
                     area(frame.changed),
-                    frame.repainted.len(),
-                    area(frame.repainted),
                     damage.len(),
                     area(&damage),
                     rects(damage.iter().copied()),
