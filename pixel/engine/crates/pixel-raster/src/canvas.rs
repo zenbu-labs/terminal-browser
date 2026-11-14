@@ -456,6 +456,32 @@ impl Canvas {
         }
     }
 
+    pub fn clear_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: [f32; 4]) {
+        let area = Rect::covering(pixel_core::PxRect { x, y, w, h });
+        if radius.iter().all(|&r| r < 0.5) {
+            self.fill_rect(area.x, area.y, area.w, area.h, [0, 0, 0, 0]);
+            return;
+        }
+        let (cx1, cy1, cx2, cy2) = self.clip_bounds();
+        let x1 = area.x.clamp(cx1, cx2);
+        let y1 = area.y.clamp(cy1, cy2);
+        let x2 = (area.x + area.w).clamp(x1, cx2);
+        let y2 = (area.y + area.h).clamp(y1, cy2);
+        let Some(path) = rounded_rect_path(x, y, w, h, radius) else { return };
+        let Some(mut mask) = tiny_skia::Mask::new(x2 - x1, y2 - y1) else { return };
+        mask.fill_path(&path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::from_translate(-(x1 as f32), -(y1 as f32)));
+        let row_len = (x2 - x1) as usize;
+        for (row, coverage) in (y1..y2).zip(mask.data().chunks_exact(row_len)) {
+            let start = ((row * self.width + x1) * 4) as usize;
+            for (px, &c) in self.pixels[start..start + row_len * 4].chunks_exact_mut(4).zip(coverage) {
+                let keep = 255 - u32::from(c);
+                for channel in px {
+                    *channel = ((u32::from(*channel) * keep + 127) / 255) as u8;
+                }
+            }
+        }
+    }
+
     fn blend_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: [u8; 4]) {
         let alpha = color[3];
         let premultiplied = [
@@ -1419,6 +1445,29 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_round_hole_clears_only_the_circle_and_keeps_the_corners_of_its_box() {
+        let mut canvas = Canvas::new(40, 40);
+        canvas.fill([90, 90, 90, 255]);
+        canvas.clear_rounded_rect(10.0, 10.0, 20.0, 20.0, [10.0; 4]);
+        let alpha = |x: u32, y: u32| canvas.pixels[((y * 40 + x) * 4 + 3) as usize];
+        assert_eq!(alpha(20, 20), 0, "the middle of the circle is see-through");
+        assert_eq!(alpha(12, 20), 0, "the circle reaches its box's left edge at mid height");
+        assert_eq!(alpha(10, 10), 255, "the box's corner outside the circle keeps its paint");
+        assert_eq!(alpha(29, 29), 255, "so does the opposite corner");
+        assert_eq!(alpha(5, 5), 255, "outside the box is untouched");
+        assert!((10..30).any(|y| (10..30).any(|x| (1..255).contains(&alpha(x, y)))), "the circle's edge is antialiased");
+    }
+
+    #[test]
+    fn a_square_hole_clears_its_whole_box() {
+        let mut canvas = Canvas::new(40, 40);
+        canvas.fill([90, 90, 90, 255]);
+        canvas.clear_rounded_rect(10.0, 10.0, 20.0, 20.0, [0.0; 4]);
+        assert_eq!(canvas.pixels[((10 * 40 + 10) * 4 + 3) as usize], 0);
+        assert_eq!(canvas.pixels[((29 * 40 + 29) * 4 + 3) as usize], 0);
+    }
 
     #[test]
     fn fills_inside_an_occluder_are_skipped_until_it_is_withdrawn() {
