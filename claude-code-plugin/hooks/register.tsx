@@ -379,7 +379,8 @@ export const register: Register = (on, options) => {
   })
 
   // the browser in a pane-grid cell: https://github.com/hwanyong/pane-grid/blob/main/docs/add-pane-grid-cell.md
-  on('ui.render', { component: 'Pane', requestId: /^grid-/ }, async ($, e, next) => {
+  // plugin: 'pane-grid' because Claude Code 2.1.325 fills a missing plugin with this plugin's name, and pane-grid opens every grid pane
+  on('ui.render', { component: 'Pane', requestId: /^grid-/, plugin: 'pane-grid' }, async ($, e, next) => {
     const placement = await readPlacement($, PLUGIN)
     const below = await next(e)
     const { Box, Button, Text } = await $.ui.resolve(e)
