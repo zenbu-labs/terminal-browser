@@ -328,6 +328,16 @@ fn report_json(data: &ProfileData) -> String {
             if i + 1 == data.spans.len() { "" } else { "," }
         ));
     }
+    out.push_str("  ],\n  \"counters\": [\n");
+    for (i, c) in data.counters.iter().enumerate() {
+        out.push_str(&format!(
+            "    {{\"name\": \"{}\", \"at_ms\": {:.3}, \"value\": {}}}{}\n",
+            c.name,
+            c.at_ms,
+            c.value,
+            if i + 1 == data.counters.len() { "" } else { "," }
+        ));
+    }
     out.push_str("  ]\n}\n");
     out
 }
@@ -368,5 +378,6 @@ mod tests {
         let json = report_json(&data);
         assert!(json.contains("\"work\": {\"count\": 2"));
         assert!(json.contains("\"spans\": ["));
+        assert!(json.contains("\"counters\": ["));
     }
 }
