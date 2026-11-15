@@ -154,6 +154,16 @@ pub(crate) fn kitty_transmit_placed(transmit: Transmit, rgba: &[u8], wrapper: Wr
         ..
     } = transmit;
     assert_eq!(rgba.len(), (width * height * 4) as usize);
+    let keys = transmit.keys();
+    transmit_inline(&format!("a=T,f=32,o=z,s={width},v={height},t=d,i={image_id},{keys},q=2"), rgba, wrapper)
+}
+
+pub(crate) fn kitty_transmit_unplaced_inline(image_id: u32, width: u32, height: u32, rgba: &[u8], wrapper: Wrapper) -> Vec<u8> {
+    assert_eq!(rgba.len(), (width * height * 4) as usize);
+    transmit_inline(&format!("a=t,f=32,o=z,s={width},v={height},t=d,i={image_id},q=2"), rgba, wrapper)
+}
+
+fn transmit_inline(keys: &str, rgba: &[u8], wrapper: Wrapper) -> Vec<u8> {
     let compressed = pixel_core::profiler::span("kitty.compress", || {
         miniz_oxide::deflate::compress_to_vec_zlib(rgba, 1)
     });
@@ -168,11 +178,7 @@ pub(crate) fn kitty_transmit_placed(transmit: Transmit, rgba: &[u8], wrapper: Wr
         seq.clear();
         seq.extend_from_slice(b"\x1b_G");
         if i == 0 {
-            let keys = transmit.keys();
-            seq.extend_from_slice(
-                format!("a=T,f=32,o=z,s={width},v={height},t=d,i={image_id},{keys},q=2,m={more}")
-                    .as_bytes(),
-            );
+            seq.extend_from_slice(format!("{keys},m={more}").as_bytes());
         } else {
             seq.extend_from_slice(format!("m={more}").as_bytes());
         }
@@ -210,29 +216,7 @@ impl FrameEdit {
 
 pub(crate) fn kitty_frame_edit_inline(edit: FrameEdit, rgba: &[u8], wrapper: Wrapper) -> Vec<u8> {
     assert_eq!(rgba.len(), (edit.width * edit.height * 4) as usize);
-    let compressed = pixel_core::profiler::span("kitty.compress", || {
-        miniz_oxide::deflate::compress_to_vec_zlib(rgba, 1)
-    });
-    let payload = pixel_core::profiler::span("kitty.base64", || BASE64.encode(&compressed));
-    let chunks: Vec<&[u8]> = payload.as_bytes().chunks(KITTY_CHUNK_SIZE).collect();
-    let last = chunks.len() - 1;
-    let mut out = Vec::new();
-    let mut seq = Vec::new();
-    for (i, chunk) in chunks.iter().enumerate() {
-        let more = u8::from(i != last);
-        seq.clear();
-        seq.extend_from_slice(b"\x1b_G");
-        if i == 0 {
-            seq.extend_from_slice(format!("{},o=z,t=d,q=2,m={more}", edit.keys()).as_bytes());
-        } else {
-            seq.extend_from_slice(format!("m={more}").as_bytes());
-        }
-        seq.push(b';');
-        seq.extend_from_slice(chunk);
-        seq.extend_from_slice(b"\x1b\\");
-        emit(&mut out, &seq, wrapper);
-    }
-    out
+    transmit_inline(&format!("{},o=z,t=d,q=2", edit.keys()), rgba, wrapper)
 }
 
 pub(crate) fn kitty_frame_edit_named(edit: FrameEdit, name: &str, medium: Medium, wrapper: Wrapper) -> Vec<u8> {
@@ -393,6 +377,32 @@ mod tests {
         let apcs = text.matches("\x1b\x1b_G").count();
         assert!(apcs > 1, "expected multiple chunks");
         assert_eq!(wraps, apcs, "every chunk needs its own passthrough wrapper");
+    }
+
+    #[test]
+    fn inline_unplaced_transmit_stores_the_image_without_placing_it() {
+        let mut seed = 0x2545f491u32;
+        let pixels: Vec<u8> = (0..64 * 64 * 4)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed >> 24) as u8
+            })
+            .collect();
+        let text = String::from_utf8(kitty_transmit_unplaced_inline(2001, 64, 64, &pixels, Wrapper::None)).unwrap();
+        assert!(text.starts_with("\x1b_Ga=t,f=32,o=z,s=64,v=64,t=d,i=2001,q=2,m=1;"));
+        assert!(!text.contains("p=") && !text.contains("C=1"), "unplaced images carry no placement keys");
+        let mut payload = String::new();
+        for apc in text.split("\x1b_G").skip(1) {
+            let apc = apc.strip_suffix("\x1b\\").unwrap();
+            payload.push_str(apc.split_once(';').unwrap().1);
+        }
+        assert_eq!(text.matches("m=0;").count(), 1);
+        let decompressed = miniz_oxide::inflate::decompress_to_vec_zlib(&BASE64.decode(payload).unwrap()).unwrap();
+        assert_eq!(decompressed, pixels);
+
+        let wrapped = String::from_utf8_lossy(&kitty_transmit_unplaced_inline(2001, 64, 64, &pixels, Wrapper::Tmux)).into_owned();
+        assert!(wrapped.starts_with("\x1bPtmux;\x1b\x1b_Ga=t,"));
+        assert_eq!(wrapped.matches("\x1bPtmux;").count(), text.matches("\x1b_G").count(), "every chunk is wrapped");
     }
 
     #[test]

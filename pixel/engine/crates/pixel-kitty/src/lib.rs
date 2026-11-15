@@ -420,7 +420,7 @@ impl Kitty {
     }
 
     pub fn draws_layers(&self) -> bool {
-        self.draws_locally() && self.present == Presenter::Patched && self.patch_medium().is_some()
+        self.draws_locally() && self.present == Presenter::Patched
     }
 
     pub fn draws_locally(&self) -> bool {
