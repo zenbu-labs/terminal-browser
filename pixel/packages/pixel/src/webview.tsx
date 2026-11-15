@@ -66,6 +66,7 @@ export interface WebViewProps {
   style?: Style;
   preload?: string;
   partition?: string;
+  persist?: boolean;
   clipboardRead?: boolean;
   proxy?: string;
   browserWindowOptions?: BrowserWindowOptions;
@@ -247,7 +248,9 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
       ...passthrough,
       webPreferences: {
         ...passthrough.webPreferences,
-        ...(initial.partition ? { partition: persistentPartition(initial.partition) } : {}),
+        ...(initial.partition
+          ? { partition: initial.persist === false ? initial.partition : persistentPartition(initial.partition) }
+          : {}),
         ...(initial.preload ? { preload: path.resolve(initial.preload) } : {}),
       },
     };
