@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 
 import { Box, Image, Text, type NodeHandle } from "./components";
 import {
@@ -30,9 +30,13 @@ export interface MarkdownProps {
   /** The family code blocks draw in. */
   codeFamily?: FontFamily;
   onLinkClick?: (href: string) => void;
+  onCopyCode?: (code: string) => void;
   highlight?: { start: number; end: number } | null;
   highlightBg?: Color;
 }
+
+const CODE_COPY = { copy: "copy", copied: "copied" };
+const COPIED_MS = 1200;
 
 const HEADING_SCALE = [1.7, 1.4, 1.2, 1.05, 1, 1] as const;
 
@@ -41,6 +45,7 @@ type Anchors = MutableRefObject<Map<string, NodeHandle>>;
 interface Nav {
   anchors: Anchors;
   follow: (href: string) => void;
+  copy: (code: string) => void;
 }
 
 export function Markdown({
@@ -50,6 +55,7 @@ export function Markdown({
   streaming,
   codeFamily,
   onLinkClick,
+  onCopyCode,
   highlight,
   highlightBg,
 }: MarkdownProps) {
@@ -59,6 +65,8 @@ export function Markdown({
   const anchors = useRef(new Map<string, NodeHandle>());
   const external = useRef(onLinkClick);
   external.current = onLinkClick;
+  const copyCode = useRef(onCopyCode);
+  copyCode.current = onCopyCode;
   const nav = useRef<Nav>({
     anchors,
     follow: (href) => {
@@ -68,6 +76,7 @@ export function Markdown({
         external.current?.(href);
       }
     },
+    copy: (code) => copyCode.current?.(code),
   });
   const highlighted = (block: MarkdownBlock) =>
     highlight != null && block.sourceEnd > highlight.start && block.sourceStart < highlight.end;
@@ -88,6 +97,7 @@ export function Markdown({
       theme,
       rem,
       codeFamily,
+      copyable: onCopyCode != null,
       highlightBg: hit ? highlightBg ?? theme.codeBg : undefined,
       highlightRef: first ? firstHighlighted : undefined,
     };
@@ -161,6 +171,7 @@ interface BlockProps {
   theme: MarkdownTheme;
   rem: number;
   codeFamily?: FontFamily;
+  copyable?: boolean;
   slug?: string;
   nav?: Nav;
   index?: number;
@@ -174,6 +185,7 @@ const Block = memo(
     theme,
     rem,
     codeFamily,
+    copyable,
     slug,
     nav,
     index,
@@ -186,6 +198,7 @@ const Block = memo(
         theme={theme}
         rem={rem}
         codeFamily={codeFamily}
+        copyable={copyable}
         slug={slug}
         nav={nav}
         index={index}
@@ -227,6 +240,7 @@ const Block = memo(
     a.theme === b.theme &&
     a.rem === b.rem &&
     a.codeFamily === b.codeFamily &&
+    a.copyable === b.copyable &&
     a.slug === b.slug &&
     a.index === b.index &&
     a.highlightBg === b.highlightBg &&
@@ -293,7 +307,7 @@ function blockId(index: number | undefined): string | undefined {
   return index != null ? `md:${index}` : undefined;
 }
 
-function BlockBody({ block, theme, rem, codeFamily, slug, nav, index }: BlockProps) {
+function BlockBody({ block, theme, rem, codeFamily, copyable, slug, nav, index }: BlockProps) {
   switch (block.kind) {
     case "heading": {
       const scale = HEADING_SCALE[block.level - 1] ?? 1;
@@ -315,7 +329,7 @@ function BlockBody({ block, theme, rem, codeFamily, slug, nav, index }: BlockPro
     }
     case "code":
       return (
-        <CodeBlock block={block} theme={theme} rem={rem} codeFamily={codeFamily} index={index} />
+        <CodeBlock block={block} theme={theme} rem={rem} codeFamily={codeFamily} copyable={copyable} nav={nav} index={index} />
       );
     case "rule":
       return <Box style={{ height: 1, background: theme.separator }} />;
@@ -454,7 +468,7 @@ function Table({ block, theme, rem, nav, index }: BlockProps) {
   );
 }
 
-function CodeBlock({ block, theme, rem, codeFamily, index }: BlockProps) {
+function CodeBlock({ block, theme, rem, codeFamily, copyable, nav, index }: BlockProps) {
   const spans = useMemo(
     () =>
       highlight(block.text, block.language).map((s) => ({
@@ -464,6 +478,13 @@ function CodeBlock({ block, theme, rem, codeFamily, index }: BlockProps) {
       })),
     [block.text, block.language, theme]
   );
+  const [hovered, setHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
   return (
     <Box
       style={{
@@ -471,22 +492,38 @@ function CodeBlock({ block, theme, rem, codeFamily, index }: BlockProps) {
         background: theme.codeBg,
         cornerRadius: rem * 0.35,
         padding: { left: rem * 0.75, right: rem * 0.75, top: rem * 0.5, bottom: rem * 0.5 },
-        gap: rem * 0.35,
         overflow: "hidden",
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      {block.language !== "" && (
-        <Text style={{ color: theme.muted, fontSize: rem * 0.8 }}>
-          {block.language + (block.closed ? "" : " …")}
-        </Text>
-      )}
       <Text
         id={blockId(index)}
-        style={{ wrap: false, color: theme.fg, fontFamily: codeFamily ?? "monospace" }}
+        style={{ wrap: true, color: theme.fg, fontFamily: codeFamily ?? "monospace" }}
         spans={spans}
       >
         {block.text}
       </Text>
+      {copyable && (hovered || copied) && (
+        <Box
+          style={{
+            position: "absolute",
+            inset: { top: rem * 0.25, right: rem * 0.35 },
+            padding: { left: rem * 0.4, right: rem * 0.4 },
+            background: theme.codeBg,
+            hoverBackground: theme.separator,
+            cornerRadius: rem * 0.2,
+          }}
+          onClick={() => {
+            nav?.copy(block.text);
+            setCopied(true);
+          }}
+        >
+          <Text style={{ color: theme.muted, fontSize: rem * 0.85, wrap: false, selectable: false }}>
+            {copied ? CODE_COPY.copied : CODE_COPY.copy}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }
