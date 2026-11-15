@@ -35,7 +35,6 @@ export interface MarkdownProps {
   highlightBg?: Color;
 }
 
-// fixme: placeholder copy
 const CODE_COPY = { copy: "copy", copied: "copied" };
 const COPIED_MS = 1200;
 
