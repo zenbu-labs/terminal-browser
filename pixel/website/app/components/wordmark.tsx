@@ -4,39 +4,50 @@ const GLYPHS: Record<string, string[]> = {
   x: [".....", ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", ".....", "....."],
   e: ["....", "....", "####", "#..#", "####", "#...", "####", "....", "...."],
   l: ["#.", "#.", "#.", "#.", "#.", "#.", "##", "..", ".."],
+  g: ["....", "....", "####", "#..#", "#..#", "#..#", "####", "...#", "####"],
+  u: ["....", "....", "#..#", "#..#", "#..#", "#..#", "####", "....", "...."],
 };
-const WORD = "pixel";
+const LETTERS = [
+  { letter: "p" },
+  { letter: "i" },
+  { letter: "x" },
+  { letter: "e" },
+  { letter: "l" },
+  { letter: "g", color: "var(--r)" },
+  { letter: "u", color: "var(--g)" },
+  { letter: "i", color: "var(--b)" },
+];
 const ROWS = 9;
 const CELL = 15;
 const GAP = 1;
 
-function columns() {
-  const cols: boolean[][] = [];
-  for (const letter of WORD) {
+function layout() {
+  let width = 0;
+  const cells: { x: number; y: number; color?: string }[] = [];
+  for (const { letter, color } of LETTERS) {
     const glyph = GLYPHS[letter];
-    for (let x = 0; x < glyph[0].length; x++) cols.push(glyph.map((row) => row[x] === "#"));
-    cols.push(new Array(ROWS).fill(false));
+    glyph.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) if (row[x] === "#") cells.push({ x: width + x, y, color });
+    });
+    width += glyph[0].length + 1;
   }
-  cols.pop();
-  return cols;
+  return { cells, width: width - 1 };
 }
 
 export default function Wordmark() {
-  const cols = columns();
+  const { cells, width } = layout();
   return (
     <svg
       id="wordmark"
       role="img"
-      aria-label="pixel"
+      aria-label="pixelgui"
       fill="currentColor"
       shapeRendering="crispEdges"
-      viewBox={`0 0 ${cols.length * CELL} ${ROWS * CELL}`}
+      viewBox={`0 0 ${width * CELL} ${ROWS * CELL}`}
     >
-      {cols.flatMap((col, x) =>
-        col.map((on, y) =>
-          on ? <rect key={`${x}-${y}`} x={x * CELL} y={y * CELL} width={CELL - GAP} height={CELL - GAP} /> : null,
-        ),
-      )}
+      {cells.map(({ x, y, color }) => (
+        <rect key={`${x}-${y}`} x={x * CELL} y={y * CELL} width={CELL - GAP} height={CELL - GAP} fill={color} />
+      ))}
     </svg>
   );
 }
