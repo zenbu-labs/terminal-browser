@@ -9,6 +9,7 @@ use pixel_core::surfaces::Rect;
 const STRIPE_PX: u32 = 128;
 const MAX_PATCHES: usize = 6;
 const JUMP_UPLOAD_BUDGET: usize = 2_200_000;
+const INLINE_JUMP_UPLOAD_BUDGET: usize = 900_000;
 const MAX_HOLD_FRAMES: u32 = 4;
 const PATCH_Z: i32 = TILE_Z;
 const FIRST_STRIPE_ID: u32 = 2_000;
@@ -125,8 +126,23 @@ impl Kitty {
         placed.shown = Some(want);
     }
 
+    fn send_unplaced(&mut self, out: &mut Vec<u8>, id: u32, size: (u32, u32), fill: impl FnOnce(&mut [u8])) -> io::Result<()> {
+        let len = (size.0 * size.1 * 4) as usize;
+        match self.patch_medium() {
+            Some(medium) => {
+                let name = pixel_core::profiler::span("kitty.handoff", || self.hand_off_payload(medium, len, fill))?;
+                out.extend_from_slice(&crate::kitty::kitty_transmit_unplaced(id, size.0, size.1, &name, medium, self.wrapper));
+            }
+            None => {
+                let mut data = vec![0u8; len];
+                fill(&mut data);
+                out.extend_from_slice(&crate::kitty::kitty_transmit_unplaced_inline(id, size.0, size.1, &data, self.wrapper));
+            }
+        }
+        Ok(())
+    }
+
     fn send_part(&mut self, out: &mut Vec<u8>, id: u32, rect: Rect, stripe: &[u8], width: u32, premultiplied: bool) -> io::Result<()> {
-        let medium = self.patch_medium().expect("layers are only drawn with a patch medium");
         let row_len = width as usize * 4;
         let part_len = rect.w as usize * 4;
         let fill = |b: &mut [u8]| {
@@ -136,9 +152,7 @@ impl Kitty {
             }
             super::straighten(b, premultiplied);
         };
-        let name = pixel_core::profiler::span("kitty.handoff", || self.hand_off_payload(medium, part_len * rect.h as usize, fill))?;
-        out.extend_from_slice(&crate::kitty::kitty_transmit_unplaced(id, rect.w, rect.h, &name, medium, self.wrapper));
-        Ok(())
+        self.send_unplaced(out, id, (rect.w, rect.h), fill)
     }
 
     pub(super) fn draw_layer(&mut self, frame: Frame<'_>, layer: &ScrollLayer, out: &mut Vec<u8>) -> io::Result<LayerReport> {
@@ -218,12 +232,13 @@ impl Kitty {
             entry.unknown = subtract(&entry.unknown, band);
             entry.pending = diff;
         }
-        let medium = self.patch_medium().expect("layers are only drawn with a patch medium");
+        let medium = self.patch_medium();
+        let budget = if medium.is_some() { JUMP_UPLOAD_BUDGET } else { INLINE_JUMP_UPLOAD_BUDGET };
         let stripe_bytes = row_len * STRIPE_PX as usize;
         let mut spent = 0;
         for k in visible.clone() {
             let entry = state.stripes.get_mut(&k).expect("inserted above");
-            let complete = entry.unknown.is_empty() && entry.patches.len() >= 2 && !consolidated && self.has_ready_payload(medium, stripe_bytes);
+            let complete = entry.unknown.is_empty() && entry.patches.len() >= 2 && !consolidated && medium.is_none_or(|m| self.has_ready_payload(m, stripe_bytes));
             let Some(diff) = (if complete { Some(Rect::sized(area.w, STRIPE_PX)) } else { entry.pending }) else {
                 continue;
             };
@@ -233,7 +248,7 @@ impl Kitty {
             }
             let whole = rect.area() * 2 >= u64::from(area.w * STRIPE_PX) || entry.patches.len() >= MAX_PATCHES || !covers(&entry.pixels, &entry.sent, rect, row_len);
             let cost = if whole { stripe_bytes } else { rect.area() as usize * 4 };
-            if jump && spent > 0 && spent + cost > JUMP_UPLOAD_BUDGET {
+            if jump && spent > 0 && spent + cost > budget {
                 continue;
             }
             spent += cost;
@@ -337,10 +352,8 @@ impl Kitty {
             let same_image = previous.is_some_and(|s| (s.rect.w, s.rect.h) == (rect.w, rect.h) && s.rgba == overlay.pixels.rgba);
             let placed = same_image && previous.is_some_and(|s| s.rect == rect && s.z == z);
             if !same_image {
-                let medium = self.patch_medium().expect("layers are only drawn with a patch medium");
                 let pixels = &overlay.pixels.rgba;
-                let name = pixel_core::profiler::span("kitty.handoff", || self.hand_off_payload(medium, pixels.len(), |b| b.copy_from_slice(pixels)))?;
-                out.extend_from_slice(&crate::kitty::kitty_transmit_unplaced(id, rect.w, rect.h, &name, medium, self.wrapper));
+                self.send_unplaced(out, id, (rect.w, rect.h), |b| b.copy_from_slice(pixels))?;
                 sent += 1;
             }
             if !placed {
@@ -361,5 +374,47 @@ impl Kitty {
         state.overlays.truncate(layer.overlays.len());
         pixel_core::profiler::count("present.overlays", || sent);
         Ok(sent)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pixel_raster::Canvas;
+
+    fn content(width: u32, height: u32, origin_y: i64) -> Canvas {
+        let mut canvas = Canvas::new(width, height);
+        for y in 0..height {
+            let row = (i64::from(y) - origin_y) as u32;
+            for px in canvas.pixels[(y * width * 4) as usize..((y + 1) * width * 4) as usize].chunks_exact_mut(4) {
+                px.copy_from_slice(&[row as u8, (row >> 8) as u8, 7, 255]);
+            }
+        }
+        canvas
+    }
+
+    fn draw(kitty: &mut Kitty, canvas: &Canvas, layer: &ScrollLayer) -> String {
+        let frame = Frame { canvas, premultiplied: false, changed: &[], repainted: &[], opaque: &[], ui_over_surfaces: &[], layer: Some(layer), surfaces: None };
+        let mut out = Vec::new();
+        kitty.draw_layer(frame, layer, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn inline_layers_send_stripes_once_and_scroll_by_placing_them() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        assert!(kitty.patch_medium().is_none());
+        let area = Rect::sized(64, 2 * STRIPE_PX);
+        kitty.patches.layer = Some(Layer::new(area));
+        let first = ScrollLayer { area, origin_y: 0, under: Vec::new(), overlays: Vec::new() };
+        let out = draw(&mut kitty, &content(64, area.h, 0), &first);
+        assert_eq!(out.matches("a=t,f=32,o=z,s=64,v=128,t=d,").count(), 2);
+        assert_eq!(out.matches("a=p,").count(), 2);
+
+        let scrolled = ScrollLayer { origin_y: -i64::from(STRIPE_PX), ..first };
+        let out = draw(&mut kitty, &content(64, area.h, scrolled.origin_y), &scrolled);
+        assert_eq!(out.matches("a=t,").count(), 1, "only the stripe scrolled into view is uploaded");
+        assert!(out.contains("\x1b[1;1H\x1b_Ga=p,i=2001,p=1,C=1,q=2"), "the second stripe moves to the top");
+        assert!(out.contains("a=d,d=i,i=2000,p=1"), "the stripe scrolled out of view is hidden but kept");
     }
 }

@@ -76,7 +76,7 @@ impl Kitty {
             &mut self.patches.ui_over_surfaces,
             frame.ui_over_surfaces.iter().map(|r| r.clamped(size.0, size.1)).filter(|r| !r.is_empty()).collect(),
         );
-        let layer = frame.layer.filter(|_| self.patches.opaque.is_empty() && self.patch_medium().is_some());
+        let layer = frame.layer.filter(|_| self.patches.opaque.is_empty());
         if layer.map(|l| l.area) != self.patches.layer.as_ref().map(|l| l.area) {
             pixel_core::profiler::span("present.new_layer", || {
                 if let Some(old) = self.patches.layer.take() {
