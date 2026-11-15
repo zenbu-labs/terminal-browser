@@ -160,7 +160,7 @@ footer > span:first-child { white-space: nowrap; }
 footer .links { display: flex; align-items: center; gap: 18px; }
 footer .links a { display: flex; }
 footer a:hover { color: var(--text2); }
-#wordmark { display: block; width: 300px; max-width: 100%; height: auto; aspect-ratio: 300 / 135; color: var(--text); }
+#wordmark { display: block; width: 465px; max-width: 100%; height: auto; aspect-ratio: 465 / 135; color: var(--text); }
 body { position: relative; }
 #dither { position: absolute; top: 0; left: 0; width: 100%; height: 100vh; image-rendering: pixelated; pointer-events: none; }
 #trail { position: fixed; inset: 0; width: 100vw; height: 100vh; image-rendering: pixelated; pointer-events: none; }
