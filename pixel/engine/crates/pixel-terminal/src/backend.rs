@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pixel_core::backend::{
-    Backend, ClipboardRead, Event, Frame, HostInfo, Metrics, SystemClipboard, Waker,
+    Backend, ClipboardRead, Event, Frame, HostInfo, Metrics, ProgramStatus, SystemClipboard, Waker,
 };
 use pixel_core::fonts::Font;
 use pixel_core::logging;
@@ -454,6 +454,10 @@ impl Backend for TerminalBackend {
 
     fn set_title(&mut self, text: &str) -> io::Result<()> {
         self.term.set_title(text)
+    }
+
+    fn set_status(&mut self, status: &ProgramStatus) -> io::Result<()> {
+        self.term.set_status(status)
     }
 
     fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {

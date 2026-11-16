@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { debug } from "../debug";
-import type { EngineKeyEvent, TerminalColors } from "../react";
+import type { EngineKeyEvent, ProgramStatus, TerminalColors } from "../react";
 export interface GuestFrame {
   path: string;
   width: number;
@@ -53,6 +53,7 @@ export class Guest {
   onTitle: ((title: string) => void) | null = null;
   onPointer: ((shape: string) => void) | null = null;
   onClipboard: ((text: string) => void) | null = null;
+  onStatus: ((status: ProgramStatus) => void) | null = null;
   onClose: (() => void) | null = null;
   private closed = false;
   private departed = false;
@@ -100,7 +101,7 @@ export class Guest {
   }
 
   handleLine(line: string) {
-    let message: { type?: string; text?: string; shape?: string };
+    let message: { type?: string; text?: string; shape?: string; state?: string };
     try {
       message = JSON.parse(line) as typeof message;
     } catch {
@@ -116,6 +117,9 @@ export class Guest {
         break;
       case "clipboard":
         if (typeof message.text === "string") this.onClipboard?.(message.text);
+        break;
+      case "status":
+        if (typeof message.state === "string") this.onStatus?.(message as unknown as ProgramStatus);
         break;
     }
   }
