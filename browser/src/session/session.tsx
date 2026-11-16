@@ -548,7 +548,11 @@ class Session {
         layout={this.layout}
         colors={this.root.info.colors}
         findOpen={this.findOpen}
-        tabs={this.tabs.view()}
+        tabs={
+          this.ctx.env.TERMINAL_BROWSER_NO_AGENT_INDICATOR === "1"
+            ? this.tabs.view().map((tab) => ({ ...tab, agentControlled: false }))
+            : this.tabs.view()
+        }
         newTab={
           this.newTab
             ? { suggestions: this.newTabRows(), index: this.newTab.index }
