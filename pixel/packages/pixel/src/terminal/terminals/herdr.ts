@@ -13,7 +13,7 @@ interface HerdrPaneSplitResult {
 interface HerdrPane {
   pane_id: string;
   tab_id: string;
-  workspace_id?: string;
+  workspace_id: string;
 }
 
 interface HerdrProcessInfo {
@@ -48,10 +48,31 @@ const NATIVE_DIRECTION: Record<Direction, "right" | "down"> = {
 const OPPOSITE: Record<"right" | "down", "left" | "up"> = { right: "left", down: "up" };
 
 export const herdr: Detect = (env, run) => {
-  if (!env.HERDR_PANE_ID) return null;
+  if (!env.HERDR_PANE_ID && env.HERDR_ENV !== "1") return null;
 
   const bin = env.HERDR_BIN_PATH || "herdr";
   const herdr = (args: string[]) => run(bin, args);
+
+  async function resolvePane(id: string | undefined = env.HERDR_PANE_ID): Promise<HerdrPane> {
+    try {
+      if (!id?.trim()) throw new Error("HERDR_PANE_ID is missing or empty");
+      const reply = JSON.parse(await herdr(["pane", "current", "--pane", id]));
+      if (reply.error) throw new Error(reply.error.message ?? "Herdr caller lookup failed");
+      const pane = reply.result?.pane;
+      if (![pane?.pane_id, pane?.tab_id, pane?.workspace_id].every(
+        (value) => typeof value === "string" && value.trim().length > 0,
+      )) throw new Error("Herdr returned an incomplete pane context");
+      return pane;
+    } catch (cause) {
+      throw new Error(
+        `Could not resolve the Herdr pane ${id?.trim() ? id : "(missing HERDR_PANE_ID)"}: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}. ` +
+        "Run `herdr pane current --current` from the calling Herdr pane and check HERDR_SOCKET_PATH; " +
+        "launch terminal-browser from a live Herdr shell if the inherited context no longer resolves.",
+        { cause },
+      );
+    }
+  }
 
   async function splitPane(args: string[]): Promise<HerdrPaneSplitResult> {
     return JSON.parse(await herdr(["pane", "split", ...args, "--right-click", "pane"]));
@@ -70,12 +91,12 @@ export const herdr: Detect = (env, run) => {
   }
 
   async function listPanes(): Promise<PaneDetails[]> {
+    const current = await resolvePane();
     const { result } = JSON.parse(await herdr(["pane", "list"])) as {
       result: { panes: HerdrPane[] };
     };
-    const workspace = env.HERDR_PANE_ID!.split(":")[0];
     const visible = result.panes.filter(
-      (pane) => (pane.workspace_id ?? pane.pane_id.split(":")[0]) === workspace,
+      pane => pane.workspace_id === current.workspace_id,
     );
     const processes = await Promise.all(
       visible.map((pane) =>
@@ -129,15 +150,19 @@ export const herdr: Detect = (env, run) => {
   }
 
   async function focusPane(pane: string): Promise<void> {
+    const current = await resolvePane();
     const { result } = JSON.parse(await herdr(["pane", "get", pane])) as { result: { pane: HerdrPane } };
-    if (result.pane.tab_id !== env.HERDR_TAB_ID) await herdr(["tab", "focus", result.pane.tab_id]);
-    await socketCall("pane.focus", { pane_id: pane });
+    if (result.pane.tab_id !== current.tab_id) await herdr(["tab", "focus", result.pane.tab_id]);
+    await socketCall("pane.focus", { pane_id: result.pane.pane_id });
   }
 
   return {
     name: "herdr",
     prepare,
-    getCurrentPane: async () => ({ id: env.HERDR_PANE_ID!, tab: env.HERDR_TAB_ID! }),
+    async getCurrentPane() {
+      const pane = await resolvePane();
+      return { id: pane.pane_id, tab: pane.tab_id };
+    },
     listPanes,
     async neighbor(from, direction) {
       const { result } = JSON.parse(await herdr(["pane", "neighbor", "--pane", from.id, "--direction", direction])) as {
@@ -154,9 +179,10 @@ export const herdr: Detect = (env, run) => {
     },
     focusPane,
     async split({ from, direction, command, size }) {
+      const source = await resolvePane(from.id);
       const native = NATIVE_DIRECTION[direction];
       const ratio = size ? ["--ratio", String(size)] : [];
-      const { result } = await splitPane(["--pane", from.id, "--direction", native, "--focus", ...ratio]);
+      const { result } = await splitPane(["--pane", source.pane_id, "--direction", native, "--focus", ...ratio]);
       const newPaneId = result.pane.pane_id;
       if (direction === "left" || direction === "up") {
         await herdr(["pane", "swap", "--pane", newPaneId, "--direction", OPPOSITE[native]]);
