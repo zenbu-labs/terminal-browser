@@ -28,6 +28,9 @@ export type ConfigFile = keyof ConfigFiles;
 
 const WATCH_SETTLE_MS = 150;
 const WATCH_POLL_MS = 1000;
+const LOCK_TIMEOUT_MS = 5000;
+const LOCK_STALE_MS = 10000;
+const LOCK_RETRY_MS = 10;
 
 const jsonObject = z
   .string()
@@ -100,6 +103,50 @@ function shortcutsFrom(file: string, raw: JsonObject): { value: ShortcutOverride
     }
   }
   return { value, errors };
+}
+
+function sleep(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function withFileLock<T>(file: string, run: () => T): T {
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, "wx"));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    try {
+      if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        fs.rmSync(lock, { force: true });
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${lock}; remove it if no other terminal-browser process is writing`);
+    sleep(LOCK_RETRY_MS);
+  }
+  try {
+    return run();
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+}
+
+function writeFileAtomic(link: string, text: string) {
+  const file = fs.existsSync(link) ? fs.realpathSync(link) : link;
+  const temp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(temp, text);
+    fs.renameSync(temp, file);
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw error;
+  }
 }
 
 function digest(text: string): string {
@@ -212,14 +259,16 @@ export class ConfigStore {
   }
 
   private update(file: string, key: string, value: unknown) {
-    const current = readJsonObject(file);
-    if (!current.value) throw new Error(current.error ?? file);
-    const next = { ...current.value };
-    if (value === undefined) delete next[key];
-    else next[key] = value;
-    const text = `${JSON.stringify(next, null, 2)}\n`;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, text);
-    this.written.set(file, digest(text));
+    withFileLock(file, () => {
+      const current = readJsonObject(file);
+      if (!current.value) throw new Error(current.error ?? file);
+      const next = { ...current.value };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      const text = `${JSON.stringify(next, null, 2)}\n`;
+      writeFileAtomic(file, text);
+      this.written.set(file, digest(text));
+    });
   }
 }

@@ -3,10 +3,11 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
+const { spawn } = require("node:child_process");
 
 const { ConfigStore } = require("shared");
 const { Keymap, parseChord, formatChord, chordFromEvent } = require("shared");
-const { defaultKeys } = require("shared");
+const { defaultKeys, COMMAND_IDS } = require("shared");
 const { searchUrlFor, searchOrUrl } = require("../dist/url.js");
 const { SEARCH_ENGINES, engineBySearch, parseSuggestions } = require("shared");
 const { SettingsManager } = require("../dist/session/settings.js");
@@ -124,6 +125,144 @@ test("config store keeps unknown keys and refuses to overwrite broken files", ()
   assert.equal(broken.settings["search.suggestions"], "off");
   assert.throws(() => store.setShortcut("find", null));
   assert.equal(fs.readFileSync(store.files.shortcuts, "utf8"), "{ not json");
+});
+
+const WORKER = `
+const { ConfigStore } = require(process.argv[1]);
+const [, , files, kind, key, value, startAt] = process.argv;
+const store = new ConfigStore(JSON.parse(files));
+while (Date.now() < Number(startAt)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+if (kind === "shortcut") store.setShortcut(key, [value]);
+else store.setSetting(key, value);
+`;
+
+function runWorkers(store, jobs) {
+  const startAt = Date.now() + 600;
+  return Promise.all(
+    jobs.map(
+      ([kind, key, value]) =>
+        new Promise((resolve) => {
+          const child = spawn(
+            process.execPath,
+            ["-e", WORKER, require.resolve("shared"), JSON.stringify(store.files), kind, key, value, String(startAt)],
+            { stdio: ["ignore", "ignore", "pipe"] },
+          );
+          let stderr = "";
+          child.stderr.on("data", (chunk) => (stderr += chunk));
+          child.on("close", (code) => resolve({ code, stderr }));
+        }),
+    ),
+  );
+}
+
+const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const leftovers = (store) =>
+  fs.readdirSync(path.dirname(store.files.settings)).filter((name) => /\.(lock|tmp)$/.test(name));
+
+test("parallel processes updating different settings keys all persist", async () => {
+  for (let round = 0; round < 5; round++) {
+    const store = tempStore();
+    const results = await runWorkers(store, [
+      ["setting", "telemetry.usage", "off"],
+      ["setting", "telemetry.crashReports", "off"],
+    ]);
+    assert.deepEqual(results.map((r) => r.code), [0, 0], results.map((r) => r.stderr).join());
+    assert.deepEqual(readJson(store.files.settings), {
+      "telemetry.usage": "off",
+      "telemetry.crashReports": "off",
+    });
+    assert.deepEqual(leftovers(store), []);
+  }
+});
+
+test("many parallel processes updating shortcuts and settings keep every key", async () => {
+  const store = tempStore();
+  fs.mkdirSync(path.dirname(store.files.settings), { recursive: true });
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "future.setting": 1 }));
+  const ids = COMMAND_IDS.slice(0, 30);
+  const results = await runWorkers(store, [
+    ...ids.map((id) => ["shortcut", id, "ctrl+alt+x"]),
+    ["setting", "telemetry.usage", "off"],
+    ["setting", "telemetry.crashReports", "off"],
+  ]);
+  assert.deepEqual(results.filter((r) => r.code !== 0), []);
+  assert.deepEqual(Object.keys(readJson(store.files.shortcuts)).sort(), [...ids].sort());
+  assert.deepEqual(readJson(store.files.settings), {
+    "future.setting": 1,
+    "telemetry.usage": "off",
+    "telemetry.crashReports": "off",
+  });
+  assert.deepEqual(store.load().errors, []);
+  assert.deepEqual(leftovers(store), []);
+});
+
+test("parallel processes writing the same key leave one of the values and the other keys", async () => {
+  const store = tempStore();
+  fs.mkdirSync(path.dirname(store.files.settings), { recursive: true });
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "future.setting": 1 }));
+  const engines = ["google", "duckduckgo", "bing", "brave", "kagi", "ecosia"];
+  const results = await runWorkers(store, engines.map((engine) => ["setting", "search.engine", engine]));
+  assert.deepEqual(results.filter((r) => r.code !== 0), []);
+  const saved = readJson(store.files.settings);
+  assert.equal(saved["future.setting"], 1);
+  assert.equal(engines.includes(saved["search.engine"]), true);
+  assert.deepEqual(Object.keys(saved).sort(), ["future.setting", "search.engine"]);
+});
+
+test("failed writes throw, keep the original file, and release the lock", () => {
+  const store = tempStore();
+  store.setSetting("search.suggestions", "off");
+  const before = fs.readFileSync(store.files.settings, "utf8");
+  const dir = path.dirname(store.files.settings);
+  const canDeny = process.platform !== "win32" && process.getuid?.() !== 0;
+  if (canDeny) {
+    fs.chmodSync(dir, 0o500);
+    try {
+      assert.throws(() => store.setSetting("telemetry.usage", "off"), /EACCES|EPERM/);
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+    assert.equal(fs.readFileSync(store.files.settings, "utf8"), before);
+    assert.deepEqual(leftovers(store), []);
+  }
+  fs.writeFileSync(store.files.shortcuts, "{ not json");
+  assert.throws(() => store.setShortcut("find", null));
+  assert.deepEqual(leftovers(store), []);
+  store.setSetting("telemetry.usage", "off");
+  assert.equal(readJson(store.files.settings)["telemetry.usage"], "off");
+});
+
+test("a stale lock left by a crashed writer is taken over", () => {
+  const store = tempStore();
+  fs.mkdirSync(path.dirname(store.files.settings), { recursive: true });
+  const lock = `${store.files.settings}.lock`;
+  fs.writeFileSync(lock, "");
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lock, old, old);
+  store.setSetting("telemetry.usage", "off");
+  assert.equal(readJson(store.files.settings)["telemetry.usage"], "off");
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test("a lock held by a live writer makes the update fail instead of overwriting", () => {
+  const store = tempStore();
+  fs.mkdirSync(path.dirname(store.files.settings), { recursive: true });
+  const lock = `${store.files.settings}.lock`;
+  fs.writeFileSync(lock, "");
+  assert.throws(() => store.setSetting("telemetry.usage", "off"), /timed out waiting for/);
+  assert.equal(fs.existsSync(store.files.settings), false);
+  assert.equal(fs.existsSync(lock), true);
+});
+
+test("updates write through a symlinked config file", { skip: process.platform === "win32" }, () => {
+  const store = tempStore();
+  const dir = path.dirname(store.files.settings);
+  const real = path.join(dir, "real-settings.json");
+  fs.writeFileSync(real, JSON.stringify({ "future.setting": 1 }));
+  fs.symlinkSync(real, store.files.settings);
+  store.setSetting("telemetry.usage", "off");
+  assert.equal(fs.lstatSync(store.files.settings).isSymbolicLink(), true);
+  assert.deepEqual(readJson(real), { "future.setting": 1, "telemetry.usage": "off" });
 });
 
 test("shortcuts report unknown commands and bad values but keep the rest", () => {
