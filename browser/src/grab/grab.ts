@@ -3,6 +3,7 @@ import path from "node:path";
 import { app } from "electron";
 import type { WebViewHandle } from "@zenbu-labs/pixel";
 import { bundledAsset } from "../assets";
+import { clipboardPreload } from "../session/clipboard";
 
 const CHANNEL = "grab";
 const PLUGIN = "terminal-browser";
@@ -62,74 +63,21 @@ const REGISTER_PLUGIN = `(api) => {
   });
 }`;
 
-const COPY_ON_SELECT_BINDING = "__terminalBrowserCopyOnSelect";
-const COPY_ON_SELECT_WORLD_ID = 1013;
-const COPY_ON_SELECT_WORLD = "terminal-browser-copy-on-select";
-
-const COPY_ON_SELECT_WATCHER = `;(() => {
-  let last = "";
-  document.addEventListener("mouseup", (e) => {
-    if (!e.isTrusted) return;
-    setTimeout(() => {
-      const sel = window.getSelection && window.getSelection();
-      const text = sel ? String(sel).trim() : "";
-      if (text && text !== last && typeof window.${COPY_ON_SELECT_BINDING} === "function") {
-        last = text;
-        window.${COPY_ON_SELECT_BINDING}(text);
-      }
-    }, 0);
-  });
-})();`;
-
 let preloadFile: string | null = null;
 export function reactGrabPreloadPath(copyOnSelect = false): string {
   if (!preloadFile) {
     const early = `window.__REACT_GRAB_DISABLED__ = true;\n${reactGrabLibrary()}`;
-    const copyOnSelectInjection = copyOnSelect
-      ? `
-  webFrame.setIsolatedWorldInfo(${COPY_ON_SELECT_WORLD_ID}, { name: ${JSON.stringify(COPY_ON_SELECT_WORLD)} });
-  void webFrame.executeJavaScriptInIsolatedWorld(${COPY_ON_SELECT_WORLD_ID}, [{ code: ${JSON.stringify(COPY_ON_SELECT_WATCHER)} }]);`
-      : "";
     preloadFile = path.join(app.getPath("userData"), "terminal-browser-react-grab-preload.js");
     fs.writeFileSync(
       preloadFile,
       `if (process.isMainFrame) {
   const { webFrame } = require("electron");
-  void webFrame.executeJavaScript(${JSON.stringify(early)});${copyOnSelectInjection}
+  void webFrame.executeJavaScript(${JSON.stringify(early)});${clipboardPreload(copyOnSelect)}
 }
 `,
     );
   }
   return preloadFile;
-}
-
-export class CopyOnSelect {
-  private listening = false;
-  private readonly onMessage = (_event: unknown, method: string, params: unknown) => {
-    if (method !== "Runtime.bindingCalled") return;
-    const call = params as { name: string; payload: string };
-    if (call.name === COPY_ON_SELECT_BINDING) this.hooks.copied(call.payload);
-  };
-
-  constructor(
-    private readonly view: WebViewHandle,
-    private readonly hooks: { copied(text: string): void },
-  ) {}
-
-  async enable(): Promise<void> {
-    if (this.listening) return;
-    this.listening = true;
-    await this.view.cdp("Runtime.addBinding", { name: COPY_ON_SELECT_BINDING, executionContextName: COPY_ON_SELECT_WORLD });
-    this.view.webContents.debugger.on("message", this.onMessage);
-  }
-
-  dispose(): void {
-    if (!this.listening) return;
-    this.listening = false;
-    try {
-      this.view.webContents.debugger.removeListener("message", this.onMessage);
-    } catch {}
-  }
 }
 
 const ACTIVATE_SCRIPT = `(() => {
