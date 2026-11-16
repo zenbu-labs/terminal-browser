@@ -13,15 +13,15 @@ const LETTERS = [
   { letter: "x" },
   { letter: "e" },
   { letter: "l" },
-  { letter: "g", color: "var(--r)" },
-  { letter: "u", color: "var(--g)" },
-  { letter: "i", color: "var(--b)" },
+  { letter: "g", color: "r" },
+  { letter: "u", color: "g" },
+  { letter: "i", color: "b" },
 ];
-const ROWS = 9;
-const CELL = 15;
-const GAP = 1;
+export const ROWS = 9;
+export const CELL = 15;
+export const GAP = 1;
 
-function layout() {
+export function layout() {
   let width = 0;
   const cells: { x: number; y: number; color?: string }[] = [];
   for (const { letter, color } of LETTERS) {
@@ -46,7 +46,7 @@ export default function Wordmark() {
       viewBox={`0 0 ${width * CELL} ${ROWS * CELL}`}
     >
       {cells.map(({ x, y, color }) => (
-        <rect key={`${x}-${y}`} x={x * CELL} y={y * CELL} width={CELL - GAP} height={CELL - GAP} fill={color} />
+        <rect key={`${x}-${y}`} x={x * CELL} y={y * CELL} width={CELL - GAP} height={CELL - GAP} fill={color && `var(--${color})`} />
       ))}
     </svg>
   );

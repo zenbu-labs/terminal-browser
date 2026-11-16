@@ -14,18 +14,18 @@ const DESCRIPTION = "Build graphical applications in the terminal";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://pixelgui.com"),
-  title: "pixel",
+  title: "pixelgui",
   description: DESCRIPTION,
   openGraph: {
-    title: "Pixel",
+    title: "pixelgui",
     description: DESCRIPTION,
     url: "/",
-    siteName: "Pixel",
+    siteName: "pixelgui",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Pixel",
+    title: "pixelgui",
     description: DESCRIPTION,
   },
 };

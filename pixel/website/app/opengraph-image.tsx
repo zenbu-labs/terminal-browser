@@ -1,20 +1,34 @@
 import { ImageResponse } from "next/og";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { CELL, GAP, ROWS, layout } from "./components/wordmark";
 
-export const alt = "Pixel · Build graphical applications in the terminal";
+export const alt = "pixelgui · Build graphical applications in the terminal";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-const TITLE_PX = 110;
-const LOGO_PX = 90;
+const WORDMARK_WIDTH_PX = 760;
+const COLORS: Record<string, string> = { r: "#ff4d5e", g: "#3ddc84", b: "#4d9fff" };
 
-function Logo() {
+function Wordmark() {
+  const { cells, width } = layout();
   return (
-    <svg width={LOGO_PX} height={LOGO_PX} viewBox="0 0 32 32" shapeRendering="crispEdges">
-      <rect x="9" y="2" width="14" height="14" fill="#ff4d5e" />
-      <rect x="1" y="17" width="14" height="14" fill="#3ddc84" />
-      <rect x="17" y="17" width="14" height="14" fill="#4d9fff" />
+    <svg
+      width={WORDMARK_WIDTH_PX}
+      height={(WORDMARK_WIDTH_PX * ROWS) / width}
+      viewBox={`0 0 ${width * CELL} ${ROWS * CELL}`}
+      shapeRendering="crispEdges"
+    >
+      {cells.map(({ x, y, color }) => (
+        <rect
+          key={`${x}-${y}`}
+          x={x * CELL}
+          y={y * CELL}
+          width={CELL - GAP}
+          height={CELL - GAP}
+          fill={color ? COLORS[color] : "#eeeeee"}
+        />
+      ))}
     </svg>
   );
 }
@@ -40,14 +54,9 @@ export default async function OpengraphImage() {
           fontFamily: "JetBrains Mono",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 34 }}>
-          <span style={{ fontSize: TITLE_PX, fontWeight: 600, letterSpacing: -1, color: "#eeeeee", lineHeight: 1 }}>
-            Pixel
-          </span>
-          <Logo />
-        </div>
+        <Wordmark />
         {/* fixme: placeholder copy */}
-        <div style={{ marginTop: 40, fontSize: 36, color: "#8c8c8c" }}>Build graphical applications in the terminal</div>
+        <div style={{ marginTop: 56, fontSize: 36, color: "#8c8c8c" }}>Build graphical applications in the terminal</div>
       </div>
     ),
     {
