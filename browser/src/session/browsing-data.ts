@@ -15,7 +15,29 @@ export function browsingSession(partition: string | null): Session {
   return electronSession.fromPartition(partition.startsWith("persist:") ? partition : `persist:${partition}`);
 }
 
-export async function clearBrowsingData(session: Session, kinds: readonly BrowsingDataKind[]): Promise<void> {
+// one site at a time goes through clearData, the only call that filters by origin
+export async function clearBrowsingData(
+  session: Session,
+  kinds: readonly BrowsingDataKind[],
+  origin?: string,
+): Promise<void> {
+  if (origin) {
+    const dataTypes: NonNullable<Electron.ClearDataOptions["dataTypes"]> = [];
+    if (kinds.includes("siteData")) {
+      dataTypes.push(
+        "backgroundFetch",
+        "cookies",
+        "fileSystems",
+        "indexedDB",
+        "localStorage",
+        "serviceWorkers",
+        "webSQL",
+      );
+    }
+    if (kinds.includes("cache")) dataTypes.push("cache");
+    await session.clearData({ origins: [origin], dataTypes });
+    return;
+  }
   if (kinds.includes("siteData")) {
     await session.clearStorageData();
     await session.clearAuthCache();

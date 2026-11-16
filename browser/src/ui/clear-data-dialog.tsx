@@ -55,7 +55,7 @@ export function ClearDataDialog({
           <Text
             style={{ flexGrow: 1, flexBasis: 0, fontSize: rem * 1.15, color: theme.fg, wrap: false, selectable: false }}
           >
-            {COPY.title}
+            {view.site ? `Clear data for ${view.site}` : COPY.title}
           </Text>
           <Box
             style={{
