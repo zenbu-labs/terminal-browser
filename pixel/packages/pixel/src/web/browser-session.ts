@@ -198,6 +198,10 @@ export function persistentPartition(partition: string): string {
   return partition.startsWith("persist:") ? partition : `persist:${partition}`;
 }
 
+export function memoryPartition(partition: string): string {
+  return partition.replace(/^persist:/, "");
+}
+
 function rangeResponse(url: string, range: string): Response | null {
   const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
   if (!match || (!match[1] && !match[2])) return null;
