@@ -44,7 +44,7 @@ import type {
 } from "./web/browser-session";
 import { PageHost, decideOpenWindow } from "./web/host";
 import type { BrowserWindowOptions, OpenWindowDecision, OpenWindowPolicy } from "./web/host";
-import { persistentPartition } from "./web/browser-session";
+import { memoryPartition, persistentPartition } from "./web/browser-session";
 import { initialWebViewState, snapToCssGrid } from "./web/types";
 import type { DevtoolsDock, MediaCapture, SurfaceLayout, WebViewState } from "./web/types";
 import type { ZoomDirection } from "./web/zoom";
@@ -249,7 +249,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
       webPreferences: {
         ...passthrough.webPreferences,
         ...(initial.partition
-          ? { partition: initial.persist === false ? initial.partition : persistentPartition(initial.partition) }
+          ? { partition: initial.persist === false ? memoryPartition(initial.partition) : persistentPartition(initial.partition) }
           : {}),
         ...(initial.preload ? { preload: path.resolve(initial.preload) } : {}),
       },

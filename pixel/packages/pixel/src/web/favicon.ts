@@ -22,7 +22,7 @@ export class FaviconCache {
   constructor(private readonly dir: string = path.join(app.getPath("userData"), "favicons")) {}
 
   async resolve(urls: string[], ses: Session): Promise<string | null> {
-    if (urls.length === 0) return null;
+    if (urls.length === 0 || !ses.isPersistent()) return null;
     const clearsBefore = clears;
     const candidates = [...urls].sort((a, b) => Number(RASTER_URL.test(b)) - Number(RASTER_URL.test(a)));
     try {

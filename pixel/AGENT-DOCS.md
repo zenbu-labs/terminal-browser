@@ -267,7 +267,7 @@ KeyMods        { shift: boolean; alt: boolean; ctrl: boolean; super: boolean }
 | `style` | layout style |
 | `preload` | preload script path |
 | `partition` | session name, made persistent |
-| `persist` | `false` keeps the partition in memory: nothing it stores reaches disk, and it is gone when the app quits <!-- fixme: placeholder copy --> |
+| `persist` | `false` keeps the partition in memory: nothing it stores reaches disk, and it is gone when the app quits; its pages get no favicon <!-- fixme: placeholder copy --> |
 | `proxy` | proxy rules, e.g. `socks5://127.0.0.1:1080` |
 | `clipboardRead` | allows the page to read the clipboard |
 | `browserWindowOptions` | Electron `BrowserWindow` options except size and offscreen flags |
