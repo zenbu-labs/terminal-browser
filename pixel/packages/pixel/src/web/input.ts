@@ -354,6 +354,10 @@ const SELECTION_SNIPPET = `(() => {
     if (el && "selectionStart" in el && el.selectionStart !== el.selectionEnd) {
       return el.value.slice(el.selectionStart, el.selectionEnd);
     }
+    const context = el?.editContext;
+    if (context && context.selectionStart !== context.selectionEnd) {
+      return context.text.slice(context.selectionStart, context.selectionEnd);
+    }
   } catch {}
   return String(getSelection() ?? "");
 })()`;
