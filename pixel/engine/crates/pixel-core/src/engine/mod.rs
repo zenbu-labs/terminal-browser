@@ -300,7 +300,7 @@ pub struct Engine {
     frame_deferred: bool,
     max_fps: f32,
     frame_due: Option<Instant>,
-    scroll_requests: Vec<(usize, scroll::ScrollRequest, bool)>,
+    scroll_requests: Vec<(usize, scroll::ScrollRequest, bool, bool)>,
     pub stats: FrameStats,
 }
 

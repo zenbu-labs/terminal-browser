@@ -11,12 +11,14 @@ pub struct ScrollState {
     pub target: f32,
     pub velocity: f32,
     pub anchored: i64,
+    pub reveal: bool,
     idle: f32,
 }
 
 impl ScrollState {
     pub fn tick<P: ScrollProfile + ?Sized>(&mut self, profile: &P, delta: f32, max: f32) {
         self.idle = 0.0;
+        self.reveal = true;
         self.target = (self.target + delta).clamp(0.0, max);
         profile.tick(self, delta, max);
     }

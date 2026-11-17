@@ -652,19 +652,19 @@ const hostConfig = {
         b.push(instance.view, { op: "blur", id: instance.id });
         b.flush();
       },
-      scrollTo: (offset: number, smooth = false) => {
+      scrollTo: (offset: number, smooth = false, reveal = false) => {
         const b = instance.bridge;
-        b.push(instance.view, { op: "scrollTo", id: instance.id, offset, smooth });
+        b.push(instance.view, { op: "scrollTo", id: instance.id, offset, smooth, reveal });
         b.flush();
       },
-      scrollBy: (delta: number) => {
+      scrollBy: (delta: number, reveal = false) => {
         const b = instance.bridge;
-        b.push(instance.view, { op: "scrollBy", id: instance.id, delta });
+        b.push(instance.view, { op: "scrollBy", id: instance.id, delta, reveal });
         b.flush();
       },
-      scrollIntoView: (smooth = false) => {
+      scrollIntoView: (smooth = false, reveal = false) => {
         const b = instance.bridge;
-        b.push(instance.view, { op: "scrollIntoView", id: instance.id, smooth });
+        b.push(instance.view, { op: "scrollIntoView", id: instance.id, smooth, reveal });
         b.flush();
       },
       splice: (start: number, end: number, text: string) => {
