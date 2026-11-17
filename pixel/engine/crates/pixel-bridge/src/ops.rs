@@ -98,16 +98,22 @@ enum Op {
         id: u32,
         #[serde(default)]
         smooth: bool,
+        #[serde(default)]
+        reveal: bool,
     },
     ScrollTo {
         id: u32,
         offset: f32,
         #[serde(default)]
         smooth: bool,
+        #[serde(default)]
+        reveal: bool,
     },
     ScrollBy {
         id: u32,
         delta: f32,
+        #[serde(default)]
+        reveal: bool,
     },
     SetClearColor {
         color: Color,
@@ -932,19 +938,19 @@ fn apply_op(
                 engine.blur(view, node);
             }
         }
-        Op::ScrollTo { id, offset, smooth } => {
+        Op::ScrollTo { id, offset, smooth, reveal } => {
             if let Some(node) = map.live(tree, id) {
-                engine.scroll_to(view, node, offset, smooth);
+                engine.scroll_to(view, node, offset, smooth, reveal);
             }
         }
-        Op::ScrollBy { id, delta } => {
+        Op::ScrollBy { id, delta, reveal } => {
             if let Some(node) = map.live(tree, id) {
-                engine.scroll_by(view, node, delta);
+                engine.scroll_by(view, node, delta, reveal);
             }
         }
-        Op::ScrollIntoView { id, smooth } => {
+        Op::ScrollIntoView { id, smooth, reveal } => {
             if let Some(node) = map.live(tree, id) {
-                engine.scroll_into_view(view, node, smooth);
+                engine.scroll_into_view(view, node, smooth, reveal);
             }
         }
         Op::SetClearColor { color } => engine.set_clear_color(view, color),

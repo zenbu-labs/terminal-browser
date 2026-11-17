@@ -364,6 +364,7 @@ impl Engine {
         if let Some(target) = area.target_to_reveal(caret, current, margin)
             && let Some(state) = self.comp.views[view].tree.scroll_state_mut(scroller)
         {
+            state.reveal = false;
             state.set_target(target);
         }
     }

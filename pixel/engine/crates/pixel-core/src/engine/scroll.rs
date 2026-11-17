@@ -157,20 +157,20 @@ impl Engine {
         }
     }
 
-    pub fn scroll_into_view(&mut self, view: usize, id: NodeId, smooth: bool) {
-        self.scroll_requests.push((view, ScrollRequest::IntoView(id), smooth));
+    pub fn scroll_into_view(&mut self, view: usize, id: NodeId, smooth: bool, reveal: bool) {
+        self.scroll_requests.push((view, ScrollRequest::IntoView(id), smooth, reveal));
     }
 
-    pub fn scroll_to(&mut self, view: usize, id: NodeId, offset: f32, smooth: bool) {
-        self.scroll_requests.push((view, ScrollRequest::To(id, offset), smooth));
+    pub fn scroll_to(&mut self, view: usize, id: NodeId, offset: f32, smooth: bool, reveal: bool) {
+        self.scroll_requests.push((view, ScrollRequest::To(id, offset), smooth, reveal));
     }
 
-    pub fn scroll_by(&mut self, view: usize, id: NodeId, delta: f32) {
-        self.scroll_requests.push((view, ScrollRequest::By(id, delta), false));
+    pub fn scroll_by(&mut self, view: usize, id: NodeId, delta: f32, reveal: bool) {
+        self.scroll_requests.push((view, ScrollRequest::By(id, delta), false, reveal));
     }
 
     pub(super) fn apply_scroll_requests(&mut self) {
-        for (view, request, smooth) in std::mem::take(&mut self.scroll_requests) {
+        for (view, request, smooth, reveal) in std::mem::take(&mut self.scroll_requests) {
             if view >= self.comp.views.len() {
                 continue;
             }
@@ -181,11 +181,11 @@ impl Engine {
             match request {
                 ScrollRequest::IntoView(id) => {
                     if let Some((ancestor, y)) = scroll_ancestor_offset(tree, id) {
-                        set_scroll(tree, ancestor, y - base_px * 0.5, smooth);
+                        set_scroll(tree, ancestor, y - base_px * 0.5, smooth, reveal);
                     }
                 }
-                ScrollRequest::To(id, offset) => set_scroll(tree, id, offset, smooth),
-                ScrollRequest::By(id, delta) => scroll_by(tree, id, delta),
+                ScrollRequest::To(id, offset) => set_scroll(tree, id, offset, smooth, reveal),
+                ScrollRequest::By(id, delta) => scroll_by(tree, id, delta, reveal),
             }
         }
     }
@@ -264,8 +264,11 @@ impl Engine {
                 if let Some(state) = tree.scroll_state_mut(id)
                     && state.step(profile.as_ref(), dt, max)
                 {
+                    let reveal = state.reveal;
                     tree.mark_place();
-                    tree.touch_bar(id);
+                    if reveal {
+                        tree.touch_bar(id);
+                    }
                 }
             }
         }
@@ -290,16 +293,18 @@ fn scroll_ancestor_offset(tree: &crate::tree::Tree, id: NodeId) -> Option<(NodeI
     None
 }
 
-fn scroll_by(tree: &mut crate::tree::Tree, id: NodeId, delta: f32) {
+fn scroll_by(tree: &mut crate::tree::Tree, id: NodeId, delta: f32, reveal: bool) {
     if let Some(position) = tree.scroll_state(id).map(|state| state.position) {
-        set_scroll(tree, id, position + delta, false);
+        set_scroll(tree, id, position + delta, false, reveal);
     }
 }
 
-fn set_scroll(tree: &mut crate::tree::Tree, id: NodeId, offset: f32, smooth: bool) {
+fn set_scroll(tree: &mut crate::tree::Tree, id: NodeId, offset: f32, smooth: bool, reveal: bool) {
     let offset = offset.clamp(0.0, tree.scroll_max(id));
     let view = tree.rect(id).map_or(0.0, |r| r.h);
     if let Some(state) = tree.scroll_state_mut(id) {
+        let moves = state.position != offset || state.target != offset;
+        state.reveal = reveal;
         if smooth {
             if (offset - state.position).abs() > view {
                 state.position = offset - view.copysign(offset - state.position);
@@ -312,7 +317,9 @@ fn set_scroll(tree: &mut crate::tree::Tree, id: NodeId, offset: f32, smooth: boo
             state.set_target(offset);
             tree.mark_place();
         }
-        tree.touch_bar(id);
+        if reveal && moves {
+            tree.touch_bar(id);
+        }
     }
 }
 
@@ -338,10 +345,10 @@ mod tests {
         let mut fonts = crate::fonts::FontRegistry::bundled();
         tree.flush_layout(&mut fonts, 16.0);
         let list = tree.find("list").unwrap();
-        set_scroll(&mut tree, list, 1900.0, true);
+        set_scroll(&mut tree, list, 1900.0, true, false);
         let state = tree.scroll_state(list).unwrap();
         assert_eq!((state.position, state.target), (1800.0, 1900.0));
-        set_scroll(&mut tree, list, 1850.0, true);
+        set_scroll(&mut tree, list, 1850.0, true, false);
         assert_eq!(tree.scroll_state(list).unwrap().position, 1800.0, "near targets animate the whole way");
     }
 
@@ -361,11 +368,38 @@ mod tests {
         let mut fonts = crate::fonts::FontRegistry::bundled();
         tree.flush_layout(&mut fonts, 16.0);
         let list = tree.find("list").unwrap();
-        set_scroll(&mut tree, list, 30.0, false);
-        scroll_by(&mut tree, list, 25.0);
-        scroll_by(&mut tree, list, 25.0);
+        set_scroll(&mut tree, list, 30.0, false, false);
+        scroll_by(&mut tree, list, 25.0, false);
+        scroll_by(&mut tree, list, 25.0, false);
         assert_eq!(tree.scroll_state(list).unwrap().position, 80.0);
-        scroll_by(&mut tree, list, 500.0);
+        scroll_by(&mut tree, list, 500.0, false);
         assert_eq!(tree.scroll_state(list).unwrap().position, 100.0, "stops at the end");
+    }
+
+    #[test]
+    fn only_revealing_scrolls_that_move_show_the_bar() {
+        let mut tree = crate::tree::Tree::new((40.0, 100.0));
+        let row = |i: usize| Desc { style: Style { height: Dimension::Px(20.0), ..Style::default() }, key: Some(format!("row{i}")), ..Desc::default() };
+        tree.reconcile(Desc {
+            children: vec![Desc {
+                style: Style { width: Dimension::Px(40.0), height: Dimension::Px(100.0), overflow: Overflow::Scroll, layout: Layout::List, ..Style::default() },
+                key: Some("list".into()),
+                children: (0..20).map(row).collect(),
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        });
+        let mut fonts = crate::fonts::FontRegistry::bundled();
+        tree.flush_layout(&mut fonts, 16.0);
+        let list = tree.find("list").unwrap();
+        let shown = |tree: &crate::tree::Tree| tree.get(list).unwrap().bar.last_move.is_some();
+        set_scroll(&mut tree, list, 300.0, false, false);
+        scroll_by(&mut tree, list, -40.0, false);
+        set_scroll(&mut tree, list, 0.0, false, false);
+        assert!(!shown(&tree));
+        set_scroll(&mut tree, list, 0.0, false, true);
+        assert!(!shown(&tree), "a scroll that goes nowhere");
+        scroll_by(&mut tree, list, 60.0, true);
+        assert!(shown(&tree));
     }
 }
