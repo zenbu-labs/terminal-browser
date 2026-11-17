@@ -32,6 +32,7 @@ import { WebView } from "./webview";
 import type { WebViewHandle, WebViewProps } from "./webview";
 import { CellZoomFollower, hostDisplayScale } from "./scale";
 import { detect } from "./terminal";
+import { streamFromEnv } from "./terminal/stream";
 import { initOffscreenMode } from "./web/offscreen";
 import {
   broadcastTheme,
@@ -114,11 +115,11 @@ export function createRoot(options: RootOptions = {}): Root {
     );
   }
   const env = options.sessionEnv ?? process.env;
-  const terminal = detect(env);
+  const stream = options.stream ?? streamFromEnv(env);
+  const terminal = stream ? null : detect(env);
+  const tty = stream ? undefined : (options.tty ?? env.PIXEL_TTY ?? ownTty());
 
-  const tty = options.tty ?? env.PIXEL_TTY ?? ownTty();
-
-  const embed = env.PIXEL_EMBED ?? null;
+  const embed = stream ? null : (env.PIXEL_EMBED ?? null);
   let owner: Instance | null = tty && !embed ? findOwner(tty) : null;
   const name = options.name ?? app.getName();
   const cellZoom = new CellZoomFollower();
@@ -175,6 +176,7 @@ export function createRoot(options: RootOptions = {}): Root {
   const engineRoot = createEngineRoot({
     ...options,
     tty: owner || embed ? undefined : tty,
+    stream: stream ?? undefined,
     host: owner
       ? {
           socket: owner.socket,
@@ -234,7 +236,7 @@ export function createRoot(options: RootOptions = {}): Root {
     onHandoff: (next) => {
       handoff = next;
     },
-    onHostClosed: () => void ownerLeft(),
+    onHostClosed: () => (stream ? shutdown(0) : void ownerLeft()),
     onEngineExit: (error) => {
       if (error) process.stderr.write(`pixel engine: ${error}\n`);
       shutdown(error ? 1 : 0);

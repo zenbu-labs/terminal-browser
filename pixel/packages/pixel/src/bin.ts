@@ -10,6 +10,7 @@ import { announceGuest, findOwner, waitForOwners } from "./instances";
 import { RELAUNCH_FD, RELAUNCH_FD_ENV, parseRelaunchRequest, type RelaunchRequest } from "./relaunch";
 import { apparmorSetup, linuxSandboxError } from "./sandbox";
 import { RENDERER_ENV, checkTerminal, detect } from "./terminal";
+import { STREAM_ENV } from "./terminal/stream";
 
 function fail(message: string): never {
   process.stderr.write(`pixel: ${message}\n`);
@@ -117,9 +118,10 @@ async function main(): Promise<number> {
   if (own.length > 1) fail(`unexpected ${own[1]}; put your app's arguments after --`);
   const entry = resolveEntry(own[0] ?? ".");
 
-  const tty = process.env.PIXEL_TTY ?? ownTty();
+  const streamed = !!process.env[STREAM_ENV];
+  const tty = streamed ? "" : (process.env.PIXEL_TTY ?? ownTty());
   let renderer = process.env[RENDERER_ENV];
-  if (!findOwner(tty) && !process.env.PIXEL_EMBED) {
+  if (!streamed && !findOwner(tty) && !process.env.PIXEL_EMBED) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       fail("tty required");
     }
@@ -160,18 +162,18 @@ async function main(): Promise<number> {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, forward(signal));
 
   const launch = async (launchArgs: string[], extraEnv: Record<string, string>): Promise<{ code: number; relaunch: RelaunchRequest | null }> => {
-    const owner = findOwner(tty);
+    const owner = streamed ? null : findOwner(tty);
     const announced = owner ? announceGuest(owner, appName(appDir(entry))) : null;
     const env = { ...process.env, ...extraEnv };
     delete env.ELECTRON_RUN_AS_NODE;
-    env.PIXEL_TTY = tty;
+    if (!streamed) env.PIXEL_TTY = tty;
     env[RELAUNCH_FD_ENV] = String(RELAUNCH_FD);
     if (renderer) env[RENDERER_ENV] = renderer;
     if (announced) env.PIXEL_PANE = announced.pane;
     else delete env.PIXEL_PANE;
     const stderr = fs.openSync(log, "a");
     const spawned = spawn(electron, [bootstrap, entry, ...chromiumArgs, ...launchArgs], {
-      stdio: ["inherit", "inherit", stderr, "pipe"],
+      stdio: [streamed ? "ignore" : "inherit", streamed ? "ignore" : "inherit", stderr, "pipe"],
       env,
     });
     child = spawned;
@@ -183,7 +185,7 @@ async function main(): Promise<number> {
         resolve(1);
       });
       spawned.on("close", (code, signal) => {
-        if (signal && !owner && !process.env.PIXEL_EMBED) resetTerminal(tty);
+        if (signal && !owner && !streamed && !process.env.PIXEL_EMBED) resetTerminal(tty);
         if (code) {
           process.stderr.write(`pixel crashed (exit code ${code}). Full logs: ${log}\n`);
         }
@@ -198,7 +200,7 @@ async function main(): Promise<number> {
   let run = await launch(appArgs, {});
   while (run.relaunch) run = await launch(run.relaunch.args, run.relaunch.env ?? {});
   const exited = run.code;
-  await waitForOwners(tty);
+  if (!streamed) await waitForOwners(tty);
   return exited;
 }
 

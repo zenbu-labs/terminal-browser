@@ -27,6 +27,12 @@ pub struct HostOptions {
     pub tty: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StreamOptions {
+    pub socket: String,
+    pub size: WindowSize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Renderer {
     #[default]
@@ -46,6 +52,7 @@ impl Renderer {
 pub struct TerminalOptions {
     pub tty: Option<String>,
     pub host: Option<HostOptions>,
+    pub stream: Option<StreamOptions>,
     pub wrapper: Wrapper,
     pub session_env: SessionEnv,
     pub watch_resize: bool,
@@ -89,9 +96,10 @@ pub(crate) fn window_from(ws: &WindowSize, cell: (u32, u32), cell_is_exact: bool
 
 impl TerminalBackend {
     pub fn new(options: TerminalOptions) -> io::Result<Self> {
-        let open = |pixel_mouse: bool| match &options.tty {
-            Some(path) => Terminal::open(path, options.wrapper, pixel_mouse),
-            None => Terminal::new(options.wrapper, pixel_mouse),
+        let open = |pixel_mouse: bool| match (&options.stream, &options.tty) {
+            (Some(stream), _) => Terminal::connect_stream(&stream.socket, stream.size, options.wrapper, pixel_mouse),
+            (None, Some(path)) => Terminal::open(path, options.wrapper, pixel_mouse),
+            (None, None) => Terminal::new(options.wrapper, pixel_mouse),
         };
         let (mut term, presenter): (Terminal, Box<dyn Presenter>) = match (&options.host, options.renderer) {
             (Some(host), _) => {
