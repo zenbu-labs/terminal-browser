@@ -254,7 +254,7 @@ fn scrolled_out_children_do_not_take_clicks() {
     let mut tree = tree_of((40.0, 40.0), scroller(true));
     let id = tree.find("scroller").unwrap();
     tree.scroll_state_mut(id).unwrap().position = 40.0;
-    tree.mark_place();
+    tree.invalidate(id, Invalidation::Place);
     tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     let hit = tree.hit_click(5.0, 35.0).unwrap();
     assert_eq!(
@@ -607,7 +607,7 @@ fn shrinking_content_clamps_the_scroll_position() {
     let state = tree.scroll_state_mut(id).unwrap();
     state.position = 40.0;
     state.set_target(40.0);
-    tree.mark_place();
+    tree.invalidate(id, Invalidation::Place);
     tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
     assert_eq!(tree.scroll_state(id).unwrap().position, 40.0);
 
@@ -1103,7 +1103,7 @@ fn an_outside_click_dismisses_the_selection_and_repaints() {
     tree.doc_select_up();
     assert_eq!(tree.doc_selected_text().as_deref(), Some("first"));
     tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
-    tree.clear_paint_flag();
+    tree.take_repaint();
 
     let rect = tree.rect(a).unwrap();
     assert!(tree.doc_select_down_near((rect.x, rect.y + 150.0), &fonts));
@@ -1606,7 +1606,7 @@ fn rows(count: u8, overflow_from: Option<u8>) -> Vec<Desc> {
 fn scroll_on_screen(tree: &mut Tree, position: f32) {
     let id = tree.find("scroller").unwrap();
     tree.scroll_state_mut(id).unwrap().position = position;
-    tree.mark_place();
+    tree.invalidate(id, Invalidation::Place);
     assert!(tree.dirty());
     tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
 }
@@ -1659,7 +1659,7 @@ fn scroll_list(tree: &mut Tree, position: f32) {
     let state = tree.scroll_state_mut(id).unwrap();
     state.position = position;
     state.set_target(position);
-    tree.mark_place();
+    tree.invalidate(id, Invalidation::Place);
     tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
 }
 

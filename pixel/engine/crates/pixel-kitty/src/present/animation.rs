@@ -38,9 +38,9 @@ impl Kitty {
         let canvas = frame.canvas;
         let size = (canvas.width, canvas.height);
         let single_edit = self.wrapper.relayed(); // tmux case 
-        let damage: Vec<Rect> = frame.changed.iter().chain(frame.repainted).copied().collect();
+        let damage: Vec<Rect> = frame.changed.to_vec();
         let strategy = choose_transmit_strategy(&self.animation, size, &damage, single_edit);
-        self.animation.stats.record(&strategy, size, !frame.repainted.is_empty(), !frame.changed.is_empty());
+        self.animation.stats.record(&strategy, size);
         match strategy {
             TransmitStrategy::Skip => Ok(0),
             TransmitStrategy::Flatten(reason) => {

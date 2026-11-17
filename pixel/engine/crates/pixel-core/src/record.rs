@@ -1,31 +1,95 @@
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::sync::Arc;
 
 use crate::fonts::Font;
-use crate::scene::{
-    BarState, Caret, Change, Fills, Icon, Image, Item, Layer, LayerKind, Op, Scene, Scroll, Scrollbar, Surface,
-    Text, TextStyle,
-};
+use crate::scene::{BarState, Caret, Fills, Icon, Image, Item, LayerKind, Op, Scene, Scroll, Scrollbar, Surface, Text, TextStyle};
 use crate::style::{Color, Layout, Overflow, Paint, Position};
 use crate::text_input::{Mark, caret_char, caret_point, caret_width};
 use crate::text_metrics::{measure_marked, measure_text};
-use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
+use crate::tree::{NodeId, PaintedSelection, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
+
+type Blocks = Vec<(NodeId, Vec<PxRect>, Color)>;
 
 struct Recorder<'a> {
     tree: &'a Tree,
     fonts: &'a [Font],
     cursor: Option<(f32, f32)>,
-    blocks: Vec<(NodeId, Vec<PxRect>, Color)>,
-    layers: u32,
+    blocks: &'a Blocks,
+    redo: Option<HashSet<NodeId>>,
+    damage: Vec<PxRect>,
 }
 
-pub fn record_scene(tree: &Tree, fonts: &[Font], cursor: Option<(f32, f32)>) -> Scene {
+pub fn record_scene(tree: &Tree, fonts: &[Font]) -> Scene {
     assert!(!fonts.is_empty());
     crate::profiler::span("tree.scene", || {
-        let mut recorder = Recorder { tree, fonts, cursor, blocks: tree.doc_selection_blocks(fonts), layers: 0 };
-        let root = recorder.item(tree.root(), None).unwrap_or_default();
-        Scene { root }
+        let blocks = tree.doc_selection_blocks(fonts);
+        let mut recorder = Recorder { tree, fonts, cursor: tree.cursor(), blocks: &blocks, redo: None, damage: Vec::new() };
+        Scene { root: recorder.item(tree.root(), None, None, None, None).unwrap_or_default() }
     })
+}
+
+// Records only the nodes that changed since `previous`, reusing everything else, and returns
+// the areas whose pixels changed. No areas means everything has to be drawn again.
+pub fn record_changes(tree: &mut Tree, fonts: &[Font], previous: &Scene, whole: bool) -> (Scene, Option<Vec<PxRect>>) {
+    assert!(!fonts.is_empty());
+    let repaint = tree.take_repaint();
+    let ranges = tree.doc_selection_ranges();
+    let blocks = tree.doc_selection_blocks(fonts);
+    let painted = std::mem::replace(&mut tree.painted_selection, PaintedSelection { ranges, blocks });
+    let tree = &*tree;
+    if whole || repaint.all {
+        return (record_scene(tree, fonts), None);
+    }
+    crate::profiler::span("tree.scene", || {
+        let mut dirty = repaint.nodes;
+        let now = &tree.painted_selection;
+        let before: HashMap<NodeId, &Range<usize>> = painted.ranges.iter().map(|(id, range)| (*id, range)).collect();
+        let after: HashMap<NodeId, &Range<usize>> = now.ranges.iter().map(|(id, range)| (*id, range)).collect();
+        for id in before.keys().chain(after.keys()) {
+            if before.get(id) != after.get(id) {
+                dirty.insert(*id);
+            }
+        }
+        for block in now.blocks.iter().chain(&painted.blocks) {
+            if !now.blocks.contains(block) || !painted.blocks.contains(block) {
+                subtree(tree, block.0, &mut dirty);
+            }
+        }
+        crate::profiler::count("scene.dirty", || dirty.len() as u64);
+        let mut recorder = Recorder {
+            tree,
+            fonts,
+            cursor: tree.cursor(),
+            blocks: &now.blocks,
+            redo: Some(with_ancestors(tree, dirty)),
+            damage: Vec::new(),
+        };
+        let root = recorder.item(tree.root(), None, Some(&previous.root), None, None).unwrap_or_default();
+        (Scene { root }, Some(recorder.damage))
+    })
+}
+
+fn subtree(tree: &Tree, id: NodeId, out: &mut HashSet<NodeId>) {
+    out.insert(id);
+    for &child in tree.children(id) {
+        subtree(tree, child, out);
+    }
+}
+
+fn with_ancestors(tree: &Tree, dirty: HashSet<NodeId>) -> HashSet<NodeId> {
+    let mut out = HashSet::with_capacity(dirty.len() * 4);
+    for id in dirty {
+        let mut current = Some(id);
+        while let Some(at) = current {
+            if !out.insert(at) {
+                break;
+            }
+            current = tree.parent(at);
+        }
+    }
+    out
 }
 
 fn rect_of(x: f32, y: f32, w: f32, h: f32) -> PxRect {
@@ -41,8 +105,138 @@ fn bands(out: &mut Vec<Op>, bands: &[PxRect], clip: PxRect, color: Color) {
     }
 }
 
+fn reach(ops: &[Op]) -> PxRect {
+    ops.iter().filter_map(Op::reach).fold(PxRect::ZERO, PxRect::union)
+}
+
+fn inside(item: &Item, clip: Option<PxRect>) -> Option<PxRect> {
+    if item.clips { Some(clip.map_or(item.bounds, |c| c.intersect(item.bounds))) } else { clip }
+}
+
+fn own_reach(item: &Item) -> PxRect {
+    let inner = reach(&item.inner).union(reach(&item.after));
+    reach(&item.ops).union(if item.clips { inner.intersect(item.bounds) } else { inner })
+}
+
+fn extent(item: &Item) -> PxRect {
+    let inner = item.children.iter().map(|c| c.extent).fold(reach(&item.inner).union(reach(&item.after)), PxRect::union);
+    reach(&item.ops).union(if item.clips { inner.intersect(item.bounds) } else { inner })
+}
+
 impl Recorder<'_> {
-    fn item(&mut self, id: NodeId, enclosing: Option<usize>) -> Option<Item> {
+    fn damage(&mut self, rect: PxRect, clip: Option<PxRect>) {
+        let rect = clip.map_or(rect, |c| rect.intersect(c));
+        if !rect.is_empty() {
+            self.damage.push(rect);
+        }
+    }
+
+    fn item(&mut self, id: NodeId, enclosing: Option<usize>, old: Option<&Arc<Item>>, clip: Option<PxRect>, old_clip: Option<PxRect>) -> Option<Arc<Item>> {
+        if let (Some(old), Some(redo)) = (old, &self.redo)
+            && !redo.contains(&id)
+        {
+            return Some(old.clone());
+        }
+        let (mut item, enclosing) = self.own(id, enclosing)?;
+        let child_clip = inside(&item, clip);
+        let old_child_clip = old.map_or(old_clip, |old| inside(old, old_clip));
+        let previous: HashMap<u64, (usize, &Arc<Item>)> =
+            old.map(|old| old.children.iter().enumerate().map(|(i, c)| (c.node, (i, c))).collect()).unwrap_or_default();
+        let mut kept = HashSet::new();
+        let mut latest = 0;
+        let tree = self.tree;
+        for child in tree.paint_children(id) {
+            if tree.get(child).is_some_and(|n| {
+                n.offscreen || (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
+            }) {
+                continue;
+            }
+            let before = previous.get(&child.to_bits()).copied();
+            let Some(recorded) = self.item(child, enclosing, before.map(|(_, c)| c), child_clip, old_child_clip) else {
+                continue;
+            };
+            match before {
+                Some((index, was)) => {
+                    if index < latest {
+                        self.damage(was.extent, old_child_clip);
+                        self.damage(recorded.extent, child_clip);
+                    }
+                    latest = latest.max(index);
+                    kept.insert(recorded.node);
+                }
+                None if old.is_some() => self.damage(recorded.extent, child_clip),
+                None => {}
+            }
+            item.children.push(recorded);
+        }
+        if let Some(bar) = scrollbar(tree, id) {
+            item.after.push(Op::Scrollbar(bar));
+        }
+        item.extent = extent(&item);
+        if let Some(old) = old {
+            for gone in old.children.iter().filter(|c| !kept.contains(&c.node)) {
+                self.damage(gone.extent, old_child_clip);
+            }
+            self.compare(old, &item, clip, old_clip);
+        }
+        Some(Arc::new(item))
+    }
+
+    fn compare(&mut self, old: &Item, new: &Item, clip: Option<PxRect>, old_clip: Option<PxRect>) {
+        if old.clips != new.clips || clip != old_clip || (new.clips && old.bounds != new.bounds) {
+            self.damage(own_reach(old), old_clip);
+            self.damage(own_reach(new), clip);
+            if old.clips {
+                self.damage(old.bounds, old_clip);
+            }
+            if new.clips {
+                self.damage(new.bounds, clip);
+            }
+            return;
+        }
+        let inner = inside(new, clip);
+        self.compare_ops(&old.ops, &new.ops, clip);
+        self.compare_ops(&old.inner, &new.inner, inner);
+        self.compare_ops(&old.after, &new.after, inner);
+    }
+
+    fn compare_ops(&mut self, old: &[Op], new: &[Op], clip: Option<PxRect>) {
+        let start = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+        let end = old[start..].iter().rev().zip(new[start..].iter().rev()).take_while(|(a, b)| a == b).count();
+        let (old, new) = (&old[start..old.len() - end], &new[start..new.len() - end]);
+        if old.len() == new.len() {
+            for (a, b) in old.iter().zip(new).filter(|(a, b)| a != b) {
+                match (a, b) {
+                    (Op::Text(a), Op::Text(b)) => {
+                        let rect = self.text_change(a, b);
+                        self.damage(rect, clip);
+                    }
+                    _ => {
+                        self.damage(a.reach().unwrap_or_default(), clip);
+                        self.damage(b.reach().unwrap_or_default(), clip);
+                    }
+                }
+            }
+            return;
+        }
+        for op in old.iter().chain(new) {
+            self.damage(op.reach().unwrap_or_default(), clip);
+        }
+    }
+
+    fn text_change(&self, a: &Text, b: &Text) -> PxRect {
+        let same_run = (a.x, a.top, a.px, a.ascent, a.font, a.face, a.color, a.style) == (b.x, b.top, b.px, b.ascent, b.font, b.face, b.color, b.style);
+        if !same_run || !a.marks.is_empty() || !b.marks.is_empty() || a.style != TextStyle::Run {
+            return a.reach().union(b.reach());
+        }
+        let common = a.text.char_indices().zip(b.text.chars()).take_while(|((_, x), y)| x == y).last().map_or(0, |((i, c), _)| i + c.len_utf8());
+        let font = &self.fonts[a.face.min(self.fonts.len() - 1)];
+        let from = a.x + measure_text(font, &a.text[..common], a.px) - a.px * 0.5;
+        let to = (a.x + a.width).max(b.x + b.width) + a.px;
+        PxRect { x: from, y: a.top - a.px * 0.5, w: to - from, h: a.ascent + a.px * 1.5 }
+    }
+
+    fn own(&self, id: NodeId, enclosing: Option<usize>) -> Option<(Item, Option<usize>)> {
         let tree = self.tree;
         let node = tree.get(id)?;
         if node.hidden {
@@ -59,15 +253,14 @@ impl Recorder<'_> {
             radius: node.style.corner_radius,
             fills: fills(tree, id),
             surface: node.surface,
+            layer: layer(tree, id),
             ..Item::default()
         };
-        item.layer = self.layer(id);
-
         if let Some(shape) = &node.shape {
             if node.visible.w > 0.0 && node.visible.h > 0.0 {
                 item.ops.push(Op::Icon(Icon { rect, path: shape.clone(), glyph: shape.glyph.clone() }));
             }
-            return Some(item);
+            return Some((item, enclosing));
         }
 
         let background = match (hovered, node.style.hover_background) {
@@ -137,50 +330,7 @@ impl Recorder<'_> {
         let enclosing = block.or(enclosing);
         self.text(id, hovered, enclosing.is_some(), &mut item.inner);
 
-        for child in tree.paint_children(id) {
-            if tree.get(child).is_some_and(|n| {
-                n.offscreen || (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
-            }) {
-                continue;
-            }
-            if let Some(child) = self.item(child, enclosing) {
-                item.children.push(child);
-            }
-        }
-        if let Some(bar) = scrollbar(tree, id) {
-            item.after.push(Op::Scrollbar(bar));
-        }
-        Some(item)
-    }
-
-    fn layer(&mut self, id: NodeId) -> Option<Layer> {
-        let tree = self.tree;
-        let node = tree.get(id)?;
-        let kind = if node.style.overflow == Overflow::Scroll {
-            let bar = tree.scrollbar_rects(id).zip(tree.scrollbar_style(id)).map(|(rects, style)| BarState {
-                zone: rects.zone,
-                thumb: rects.thumb,
-                opacity: node.bar.opacity,
-                expand: node.bar.expand,
-                thumb_color: style.thumb_color,
-                thumb_hover_color: style.thumb_hover_color,
-            });
-            LayerKind::Scroll(Scroll {
-                offset: node.scroll.shown(),
-                extent: node.scroll_max + node.abs.h,
-                anchored: node.scroll.anchored,
-                list: node.style.layout == Layout::List,
-                bar,
-            })
-        } else if node.style.position == Position::Sticky {
-            LayerKind::Sticky { stuck: node.stuck }
-        } else if node.surface.is_some() {
-            LayerKind::Surface
-        } else {
-            return None;
-        };
-        self.layers += 1;
-        Some(Layer { z: self.layers, kind, change: Change::New })
+        Some((item, enclosing))
     }
 
     fn text(&self, id: NodeId, hovered: bool, in_block: bool, out: &mut Vec<Op>) {
@@ -315,7 +465,8 @@ impl Recorder<'_> {
                     Some(cut) => (cut, Vec::new()),
                     None => (text[line.clone()].to_string(), rebased(marks, line.clone())),
                 };
-                out.push(run(shown_text, origin.0, top, font_index, 0.0, color, TextStyle::Run, shown_marks));
+                let width = measure_marked(font, &shown_text, 0..shown_text.len(), px, &shown_marks);
+                out.push(run(shown_text, origin.0, top, font_index, width, color, TextStyle::Run, shown_marks));
                 continue;
             }
             let mut x = origin.0;
@@ -380,102 +531,30 @@ impl Recorder<'_> {
     }
 }
 
-pub fn mark_changes(previous: &Scene, next: &mut Scene) {
-    let mut before = std::collections::HashMap::new();
-    collect(&previous.root, &mut before);
-    mark(&mut next.root, &before);
-}
-
-fn collect<'a>(item: &'a Item, out: &mut std::collections::HashMap<u64, &'a Item>) {
-    if item.layer.is_some() {
-        out.insert(item.node, item);
-    }
-    for child in &item.children {
-        collect(child, out);
-    }
-}
-
-fn mark(item: &mut Item, before: &std::collections::HashMap<u64, &Item>) {
-    for child in &mut item.children {
-        mark(child, before);
-    }
-    let Some(layer) = item.layer else { return };
-    let change = match before.get(&item.node) {
-        None => Change::New,
-        Some(old) => {
-            let offset = |i: &Item| i.scroll().map_or(0.0, |s| s.offset);
-            let by = offset(item) - offset(old);
-            if by == 0.0 {
-                if same(old, item) { Change::None } else { Change::Content }
-            } else if by.fract() == 0.0 && same_shifted(old, item, by) {
-                Change::Offset { by: by as i64 }
-            } else {
-                Change::Content
-            }
-        }
-    };
-    item.layer = Some(Layer { change, ..layer });
-}
-
-fn same(a: &Item, b: &Item) -> bool {
-    a.bounds == b.bounds && a.ops == b.ops && a.inner == b.inner && a.after == b.after && a.children.len() == b.children.len()
-        && a.children.iter().zip(&b.children).all(|(x, y)| x.node == y.node && same(x, y))
-}
-
-fn same_shifted(old: &Item, new: &Item, by: f32) -> bool {
-    if old.ops != new.ops {
-        return false;
-    }
-    let mut inner = new.inner.clone();
-    inner.iter_mut().for_each(|op| shift_op(op, by));
-    if inner != old.inner {
-        return false;
-    }
-    let now_seen = PxRect { y: new.bounds.y + by, ..new.bounds };
-    let mut kept = old.children.iter().filter(|a| new.children.iter().any(|b| b.node == a.node));
-    for child in &new.children {
-        let mut moved = child.clone();
-        shift(&mut moved, by);
-        if old.children.iter().any(|a| a.node == child.node) {
-            if !kept.next().is_some_and(|a| a.node == child.node && same(a, &moved)) {
-                return false;
-            }
-        } else if overlaps(moved.bounds, old.bounds) {
-            return false;
-        }
-    }
-    old.children.iter().all(|a| new.children.iter().any(|b| b.node == a.node) || !overlaps(a.bounds, now_seen))
-}
-
-fn overlaps(a: PxRect, b: PxRect) -> bool {
-    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-}
-
-fn shift(item: &mut Item, by: f32) {
-    item.bounds.y += by;
-    for op in item.ops.iter_mut().chain(item.inner.iter_mut()).chain(item.after.iter_mut()) {
-        shift_op(op, by);
-    }
-    for child in &mut item.children {
-        shift(child, by);
-    }
-}
-
-fn shift_op(op: &mut Op, by: f32) {
-    match op {
-        Op::Rect { rect, .. } | Op::Gradient { rect, .. } | Op::Border { rect, .. } | Op::Rule { rect, .. } | Op::Selection { rect, .. } | Op::Clip(rect) => rect.y += by,
-        Op::Text(text) => text.top += by,
-        Op::Image(image) => image.rect.y += by,
-        Op::Surface(surface) => surface.rect.y += by,
-        Op::Icon(icon) => icon.rect.y += by,
-        Op::Caret(caret) => caret.rect.y += by,
-        Op::Scrollbar(bar) => {
-            bar.thumb.0.y += by;
-            if let Some(track) = &mut bar.track {
-                track.0.y += by;
-            }
-        }
-        Op::Unclip => {}
+fn layer(tree: &Tree, id: NodeId) -> Option<LayerKind> {
+    let node = tree.get(id)?;
+    if node.style.overflow == Overflow::Scroll {
+        let bar = tree.scrollbar_rects(id).zip(tree.scrollbar_style(id)).map(|(rects, style)| BarState {
+            zone: rects.zone,
+            thumb: rects.thumb,
+            opacity: node.bar.opacity,
+            expand: node.bar.expand,
+            thumb_color: style.thumb_color,
+            thumb_hover_color: style.thumb_hover_color,
+        });
+        Some(LayerKind::Scroll(Scroll {
+            offset: node.scroll.shown(),
+            extent: node.scroll_max + node.abs.h,
+            anchored: node.scroll.anchored,
+            list: node.style.layout == Layout::List,
+            bar,
+        }))
+    } else if node.style.position == Position::Sticky {
+        Some(LayerKind::Sticky { stuck: node.stuck })
+    } else if node.surface.is_some() {
+        Some(LayerKind::Surface)
+    } else {
+        None
     }
 }
 

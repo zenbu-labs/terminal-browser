@@ -10,7 +10,6 @@ pub struct PixelFrame<'a> {
     pub canvas: &'a Canvas,
     pub premultiplied: bool,
     pub changed: &'a [Rect],
-    pub repainted: &'a [Rect],
     pub opaque: &'a [OpaqueArea],
     pub ui_over_surfaces: &'a [Rect],
     pub layer: Option<&'a ScrollLayer>,
@@ -875,22 +874,18 @@ impl Canvas {
             + 1.0;
         if w * h >= 65536.0 && w > corner * 2.0 + 2.0 && h > corner * 2.0 + 2.0 {
             let inset = width / 2.0;
-            let stroke_radius = radius.map(|r| (r - inset).max(0.0));
-            let clips: [(f32, f32, f32, f32); 4] = [
-                (x, y, corner, corner),
-                (x + w - corner, y, corner, corner),
-                (x + w - corner, y + h - corner, corner, corner),
-                (x, y + h - corner, corner, corner),
+            let [r0, r1, r2, r3] = radius.map(|r| (r - inset).max(0.0));
+            let (left, top, right, bottom) = (x + inset, y + inset, x + w - inset, y + h - inset);
+            let span = corner * 2.0;
+            let corners: [((f32, f32), (f32, f32), [f32; 4]); 4] = [
+                ((x, y), (left, top), [r0, 0.0, 0.0, 0.0]),
+                ((x + w - corner, y), (right - span, top), [0.0, r1, 0.0, 0.0]),
+                ((x + w - corner, y + h - corner), (right - span, bottom - span), [0.0, 0.0, r2, 0.0]),
+                ((x, y + h - corner), (left, bottom - span), [0.0, 0.0, 0.0, r3]),
             ];
-            if let Some(path) = rounded_rect_path(
-                x + inset,
-                y + inset,
-                w - width,
-                h - width,
-                stroke_radius,
-            ) {
-                for (cx, cy, cw, ch) in clips {
-                    self.push_clip(cx, cy, cw, ch);
+            for ((cx, cy), (px, py), radius) in corners {
+                if let Some(path) = rounded_rect_path(px, py, span, span, radius) {
+                    self.push_clip(cx, cy, corner, corner);
                     self.paint_path(&path, color, Some(width));
                     self.pop_clip();
                 }
@@ -1341,41 +1336,13 @@ impl Canvas {
             return;
         }
         tally(|s| &s.paths);
-        let unclipped = (cx1, cy1, cx2, cy2) == (0, 0, self.width, self.height);
-        let inside = unclipped
-            || (bounds.left() - pad >= cx1 as f32
-                && bounds.top() - pad >= cy1 as f32
-                && bounds.right() + pad <= cx2 as f32
-                && bounds.bottom() + pad <= cy2 as f32);
-        if !inside {
+        if bounds.left() - pad < cx1 as f32 || bounds.top() - pad < cy1 as f32 || bounds.right() + pad > cx2 as f32 || bounds.bottom() + pad > cy2 as f32 {
             tally(|s| &s.paths_clipped);
-            self.paint_path_clipped(path, paint, stroke, (cx1, cy1, cx2, cy2), pad);
-            return;
         }
-        let Some(mut pixmap) =
-            tiny_skia::PixmapMut::from_bytes(&mut self.pixels, self.width, self.height)
-        else {
-            return;
-        };
-        match stroke {
-            None => pixmap.fill_path(
-                path,
-                &paint,
-                tiny_skia::FillRule::Winding,
-                tiny_skia::Transform::identity(),
-                None,
-            ),
-            Some(stroke) => pixmap.stroke_path(
-                path,
-                &paint,
-                &stroke,
-                tiny_skia::Transform::identity(),
-                None,
-            ),
-        }
+        self.paint_path_region(path, paint, stroke, (cx1, cy1, cx2, cy2), pad);
     }
 
-    fn paint_path_clipped(
+    fn paint_path_region(
         &mut self,
         path: &tiny_skia::Path,
         paint: tiny_skia::Paint<'static>,
@@ -1385,30 +1352,34 @@ impl Canvas {
     ) {
         let bounds = path.bounds();
         let (cx1, cy1, cx2, cy2) = clip;
-        let x1 = ((bounds.left() - pad).floor().max(0.0) as u32).max(cx1);
-        let y1 = ((bounds.top() - pad).floor().max(0.0) as u32).max(cy1);
-        let x2 = ((bounds.right() + pad).ceil().max(0.0) as u32).min(cx2);
-        let y2 = ((bounds.bottom() + pad).ceil().max(0.0) as u32).min(cy2);
-        if x2 <= x1 || y2 <= y1 {
+        let x1 = (bounds.left() - pad).floor().max(0.0) as u32;
+        let y1 = (bounds.top() - pad).floor().max(0.0) as u32;
+        let x2 = ((bounds.right() + pad).ceil().max(0.0) as u32).min(self.width);
+        let y2 = ((bounds.bottom() + pad).ceil().max(0.0) as u32).min(self.height);
+        let (kx1, ky1, kx2, ky2) = (x1.max(cx1), y1.max(cy1), x2.min(cx2), y2.min(cy2));
+        if kx2 <= kx1 || ky2 <= ky1 {
             return;
         }
         let (w, h) = (x2 - x1, y2 - y1);
+        let row_bytes = w as usize * 4;
+        let at = |row: u32, col: u32| ((row as usize) * self.width as usize + col as usize) * 4;
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.clear();
-        scratch.resize(w as usize * h as usize * 4, 0);
+        for row in y1..y2 {
+            scratch.extend_from_slice(&self.pixels[at(row, x1)..at(row, x1) + row_bytes]);
+        }
+        // Paths are always drawn into a copy of their own area and only the part inside the clip is
+        // kept, so the pixels never depend on the clip: drawing part of a frame matches drawing all of it.
         if let Some(mut pixmap) = tiny_skia::PixmapMut::from_bytes(&mut scratch, w, h) {
             let shift = tiny_skia::Transform::from_translate(-(x1 as f32), -(y1 as f32));
             match stroke {
                 None => pixmap.fill_path(path, &paint, tiny_skia::FillRule::Winding, shift, None),
                 Some(stroke) => pixmap.stroke_path(path, &paint, &stroke, shift, None),
             }
-            let row_bytes = w as usize * 4;
-            for row in 0..h as usize {
-                let dst = ((y1 as usize + row) * self.width as usize + x1 as usize) * 4;
-                blend_row(
-                    &mut self.pixels[dst..dst + row_bytes],
-                    &scratch[row * row_bytes..][..row_bytes],
-                );
+            let keep = (kx2 - kx1) as usize * 4;
+            for row in ky1..ky2 {
+                let from = (row - y1) as usize * row_bytes + (kx1 - x1) as usize * 4;
+                self.pixels[at(row, kx1)..at(row, kx1) + keep].copy_from_slice(&scratch[from..from + keep]);
             }
         }
         self.scratch = scratch;

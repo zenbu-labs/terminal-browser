@@ -34,7 +34,7 @@ function spawnDaemon(): void {
   const bootstrap = path.join(library, "dist", "bootstrap.js");
   const entry = path.join(__dirname, "daemon.js");
   const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_") && key !== "ELECTRON_RUN_AS_NODE"),
+    Object.entries(process.env).filter(([key]) => (!key.startsWith("PIXEL_") || key.startsWith("PIXEL_VERIFY_DAMAGE")) && key !== "ELECTRON_RUN_AS_NODE"),
   );
   fs.mkdirSync(path.dirname(SOCKET), { recursive: true });
   const log = fs.openSync(path.join(path.dirname(SOCKET), "daemon.log"), "a");

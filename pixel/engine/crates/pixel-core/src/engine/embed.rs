@@ -43,6 +43,7 @@ impl Engine {
         });
         crate::profiler::count("surface.damage_px", || incoming);
         let cpu = crate::profiler::cpu_us();
+        let first = crate::surfaces::with(surface, |_| ()).is_none();
         let changed = crate::profiler::span("surface.convert", || {
             crate::surfaces::write(surface, width, height, damage, bgra, stride)
         });
@@ -53,17 +54,19 @@ impl Engine {
         }
         crate::profiler::count("surface.rows", || changed.iter().map(|r| u64::from(r.h)).sum());
         crate::profiler::count("surface.changed_px", || changed.iter().map(|r| r.area()).sum());
+        if first {
+            for view in &mut self.comp.views {
+                view.tree.invalidate_surface(surface);
+            }
+        }
         self.damage_surface_views(surface, &changed);
         Ok(row_bytes * height as usize)
     }
 
     pub fn delete_surface(&mut self, surface: u32) -> io::Result<()> {
         crate::surfaces::remove(surface);
-        for view in self.comp.active_views() {
-            let tree = &mut self.comp.views[view].tree;
-            if tree.uses_surface(surface) {
-                tree.mark_paint();
-            }
+        for view in &mut self.comp.views {
+            view.tree.invalidate_surface(surface);
         }
         Ok(())
     }
@@ -93,7 +96,7 @@ impl Engine {
             let view = &mut self.comp.views[view];
             if whole_node {
                 view.tree.mark_surface_changed(surface);
-                view.tree.mark_paint();
+                view.tree.invalidate_surface(surface);
             }
             for rect in mapped {
                 view.add_damage(rect);
@@ -128,7 +131,7 @@ impl Engine {
                 None => {
                     let view = self.comp.view_at(point.0);
                     let local = self.comp.to_local(view, point);
-                    self.track_hover(view, local);
+                    self.sync_cursor();
                     self.update_hover_target(view, local, out);
                     let Some(node) = self.comp.views[view].tree.hit_pointer(local.0, local.1)
                     else {

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use pixel_core::fonts::Font;
 use pixel_core::image_cache::{ImageStatus, with_scaled_image};
 use pixel_core::scene::{Caret, Icon, Image, Item, Op, Scrollbar, Surface, Text, TextStyle};
+use pixel_core::surfaces::Rect;
 use pixel_core::{CaretShape, Color, PxRect, caret_thickness};
 
 use crate::canvas::Canvas;
@@ -19,6 +20,7 @@ pub(crate) struct Painter<'a> {
     pub fonts: &'a [Font],
     pub host_surfaces: bool,
     pub occluders: Vec<(u64, u32)>,
+    pub only: Option<PxRect>,
 }
 
 pub(crate) fn paint_scene(
@@ -26,25 +28,33 @@ pub(crate) fn paint_scene(
     root: &Item,
     fonts: &[Font],
     host_surfaces: bool,
-    clear: Option<(pixel_core::surfaces::Rect, Color)>,
+    parts: &[Rect],
+    clear: Option<Color>,
     skip: Option<&Skip<'_>>,
 ) {
     pixel_core::profiler::span("tree.paint", || {
-        let mut occluders = Vec::new();
-        crate::opaque::collect_surface_occluders(root, None, canvas, &mut occluders);
-        if let Some((region, color)) = clear {
+        let occluders = crate::opaque::surface_occluders(root);
+        let clear = clear.map(|color| {
             let alpha = u32::from(color[3]);
-            let color = [
+            [
                 ((u32::from(color[0]) * alpha + 127) / 255) as u8,
                 ((u32::from(color[1]) * alpha + 127) / 255) as u8,
                 ((u32::from(color[2]) * alpha + 127) / 255) as u8,
                 color[3],
-            ];
-            pixel_core::profiler::span("canvas.clear", || canvas.fill_rect(region.x, region.y, region.w, region.h, color));
+            ]
+        });
+        for part in parts {
+            canvas.push_clip(part.x as f32, part.y as f32, part.w as f32, part.h as f32);
+            let occluders = occluders.iter().map(|(node, area)| (*node, canvas.add_occluder(area.x, area.y, area.w, area.h))).collect();
+            if let Some(color) = clear {
+                pixel_core::profiler::span("canvas.clear", || canvas.fill_rect(part.x, part.y, part.w, part.h, color));
+            }
+            let only = PxRect { x: part.x as f32, y: part.y as f32, w: part.w as f32, h: part.h as f32 };
+            let mut painter = Painter { canvas: &mut *canvas, fonts, host_surfaces, occluders, only: Some(only) };
+            painter.item(root, skip);
+            painter.canvas.clear_occluders();
+            canvas.pop_clip();
         }
-        let mut painter = Painter { canvas, fonts, host_surfaces, occluders };
-        painter.item(root, skip);
-        painter.canvas.clear_occluders();
         let (boxes, skipped, paths, clipped) = crate::canvas::take_canvas_stats();
         pixel_core::profiler::count("paint.boxes", || boxes);
         pixel_core::profiler::count("paint.boxes.skipped", || skipped);
@@ -54,13 +64,16 @@ pub(crate) fn paint_scene(
 }
 
 pub(crate) fn paint_subtree(canvas: &mut Canvas, item: &Item, fonts: &[Font], host_surfaces: bool) {
-    let mut painter = Painter { canvas, fonts, host_surfaces, occluders: Vec::new() };
+    let mut painter = Painter { canvas, fonts, host_surfaces, occluders: Vec::new(), only: None };
     painter.item(item, None);
     painter.canvas.clear_occluders();
 }
 
 impl Painter<'_> {
     pub(crate) fn item(&mut self, item: &Item, skip: Option<&Skip<'_>>) {
+        if self.only.is_some_and(|only| !item.extent.intersects(only)) {
+            return;
+        }
         for op in &item.ops {
             if matches!(op, Op::Surface(_))
                 && let Some(at) = self.occluders.iter().position(|(n, _)| *n == item.node)

@@ -1,8 +1,6 @@
 use pixel_core::scene::{Item, Op};
 use pixel_core::PxRect;
 
-use crate::canvas::Canvas;
-
 pub struct Opaque {
     pub areas: Vec<pixel_core::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<pixel_core::surfaces::Rect>,
@@ -183,7 +181,13 @@ fn opaque_bands(rect: PxRect, radius: f32) -> [PxRect; 3] {
     ]
 }
 
-pub(crate) fn collect_surface_occluders(item: &Item, clip: Option<PxRect>, canvas: &mut Canvas, out: &mut Vec<(u64, u32)>) {
+pub(crate) fn surface_occluders(root: &Item) -> Vec<(u64, PxRect)> {
+    let mut out = Vec::new();
+    collect_surface_occluders(root, None, &mut out);
+    out
+}
+
+fn collect_surface_occluders(item: &Item, clip: Option<PxRect>, out: &mut Vec<(u64, PxRect)>) {
     let rect = item.bounds;
     if let Some(surface) = item.surface
         && item.opaque
@@ -200,14 +204,13 @@ pub(crate) fn collect_surface_occluders(item: &Item, clip: Option<PxRect>, canva
             area = area.intersect(clip);
         }
         if area.w > 0.0 && area.h > 0.0 {
-            let token = canvas.add_occluder(area.x, area.y, area.w, area.h);
-            out.push((item.node, token));
+            out.push((item.node, area));
         }
     }
     let child_clip = if item.clips { Some(clip.map_or(rect, |c| c.intersect(rect))) } else { clip };
     for child in &item.children {
         if !child.ops.iter().any(|op| matches!(op, Op::Icon(_))) {
-            collect_surface_occluders(child, child_clip, canvas, out);
+            collect_surface_occluders(child, child_clip, out);
         }
     }
 }
@@ -234,7 +237,7 @@ mod tests {
         });
         let mut fonts = crate::tests::fonts();
         tree.flush_layout(&mut fonts, 16.0);
-        pixel_core::record_scene(&tree, &fonts, None)
+        pixel_core::record_scene(&tree, &fonts)
     }
 
     fn opaque_page(surface: u32) -> Desc {
