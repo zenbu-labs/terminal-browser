@@ -274,7 +274,7 @@ fn scrolled_surface_layer(root: &Item, view: (u32, u32)) -> Option<(u32, ScrollL
         let inside = area.x + area.w <= view.0 && area.y + area.h <= view.1;
         let same_size = pixel_core::surfaces::with(surface, |s| (s.width, s.height)) == Some((area.w, area.h));
         (aligned && unclipped && inside && same_size && !area.is_empty()).then(|| {
-            (surface, ScrollLayer { area, origin_y: i64::from(area.y) - scroll_y, under: Vec::new(), overlays: Vec::new() })
+            (surface, ScrollLayer { area, origin_y: i64::from(area.y) - scroll_y, under: Vec::new(), overlays: Vec::new(), pinned_rows: true })
         })
     })
 }

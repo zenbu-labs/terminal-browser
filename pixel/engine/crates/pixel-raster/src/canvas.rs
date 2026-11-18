@@ -23,6 +23,9 @@ pub struct ScrollLayer {
     pub origin_y: i64,
     pub under: Vec<Pixels>,
     pub overlays: Vec<Overlay>,
+    // The presenter looks for rows at the top or bottom that stay put while the content scrolls (a sticky
+    // header drawn into the same pixels) and shows them on their own instead of re-sending them with the content.
+    pub pinned_rows: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
