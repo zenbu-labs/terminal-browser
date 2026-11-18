@@ -137,7 +137,7 @@ function createRoot(options?: RootOptions): Root
 | `setKeyCapture(keys: string[])` | listed unmodified keys (`"enter"`, `"escape"`, `"a"`) go to `onKey` even while an `Input` is focused; keys with ctrl/alt/shift/super never match |
 | `registerFont(face: FontFace): Promise<void>` | adds a font file to a family after startup; text laid out afterwards can use it |
 | `createSurface(): Surface` | creates a pixel surface for `<Box surface>` |
-| `setRender({ maxFps?, highlightTransmits?, frameEvents? })` | frame rate cap and render debug options |
+| `setRender({ maxFps?, highlightTransmits?, frameEvents?, tiles? })` | frame rate cap and render debug options; `tiles` (`"auto"`, `"on"`, `"off"`) sends image updates as non overlapping tiles instead of overlaid patches; `"auto"` tiles in rex |
 | `openDevtools(tab?)` / `closeDevtools()` | built in devtools for the React UI |
 | `startProfile()` / `stopProfile(): Promise<string \| null>` | records a profile, returns its path |
 | `setLogFile(path \| null)` | writes engine logs to a file |

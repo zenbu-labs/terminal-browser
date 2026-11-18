@@ -139,6 +139,14 @@ export const SETTINGS = {
       plain("inline", "Inline"),
     ],
   }),
+  "render.tiles": setting({
+    group: "advanced",
+    label: "Tiled image transmission",
+    hint: "Send image updates as non overlapping tiles, instead of overlaid patches",
+    schema: z.enum([AUTO, "on", "off"]),
+    default: AUTO,
+    choices: [plain(AUTO, "Automatic"), plain("on", "Yes"), plain("off", "No")],
+  }),
   "render.frameEvents": setting({
     group: "advanced",
     label: "Display debug actions",

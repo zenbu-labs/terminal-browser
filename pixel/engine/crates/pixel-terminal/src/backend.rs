@@ -147,6 +147,10 @@ impl TerminalBackend {
         self.presenter.highlight_transmits(on);
     }
 
+    pub fn set_force_tiles(&mut self, on: Option<bool>) {
+        self.presenter.force_tiles(on);
+    }
+
     pub fn note(&mut self, text: String) {
         self.presenter.note(text);
     }

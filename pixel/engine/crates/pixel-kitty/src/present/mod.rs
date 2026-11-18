@@ -58,6 +58,10 @@ impl Identity {
             Identity::Unknown => false,
         }
     }
+    fn prefers_tiles(self) -> bool {
+        matches!(self, Identity::Rex)
+    }
+
     pub(crate) fn is_ghostty(self) -> bool {
         matches!(self, Identity::Ghostty { .. })
     }
@@ -311,6 +315,14 @@ impl Kitty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_rex_prefers_tiles() {
+        assert!(Identity::Rex.prefers_tiles());
+        assert!(!Identity::Ghostty { version: (1, 3, 2) }.prefers_tiles());
+        assert!(!Identity::Kitty { version: (0, 48, 0) }.prefers_tiles());
+        assert!(!Identity::Unknown.prefers_tiles());
+    }
 
     #[test]
     fn xtversion_replies_identify_ghostty_kitty_and_rex() {

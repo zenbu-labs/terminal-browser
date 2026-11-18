@@ -27,7 +27,17 @@ enum TerminalOp {
         highlight_transmits: Option<bool>,
         #[serde(default)]
         frame_events: Option<bool>,
+        #[serde(default)]
+        tiles: Option<Tiles>,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Tiles {
+    Auto,
+    On,
+    Off,
 }
 
 pub struct TerminalOps;
@@ -38,11 +48,20 @@ impl HostOps for TerminalOps {
             return false;
         };
         match op {
-            TerminalOp::Presenter { highlight_transmits, frame_events } => {
+            TerminalOp::Presenter { highlight_transmits, frame_events, tiles } => {
                 if let Some(on) = highlight_transmits
                     && let Some(terminal) = terminal(engine)
                 {
                     terminal.set_highlight_transmits(on);
+                }
+                if let Some(tiles) = tiles
+                    && let Some(terminal) = terminal(engine)
+                {
+                    terminal.set_force_tiles(match tiles {
+                        Tiles::Auto => None,
+                        Tiles::On => Some(true),
+                        Tiles::Off => Some(false),
+                    });
                 }
                 if let Some(on) = frame_events {
                     let font = on.then(|| engine.fonts[0].clone());
@@ -81,7 +100,7 @@ mod tests {
     #[test]
     fn presenter_reads_camel_cased_fields_and_leaves_missing_ones_unset() {
         let op: TerminalOp = serde_json::from_str(r#"{"op":"presenter","highlightTransmits":true}"#).unwrap();
-        let TerminalOp::Presenter { highlight_transmits, frame_events } = op else {
+        let TerminalOp::Presenter { highlight_transmits, frame_events, .. } = op else {
             panic!("parsed as another op");
         };
         assert_eq!(highlight_transmits, Some(true));

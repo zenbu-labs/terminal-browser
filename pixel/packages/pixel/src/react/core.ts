@@ -215,6 +215,7 @@ export interface RenderSettings {
   maxFps?: number;
   highlightTransmits?: boolean;
   frameEvents?: boolean;
+  tiles?: "auto" | "on" | "off";
 }
 
 export interface PixelRoot {
@@ -821,8 +822,13 @@ export function createEngineRoot(options: EngineRootOptions, platform: RootPlatf
         highlightTransmits: settings.highlightTransmits ?? s.highlightTransmits,
       }));
       bridge.push(APP_VIEW, { op: "setRender", maxFps: settings.maxFps });
-      if (settings.highlightTransmits !== undefined || settings.frameEvents !== undefined) {
-        bridge.push(APP_VIEW, { op: "presenter", highlightTransmits: settings.highlightTransmits, frameEvents: settings.frameEvents });
+      if (settings.highlightTransmits !== undefined || settings.frameEvents !== undefined || settings.tiles !== undefined) {
+        bridge.push(APP_VIEW, {
+          op: "presenter",
+          highlightTransmits: settings.highlightTransmits,
+          frameEvents: settings.frameEvents,
+          tiles: settings.tiles,
+        });
       }
       bridge.flush();
     },
