@@ -99,6 +99,12 @@ impl Raster {
                     render_layer(root, &plan, canvases, frame.fonts, options.host_surfaces, view.clear)
                 })
             });
+            if options.scroll_layer && pixels.layer.is_none()
+                && let Some((surface, layer)) = scrolled_surface_layer(root, view.size)
+            {
+                pixels.opaque.retain(|area| area.surface != Some(surface));
+                pixels.layer = Some(layer);
+            }
             painted.push(Painted { view: view.view, parts, whole, surface_parts });
         }
         pixel_core::profiler::set_view(0);
@@ -254,6 +260,23 @@ impl Raster {
         }
         self.surface_layout = Some(layout);
     }
+}
+
+fn scrolled_surface_layer(root: &Item, view: (u32, u32)) -> Option<(u32, ScrollLayer)> {
+    let mut found = Vec::new();
+    surface_items(root, None, &mut found);
+    found.into_iter().find_map(|(surface, bounds, visible)| {
+        let scroll_y = pixel_core::surfaces::scroll(surface)?;
+        let area = Rect::covering(bounds);
+        let whole = |v: f32| v.fract() == 0.0;
+        let aligned = whole(bounds.x) && whole(bounds.y) && whole(bounds.w) && whole(bounds.h) && bounds.x >= 0.0 && bounds.y >= 0.0;
+        let unclipped = visible == bounds;
+        let inside = area.x + area.w <= view.0 && area.y + area.h <= view.1;
+        let same_size = pixel_core::surfaces::with(surface, |s| (s.width, s.height)) == Some((area.w, area.h));
+        (aligned && unclipped && inside && same_size && !area.is_empty()).then(|| {
+            (surface, ScrollLayer { area, origin_y: i64::from(area.y) - scroll_y, under: Vec::new(), overlays: Vec::new() })
+        })
+    })
 }
 
 fn surface_items(item: &Item, clip: Option<pixel_core::PxRect>, out: &mut Vec<(u32, pixel_core::PxRect, pixel_core::PxRect)>) {
