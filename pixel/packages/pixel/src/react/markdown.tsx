@@ -19,6 +19,7 @@ export interface MarkdownTheme {
   inlineCode: Color;
   codeBg: Color;
   separator: Color;
+  separatorWidth?: number;
   syntax: Record<string, Color | undefined>;
 }
 
@@ -332,7 +333,7 @@ function BlockBody({ block, theme, rem, codeFamily, copyable, slug, nav, index }
         <CodeBlock block={block} theme={theme} rem={rem} codeFamily={codeFamily} copyable={copyable} nav={nav} index={index} />
       );
     case "rule":
-      return <Box style={{ height: 1, background: theme.separator }} />;
+      return <Box style={{ height: theme.separatorWidth ?? 1, background: theme.separator }} />;
     case "image":
       return (
         <Image
@@ -414,7 +415,7 @@ function Table({ block, theme, rem, nav, index }: BlockProps) {
     <Box
       style={{
         flexDirection: "column",
-        border: { width: 1, color: theme.separator },
+        border: { width: theme.separatorWidth ?? 1, color: theme.separator },
         padding: 1,
         overflow: "hidden",
       }}
@@ -424,7 +425,7 @@ function Table({ block, theme, rem, nav, index }: BlockProps) {
           key={r}
           style={{
             background: r === 0 ? theme.codeBg : undefined,
-            border: r > 0 ? { top: [1, theme.separator] } : undefined,
+            border: r > 0 ? { top: [theme.separatorWidth ?? 1, theme.separator] } : undefined,
           }}
         >
           {Array.from({ length: columns }, (_, c) => {
@@ -437,7 +438,7 @@ function Table({ block, theme, rem, nav, index }: BlockProps) {
                   flexGrow: weights[c],
                   flexBasis: 0,
                   justifyContent: CELL_JUSTIFY[align],
-                  border: c > 0 ? { left: [1, theme.separator] } : undefined,
+                  border: c > 0 ? { left: [theme.separatorWidth ?? 1, theme.separator] } : undefined,
                   padding: {
                     left: rem * 0.6,
                     right: rem * 0.6,
