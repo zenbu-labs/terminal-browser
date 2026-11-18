@@ -19,6 +19,7 @@ const KEEP_SCREENS: i64 = 3;
 const MAX_PINNED_ROWS_SHARE: u32 = 4;
 const MAX_PINNED_COLUMNS_SHARE: u32 = 3;
 const MIN_PINNED_COLUMNS: u32 = 8;
+const PINNED_SAMPLE_EVERY: usize = 8;
 
 #[derive(Debug)]
 pub(crate) struct Layer {
@@ -39,7 +40,7 @@ struct Pinned {
 }
 
 impl Pinned {
-    fn new(area: Rect, top: u32, bottom: u32, left: u32, right: u32, canvas: &Canvas) -> Self {
+    fn new(area: Rect, [top, bottom, left, right]: [u32; 4], canvas: &Canvas, worth: impl Fn(Rect) -> bool) -> Self {
         let middle = area.h - top - bottom;
         let rects = [
             Rect { x: area.x, y: area.y, w: area.w, h: top },
@@ -47,52 +48,81 @@ impl Pinned {
             Rect { x: area.x, y: area.y + top, w: left, h: middle },
             Rect { x: area.x + area.w - right, y: area.y + top, w: right, h: middle },
         ]
-        .map(|rect| opaque_part(canvas, rect));
+        .map(|rect| if !rect.is_empty() && worth(rect) { opaque_part(canvas, rect) } else { Rect::default() });
         Self { rects, pixels: Default::default() }.capture(canvas)
     }
 
     fn capture(mut self, canvas: &Canvas) -> Self {
-        let stride = canvas.width as usize * 4;
-        self.pixels = self.rects.map(|r| {
-            (r.y..r.y + r.h).flat_map(|y| {
-                let at = y as usize * stride + r.x as usize * 4;
-                canvas.pixels[at..at + r.w as usize * 4].iter().copied()
-            }).collect()
-        });
+        self.pixels = self.rects.map(|r| region_pixels(canvas, r));
         self
     }
 
-    fn rows(&self) -> (u32, u32) {
-        (self.rects[0].h, self.rects[1].h)
+    // Refreshes the pixels of regions whose content changed in place, and drops a region that stopped
+    // being fully opaque.
+    fn refresh(&mut self, canvas: &Canvas) {
+        let stride = canvas.width as usize * 4;
+        for (rect, pixels) in self.rects.iter_mut().zip(self.pixels.iter_mut()) {
+            if rect.is_empty() {
+                continue;
+            }
+            let len = rect.w as usize * 4;
+            let same = (0..rect.h as usize).all(|r| {
+                let at = (rect.y as usize + r) * stride + rect.x as usize * 4;
+                canvas.pixels[at..at + len] == pixels[r * len..(r + 1) * len]
+            });
+            if same {
+                continue;
+            }
+            if opaque_part(canvas, *rect) == *rect {
+                *pixels = region_pixels(canvas, *rect);
+            } else {
+                *rect = Rect::default();
+                pixels.clear();
+            }
+        }
     }
 
-    // The parts of screen row y not covered by a pinned region, as pixel ranges from the area's left edge.
-    fn open_spans(&self, area: Rect, y: u32) -> Vec<std::ops::Range<u32>> {
-        let mut covered: Vec<(u32, u32)> = self
-            .rects
-            .iter()
-            .filter(|r| !r.is_empty() && y >= r.y && y < r.y + r.h)
-            .map(|r| (r.x - area.x, r.x - area.x + r.w))
-            .collect();
-        covered.sort_unstable();
-        let mut spans = Vec::new();
-        let mut at = 0;
-        for (start, end) in covered {
-            if start > at {
-                spans.push(at..start);
-            }
-            at = at.max(end);
-        }
-        if at < area.w {
-            spans.push(at..area.w);
-        }
-        spans
+}
+
+// The parts of screen row y not covered by a pinned region, as pixel ranges from the area's left edge.
+fn open_spans(pinned: &[Rect; 4], area: Rect, y: u32) -> Vec<std::ops::Range<u32>> {
+    if pinned.iter().all(|r| r.is_empty() || y < r.y || y >= r.y + r.h) {
+        return vec![0..area.w];
     }
+    let mut covered: Vec<(u32, u32)> = pinned
+        .iter()
+        .filter(|r| !r.is_empty() && y >= r.y && y < r.y + r.h)
+        .map(|r| (r.x - area.x, r.x - area.x + r.w))
+        .collect();
+    covered.sort_unstable();
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for (start, end) in covered {
+        if start > at {
+            spans.push(at..start);
+        }
+        at = at.max(end);
+    }
+    if at < area.w {
+        spans.push(at..area.w);
+    }
+    spans
 }
 
 // Terminals blend a see-through pixel with whatever image lies under it, and under a pinned region lie
 // stale stripes, so a pinned region keeps only fully opaque pixels: rows and columns at its ends with
 // any see-through pixel (a rounded corner) are left to the stripes, and a region with one inside is dropped.
+fn region_pixels(canvas: &Canvas, rect: Rect) -> Vec<u8> {
+    let stride = canvas.width as usize * 4;
+    let len = rect.w as usize * 4;
+    let mut pixels = Vec::with_capacity(len * rect.h as usize);
+    for y in rect.y..rect.y + rect.h {
+        let at = y as usize * stride + rect.x as usize * 4;
+        pixels.extend_from_slice(&canvas.pixels[at..at + len]);
+    }
+    pixels
+}
+
 fn opaque_part(canvas: &Canvas, rect: Rect) -> Rect {
     if rect.is_empty() {
         return rect;
@@ -100,7 +130,10 @@ fn opaque_part(canvas: &Canvas, rect: Rect) -> Rect {
     let stride = canvas.width as usize * 4;
     let opaque = |x: u32, y: u32| canvas.pixels[y as usize * stride + x as usize * 4 + 3] == 255;
     let column = |x: u32| (rect.y..rect.y + rect.h).all(|y| opaque(x, y));
-    let row = |y: u32, x0: u32, x1: u32| (x0..x1).all(|x| opaque(x, y));
+    let row = |y: u32, x0: u32, x1: u32| {
+        let at = y as usize * stride;
+        canvas.pixels[at + x0 as usize * 4..at + x1 as usize * 4].iter().skip(3).step_by(4).all(|&a| a == 255)
+    };
     let mut x0 = rect.x;
     let mut x1 = rect.x + rect.w;
     if rect.w >= rect.h {
@@ -211,12 +244,13 @@ impl Layer {
     // them moved, belong to something fixed to the screen (a sticky header, a sticky sidebar) rather
     // than to the scrolled content. While the content stays put they keep their place and only their
     // pixels are refreshed.
-    fn find_pinned(&self, canvas: &Canvas, layer: &ScrollLayer) -> Pinned {
+    fn find_pinned(&mut self, canvas: &Canvas, layer: &ScrollLayer) -> Pinned {
         let area = self.area;
         let Some(before) = self.origin else { return Pinned::default() };
         if before == layer.origin_y {
-            let [top, bottom, left, right] = self.pinned.rects;
-            return Pinned::new(area, top.h, bottom.h, left.w, right.w, canvas);
+            let mut pinned = std::mem::take(&mut self.pinned);
+            pinned.refresh(canvas);
+            return pinned;
         }
         let row_len = area.w as usize * 4;
         let stride = canvas.width as usize * 4;
@@ -230,35 +264,59 @@ impl Layer {
         let top = (0..rows_limit).take_while(|&r| unchanged(area.y + r)).count() as u32;
         let bottom = (0..rows_limit).take_while(|&r| unchanged(area.y + area.h - 1 - r)).count() as u32;
         let columns_limit = area.w / MAX_PINNED_COLUMNS_SHARE;
-        let (mut left, mut right) = (columns_limit, columns_limit);
-        for y in area.y + top..area.y + area.h - bottom {
+        let middle = area.y + top..area.y + area.h - bottom;
+        // A side whose columns look the same in the stripes at the new offset (plain margins) gains
+        // nothing from pinning; a sample of rows tells cheaply.
+        let moves = |bytes: std::ops::Range<usize>| {
+            middle.clone().step_by(PINNED_SAMPLE_EVERY).any(|y| {
+                self.stored_row(i64::from(y) - layer.origin_y).is_some_and(|stored| stored[bytes.clone()] != canvas_row(y)[bytes.clone()])
+            })
+        };
+        let columns = columns_limit as usize * 4;
+        let mut left = if !self.pinned.rects[2].is_empty() || moves(0..columns) { columns_limit } else { 0 };
+        let mut right = if !self.pinned.rects[3].is_empty() || moves(row_len - columns..row_len) { columns_limit } else { 0 };
+        let nothing_pinned = self.pinned.rects.iter().all(|r| r.is_empty());
+        for y in middle {
             if left == 0 && right == 0 {
                 break;
             }
-            if !self.shown_row(y, before, &mut shown) {
+            let was = if nothing_pinned {
+                self.stored_row(i64::from(y) - before)
+            } else {
+                self.shown_row(y, before, &mut shown).then_some(shown.as_slice())
+            };
+            let Some(shown) = was else {
                 (left, right) = (0, 0);
                 break;
+            };
+            let now = canvas_row(y);
+            let (l, r) = (left as usize * 4, right as usize * 4);
+            if now[..l] != shown[..l] {
+                left = (now[..l].iter().zip(&shown[..l]).position(|(a, b)| a != b).unwrap_or(l) / 4) as u32;
             }
-            let now = canvas_row(y).chunks_exact(4);
-            let was = shown.chunks_exact(4);
-            left = left.min(now.clone().zip(was.clone()).take(left as usize).take_while(|(n, w)| n == w).count() as u32);
-            right = right.min(now.rev().zip(was.rev()).take(right as usize).take_while(|(n, w)| n == w).count() as u32);
+            if now[row_len - r..] != shown[row_len - r..] {
+                right = (now[row_len - r..].iter().rev().zip(shown[row_len - r..].iter().rev()).position(|(a, b)| a != b).unwrap_or(r) / 4) as u32;
+            }
         }
         let narrow = |columns: u32| if columns < MIN_PINNED_COLUMNS { 0 } else { columns };
-        Pinned::new(area, top, bottom, narrow(left), narrow(right), canvas)
+        // Pinning only pays when the stripes would have had to change there: plain margins that scroll
+        // along look the same at every offset and are cheaper left in the stripes.
+        let worth = |rect: Rect| {
+            let bytes = (rect.x - area.x) as usize * 4..(rect.x - area.x + rect.w) as usize * 4;
+            (rect.y..rect.y + rect.h).any(|y| {
+                self.stored_row(i64::from(y) - layer.origin_y).is_some_and(|stored| stored[bytes.clone()] != canvas_row(y)[bytes.clone()])
+            })
+        };
+        Pinned::new(area, [top, bottom, narrow(left), narrow(right)], canvas, worth)
     }
 
-    fn pinned_overlays(&self, premultiplied: bool) -> Vec<Overlay> {
+    fn pinned_overlays(&self) -> Vec<Overlay> {
         self.pinned
             .rects
             .into_iter()
             .zip(&self.pinned.pixels)
             .filter(|(rect, _)| !rect.is_empty())
-            .map(|(rect, pixels)| {
-                let mut rgba = pixels.clone();
-                super::straighten(&mut rgba, premultiplied);
-                Overlay { pixels: Pixels { rect, rgba }, above: true }
-            })
+            .map(|(rect, pixels)| Overlay { pixels: Pixels { rect, rgba: pixels.clone() }, above: true })
             .collect()
     }
 
@@ -342,10 +400,10 @@ impl Kitty {
         let Some(mut state) = self.patches.layer.take() else {
             return Ok(LayerReport::default());
         };
-        state.pinned = if layer.pinned_rows { state.find_pinned(frame.canvas, layer) } else { Pinned::default() };
+        state.pinned = if layer.pinned_rows { pixel_core::profiler::span("present.pinned", || state.find_pinned(frame.canvas, layer)) } else { Pinned::default() };
         let result = self.draw_stripes(frame, layer, &mut state, out).and_then(|mut report| {
             let mut overlays = layer.overlays.clone();
-            overlays.extend(state.pinned_overlays(frame.premultiplied));
+            overlays.extend(state.pinned_overlays());
             report.overlays_sent = self.draw_overlays(&overlays, &mut state, out)?;
             Ok(report)
         });
@@ -367,7 +425,7 @@ impl Kitty {
         let stride = canvas.width as usize * 4;
         let premultiplied = frame.premultiplied;
         let mut consolidated = false;
-        let pinned = state.pinned.clone();
+        let pinned = state.pinned.rects;
         let band_of = |k: i64| {
             let y0 = layer.origin_y + k * stripe;
             let shown_top = y0.max(i64::from(area.y));
@@ -405,7 +463,7 @@ impl Kitty {
                     row = &row_buf;
                 }
                 let at = (band.y + r) as usize * row_len;
-                for span in pinned.open_spans(area, y) {
+                for span in open_spans(&pinned, area, y) {
                     let bytes = span.start as usize * 4..span.end as usize * 4;
                     let stored = &mut entry.pixels[at + bytes.start..at + bytes.end];
                     let row = &row[bytes];
@@ -632,15 +690,15 @@ mod tests {
         let out = draw(&mut kitty, &with_header(64, area.h, -30, 20), &at(-30));
         assert!(out.contains(&format!("i={FIRST_OVERLAY_ID}")), "the header is shown on its own: {out}");
         let state = kitty.patches.layer.as_ref().unwrap();
-        assert_eq!(state.pinned.rows(), (20, 0));
+        assert_eq!((state.pinned.rects[0].h, state.pinned.rects[1].h), (20, 0));
         let out = draw(&mut kitty, &with_header(64, area.h, -60, 20), &at(-60));
         assert!(!out.contains(&format!("i={FIRST_OVERLAY_ID},")), "an unchanged header is not sent again: {out}");
         let state = kitty.patches.layer.as_ref().unwrap();
-        assert_eq!(state.pinned.rows(), (20, 0));
+        assert_eq!((state.pinned.rects[0].h, state.pinned.rects[1].h), (20, 0));
         let out = draw(&mut kitty, &content(64, area.h, -90), &at(-90));
         assert!(out.contains(&format!("a=d,d=I,i={FIRST_OVERLAY_ID}")) || out.contains(&format!("i={FIRST_OVERLAY_ID},")), "a header that goes away stops being shown: {out}");
         let state = kitty.patches.layer.as_ref().unwrap();
-        assert_eq!(state.pinned.rows(), (0, 0));
+        assert_eq!((state.pinned.rects[0].h, state.pinned.rects[1].h), (0, 0));
         let canvas = content(64, area.h, -90);
         for y in 0..area.h {
             let want = &canvas.pixels[(y * 64 * 4) as usize..((y + 1) * 64 * 4) as usize];
@@ -650,9 +708,9 @@ mod tests {
 
     fn with_sidebar(width: u32, height: u32, origin_y: i64, side: u32) -> Canvas {
         let mut canvas = content(width, height, origin_y);
-        for row in canvas.pixels.chunks_exact_mut((width * 4) as usize) {
+        for (y, row) in canvas.pixels.chunks_exact_mut((width * 4) as usize).enumerate() {
             for px in row[..(side * 4) as usize].chunks_exact_mut(4) {
-                px.copy_from_slice(&[10, 200, 10, 255]);
+                px.copy_from_slice(&[10, 200, (y % 7) as u8 * 30, 255]);
             }
         }
         canvas
