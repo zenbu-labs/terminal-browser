@@ -58,8 +58,6 @@ impl Pinned {
         self
     }
 
-    // Refreshes the pixels of regions whose content changed in place, and drops a region that stopped
-    // being fully opaque.
     fn refresh(&mut self, canvas: &Canvas) {
         let stride = canvas.width as usize * 4;
         for (rect, pixels) in self.rects.iter_mut().zip(self.pixels.iter_mut()) {
@@ -85,7 +83,6 @@ impl Pinned {
 
 }
 
-// The parts of screen row y not covered by a pinned region, as pixel ranges from the area's left edge.
 fn open_spans(pinned: &[Rect; 4], area: Rect, y: u32) -> Vec<std::ops::Range<u32>> {
     if pinned.iter().all(|r| r.is_empty() || y < r.y || y >= r.y + r.h) {
         return vec![0..area.w];
@@ -110,9 +107,6 @@ fn open_spans(pinned: &[Rect; 4], area: Rect, y: u32) -> Vec<std::ops::Range<u32
     spans
 }
 
-// Terminals blend a see-through pixel with whatever image lies under it, and under a pinned region lie
-// stale stripes, so a pinned region keeps only fully opaque pixels: rows and columns at its ends with
-// any see-through pixel (a rounded corner) are left to the stripes, and a region with one inside is dropped.
 fn region_pixels(canvas: &Canvas, rect: Rect) -> Vec<u8> {
     let stride = canvas.width as usize * 4;
     let len = rect.w as usize * 4;
@@ -223,8 +217,6 @@ impl Layer {
         Some(&entry.pixels[row as usize * row_len..(row as usize + 1) * row_len])
     }
 
-    // The row the terminal showed at screen row y last frame, before the content moved: the stripes,
-    // with the pinned regions drawn over them where they were.
     fn shown_row(&self, y: u32, before: i64, row: &mut Vec<u8>) -> bool {
         let area = self.area;
         row.clear();
@@ -241,10 +233,6 @@ impl Layer {
         true
     }
 
-    // Parts of the area at its edges that showed the same pixels last frame, though the content under
-    // them moved, belong to something fixed to the screen (a sticky header, a sticky sidebar) rather
-    // than to the scrolled content. While the content stays put they keep their place and only their
-    // pixels are refreshed.
     fn find_pinned(&mut self, canvas: &Canvas, layer: &ScrollLayer) -> Pinned {
         let area = self.area;
         let Some(before) = self.origin else { return Pinned::default() };
@@ -264,14 +252,10 @@ impl Layer {
         let rows_limit = area.h / MAX_PINNED_ROWS_SHARE;
         let top = (0..rows_limit).take_while(|&r| unchanged(area.y + r)).count() as u32;
         let bottom = (0..rows_limit).take_while(|&r| unchanged(area.y + area.h - 1 - r)).count() as u32;
-        // Columns right at the edges hold the scrollbar, which changes whenever the content moves, so
-        // pinned columns start a little way in and the edges always stay with the stripes.
         let edge = EDGE_COLUMNS.min(area.w / 8);
         let e = edge as usize * 4;
         let columns_limit = area.w / MAX_PINNED_COLUMNS_SHARE;
         let middle = area.y + top..area.y + area.h - bottom;
-        // A side whose columns look the same in the stripes at the new offset (plain margins) gains
-        // nothing from pinning; a sample of rows tells cheaply.
         let moves = |bytes: std::ops::Range<usize>| {
             middle.clone().step_by(PINNED_SAMPLE_EVERY).any(|y| {
                 self.stored_row(i64::from(y) - layer.origin_y).is_some_and(|stored| stored[bytes.clone()] != canvas_row(y)[bytes.clone()])
@@ -304,8 +288,6 @@ impl Layer {
                 right = (now[inner_right.clone()].iter().rev().zip(shown[inner_right].iter().rev()).position(|(a, b)| a != b).unwrap_or(r) / 4) as u32;
             }
         }
-        // A pinned side only needs to reach as far in as the columns that change when the content moves
-        // (a scrollbar at the edge, not the plain margin next to it).
         let reach = |columns: u32, from_left: bool| {
             let mut needed = 0;
             for y in (area.y + top..area.y + area.h - bottom).step_by(PINNED_SAMPLE_EVERY) {
@@ -322,8 +304,6 @@ impl Layer {
         let left = if left > 0 { reach(left, true) } else { 0 };
         let right = if right > 0 { reach(right, false) } else { 0 };
         let narrow = |columns: u32| if columns < MIN_PINNED_COLUMNS { 0 } else { columns };
-        // Pinning only pays when the stripes would have had to change there: plain margins that scroll
-        // along look the same at every offset and are cheaper left in the stripes.
         let worth = |rect: Rect| {
             let bytes = (rect.x - area.x) as usize * 4..(rect.x - area.x + rect.w) as usize * 4;
             (rect.y..rect.y + rect.h).any(|y| {
@@ -415,7 +395,6 @@ impl Kitty {
                 let part = &mut b[row * part_len..(row + 1) * part_len];
                 part.copy_from_slice(&stripe[from..from + part_len]);
                 if !under.is_empty() {
-                    // a see-through pixel the stripe image already shows is left out, or it would be blended twice
                     for (px, below) in part.chunks_exact_mut(4).zip(under[from..from + part_len].chunks_exact(4)) {
                         if px[3] != 255 && px == below {
                             px.copy_from_slice(&[0, 0, 0, 0]);

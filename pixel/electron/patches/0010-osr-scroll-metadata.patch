@@ -58,15 +58,12 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
 diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_video_consumer.cc
 --- a/shell/browser/osr/osr_video_consumer.cc
 +++ b/shell/browser/osr/osr_video_consumer.cc
-@@ -60,6 +60,21 @@ bool IsPlatformSharedTextureHandle(const gfx::GpuMemoryBufferHandle& handle) {
+@@ -60,6 +60,18 @@ bool IsPlatformSharedTextureHandle(const gfx::GpuMemoryBufferHandle& handle) {
  
  namespace electron {
  
 +namespace {
 +
-+// Where the page's main scroller was scrolled to when the captured frame was
-+// drawn, in the frame's pixels. Read from the same compositor frame as the
-+// pixels, so it always matches them.
 +std::optional<gfx::PointF> RootScrollOffset(
 +    const media::VideoFrameMetadata& metadata) {
 +  if (!metadata.root_scroll_offset_x || !metadata.root_scroll_offset_y)
@@ -80,7 +77,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
  OffScreenVideoConsumer::OffScreenVideoConsumer(
      OffScreenRenderWidgetHostView* view,
      OnPaintCallback callback)
-@@ -152,6 +167,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -152,6 +164,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      texture.capture_update_rect = info->metadata.capture_update_rect;
      texture.source_size = info->metadata.source_size;
      texture.region_capture_rect = info->metadata.region_capture_rect;
@@ -90,7 +87,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
      texture.widget_type = view_->GetWidgetType();
  
  #if BUILDFLAG(IS_WIN)
-@@ -241,6 +259,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -241,6 +256,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      frame.frame_count = info->metadata.capture_counter.value_or(0);
      frame.capture_update_rect = info->metadata.capture_update_rect;
      frame.source_size = info->metadata.source_size;
