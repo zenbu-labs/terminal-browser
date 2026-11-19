@@ -1,0 +1,40 @@
+{
+  "env": {
+    "TERM_PROGRAM": "bateri",
+    "TERM_PROGRAM_VERSION": "0.30.0"
+  },
+  "exec": {
+    "bateri ls --json": "{\"caller\": \"p1\", \"typing\": \"p1\", \"windows\": [{\"id\": \"w1\", \"visible\": true, \"groups\": [], \"tabs\": [{\"id\": \"t1\", \"group\": null, \"keys\": \"⌘1\", \"label\": null, \"title\": \"zsh\", \"selected\": true, \"zoomed\": null, \"tree\": {\"axis\": \"side_by_side\", \"ratio\": 0.5, \"first\": {\"id\": \"p1\", \"name\": null, \"machine\": null, \"label\": null, \"on_screen\": true, \"floating\": false, \"minimized\": false}, \"second\": {\"id\": \"p2\", \"name\": null, \"machine\": null, \"label\": null, \"on_screen\": true, \"floating\": false, \"minimized\": false}}, \"cards\": []}, {\"id\": \"t2\", \"group\": null, \"keys\": \"⌘2\", \"label\": null, \"title\": \"zsh\", \"selected\": false, \"zoomed\": null, \"tree\": {\"id\": \"p3\", \"name\": null, \"machine\": null, \"label\": null, \"on_screen\": true, \"floating\": false, \"minimized\": false}, \"cards\": []}]}], \"terminals\": [{\"id\": \"p1\", \"state\": \"running\", \"program\": \"claude\", \"directory\": \"/tmp\", \"tab\": \"t1\", \"window\": \"w1\", \"placed\": \"tab\"}, {\"id\": \"p2\", \"state\": \"running\", \"program\": \"zsh\", \"directory\": \"/tmp\", \"tab\": \"t1\", \"window\": \"w1\", \"placed\": \"tab\"}, {\"id\": \"p3\", \"state\": \"running\", \"program\": \"zsh\", \"directory\": \"/tmp\", \"tab\": \"t2\", \"window\": \"w1\", \"placed\": \"tab\"}]}",
+    "bateri split p1 --right --ratio 40 -- terminal-browser open": ""
+  },
+  "expect": {
+    "name": "bateri",
+    "currentPane": {
+      "id": "p1",
+      "tab": "t1"
+    },
+    "split": {
+      "request": {
+        "direction": "right",
+        "command": [
+          "terminal-browser",
+          "open"
+        ],
+        "size": 0.4,
+        "from": {
+          "id": "p1",
+          "tab": "t1"
+        },
+        "tty": null
+      },
+      "commands": [
+        "bateri split p1 --right --ratio 40 -- terminal-browser open"
+      ]
+    },
+    "pasteKey": {
+      "commands": [
+        "bateri send-key p1 ctrl+v"
+      ]
+    }
+  }
+}
