@@ -30,6 +30,7 @@ impl Engine {
         bgra: &[u8],
         stride: usize,
         damage: Option<&[Rect]>,
+        scroll_y: Option<i64>,
     ) -> io::Result<usize> {
         let row_bytes = width as usize * 4;
         if width == 0 || height == 0 || stride < row_bytes || bgra.len() < stride * height as usize {
@@ -46,6 +47,7 @@ impl Engine {
         let changed = crate::profiler::span("surface.convert", || {
             crate::surfaces::write(surface, width, height, damage, bgra, stride)
         });
+        crate::surfaces::set_scroll(surface, scroll_y);
         if let Some((thread_before, _)) = cpu
             && let Some((thread_after, _)) = crate::profiler::cpu_us()
         {

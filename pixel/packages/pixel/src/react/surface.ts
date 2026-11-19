@@ -1,6 +1,6 @@
 import type { DamageRect, NativeEngine, SurfaceShm } from "./native";
 
-type Damaged = { damage?: DamageRect };
+type Damaged = { damage?: DamageRect; scrollY?: number };
 
 export type SurfaceTexture = { ioSurface: Buffer } | { shm: SurfaceShm };
 
@@ -32,11 +32,11 @@ export class Surface {
       if (!submit) throw new Error("IOSurface frames are not supported on this platform");
       const address = frame.ioSurface.readUIntLE(0, 6);
       const d = frame.damage;
-      submit.call(this.engine, this.id, address, d?.x ?? 0, d?.y ?? 0, d?.width ?? 0, d?.height ?? 0);
+      submit.call(this.engine, this.id, address, d?.x ?? 0, d?.y ?? 0, d?.width ?? 0, d?.height ?? 0, frame.scrollY);
     } else if ("shm" in frame) {
       const submit = this.engine.updateSurfaceShm;
       if (!submit) throw new Error("shared memory frames are not supported on this platform");
-      submit.call(this.engine, this.id, frame.shm, frame.damage, frame.released);
+      submit.call(this.engine, this.id, frame.shm, frame.damage, frame.released, frame.scrollY);
     } else {
       this.engine.updateSurface(this.id, frame.bgra, frame.width, frame.height, frame.damage);
     }
