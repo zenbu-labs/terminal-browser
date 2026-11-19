@@ -142,13 +142,21 @@ impl Kitty {
         Ok(())
     }
 
-    fn send_part(&mut self, out: &mut Vec<u8>, id: u32, rect: Rect, stripe: &[u8], width: u32, premultiplied: bool) -> io::Result<()> {
+    fn send_part(&mut self, out: &mut Vec<u8>, id: u32, rect: Rect, stripe: &[u8], under: &[u8], width: u32, premultiplied: bool) -> io::Result<()> {
         let row_len = width as usize * 4;
         let part_len = rect.w as usize * 4;
         let fill = |b: &mut [u8]| {
             for row in 0..rect.h as usize {
                 let from = (rect.y as usize + row) * row_len + rect.x as usize * 4;
-                b[row * part_len..(row + 1) * part_len].copy_from_slice(&stripe[from..from + part_len]);
+                let part = &mut b[row * part_len..(row + 1) * part_len];
+                part.copy_from_slice(&stripe[from..from + part_len]);
+                if !under.is_empty() {
+                    for (px, below) in part.chunks_exact_mut(4).zip(under[from..from + part_len].chunks_exact(4)) {
+                        if px[3] != 255 && px == below {
+                            px.copy_from_slice(&[0, 0, 0, 0]);
+                        }
+                    }
+                }
             }
             super::straighten(b, premultiplied);
         };
@@ -243,8 +251,12 @@ impl Kitty {
                 continue;
             };
             let mut rect = diff;
-            for patch in entry.patches.iter().filter(|p| !intersect(p.rect, diff).is_empty()) {
-                rect = union(rect, patch.rect);
+            loop {
+                let grown = entry.patches.iter().filter(|p| !intersect(p.rect, rect).is_empty()).fold(rect, |r, p| union(r, p.rect));
+                if grown == rect {
+                    break;
+                }
+                rect = grown;
             }
             let whole = rect.area() * 2 >= u64::from(area.w * STRIPE_PX) || entry.patches.len() >= MAX_PATCHES || !covers(&entry.pixels, &entry.sent, rect, row_len);
             let cost = if whole { stripe_bytes } else { rect.area() as usize * 4 };
@@ -254,7 +266,7 @@ impl Kitty {
             spent += cost;
             consolidated |= complete;
             entry.pending = None;
-            let (merged, kept): (Vec<Patch>, Vec<Patch>) = std::mem::take(&mut entry.patches).into_iter().partition(|p| !intersect(p.rect, diff).is_empty());
+            let (merged, kept): (Vec<Patch>, Vec<Patch>) = std::mem::take(&mut entry.patches).into_iter().partition(|p| !intersect(p.rect, rect).is_empty());
             entry.patches = kept;
             let mut freed: Vec<u32> = merged.iter().map(|p| p.placed.id).collect();
             if whole {
@@ -264,14 +276,14 @@ impl Kitty {
                     None => freed.pop().unwrap_or_else(|| state.next_id()),
                 };
                 let entry = state.stripes.get_mut(&k).expect("inserted above");
-                self.send_part(out, id, Rect::sized(area.w, STRIPE_PX), &entry.pixels, area.w, premultiplied)?;
+                self.send_part(out, id, Rect::sized(area.w, STRIPE_PX), &entry.pixels, &[], area.w, premultiplied)?;
                 entry.sent.clone_from(&entry.pixels);
                 entry.image = Some(Placed { id, shown: None });
                 report.stripes_sent += 1;
             } else {
                 let id = freed.pop().unwrap_or_else(|| state.next_id());
                 let entry = state.stripes.get_mut(&k).expect("inserted above");
-                self.send_part(out, id, rect, &entry.pixels, area.w, premultiplied)?;
+                self.send_part(out, id, rect, &entry.pixels, &entry.sent, area.w, premultiplied)?;
                 entry.patches.push(Patch { rect, placed: Placed { id, shown: None } });
                 report.overlays_sent += 1;
             }
