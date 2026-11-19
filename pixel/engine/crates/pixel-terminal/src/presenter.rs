@@ -77,6 +77,7 @@ pub(crate) trait Presenter: Send {
         Ok(())
     }
     fn highlight_transmits(&mut self, _on: bool) {}
+    fn force_tiles(&mut self, _on: Option<bool>) {}
 }
 
 pub(crate) struct KittyPresenter {
@@ -238,6 +239,10 @@ impl Presenter for KittyPresenter {
 
     fn highlight_transmits(&mut self, on: bool) {
         self.kitty.set_highlight_transmits(on);
+    }
+
+    fn force_tiles(&mut self, on: Option<bool>) {
+        self.kitty.set_force_tiles(on);
     }
 }
 

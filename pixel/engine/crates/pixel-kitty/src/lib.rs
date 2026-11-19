@@ -97,6 +97,7 @@ pub struct Kitty {
     patches: present::Patched,
     animation: present::Animation,
     highlight_transmits: bool,
+    force_tiles: Option<bool>,
     present_at: Option<Instant>,
     ready_at: Option<Instant>,
     shm_pool: Option<shm_pool::ShmPool>,
@@ -187,6 +188,7 @@ impl Kitty {
             patches: present::Patched::default(),
             animation: present::Animation::default(),
             highlight_transmits: false,
+            force_tiles: None,
             present_at: None,
             ready_at: None,
             shm_pool: None,
@@ -413,6 +415,10 @@ impl Kitty {
 
     pub fn set_highlight_transmits(&mut self, on: bool) {
         self.highlight_transmits = on;
+    }
+
+    pub fn set_force_tiles(&mut self, on: Option<bool>) {
+        self.force_tiles = on;
     }
 
     pub fn holds_a_frame(&self) -> bool {

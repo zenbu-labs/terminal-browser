@@ -60,7 +60,9 @@ impl Kitty {
         let canvas = frame.canvas;
         let size = (canvas.width, canvas.height);
         let on_screen = std::mem::take(&mut self.patches.opaque);
-        self.patches.opaque.extend(frame.opaque.iter().filter_map(|area| {
+        let tiled = self.force_tiles.unwrap_or(self.identity.prefers_tiles());
+        let opaque = if tiled { &[][..] } else { frame.opaque };
+        self.patches.opaque.extend(opaque.iter().filter_map(|area| {
             let rect = area.rect.clamped(size.0, size.1);
             (!rect.is_empty()).then_some(OpaqueArea { surface: area.surface, rect }) // im not entirely sure why we are passing area.surface here? hm
         }));
