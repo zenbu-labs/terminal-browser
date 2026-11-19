@@ -115,6 +115,12 @@ impl WindowSize {
             None
         }
     }
+
+    // its possible that the cell size and the reported window size are in different units (like iterm)
+    pub fn contradicts_cell(&self, cell: (u32, u32)) -> bool {
+        self.cell_size()
+            .is_some_and(|(w, h)| w * 2 >= cell.0 * 3 && h * 2 >= cell.1 * 3)
+    }
 }
 
 fn retry_intr<T>(mut call: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
@@ -489,6 +495,9 @@ impl Terminal {
                     }
                     RawEvent::WindowSize(ws) => Event::WindowSize(ws),
                     RawEvent::CellSize(cell) => {
+                        let Some(cell) = self.accept_cell_report(cell) else {
+                            continue;
+                        };
                         self.cell = Some(cell);
                         Event::CellSize(cell)
                     }
@@ -773,7 +782,9 @@ impl Terminal {
             return Ok(self.cell);
         }
         if self.hosted.is_none() && !self.wrapper.relayed() {
-            self.cell = self.read_report(300, parse_cell_size_report)?;
+            self.cell = self
+                .read_report(300, parse_cell_size_report)?
+                .and_then(|cell| self.accept_cell_report(cell));
         }
         if self.cell.is_none() {
             self.cell = self.size()?.cell_size();
@@ -781,6 +792,18 @@ impl Terminal {
         Ok(self.cell)
     }
 
+
+    fn accept_cell_report(&self, cell: (u32, u32)) -> Option<(u32, u32)> {
+        let ws = self.size().ok()?;
+        if ws.contradicts_cell(cell) {
+            pixel_core::logging::warn(
+                "terminal",
+                format!("ignoring reported cell {cell:?}, the window's pixels imply {:?}", ws.cell_size()),
+            );
+            return None;
+        }
+        Some(cell)
+    }
 
     pub fn ask_cell_size(&mut self) -> io::Result<Option<(u32, u32)>> {
         if let Some(state) = &self.hosted {
@@ -1902,6 +1925,22 @@ mod tests {
         assert!(matches!(event, RawEvent::WindowSize(ws) if ws.cell_size().is_none()));
         let (event, _) = parse_event(b"\x1b[6;21;10t").unwrap();
         assert!(matches!(event, RawEvent::CellSize((10, 21))));
+    }
+
+    #[test]
+    fn a_cell_reported_in_points_contradicts_a_window_in_device_pixels() {
+        let ws = WindowSize {
+            cols: 100,
+            rows: 40,
+            width_px: 1640,
+            height_px: 1360,
+        };
+        assert!(ws.contradicts_cell((8, 17)));
+        assert!(!ws.contradicts_cell((16, 34)));
+        assert!(!ws.contradicts_cell((15, 33)));
+        assert!(!ws.contradicts_cell((19, 42)));
+        let no_pixels = WindowSize { width_px: 0, height_px: 0, ..ws };
+        assert!(!no_pixels.contradicts_cell((8, 17)));
     }
 
     #[test]
