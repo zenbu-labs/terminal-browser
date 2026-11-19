@@ -188,6 +188,7 @@ fn whole_units(style: &Style, (x, y): (f32, f32), room: Edges) -> Style {
     snapped.width = size_x(grow(style.width, room.left + room.right, strokes.0, x));
     snapped.height = size_y(grow(style.height, room.top + room.bottom, strokes.1, y));
     snapped.min_width = size_x(style.min_width);
+    snapped.min_height = size_y(style.min_height);
     snapped.max_width = size_x(style.max_width);
     snapped.max_height = size_y(style.max_height);
     snapped.padding = Edges {
@@ -282,7 +283,7 @@ fn to_taffy_px(style: &Style, hidden: bool, input: bool) -> taffy::Style {
             } else {
                 dimension(style.min_width)
             },
-            height: auto(),
+            height: dimension(style.min_height),
         },
         max_size: taffy::Size {
             width: dimension(style.max_width),

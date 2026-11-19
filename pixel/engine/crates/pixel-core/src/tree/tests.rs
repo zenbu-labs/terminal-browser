@@ -2227,3 +2227,210 @@ fn a_new_tree_reserves_little_and_grows_on_demand() {
     assert!(tree.get(ids[5]).is_none());
     assert_eq!(tree.node(root).children.len(), 19_999);
 }
+
+fn row_text(i: usize) -> Desc {
+    Desc { key: Some(format!("row{i}")), text: Some(format!("row {i}")), ..Desc::default() }
+}
+
+fn nested_scroll_page(rows: usize) -> Vec<Desc> {
+    vec![Desc {
+        key: Some("page".into()),
+        style: Style { flex_direction: FlexDirection::Column, width: Dimension::Percent(1.0), height: Dimension::Percent(1.0), ..Style::default() },
+        children: vec![
+            Desc { key: Some("header".into()), text: Some("header".into()), ..Desc::default() },
+            Desc {
+                key: Some("body".into()),
+                style: Style { flex_grow: 1.0, ..Style::default() },
+                children: vec![Desc {
+                    key: Some("pane".into()),
+                    style: Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..Style::default() },
+                    children: vec![Desc {
+                        key: Some("scroll".into()),
+                        style: Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, overflow: Overflow::Scroll, ..Style::default() },
+                        children: (0..rows).map(row_text).collect(),
+                        ..Desc::default()
+                    }],
+                    ..Desc::default()
+                }],
+                ..Desc::default()
+            },
+        ],
+        ..Desc::default()
+    }]
+}
+
+#[test]
+fn nested_flex_grow_scroll_area_fills_the_rest_of_the_window_and_scrolls() {
+    let tree = tree_of((400.0, 300.0), nested_scroll_page(200));
+    let rect = |k: &str| tree.rect(tree.find(k).unwrap()).unwrap();
+    let header = rect("header");
+    for key in ["body", "pane", "scroll"] {
+        let r = rect(key);
+        assert_eq!(r.y, header.h, "{key} starts under the header");
+        assert_eq!(r.h, 300.0 - header.h, "{key} fills the rest of the window");
+    }
+    let area = tree.scroll_area(tree.find("scroll").unwrap()).unwrap();
+    assert!(area.max_scroll() > 0.0);
+    let row = rect("row1");
+    assert_eq!(row.h, header.h, "rows keep their text height");
+}
+
+fn wide_table_page(rows: usize) -> Vec<Desc> {
+    let cell = |r: usize, c: usize| Desc {
+        key: Some(format!("r{r}c{c}")),
+        text: Some(format!("r{r}c{c}")),
+        style: Style { width: Dimension::Px(120.0), flex_shrink: 0.0, ..Style::default() },
+        ..Desc::default()
+    };
+    let row = |r: usize| Desc { style: Style { flex_shrink: 0.0, ..Style::default() }, children: (0..8).map(|c| cell(r, c)).collect(), ..Desc::default() };
+    vec![Desc {
+        style: Style { flex_direction: FlexDirection::Column, width: Dimension::Percent(1.0), height: Dimension::Percent(1.0), ..Style::default() },
+        children: vec![
+            Desc { key: Some("header".into()), text: Some("header".into()), ..Desc::default() },
+            Desc {
+                key: Some("body".into()),
+                style: Style { flex_grow: 1.0, ..Style::default() },
+                children: vec![
+                    Desc { style: Style { width: Dimension::Px(100.0), flex_shrink: 0.0, ..Style::default() }, ..Desc::default() },
+                    Desc {
+                        key: Some("pane".into()),
+                        style: Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..Style::default() },
+                        children: vec![Desc {
+                            key: Some("scroll".into()),
+                            style: Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, overflow: Overflow::Scroll, ..Style::default() },
+                            children: (0..rows).map(row).collect(),
+                            ..Desc::default()
+                        }],
+                        ..Desc::default()
+                    },
+                ],
+                ..Desc::default()
+            },
+        ],
+        ..Desc::default()
+    }]
+}
+
+#[test]
+fn a_wide_scroll_area_in_a_growing_pane_stays_inside_the_window_and_scrolls_sideways() {
+    let mut tree = tree_of((400.0, 300.0), wide_table_page(50));
+    let rect = |tree: &Tree, k: &str| tree.rect(tree.find(k).unwrap()).unwrap();
+    assert_eq!(rect(&tree, "body").w, 400.0);
+    assert_eq!((rect(&tree, "pane").x, rect(&tree, "pane").w), (100.0, 300.0));
+    assert_eq!(rect(&tree, "scroll").w, 300.0);
+    let scroll = tree.find("scroll").unwrap();
+    assert_eq!(tree.scroll_max_x(scroll), 8.0 * 120.0 - 300.0);
+    assert!(tree.scroll_max(scroll) > 0.0, "and it still scrolls down");
+
+    tree.scroll_x_state_mut(scroll).unwrap().position = 250.0;
+    tree.mark_place();
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    assert_eq!(rect(&tree, "r0c3").x, 100.0 + 3.0 * 120.0 - 250.0);
+    assert_eq!(tree.sideways_scroll_at(150.0, 100.0), Some(scroll));
+    assert_eq!(tree.sideways_scroll_at(50.0, 100.0), None);
+
+    tree.scroll_x_state_mut(scroll).unwrap().position = 5000.0;
+    tree.mark_place();
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    assert_eq!(rect(&tree, "r0c7").x + 120.0, 400.0, "stops at the right edge");
+}
+
+#[test]
+fn a_scroll_area_that_fits_does_not_scroll_sideways() {
+    let tree = tree_of((400.0, 300.0), nested_scroll_page(200));
+    let scroll = tree.find("scroll").unwrap();
+    assert_eq!(tree.scroll_max_x(scroll), 0.0);
+    assert_eq!(tree.sideways_scroll_at(10.0, 100.0), None);
+}
+
+#[test]
+fn text_rows_in_a_column_too_short_for_them_keep_their_height_and_overflow() {
+    let tree = tree_of(
+        (400.0, 300.0),
+        vec![Desc {
+            style: Style { flex_direction: FlexDirection::Column, height: Dimension::Px(100.0), ..Style::default() },
+            children: (0..10).map(row_text).collect(),
+            ..Desc::default()
+        }],
+    );
+    let rows: Vec<PxRect> = (0..10).map(|i| tree.rect(tree.find(&format!("row{i}")).unwrap()).unwrap()).collect();
+    assert!(rows[0].h > 0.0);
+    for pair in rows.windows(2) {
+        assert!((pair[1].h - rows[0].h).abs() <= 1.0, "{pair:?} keep their text height");
+        assert!(pair[1].y >= pair[0].y + pair[0].h, "{pair:?} do not overlap");
+    }
+    assert!(rows[9].y + rows[9].h > 100.0);
+}
+
+#[test]
+fn the_header_above_a_growing_scroll_area_keeps_its_height_in_a_tiny_window() {
+    let tree = tree_of((400.0, 12.0), nested_scroll_page(200));
+    let header = tree.rect(tree.find("header").unwrap()).unwrap();
+    assert!(header.h > 12.0);
+    assert_eq!(tree.rect(tree.find("scroll").unwrap()).unwrap().h, 0.0);
+}
+
+#[test]
+fn a_content_sized_scroll_area_takes_its_content_height_up_to_its_max_height() {
+    let list = |rows: usize| {
+        vec![Desc {
+            style: Style { flex_direction: FlexDirection::Column, ..Style::default() },
+            children: vec![Desc {
+                key: Some("list".into()),
+                style: Style { flex_direction: FlexDirection::Column, max_height: Dimension::Px(100.0), overflow: Overflow::Scroll, ..Style::default() },
+                children: (0..rows).map(row_text).collect(),
+                ..Desc::default()
+            }],
+            ..Desc::default()
+        }]
+    };
+    let tree = tree_of((400.0, 300.0), list(3));
+    let line = tree.rect(tree.find("row0").unwrap()).unwrap().h;
+    assert_eq!(tree.rect(tree.find("list").unwrap()).unwrap().h, 3.0 * line);
+    let tree = tree_of((400.0, 300.0), list(20));
+    assert_eq!(tree.rect(tree.find("list").unwrap()).unwrap().h, 100.0);
+}
+
+#[test]
+fn min_height_keeps_a_growing_scroll_area_from_shrinking_below_it() {
+    let mut page = nested_scroll_page(200);
+    page[0].children[1].children[0].children[0].style.min_height = Dimension::Px(200.0);
+    let tree = tree_of((400.0, 150.0), page);
+    assert_eq!(tree.rect(tree.find("scroll").unwrap()).unwrap().h, 200.0);
+}
+
+#[test]
+fn min_height_zero_lets_a_box_shrink_below_its_text() {
+    let page = |min_height: Dimension| {
+        vec![Desc {
+            style: Style { flex_direction: FlexDirection::Column, height: Dimension::Px(100.0), ..Style::default() },
+            children: vec![
+                Desc {
+                    key: Some("rows".into()),
+                    style: Style { flex_direction: FlexDirection::Column, min_height, ..Style::default() },
+                    children: (0..10).map(row_text).collect(),
+                    ..Desc::default()
+                },
+                Desc { key: Some("footer".into()), text: Some("footer".into()), ..Desc::default() },
+            ],
+            ..Desc::default()
+        }]
+    };
+    let tree = tree_of((400.0, 300.0), page(Dimension::Auto));
+    let line = tree.rect(tree.find("footer").unwrap()).unwrap().h;
+    assert!(tree.rect(tree.find("rows").unwrap()).unwrap().h >= 10.0 * line);
+    let tree = tree_of((400.0, 300.0), page(Dimension::Px(0.0)));
+    assert_eq!(tree.rect(tree.find("rows").unwrap()).unwrap().h, 100.0 - line);
+    assert_eq!(tree.rect(tree.find("footer").unwrap()).unwrap().y, 100.0 - line);
+}
+
+#[test]
+fn rows_that_arrive_after_the_first_layout_scroll_inside_the_growing_area() {
+    let mut tree = tree_of((400.0, 300.0), nested_scroll_page(0));
+    tree.reconcile(Desc { children: nested_scroll_page(200), ..Desc::default() });
+    tree.flush_layout(&mut crate::fonts::FontRegistry::bundled(), 16.0);
+    let header = tree.rect(tree.find("header").unwrap()).unwrap();
+    let scroll = tree.find("scroll").unwrap();
+    assert_eq!(tree.rect(scroll).unwrap().h, 300.0 - header.h);
+    assert!(tree.scroll_area(scroll).unwrap().max_scroll() > 0.0);
+}

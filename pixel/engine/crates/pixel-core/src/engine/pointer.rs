@@ -280,7 +280,10 @@ impl Engine {
                 } else {
                     self.cell.0 as f32
                 };
-                self.emit_wheel(view, local, delta, 0.0, false, mouse.mods, out);
+                if self.emit_wheel(view, local, delta, 0.0, false, mouse.mods, out) {
+                    return Ok(());
+                }
+                self.scroll_sideways(view, local, delta);
             }
             MouseKind::ScrollUp | MouseKind::ScrollDown => {
                 let view = self.comp.view_at(point.0);
@@ -292,6 +295,9 @@ impl Engine {
                     self.cell.1 as f32
                 };
                 if self.emit_wheel(view, local, 0.0, delta, false, mouse.mods, out) {
+                    return Ok(());
+                }
+                if mouse.mods.shift && self.scroll_sideways(view, local, delta.signum() * self.cell.0 as f32) {
                     return Ok(());
                 }
                 if let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) {

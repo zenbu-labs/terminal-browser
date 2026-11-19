@@ -70,6 +70,7 @@ export interface Style {
   width?: number | `${number}%` | "auto";
   height?: number | `${number}%` | "auto";
   minWidth?: number | `${number}%` | "auto";
+  minHeight?: number | `${number}%` | "auto";
   maxWidth?: number | `${number}%` | "auto";
   maxHeight?: number | `${number}%` | "auto";
   padding?: number | Edges;
@@ -158,6 +159,7 @@ export function serializeStyle(style: Style): Record<string, unknown> {
     width: style.width,
     height: style.height,
     minWidth: style.minWidth,
+    minHeight: style.minHeight,
     maxWidth: style.maxWidth,
     maxHeight: style.maxHeight,
     padding: style.padding,
