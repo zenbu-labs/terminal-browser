@@ -258,3 +258,91 @@ fn rows_that_barely_change_are_repainted_rather_than_scrolled() {
     let text = String::from_utf8_lossy(&handle.frames()[before..].concat()).into_owned();
     assert!(!text.contains("S\x1b[r"), "only one digit per row changed, so the rows are rewritten in place: {text:?}");
 }
+
+fn growing(children: Vec<Desc>, style: Style) -> Desc {
+    Desc { style: Style { flex_grow: 1.0, ..style }, children, ..Desc::default() }
+}
+
+fn nested_scroll_page(rows: Vec<Desc>) -> Desc {
+    let scroll = Desc {
+        style: Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, overflow: pixel_core::Overflow::Scroll, ..Style::default() },
+        children: rows,
+        ..Desc::default()
+    };
+    let pane = growing(vec![scroll], Style { flex_direction: FlexDirection::Column, ..Style::default() });
+    Desc {
+        style: Style { flex_direction: FlexDirection::Column, width: Dimension::Percent(1.0), height: Dimension::Percent(1.0), ..Style::default() },
+        children: vec![text("title"), growing(vec![pane], Style::default())],
+        ..Desc::default()
+    }
+}
+
+fn wheel(engine: &mut Engine, handle: &TestHandle, kind: pixel_core::MouseKind, shift: bool) {
+    handle.send(Event::Mouse(pixel_core::Mouse {
+        kind,
+        button: pixel_core::MouseButton::Middle,
+        mods: pixel_core::Mods { shift, ..pixel_core::Mods::default() },
+        x: 15,
+        y: 30,
+    }));
+    settle(engine);
+}
+
+fn shown_lines(handle: &TestHandle) -> Vec<String> {
+    handle.snapshot().lines().map(|l| l.trim_end_matches([' ', '▐']).to_string()).collect()
+}
+
+#[test]
+fn a_scroll_area_nested_in_growing_boxes_fills_the_window_and_scrolls() {
+    let (mut engine, handle) = engine(12, 6, ColorTier::TrueColor);
+    let line = |i: usize| char::from(b'a' + i as u8).to_string().repeat(10);
+    show(&mut engine, nested_scroll_page((0..26).map(|i| text(&line(i))).collect()));
+    let expected = |from: usize| -> Vec<String> { ["title".to_string()].into_iter().chain((from..from + 5).map(line)).collect() };
+    assert_eq!(shown_lines(&handle), expected(0));
+    wheel(&mut engine, &handle, pixel_core::MouseKind::ScrollDown, false);
+    assert_eq!(shown_lines(&handle), expected(3));
+}
+
+fn wide_rows() -> Vec<Desc> {
+    let cell = |s: String| Desc { text: Some(s), style: Style { width: Dimension::Px(100.0), flex_shrink: 0.0, ..Style::default() }, ..Desc::default() };
+    let row = |i: usize| Desc {
+        style: Style { flex_shrink: 0.0, ..Style::default() },
+        children: vec![cell(format!("{i}abcdefghi")), cell("jklmnopqrs".into()), cell(format!("tuvwxy{i}"))],
+        ..Desc::default()
+    };
+    (0..20).map(row).collect()
+}
+
+#[test]
+fn a_wide_scroll_area_scrolls_sideways_with_the_wheel_and_shift_wheel() {
+    let (mut engine, handle) = engine(12, 6, ColorTier::TrueColor);
+    show(&mut engine, nested_scroll_page(wide_rows()));
+    assert_eq!(shown_lines(&handle)[1], "0abcdefghijk");
+    wheel(&mut engine, &handle, pixel_core::MouseKind::ScrollRight, false);
+    assert_eq!(shown_lines(&handle)[1], "cdefghijklmn");
+    wheel(&mut engine, &handle, pixel_core::MouseKind::ScrollDown, true);
+    assert_eq!(shown_lines(&handle)[1], "fghijklmnopq");
+    wheel(&mut engine, &handle, pixel_core::MouseKind::ScrollLeft, false);
+    assert_eq!(shown_lines(&handle)[1], "cdefghijklmn");
+    for _ in 0..10 {
+        wheel(&mut engine, &handle, pixel_core::MouseKind::ScrollRight, false);
+    }
+    assert_eq!(shown_lines(&handle)[1], "rstuvwxy0", "stops at the right edge");
+    wheel(&mut engine, &handle, pixel_core::MouseKind::ScrollDown, false);
+    assert_eq!(shown_lines(&handle)[1], "rstuvwxy3", "a plain wheel still scrolls down");
+}
+
+#[test]
+fn trackpad_steps_scroll_along_the_axis_they_mostly_move_in() {
+    let (mut engine, handle) = engine(12, 6, ColorTier::TrueColor);
+    show(&mut engine, nested_scroll_page(wide_rows()));
+    let swipe = |engine: &mut Engine, steps: Vec<(f32, f32)>| {
+        handle.send(Event::Wheel { at: Some((15.0, 30.0)), steps, mods: pixel_core::Mods::default() });
+        settle(engine);
+    };
+    swipe(&mut engine, vec![(20.0, 3.0), (20.0, -2.0)]);
+    assert_eq!(shown_lines(&handle)[1], "defghijklmno");
+    swipe(&mut engine, vec![(4.0, 40.0)]);
+    swipe(&mut engine, vec![(-40.0, 0.0)]);
+    assert!(shown_lines(&handle)[1].starts_with("2abcdefghij"), "two rows down and back to the left edge");
+}

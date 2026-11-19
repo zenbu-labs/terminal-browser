@@ -10,9 +10,10 @@ impl Engine {
     pub(super) fn animating(&self) -> bool {
         let scrolling = self.comp.active_views().into_iter().any(|view| {
             let tree = &self.comp.views[view].tree;
-            tree.scroll_nodes()
-                .iter()
-                .any(|&id| tree.scroll_state(id).is_some_and(|s| !s.settled()))
+            tree.scroll_nodes().iter().any(|&id| {
+                tree.scroll_state(id).is_some_and(|s| !s.settled())
+                    || tree.scroll_x_state(id).is_some_and(|s| !s.settled())
+            })
         });
         scrolling || self.bars_animating() || self.backend.animating() || self.backend.pending_present()
     }
@@ -22,7 +23,9 @@ impl Engine {
             let tree = &self.comp.views[view].tree;
             tree.scroll_nodes().iter().any(|&id| {
                 let fading = tree.bar_opacity(id) > 0.0 && tree.bar_opacity(id) < 1.0;
-                fading || tree.scroll_state(id).is_some_and(|s| !s.settled())
+                fading
+                    || tree.scroll_state(id).is_some_and(|s| !s.settled())
+                    || tree.scroll_x_state(id).is_some_and(|s| !s.settled())
             })
         }) || self.backend.animating()
     }
@@ -227,25 +230,45 @@ impl Engine {
         if self.emit_wheel(view, local, delta.0, delta.1, true, mods, out) {
             return;
         }
-        let Some(area) = self.comp.views[view].tree.scroll_area_at(local.0, local.1) else {
-            return;
-        };
-        let (node, max) = (area.node, area.max_scroll());
+        let tree = &mut self.comp.views[view].tree;
+        let sideways = tree.sideways_scroll_at(local.0, local.1);
+        let (sideways_steps, steps): (Vec<(f32, f32)>, Vec<(f32, f32)>) =
+            steps.iter().partition(|(dx, dy)| sideways.is_some() && dx.abs() > dy.abs());
         let mut moved = false;
-        if let Some(state) = self.comp.views[view].tree.scroll_state_mut(node) {
-            for (_, dy) in steps {
-                let next = (state.position + dy).clamp(0.0, max);
-                if next != state.position {
-                    state.position = next;
-                    moved = true;
-                }
-                state.set_target(next);
+        if let Some(node) = sideways {
+            let max = tree.scroll_max_x(node);
+            if let Some(state) = tree.scroll_x_state_mut(node) {
+                moved |= jump_by(state, sideways_steps.iter().map(|(dx, _)| *dx), max);
             }
         }
-        if moved {
-            self.comp.views[view].tree.mark_place();
+        let area = tree.scroll_area_at(local.0, local.1);
+        if let Some(area) = area
+            && let Some(state) = tree.scroll_state_mut(area.node)
+        {
+            moved |= jump_by(state, steps.iter().map(|(_, dy)| *dy), area.max_scroll());
         }
-        self.touch_bar(view, node);
+        if moved {
+            tree.mark_place();
+        }
+        if let Some(area) = area
+            && !steps.is_empty()
+        {
+            self.touch_bar(view, area.node);
+        }
+    }
+
+    pub(super) fn scroll_sideways(&mut self, view: usize, local: (f32, f32), delta: f32) -> bool {
+        let tree = &mut self.comp.views[view].tree;
+        let Some(node) = tree.sideways_scroll_at(local.0, local.1) else {
+            return false;
+        };
+        let max = tree.scroll_max_x(node);
+        let profile = self.profile.clone();
+        if let Some(state) = tree.scroll_x_state_mut(node) {
+            state.tick(profile.as_ref(), delta, max);
+        }
+        self.mark_scroll(view);
+        true
     }
 
     fn pointer_or_center(&self, at: Option<(f32, f32)>) -> (f32, f32) {
@@ -270,9 +293,28 @@ impl Engine {
                         tree.touch_bar(id);
                     }
                 }
+                let max_x = tree.scroll_max_x(id);
+                if let Some(state) = tree.scroll_x_state_mut(id)
+                    && state.step(profile.as_ref(), dt, max_x)
+                {
+                    tree.mark_place();
+                }
             }
         }
     }
+}
+
+fn jump_by(state: &mut crate::scroll::ScrollState, deltas: impl Iterator<Item = f32>, max: f32) -> bool {
+    let mut moved = false;
+    for delta in deltas {
+        let next = (state.position + delta).clamp(0.0, max);
+        if next != state.position {
+            state.position = next;
+            moved = true;
+        }
+        state.set_target(next);
+    }
+    moved
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -164,7 +164,7 @@ Text names fonts by family, as in CSS. `FontFace` is `{ family, src, weight?, st
 | `flexDirection` | `"row" \| "column"` |
 | `flexWrap` | `"nowrap" \| "wrap"`; wrapped lines pack to the start |
 | `flexGrow`, `flexShrink` | `number` |
-| `flexBasis`, `width`, `height`, `minWidth`, `maxWidth`, `maxHeight` | `number \| "${n}%" \| "auto"` |
+| `flexBasis`, `width`, `height`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight` | `number \| "${n}%" \| "auto"` |
 | `padding`, `margin` | `number \| { top, right, bottom, left }` |
 | `gap` | `number` |
 | `position` | `"flow" \| "absolute" \| "sticky"` (sticky: `inset.top` is how close to the top of the scroll area it stops; it stays inside its parent and paints over the parent's other children) |
@@ -187,7 +187,10 @@ Text names fonts by family, as in CSS. `FontFace` is `{ family, src, weight?, st
 | `selectionMode` | `"text" \| "unified"` |
 | `pointerShape` | `PointerShape`, CSS cursor names (`"pointer"`, `"text"`, `"grab"`, `"ns-resize"`, ...) |
 
-`Color` = `[r, g, b, a] \| [r, g, b] \| "#rgb" \| "#rgba" \| "#rrggbb" \| "#rrggbbaa"`. There is no `minHeight`.
+`Color` = `[r, g, b, a] \| [r, g, b] \| "#rgb" \| "#rgba" \| "#rrggbb" \| "#rrggbbaa"`.
+
+<!-- fixme: placeholder copy -->
+A scroll box's content never stops the boxes around it from shrinking: `flexGrow: 1` with `overflow: "scroll"` fills whatever space is left and scrolls, however deeply it is nested, with no `flexBasis: 0`, `minHeight: 0` or `overflow: "hidden"` on the boxes in between. A scroll box scrolls sideways too when its content is wider than it (trackpad, horizontal wheel, or shift + wheel). Every other box still won't shrink below its content, so text never gets squeezed; set `minWidth` or `minHeight` to change that minimum (`0` lets a box shrink past its content).
 
 The engine sets the mouse cursor from whatever is under it. The nearest `pointerShape` on the node or an ancestor wins. Without one, an `Input` or selectable text shows `"text"` (text inside a clickable does not), and everything else shows `"default"`. Anything drawn on top decides, so an overlay above an `Input` needs `pointerShape: "text"`.
 
