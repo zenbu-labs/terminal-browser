@@ -46,6 +46,7 @@ import { CopyOnSelect, Grab, reactGrabPreloadPath } from "../grab/grab";
 import type { GrabRegion } from "../grab/grab";
 import { grabScreenshot } from "../grab/screenshot";
 import { AgentPaneFinder } from "../grab/target";
+import { LinkHints } from "../hints/hints";
 import type { EmbeddedAgent } from "../grab/target";
 import type { ZoomDirection } from "../zoom";
 
@@ -259,6 +260,7 @@ class Session {
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();
   private copyWatchers = new Map<number, CopyOnSelect>();
+  private hints = new Map<number, LinkHints>();
   private readonly copyOnSelect: boolean;
   private readonly agentPanes: AgentPaneFinder;
   private shownRecord: RecordSession | null = null;
@@ -295,6 +297,9 @@ class Session {
       {
         onActivated: () => {
           this.pageMenu = null;
+          for (const [id, hints] of this.hints) {
+            if (id !== this.tabs.active?.id) void hints.cancel();
+          }
           this.reconcileRecord();
           this.recalculateLayout();
           this.render();
@@ -318,6 +323,11 @@ class Session {
             if (this.tabs.has(id)) continue;
             watcher.dispose();
             this.copyWatchers.delete(id);
+          }
+          for (const [id, hints] of [...this.hints]) {
+            if (this.tabs.has(id)) continue;
+            hints.dispose();
+            this.hints.delete(id);
           }
         },
         onActiveState: (state, urlChanged) => {
@@ -947,6 +957,12 @@ class Session {
       case "find":
         this.openFind();
         return;
+      case "hints.open":
+        this.startHints(false);
+        return;
+      case "hints.openTab":
+        this.startHints(true);
+        return;
       case "page.reload":
         this.activeRecord()?.reloaded();
         handle?.reload();
@@ -1558,6 +1574,22 @@ class Session {
     this.render();
   }
 
+  private startHints(newTab: boolean) {
+    const tab = this.tabs.active;
+    const handle = tab?.ref.current;
+    if (!tab || !handle || this.findOpen || this.activeRecord()?.reviewing) return;
+    let hints = this.hints.get(tab.id);
+    if (!hints) {
+      hints = new LinkHints(handle, {
+        openTab: (url) => this.tabs.create(url),
+        empty: () => this.showToast("No links to hint", "alert"),
+      });
+      this.hints.set(tab.id, hints);
+    }
+    this.refocusPage();
+    void hints.start(newTab);
+  }
+
   private closeFind() {
     if (!this.findOpen) return;
     this.findOpen = false;
@@ -1598,6 +1630,8 @@ class Session {
     });
     return [
       command("find"),
+      command("hints.open"),
+      command("hints.openTab"),
       command("tab.next"),
       command("tab.previous"),
       command("record.toggle"),
