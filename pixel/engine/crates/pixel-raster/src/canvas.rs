@@ -23,6 +23,7 @@ pub struct ScrollLayer {
     pub origin_y: i64,
     pub under: Vec<Pixels>,
     pub overlays: Vec<Overlay>,
+    pub pinned_rows: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

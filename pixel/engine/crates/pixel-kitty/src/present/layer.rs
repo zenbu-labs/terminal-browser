@@ -3,7 +3,7 @@ use std::io;
 
 use crate::Kitty;
 use super::tiles::{TILE_Z, intersect, subtract};
-use pixel_raster::{PixelFrame as Frame, ScrollLayer};
+use pixel_raster::{Canvas, Overlay, PixelFrame as Frame, Pixels, ScrollLayer};
 use pixel_core::surfaces::Rect;
 
 const STRIPE_PX: u32 = 128;
@@ -16,6 +16,11 @@ const FIRST_STRIPE_ID: u32 = 2_000;
 const FIRST_OVERLAY_ID: u32 = 30_000;
 const OVERLAY_Z: i32 = TILE_Z + 1;
 const KEEP_SCREENS: i64 = 3;
+const MAX_PINNED_ROWS_SHARE: u32 = 4;
+const MAX_PINNED_COLUMNS_SHARE: u32 = 3;
+const MIN_PINNED_COLUMNS: u32 = 8;
+const PINNED_SAMPLE_EVERY: usize = 8;
+const EDGE_COLUMNS: u32 = 32;
 
 #[derive(Debug)]
 pub(crate) struct Layer {
@@ -25,6 +30,128 @@ pub(crate) struct Layer {
     free_ids: Vec<u32>,
     next_id: u32,
     holding: u32,
+    origin: Option<i64>,
+    pinned: Pinned,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Pinned {
+    rects: [Rect; 4],
+    pixels: [Vec<u8>; 4],
+}
+
+impl Pinned {
+    fn new(area: Rect, [top, bottom, left, right]: [u32; 4], edge: u32, canvas: &Canvas, worth: impl Fn(Rect) -> bool) -> Self {
+        let middle = area.h - top - bottom;
+        let rects = [
+            Rect { x: area.x, y: area.y, w: area.w, h: top },
+            Rect { x: area.x, y: area.y + area.h - bottom, w: area.w, h: bottom },
+            Rect { x: area.x + edge, y: area.y + top, w: left, h: middle },
+            Rect { x: area.x + area.w - edge - right, y: area.y + top, w: right, h: middle },
+        ]
+        .map(|rect| if !rect.is_empty() && worth(rect) { opaque_part(canvas, rect) } else { Rect::default() });
+        Self { rects, pixels: Default::default() }.capture(canvas)
+    }
+
+    fn capture(mut self, canvas: &Canvas) -> Self {
+        self.pixels = self.rects.map(|r| region_pixels(canvas, r));
+        self
+    }
+
+    fn refresh(&mut self, canvas: &Canvas) {
+        let stride = canvas.width as usize * 4;
+        for (rect, pixels) in self.rects.iter_mut().zip(self.pixels.iter_mut()) {
+            if rect.is_empty() {
+                continue;
+            }
+            let len = rect.w as usize * 4;
+            let same = (0..rect.h as usize).all(|r| {
+                let at = (rect.y as usize + r) * stride + rect.x as usize * 4;
+                canvas.pixels[at..at + len] == pixels[r * len..(r + 1) * len]
+            });
+            if same {
+                continue;
+            }
+            if opaque_part(canvas, *rect) == *rect {
+                *pixels = region_pixels(canvas, *rect);
+            } else {
+                *rect = Rect::default();
+                pixels.clear();
+            }
+        }
+    }
+
+}
+
+fn open_spans(pinned: &[Rect; 4], area: Rect, y: u32) -> Vec<std::ops::Range<u32>> {
+    if pinned.iter().all(|r| r.is_empty() || y < r.y || y >= r.y + r.h) {
+        return vec![0..area.w];
+    }
+    let mut covered: Vec<(u32, u32)> = pinned
+        .iter()
+        .filter(|r| !r.is_empty() && y >= r.y && y < r.y + r.h)
+        .map(|r| (r.x - area.x, r.x - area.x + r.w))
+        .collect();
+    covered.sort_unstable();
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for (start, end) in covered {
+        if start > at {
+            spans.push(at..start);
+        }
+        at = at.max(end);
+    }
+    if at < area.w {
+        spans.push(at..area.w);
+    }
+    spans
+}
+
+fn region_pixels(canvas: &Canvas, rect: Rect) -> Vec<u8> {
+    let stride = canvas.width as usize * 4;
+    let len = rect.w as usize * 4;
+    let mut pixels = Vec::with_capacity(len * rect.h as usize);
+    for y in rect.y..rect.y + rect.h {
+        let at = y as usize * stride + rect.x as usize * 4;
+        pixels.extend_from_slice(&canvas.pixels[at..at + len]);
+    }
+    pixels
+}
+
+fn opaque_part(canvas: &Canvas, rect: Rect) -> Rect {
+    if rect.is_empty() {
+        return rect;
+    }
+    let stride = canvas.width as usize * 4;
+    let opaque = |x: u32, y: u32| canvas.pixels[y as usize * stride + x as usize * 4 + 3] == 255;
+    let column = |x: u32| (rect.y..rect.y + rect.h).all(|y| opaque(x, y));
+    let row = |y: u32, x0: u32, x1: u32| {
+        let at = y as usize * stride;
+        canvas.pixels[at + x0 as usize * 4..at + x1 as usize * 4].iter().skip(3).step_by(4).all(|&a| a == 255)
+    };
+    let mut x0 = rect.x;
+    let mut x1 = rect.x + rect.w;
+    if rect.w >= rect.h {
+        while x0 < x1 && !column(x0) {
+            x0 += 1;
+        }
+        while x1 > x0 && !column(x1 - 1) {
+            x1 -= 1;
+        }
+    }
+    let mut y0 = rect.y;
+    let mut y1 = rect.y + rect.h;
+    while y0 < y1 && !row(y0, x0, x1) {
+        y0 += 1;
+    }
+    while y1 > y0 && !row(y1 - 1, x0, x1) {
+        y1 -= 1;
+    }
+    let trimmed = Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    if trimmed.is_empty() || !(trimmed.y..trimmed.y + trimmed.h).all(|y| row(y, trimmed.x, trimmed.x + trimmed.w)) {
+        return Rect::default();
+    }
+    trimmed
 }
 
 #[derive(Debug)]
@@ -65,7 +192,7 @@ pub(super) struct LayerReport {
 
 impl Layer {
     pub(super) fn new(area: Rect) -> Self {
-        Self { area, stripes: BTreeMap::new(), overlays: Vec::new(), free_ids: Vec::new(), next_id: FIRST_STRIPE_ID, holding: 0 }
+        Self { area, stripes: BTreeMap::new(), overlays: Vec::new(), free_ids: Vec::new(), next_id: FIRST_STRIPE_ID, holding: 0, origin: None, pinned: Pinned::default() }
     }
 
     pub(super) fn holding(&self) -> bool {
@@ -77,6 +204,123 @@ impl Layer {
             self.next_id += 1;
             self.next_id - 1
         })
+    }
+
+    fn stored_row(&self, content_y: i64) -> Option<&[u8]> {
+        let stripe = i64::from(STRIPE_PX);
+        let entry = self.stripes.get(&content_y.div_euclid(stripe))?;
+        let row = content_y.rem_euclid(stripe) as u32;
+        if entry.unknown.iter().any(|u| row >= u.y && row < u.y + u.h) {
+            return None;
+        }
+        let row_len = self.area.w as usize * 4;
+        Some(&entry.pixels[row as usize * row_len..(row as usize + 1) * row_len])
+    }
+
+    fn shown_row(&self, y: u32, before: i64, row: &mut Vec<u8>) -> bool {
+        let area = self.area;
+        row.clear();
+        let Some(stored) = self.stored_row(i64::from(y) - before) else { return false };
+        row.extend_from_slice(stored);
+        for (region, pixels) in self.pinned.rects.iter().zip(&self.pinned.pixels) {
+            if !region.is_empty() && y >= region.y && y < region.y + region.h {
+                let len = region.w as usize * 4;
+                let from = (y - region.y) as usize * len;
+                let to = (region.x - area.x) as usize * 4;
+                row[to..to + len].copy_from_slice(&pixels[from..from + len]);
+            }
+        }
+        true
+    }
+
+    fn find_pinned(&mut self, canvas: &Canvas, layer: &ScrollLayer) -> Pinned {
+        let area = self.area;
+        let Some(before) = self.origin else { return Pinned::default() };
+        if before == layer.origin_y {
+            let mut pinned = std::mem::take(&mut self.pinned);
+            pinned.refresh(canvas);
+            return pinned;
+        }
+        let row_len = area.w as usize * 4;
+        let stride = canvas.width as usize * 4;
+        let canvas_row = |y: u32| {
+            let at = y as usize * stride + area.x as usize * 4;
+            &canvas.pixels[at..at + row_len]
+        };
+        let mut shown = Vec::with_capacity(row_len);
+        let mut unchanged = |y: u32| self.shown_row(y, before, &mut shown) && shown.as_slice() == canvas_row(y);
+        let rows_limit = area.h / MAX_PINNED_ROWS_SHARE;
+        let top = (0..rows_limit).take_while(|&r| unchanged(area.y + r)).count() as u32;
+        let bottom = (0..rows_limit).take_while(|&r| unchanged(area.y + area.h - 1 - r)).count() as u32;
+        let edge = EDGE_COLUMNS.min(area.w / 8);
+        let e = edge as usize * 4;
+        let columns_limit = area.w / MAX_PINNED_COLUMNS_SHARE;
+        let middle = area.y + top..area.y + area.h - bottom;
+        let moves = |bytes: std::ops::Range<usize>| {
+            middle.clone().step_by(PINNED_SAMPLE_EVERY).any(|y| {
+                self.stored_row(i64::from(y) - layer.origin_y).is_some_and(|stored| stored[bytes.clone()] != canvas_row(y)[bytes.clone()])
+            })
+        };
+        let columns = columns_limit as usize * 4;
+        let mut left = if !self.pinned.rects[2].is_empty() || moves(e..e + columns) { columns_limit } else { 0 };
+        let mut right = if !self.pinned.rects[3].is_empty() || moves(row_len - e - columns..row_len - e) { columns_limit } else { 0 };
+        let nothing_pinned = self.pinned.rects.iter().all(|r| r.is_empty());
+        for y in middle {
+            if left == 0 && right == 0 {
+                break;
+            }
+            let was = if nothing_pinned {
+                self.stored_row(i64::from(y) - before)
+            } else {
+                self.shown_row(y, before, &mut shown).then_some(shown.as_slice())
+            };
+            let Some(shown) = was else {
+                (left, right) = (0, 0);
+                break;
+            };
+            let now = canvas_row(y);
+            let (l, r) = (left as usize * 4, right as usize * 4);
+            let (inner_left, inner_right) = (e..e + l, row_len - e - r..row_len - e);
+            if now[inner_left.clone()] != shown[inner_left.clone()] {
+                left = (now[inner_left.clone()].iter().zip(&shown[inner_left]).position(|(a, b)| a != b).unwrap_or(l) / 4) as u32;
+            }
+            if now[inner_right.clone()] != shown[inner_right.clone()] {
+                right = (now[inner_right.clone()].iter().rev().zip(shown[inner_right].iter().rev()).position(|(a, b)| a != b).unwrap_or(r) / 4) as u32;
+            }
+        }
+        let reach = |columns: u32, from_left: bool| {
+            let mut needed = 0;
+            for y in (area.y + top..area.y + area.h - bottom).step_by(PINNED_SAMPLE_EVERY) {
+                let Some(stored) = self.stored_row(i64::from(y) - layer.origin_y) else { continue };
+                let now = canvas_row(y);
+                let pixels = (0..columns as usize).filter(|&i| {
+                    let x = if from_left { edge as usize + i } else { area.w as usize - 1 - edge as usize - i };
+                    stored[x * 4..x * 4 + 4] != now[x * 4..x * 4 + 4]
+                });
+                needed = needed.max(pixels.last().map_or(0, |i| i as u32 + 1));
+            }
+            needed
+        };
+        let left = if left > 0 { reach(left, true) } else { 0 };
+        let right = if right > 0 { reach(right, false) } else { 0 };
+        let narrow = |columns: u32| if columns < MIN_PINNED_COLUMNS { 0 } else { columns };
+        let worth = |rect: Rect| {
+            let bytes = (rect.x - area.x) as usize * 4..(rect.x - area.x + rect.w) as usize * 4;
+            (rect.y..rect.y + rect.h).any(|y| {
+                self.stored_row(i64::from(y) - layer.origin_y).is_some_and(|stored| stored[bytes.clone()] != canvas_row(y)[bytes.clone()])
+            })
+        };
+        Pinned::new(area, [top, bottom, narrow(left), narrow(right)], edge, canvas, worth)
+    }
+
+    fn pinned_overlays(&self) -> Vec<Overlay> {
+        self.pinned
+            .rects
+            .into_iter()
+            .zip(&self.pinned.pixels)
+            .filter(|(rect, _)| !rect.is_empty())
+            .map(|(rect, pixels)| Overlay { pixels: Pixels { rect, rgba: pixels.clone() }, above: true })
+            .collect()
     }
 
     pub(super) fn delete_all(&self, out: &mut Vec<u8>) {
@@ -142,13 +386,21 @@ impl Kitty {
         Ok(())
     }
 
-    fn send_part(&mut self, out: &mut Vec<u8>, id: u32, rect: Rect, stripe: &[u8], width: u32, premultiplied: bool) -> io::Result<()> {
+    fn send_part(&mut self, out: &mut Vec<u8>, id: u32, rect: Rect, stripe: &[u8], under: &[u8], width: u32, premultiplied: bool) -> io::Result<()> {
         let row_len = width as usize * 4;
         let part_len = rect.w as usize * 4;
         let fill = |b: &mut [u8]| {
             for row in 0..rect.h as usize {
                 let from = (rect.y as usize + row) * row_len + rect.x as usize * 4;
-                b[row * part_len..(row + 1) * part_len].copy_from_slice(&stripe[from..from + part_len]);
+                let part = &mut b[row * part_len..(row + 1) * part_len];
+                part.copy_from_slice(&stripe[from..from + part_len]);
+                if !under.is_empty() {
+                    for (px, below) in part.chunks_exact_mut(4).zip(under[from..from + part_len].chunks_exact(4)) {
+                        if px[3] != 255 && px == below {
+                            px.copy_from_slice(&[0, 0, 0, 0]);
+                        }
+                    }
+                }
             }
             super::straighten(b, premultiplied);
         };
@@ -159,10 +411,14 @@ impl Kitty {
         let Some(mut state) = self.patches.layer.take() else {
             return Ok(LayerReport::default());
         };
+        state.pinned = if layer.pinned_rows { pixel_core::profiler::span("present.pinned", || state.find_pinned(frame.canvas, layer)) } else { Pinned::default() };
         let result = self.draw_stripes(frame, layer, &mut state, out).and_then(|mut report| {
-            report.overlays_sent = self.draw_overlays(layer, &mut state, out)?;
+            let mut overlays = layer.overlays.clone();
+            overlays.extend(state.pinned_overlays());
+            report.overlays_sent = self.draw_overlays(&overlays, &mut state, out)?;
             Ok(report)
         });
+        state.origin = Some(layer.origin_y);
         self.patches.layer = Some(state);
         result
     }
@@ -180,6 +436,7 @@ impl Kitty {
         let stride = canvas.width as usize * 4;
         let premultiplied = frame.premultiplied;
         let mut consolidated = false;
+        let pinned = state.pinned.rects;
         let band_of = |k: i64| {
             let y0 = layer.origin_y + k * stripe;
             let shown_top = y0.max(i64::from(area.y));
@@ -217,13 +474,17 @@ impl Kitty {
                     row = &row_buf;
                 }
                 let at = (band.y + r) as usize * row_len;
-                let stored = &mut entry.pixels[at..at + row_len];
-                if stored != row {
-                    let first = stored.chunks_exact(4).zip(row.chunks_exact(4)).position(|(p, q)| p != q).unwrap_or(0) as u32;
-                    let last = stored.chunks_exact(4).zip(row.chunks_exact(4)).rposition(|(p, q)| p != q).unwrap_or(0) as u32;
-                    let changed = Rect { x: first, y: band.y + r, w: last + 1 - first, h: 1 };
-                    diff = Some(diff.map_or(changed, |d| union(d, changed)));
-                    stored.copy_from_slice(row);
+                for span in open_spans(&pinned, area, y) {
+                    let bytes = span.start as usize * 4..span.end as usize * 4;
+                    let stored = &mut entry.pixels[at + bytes.start..at + bytes.end];
+                    let row = &row[bytes];
+                    if stored != row {
+                        let first = stored.chunks_exact(4).zip(row.chunks_exact(4)).position(|(p, q)| p != q).unwrap_or(0) as u32;
+                        let last = stored.chunks_exact(4).zip(row.chunks_exact(4)).rposition(|(p, q)| p != q).unwrap_or(0) as u32;
+                        let changed = Rect { x: span.start + first, y: band.y + r, w: last + 1 - first, h: 1 };
+                        diff = Some(diff.map_or(changed, |d| union(d, changed)));
+                        stored.copy_from_slice(row);
+                    }
                 }
             }
             for unseen in entry.unknown.iter().map(|u| intersect(*u, band)).filter(|u| !u.is_empty()) {
@@ -243,8 +504,12 @@ impl Kitty {
                 continue;
             };
             let mut rect = diff;
-            for patch in entry.patches.iter().filter(|p| !intersect(p.rect, diff).is_empty()) {
-                rect = union(rect, patch.rect);
+            loop {
+                let grown = entry.patches.iter().filter(|p| !intersect(p.rect, rect).is_empty()).fold(rect, |r, p| union(r, p.rect));
+                if grown == rect {
+                    break;
+                }
+                rect = grown;
             }
             let whole = rect.area() * 2 >= u64::from(area.w * STRIPE_PX) || entry.patches.len() >= MAX_PATCHES || !covers(&entry.pixels, &entry.sent, rect, row_len);
             let cost = if whole { stripe_bytes } else { rect.area() as usize * 4 };
@@ -254,7 +519,7 @@ impl Kitty {
             spent += cost;
             consolidated |= complete;
             entry.pending = None;
-            let (merged, kept): (Vec<Patch>, Vec<Patch>) = std::mem::take(&mut entry.patches).into_iter().partition(|p| !intersect(p.rect, diff).is_empty());
+            let (merged, kept): (Vec<Patch>, Vec<Patch>) = std::mem::take(&mut entry.patches).into_iter().partition(|p| !intersect(p.rect, rect).is_empty());
             entry.patches = kept;
             let mut freed: Vec<u32> = merged.iter().map(|p| p.placed.id).collect();
             if whole {
@@ -264,14 +529,14 @@ impl Kitty {
                     None => freed.pop().unwrap_or_else(|| state.next_id()),
                 };
                 let entry = state.stripes.get_mut(&k).expect("inserted above");
-                self.send_part(out, id, Rect::sized(area.w, STRIPE_PX), &entry.pixels, area.w, premultiplied)?;
+                self.send_part(out, id, Rect::sized(area.w, STRIPE_PX), &entry.pixels, &[], area.w, premultiplied)?;
                 entry.sent.clone_from(&entry.pixels);
                 entry.image = Some(Placed { id, shown: None });
                 report.stripes_sent += 1;
             } else {
                 let id = freed.pop().unwrap_or_else(|| state.next_id());
                 let entry = state.stripes.get_mut(&k).expect("inserted above");
-                self.send_part(out, id, rect, &entry.pixels, area.w, premultiplied)?;
+                self.send_part(out, id, rect, &entry.pixels, &entry.sent, area.w, premultiplied)?;
                 entry.patches.push(Patch { rect, placed: Placed { id, shown: None } });
                 report.overlays_sent += 1;
             }
@@ -341,10 +606,10 @@ impl Kitty {
         Ok(report)
     }
 
-    fn draw_overlays(&mut self, layer: &ScrollLayer, state: &mut Layer, out: &mut Vec<u8>) -> io::Result<u64> {
+    fn draw_overlays(&mut self, overlays: &[Overlay], state: &mut Layer, out: &mut Vec<u8>) -> io::Result<u64> {
         let (cw, ch) = self.cell();
         let mut sent = 0;
-        for (index, overlay) in layer.overlays.iter().enumerate() {
+        for (index, overlay) in overlays.iter().enumerate() {
             let id = FIRST_OVERLAY_ID + index as u32;
             let rect = overlay.pixels.rect;
             let z = OVERLAY_Z + i32::from(overlay.above);
@@ -368,10 +633,10 @@ impl Kitty {
                 }
             }
         }
-        for index in layer.overlays.len()..state.overlays.len() {
+        for index in overlays.len()..state.overlays.len() {
             out.extend_from_slice(&crate::kitty::kitty_delete_one(FIRST_OVERLAY_ID + index as u32));
         }
-        state.overlays.truncate(layer.overlays.len());
+        state.overlays.truncate(overlays.len());
         pixel_core::profiler::count("present.overlays", || sent);
         Ok(sent)
     }
@@ -406,7 +671,7 @@ mod tests {
         assert!(kitty.patch_medium().is_none());
         let area = Rect::sized(64, 2 * STRIPE_PX);
         kitty.patches.layer = Some(Layer::new(area));
-        let first = ScrollLayer { area, origin_y: 0, under: Vec::new(), overlays: Vec::new() };
+        let first = ScrollLayer { area, origin_y: 0, under: Vec::new(), overlays: Vec::new(), pinned_rows: false };
         let out = draw(&mut kitty, &content(64, area.h, 0), &first);
         assert_eq!(out.matches("a=t,f=32,o=z,s=64,v=128,t=d,").count(), 2);
         assert_eq!(out.matches("a=p,").count(), 2);
@@ -416,5 +681,76 @@ mod tests {
         assert_eq!(out.matches("a=t,").count(), 1, "only the stripe scrolled into view is uploaded");
         assert!(out.contains("\x1b[1;1H\x1b_Ga=p,i=2001,p=1,C=1,q=2"), "the second stripe moves to the top");
         assert!(out.contains("a=d,d=i,i=2000,p=1"), "the stripe scrolled out of view is hidden but kept");
+    }
+
+    fn with_header(width: u32, height: u32, origin_y: i64, header: u32) -> Canvas {
+        let mut canvas = content(width, height, origin_y);
+        for px in canvas.pixels[..(header * width * 4) as usize].chunks_exact_mut(4) {
+            px.copy_from_slice(&[200, 10, 10, 255]);
+        }
+        canvas
+    }
+
+    #[test]
+    fn a_header_that_stays_put_while_the_page_scrolls_is_sent_once_as_an_overlay() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        let area = Rect::sized(64, 2 * STRIPE_PX);
+        kitty.patches.layer = Some(Layer::new(area));
+        let at = |origin_y| ScrollLayer { area, origin_y, under: Vec::new(), overlays: Vec::new(), pinned_rows: true };
+        draw(&mut kitty, &with_header(64, area.h, 0, 20), &at(0));
+        let out = draw(&mut kitty, &with_header(64, area.h, -30, 20), &at(-30));
+        assert!(out.contains(&format!("i={FIRST_OVERLAY_ID}")), "the header is shown on its own: {out}");
+        let state = kitty.patches.layer.as_ref().unwrap();
+        assert_eq!((state.pinned.rects[0].h, state.pinned.rects[1].h), (20, 0));
+        let out = draw(&mut kitty, &with_header(64, area.h, -60, 20), &at(-60));
+        assert!(!out.contains(&format!("i={FIRST_OVERLAY_ID},")), "an unchanged header is not sent again: {out}");
+        let state = kitty.patches.layer.as_ref().unwrap();
+        assert_eq!((state.pinned.rects[0].h, state.pinned.rects[1].h), (20, 0));
+        let out = draw(&mut kitty, &content(64, area.h, -90), &at(-90));
+        assert!(out.contains(&format!("a=d,d=I,i={FIRST_OVERLAY_ID}")) || out.contains(&format!("i={FIRST_OVERLAY_ID},")), "a header that goes away stops being shown: {out}");
+        let state = kitty.patches.layer.as_ref().unwrap();
+        assert_eq!((state.pinned.rects[0].h, state.pinned.rects[1].h), (0, 0));
+        let canvas = content(64, area.h, -90);
+        for y in 0..area.h {
+            let want = &canvas.pixels[(y * 64 * 4) as usize..((y + 1) * 64 * 4) as usize];
+            assert_eq!(state.stored_row(i64::from(y) + 90), Some(want), "row {y} uncovered by the header is up to date");
+        }
+    }
+
+    fn with_sidebar(width: u32, height: u32, origin_y: i64, side: u32) -> Canvas {
+        let mut canvas = content(width, height, origin_y);
+        for (y, row) in canvas.pixels.chunks_exact_mut((width * 4) as usize).enumerate() {
+            for px in row[..(side * 4) as usize].chunks_exact_mut(4) {
+                px.copy_from_slice(&[10, 200, (y % 7) as u8 * 30, 255]);
+            }
+        }
+        canvas
+    }
+
+    #[test]
+    fn a_sidebar_that_stays_put_is_kept_out_of_the_scrolled_stripes() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        let (width, side) = (256, 80);
+        let area = Rect::sized(width, 2 * STRIPE_PX);
+        kitty.patches.layer = Some(Layer::new(area));
+        let at = |origin_y| ScrollLayer { area, origin_y, under: Vec::new(), overlays: Vec::new(), pinned_rows: true };
+        draw(&mut kitty, &with_sidebar(width, area.h, 0, side), &at(0));
+        draw(&mut kitty, &with_sidebar(width, area.h, -30, side), &at(-30));
+        let state = kitty.patches.layer.as_ref().unwrap();
+        let left = state.pinned.rects[2];
+        assert_eq!((state.pinned.rects[0].h, left.x, left.w, state.pinned.rects[3].w), (0, EDGE_COLUMNS, side - EDGE_COLUMNS, 0), "the sidebar is pinned, short of the edge strip");
+        let out = draw(&mut kitty, &with_sidebar(width, area.h, -60, side), &at(-60));
+        assert!(out.matches("a=t,").count() <= 3, "only rows scrolled into view and the edge strip are uploaded, not the sidebar: {out}");
+        let canvas = with_sidebar(width, area.h, -60, side);
+        let state = kitty.patches.layer.as_ref().unwrap();
+        let open = |y: u32| open_spans(&state.pinned.rects, area, y);
+        for y in 0..area.h {
+            let row = &canvas.pixels[(y * width * 4) as usize..((y + 1) * width * 4) as usize];
+            let stored = state.stored_row(i64::from(y) + 60).unwrap();
+            for span in open(y) {
+                let bytes = span.start as usize * 4..span.end as usize * 4;
+                assert_eq!(stored[bytes.clone()], row[bytes], "row {y} outside the pinned sidebar is up to date");
+            }
+        }
     }
 }

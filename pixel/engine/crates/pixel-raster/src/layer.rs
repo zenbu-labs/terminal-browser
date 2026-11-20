@@ -208,7 +208,7 @@ pub fn render_layer(root: &Item, plan: &LayerPlan<'_>, canvases: &mut LayerCanva
         pixels.rect = rect;
         overlays.push(Overlay { pixels, above: true });
     }
-    ScrollLayer { area, origin_y: plan.origin_y, under, overlays }
+    ScrollLayer { area, origin_y: plan.origin_y, under, overlays, pinned_rows: false }
 }
 
 fn paint_drawn(drawn: &Drawn<'_>, canvas: &mut Canvas, fonts: &[Font], host_surfaces: bool) {

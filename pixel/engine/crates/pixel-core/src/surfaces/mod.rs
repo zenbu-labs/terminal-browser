@@ -151,6 +151,18 @@ pub struct Surface {
 
 thread_local! {
     static SURFACES: RefCell<HashMap<u32, Surface>> = RefCell::new(HashMap::new());
+    static SCROLLS: RefCell<HashMap<u32, i64>> = RefCell::new(HashMap::new());
+}
+
+pub fn set_scroll(id: u32, y: Option<i64>) {
+    SCROLLS.with_borrow_mut(|scrolls| match y {
+        Some(y) => scrolls.insert(id, y),
+        None => scrolls.remove(&id),
+    });
+}
+
+pub fn scroll(id: u32) -> Option<i64> {
+    SCROLLS.with_borrow(|scrolls| scrolls.get(&id).copied())
 }
 
 
@@ -202,6 +214,7 @@ pub fn remove(id: u32) {
     SURFACES.with_borrow_mut(|surfaces| {
         surfaces.remove(&id);
     });
+    set_scroll(id, None);
 }
 
 pub fn with<R>(id: u32, read: impl FnOnce(&Surface) -> R) -> Option<R> {

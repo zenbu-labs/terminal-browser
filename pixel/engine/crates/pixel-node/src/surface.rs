@@ -19,6 +19,7 @@ pub struct SurfaceFrame {
     pub id: u32,
     pub pixels: SurfacePixels,
     pub damage: Option<Vec<Rect>>,
+    pub scroll_y: Option<i64>,
 }
 
 pub enum SurfaceCommand {
@@ -50,6 +51,10 @@ pub struct SurfaceMailbox {
 
 impl SurfaceMailbox {
     pub fn submit(&self, id: u32, pixels: SurfacePixels, damage: Option<Rect>) {
+        self.submit_scrolled(id, pixels, damage, None);
+    }
+
+    pub fn submit_scrolled(&self, id: u32, pixels: SurfacePixels, damage: Option<Rect>, scroll_y: Option<i64>) {
         let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
         let slot = slots.entry(id).or_default();
         let damage: Option<Vec<Rect>> = match slot.pending.take() {
@@ -74,7 +79,7 @@ impl SurfaceMailbox {
             }
             Some(Pending::Remove) | None => damage.map(|rect| vec![rect]),
         };
-        slot.pending = Some(Pending::Frame(SurfaceFrame { id, pixels, damage }));
+        slot.pending = Some(Pending::Frame(SurfaceFrame { id, pixels, damage, scroll_y }));
         self.submitted.fetch_add(1, Ordering::Relaxed);
     }
 

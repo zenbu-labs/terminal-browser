@@ -152,6 +152,10 @@ impl Autoprofile {
 }
 
 
+fn whole_rows(scroll_y: Option<f64>) -> Option<i64> {
+    scroll_y.filter(|y| y.is_finite()).map(|y| y.round() as i64)
+}
+
 fn ingest_frame(engine: &mut Engine, frame: &surface::SurfaceFrame) -> std::result::Result<u32, String> {
     match &frame.pixels {
         #[cfg(target_os = "macos")]
@@ -196,7 +200,7 @@ fn ingest_pixels(
     stride: usize,
 ) -> std::result::Result<u32, String> {
     engine
-        .ingest_surface(frame.id, width, height, pixels, stride, frame.damage.as_deref())
+        .ingest_surface(frame.id, width, height, pixels, stride, frame.damage.as_deref(), frame.scroll_y)
         .map(|_| height)
         .map_err(|error| error.to_string())
 }
@@ -664,6 +668,7 @@ impl PixelEngine {
         damage_y: u32,
         damage_width: u32,
         damage_height: u32,
+        scroll_y: Option<f64>,
     ) -> Result<()> {
         let surface = iosurface::RetainedSurface::retain(handle as u64 as usize).map_err(Error::from_reason)?;
         let damage = (damage_width > 0 && damage_height > 0).then_some(pixel_core::surfaces::Rect {
@@ -684,7 +689,7 @@ impl PixelEngine {
             );
         }
         self.surfaces
-            .submit(id, SurfacePixels::IoSurface(surface), damage);
+            .submit_scrolled(id, SurfacePixels::IoSurface(surface), damage, whole_rows(scroll_y));
         self.waker.wake();
         Ok(())
     }
@@ -699,6 +704,7 @@ impl PixelEngine {
         shm: SurfaceShm,
         damage: Option<DamageRect>,
         released: Option<ThreadsafeFunction<u32>>,
+        scroll_y: Option<f64>,
     ) -> Result<()> {
         let release_hook = released.map(|tsfn| {
             Box::new(move || {
@@ -731,7 +737,7 @@ impl PixelEngine {
             );
         }
         self.surfaces
-            .submit(id, SurfacePixels::Shm(surface), damage);
+            .submit_scrolled(id, SurfacePixels::Shm(surface), damage, whole_rows(scroll_y));
         self.waker.wake();
         Ok(())
     }
