@@ -1,4 +1,5 @@
 import type { Detect } from "../terminal";
+import { bateri } from "./bateri";
 import { cmux } from "./cmux";
 import { ghostty } from "./ghostty";
 import { herdr } from "./herdr";
@@ -19,6 +20,7 @@ export const TERMINALS: Detect[] = [
   tmux,
   tty7,
   rex,
+  bateri,
   wezterm,
   kitty,
   cmux,
