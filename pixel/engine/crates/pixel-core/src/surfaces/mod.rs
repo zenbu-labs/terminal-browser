@@ -147,10 +147,19 @@ pub struct Surface {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
+    pub scroll_y: Option<i64>,
 }
 
 thread_local! {
     static SURFACES: RefCell<HashMap<u32, Surface>> = RefCell::new(HashMap::new());
+}
+
+pub fn set_scroll(id: u32, scroll_y: Option<i64>) {
+    SURFACES.with_borrow_mut(|surfaces| {
+        if let Some(surface) = surfaces.get_mut(&id) {
+            surface.scroll_y = scroll_y;
+        }
+    });
 }
 
 
@@ -167,6 +176,7 @@ pub fn write(
             width: 0,
             height: 0,
             pixels: Vec::new(),
+            scroll_y: None,
         });
         let resized = surface.width != width || surface.height != height;
         if resized {

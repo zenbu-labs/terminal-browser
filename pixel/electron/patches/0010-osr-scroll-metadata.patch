@@ -1,0 +1,118 @@
+diff --git a/docs/api/structures/offscreen-shared-texture.md b/docs/api/structures/offscreen-shared-texture.md
+--- a/docs/api/structures/offscreen-shared-texture.md
++++ b/docs/api/structures/offscreen-shared-texture.md
+@@ -15,6 +15,9 @@
+     * `captureUpdateRect` [Rectangle](rectangle.md) (optional) - Updated area of frame, can be considered as the `dirty` area.
+     * `regionCaptureRect` [Rectangle](rectangle.md) (optional) - May reflect the frame's contents origin if region capture is used internally.
+     * `sourceSize` [Rectangle](rectangle.md) (optional) - Full size of the source frame.
++    * `rootScrollOffset` [Point](point.md) (optional) - How far the page's main scroller was scrolled when this frame was drawn, in the frame's pixels.
++    * `pageScaleFactor` number (optional) - Pinch zoom of the page when this frame was drawn; `1` when not zoomed.
++    * `deviceScaleFactor` number (optional) - The compositor's scale for this frame, page zoom included.
+     * `frameCount` number (optional) - The increasing count of captured frame. May contain gaps if frames are dropped between two consecutively received frames.
+   * `handle` [SharedTextureHandle](shared-texture-handle.md) - The shared texture handle data.
+ * `release` Function - Release the resources. The `texture` cannot be directly passed to another process, users need to maintain texture lifecycles in
+diff --git a/docs/api/structures/offscreen-software-frame.md b/docs/api/structures/offscreen-software-frame.md
+--- a/docs/api/structures/offscreen-software-frame.md
++++ b/docs/api/structures/offscreen-software-frame.md
+@@ -14,6 +14,9 @@
+   * `metadata` Object - Extra metadata. See comments in src\media\base\video_frame_metadata.h for accurate details.
+     * `captureUpdateRect` [Rectangle](rectangle.md) (optional) - Updated area of frame, can be considered as the `dirty` area.
+     * `sourceSize` [Rectangle](rectangle.md) (optional) - Full size of the source frame.
++    * `rootScrollOffset` [Point](point.md) (optional) - How far the page's main scroller was scrolled when this frame was drawn, in the frame's pixels.
++    * `pageScaleFactor` number (optional) - Pinch zoom of the page when this frame was drawn; `1` when not zoomed.
++    * `deviceScaleFactor` number (optional) - The compositor's scale for this frame, page zoom included.
+     * `frameCount` number (optional) - The increasing count of captured frame. May contain gaps if frames are dropped between two consecutively received frames.
+   * `fd` Integer _Linux_ - A file descriptor over the shared memory region holding the pixels, valid until `release()` is called.
+ * `release` Function - Release the resources. The `softwareFrame` cannot be directly passed to another process, users need to maintain frame lifecycles in
+diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_event.h
+--- a/shell/browser/osr/osr_paint_event.h
++++ b/shell/browser/osr/osr_paint_event.h
+@@ -14,6 +14,7 @@
+ #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
+ #include "third_party/skia/include/core/SkCanvas.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/point_f.h"
+ #include "ui/gfx/native_ui_types.h"
+ 
+ #include <cstdint>
+@@ -94,6 +95,9 @@ struct OffscreenSharedTextureValue {
+   std::optional<gfx::Rect> capture_update_rect;
+   std::optional<gfx::Size> source_size;
+   std::optional<gfx::Rect> region_capture_rect;
++  std::optional<gfx::PointF> root_scroll_offset;
++  std::optional<double> page_scale_factor;
++  std::optional<double> device_scale_factor;
+ 
+   // The capture timestamp, microseconds since capture start
+   int64_t timestamp = 0;
+@@ -155,6 +159,9 @@ struct OffscreenSoftwareFrameValue {
+   // Extra metadata for the video frame.
+   std::optional<gfx::Rect> capture_update_rect;
+   std::optional<gfx::Size> source_size;
++  std::optional<gfx::PointF> root_scroll_offset;
++  std::optional<double> page_scale_factor;
++  std::optional<double> device_scale_factor;
+ 
+   // Releaser holder
+   raw_ptr<OffscreenReleaserHolder> releaser_holder = nullptr;
+diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_video_consumer.cc
+--- a/shell/browser/osr/osr_video_consumer.cc
++++ b/shell/browser/osr/osr_video_consumer.cc
+@@ -56,6 +56,14 @@ bool IsPlatformSharedTextureHandle(const gfx::GpuMemoryBufferHandle& handle) {
+ #endif
+ }
+ 
++std::optional<gfx::PointF> RootScrollOffset(
++    const media::VideoFrameMetadata& metadata) {
++  if (!metadata.root_scroll_offset_x || !metadata.root_scroll_offset_y)
++    return std::nullopt;
++  return gfx::PointF(*metadata.root_scroll_offset_x,
++                     *metadata.root_scroll_offset_y);
++}
++
+ }  // namespace
+ 
+ namespace electron {
+@@ -152,6 +160,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+     texture.capture_update_rect = info->metadata.capture_update_rect;
+     texture.source_size = info->metadata.source_size;
+     texture.region_capture_rect = info->metadata.region_capture_rect;
++    texture.root_scroll_offset = RootScrollOffset(info->metadata);
++    texture.page_scale_factor = info->metadata.page_scale_factor;
++    texture.device_scale_factor = info->metadata.device_scale_factor;
+     texture.widget_type = view_->GetWidgetType();
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -241,6 +252,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+     frame.frame_count = info->metadata.capture_counter.value_or(0);
+     frame.capture_update_rect = info->metadata.capture_update_rect;
+     frame.source_size = info->metadata.source_size;
++    frame.root_scroll_offset = RootScrollOffset(info->metadata);
++    frame.page_scale_factor = info->metadata.page_scale_factor;
++    frame.device_scale_factor = info->metadata.device_scale_factor;
+ 
+     base::ReadOnlySharedMemoryRegion region =
+         std::move(data->get_read_only_shmem_region());
+diff --git a/shell/common/gin_converters/osr_converter.cc b/shell/common/gin_converters/osr_converter.cc
+--- a/shell/common/gin_converters/osr_converter.cc
++++ b/shell/common/gin_converters/osr_converter.cc
+@@ -116,6 +116,9 @@ v8::Local<v8::Value> Converter<electron::OffscreenSharedTextureValue>::ToV8(
+   metadata.Set("regionCaptureRect", val.region_capture_rect);
+   metadata.Set("sourceSize", val.source_size);
+   metadata.Set("frameCount", val.frame_count);
++  metadata.Set("rootScrollOffset", val.root_scroll_offset);
++  metadata.Set("pageScaleFactor", val.page_scale_factor);
++  metadata.Set("deviceScaleFactor", val.device_scale_factor);
+   dict.Set("metadata", ConvertToV8(isolate, metadata));
+ 
+   gin::Dictionary sharedTexture(isolate, v8::Object::New(isolate));
+@@ -235,6 +238,9 @@ v8::Local<v8::Value> Converter<electron::OffscreenSoftwareFrameValue>::ToV8(
+   metadata.Set("captureUpdateRect", val.capture_update_rect);
+   metadata.Set("sourceSize", val.source_size);
+   metadata.Set("frameCount", val.frame_count);
++  metadata.Set("rootScrollOffset", val.root_scroll_offset);
++  metadata.Set("pageScaleFactor", val.page_scale_factor);
++  metadata.Set("deviceScaleFactor", val.device_scale_factor);
+   dict.Set("metadata", ConvertToV8(isolate, metadata));
+ 
+ #if BUILDFLAG(IS_LINUX)
