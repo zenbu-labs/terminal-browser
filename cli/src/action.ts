@@ -54,8 +54,8 @@ export function agentBrowserPath(): string {
   return execFileSync(script, ["--path"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
 }
 
-function sessionName(browser: Browser): string {
-  return `terminal-browser-${recordKey(browser)}`;
+export function sessionName(browser: Browser): string {
+  return `tb-${recordKey(browser)}`;
 }
 
 function childEnv(): NodeJS.ProcessEnv {
