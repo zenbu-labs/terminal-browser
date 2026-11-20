@@ -196,7 +196,7 @@ impl Presenter for KittyPresenter {
     }
 
     fn start_input(&mut self, term: &mut Terminal) {
-        if term.is_hosted() && !term.is_embedded() {
+        if (term.is_hosted() && !term.is_embedded()) || term.is_stream() {
             self.kitty.native().stop();
             return;
         }

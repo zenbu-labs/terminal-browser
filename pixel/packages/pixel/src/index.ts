@@ -47,6 +47,7 @@ export {
   highlight,
   diff,
   parseMarkdown,
+  prepareFonts,
   HIGHLIGHT_CAPTURES,
   Surface,
   SurfaceCapture,
@@ -56,6 +57,8 @@ export {
   useStore,
 } from "./react";
 export type { LogRow, LogBuffer, Idle } from "./react";
+export type { TerminalStream } from "./react/native";
+export { STREAM_ENV, STREAM_SIZE_ENV, streamFromEnv } from "./terminal/stream";
 export type {
   BoxProps,
   TextProps,

@@ -35,8 +35,19 @@ fn load_font(candidates: &[&str], fallback: &'static [u8]) -> fontdue::Font {
     parse(fallback).expect("bundled font parses")
 }
 
+static DEFAULT_FONTS: std::sync::OnceLock<(fontdue::Font, fontdue::Font)> = std::sync::OnceLock::new();
+
+fn parsed_default_fonts() -> &'static (fontdue::Font, fontdue::Font) {
+    DEFAULT_FONTS.get_or_init(|| (load_font(&[], MONO_FONT_BYTES), load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES)))
+}
+
 pub fn default_fonts() -> pixel_core::fonts::FontRegistry {
-    pixel_core::fonts::FontRegistry::new(load_font(&[], MONO_FONT_BYTES), load_font(SYSTEM_UI_FONTS, UI_FONT_BYTES))
+    let (mono, ui) = parsed_default_fonts();
+    pixel_core::fonts::FontRegistry::new(mono.clone(), ui.clone())
+}
+
+pub fn prepare_default_fonts() {
+    parsed_default_fonts();
 }
 
 pub fn engine_info(engine: &Engine) -> serde_json::Value {
