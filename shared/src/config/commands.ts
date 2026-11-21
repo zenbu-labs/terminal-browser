@@ -25,6 +25,8 @@ export const COMMANDS = {
   },
   "url.edit": { label: "Edit URL", keys: platform(["cmd+l"], ["ctrl+l"]) },
   find: { label: "Find in page", keys: platform(["cmd+shift+f"], ["ctrl+shift+f"]) },
+  "hints.open": { label: "Link hints", keys: shared(["ctrl+f"]) },
+  "hints.openTab": { label: "Link hints (new tab)", keys: shared(["ctrl+alt+f"]) },
   "page.reload": { label: "Reload page", keys: platform(["cmd+r"], ["ctrl+r"]) },
   "page.back": { label: "Back", keys: platform(["cmd+[", "ctrl+["], ["ctrl+["]) },
   "page.forward": { label: "Forward", keys: platform(["cmd+]", "ctrl+]"], ["ctrl+]"]) },
