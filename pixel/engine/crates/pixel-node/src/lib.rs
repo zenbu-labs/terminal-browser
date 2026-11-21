@@ -214,6 +214,15 @@ pub struct HostOptions {
 }
 
 #[napi(object)]
+pub struct StreamOptions {
+    pub socket: String,
+    pub cols: u32,
+    pub rows: u32,
+    pub width_px: Option<u32>,
+    pub height_px: Option<u32>,
+}
+
+#[napi(object)]
 pub struct SurfaceShm {
     pub fd: i32,
     pub width: u32,
@@ -286,6 +295,11 @@ fn create_backend(name: &str, options: &serde_json::Value) -> Result<Box<dyn Bac
 
 
 #[napi]
+pub fn prepare_fonts() {
+    pixel_bridge::prepare_default_fonts();
+}
+
+#[napi]
 pub struct PixelEngine {
     engine: Option<Engine>,
     info: String,
@@ -293,6 +307,7 @@ pub struct PixelEngine {
     rx: Option<Receiver<String>>,
     waker: Waker,
     surfaces: Arc<SurfaceMailbox>,
+    presented: Arc<std::sync::atomic::AtomicU64>,
     captures: capture::Registry,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -306,6 +321,7 @@ impl PixelEngine {
         wrapper: Option<String>,
         session_env: Option<std::collections::HashMap<String, String>>,
         host: Option<HostOptions>,
+        stream: Option<StreamOptions>,
     ) -> Result<Self> {
         let session_env = match session_env {
             Some(env) => pixel_terminal::SessionEnv::of_session(env),
@@ -319,6 +335,15 @@ impl PixelEngine {
                 pane: host.pane,
                 name: host.name,
                 tty: host.tty,
+            }),
+            stream: stream.map(|stream| pixel_terminal::StreamOptions {
+                socket: stream.socket,
+                size: pixel_terminal::WindowSize {
+                    cols: stream.cols,
+                    rows: stream.rows,
+                    width_px: stream.width_px.unwrap_or(0),
+                    height_px: stream.height_px.unwrap_or(0),
+                },
             }),
             wrapper: pixel_terminal::Wrapper::named(wrapper.as_deref()),
             session_env,
@@ -349,6 +374,7 @@ impl PixelEngine {
         let waker = engine.backend.waker().map_err(err)?;
         engine.cpu_throttle.register_current_thread();
         let info = engine_info(&engine).to_string();
+        let presented = engine.presented.clone();
         let (tx, rx) = channel();
         Ok(Self {
             engine: Some(engine),
@@ -358,6 +384,7 @@ impl PixelEngine {
             waker,
             // who even uses you tho
             surfaces: Arc::new(SurfaceMailbox::default()),
+            presented,
             captures: capture::Registry::default(),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
@@ -420,6 +447,11 @@ impl PixelEngine {
     pub fn remove_surface(&self, id: u32) {
         self.surfaces.remove(id);
         self.waker.wake();
+    }
+
+    #[napi]
+    pub fn frames_presented(&self) -> f64 {
+        self.presented.load(Ordering::Relaxed) as f64
     }
 
     #[napi]

@@ -42,6 +42,10 @@
       "types": "./dist/ssh/index.d.ts",
       "default": "./dist/ssh/index.js"
     },
+    "./pair": {
+      "types": "./dist/pair/index.d.ts",
+      "default": "./dist/pair/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

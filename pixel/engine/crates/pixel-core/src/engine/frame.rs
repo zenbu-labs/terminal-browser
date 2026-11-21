@@ -198,6 +198,9 @@ impl Engine {
 
     fn finish_frame(&mut self, start: Instant, slot: Instant, bytes: usize, cpu: Option<(u64, u64)>) -> io::Result<()> {
         crate::profiler::count("bytes", || bytes as u64);
+        if bytes > 0 {
+            self.presented.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Some((thread_before, process_before)) = cpu
             && let Some((thread_after, process_after)) = crate::profiler::cpu_us()
         {

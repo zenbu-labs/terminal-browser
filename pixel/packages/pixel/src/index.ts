@@ -1,5 +1,6 @@
 /// <reference path="../electron/electron.d.ts" preserve="true" />
 export { createRoot } from "./root";
+export type { ProxySetting } from "./web/browser-session";
 export type { LoadOptions, Root, RootOptions } from "./root";
 export type { RelaunchRequest } from "./relaunch";
 export type { Instance } from "./instances";
@@ -47,6 +48,7 @@ export {
   highlight,
   diff,
   parseMarkdown,
+  prepareFonts,
   HIGHLIGHT_CAPTURES,
   Surface,
   SurfaceCapture,
@@ -56,6 +58,8 @@ export {
   useStore,
 } from "./react";
 export type { LogRow, LogBuffer, Idle } from "./react";
+export type { TerminalStream } from "./react/native";
+export { STREAM_ENV, STREAM_SIZE_ENV, TERMINAL_ENV, streamFromEnv, streamed, terminalFromEnv } from "./terminal/stream";
 export type {
   BoxProps,
   TextProps,

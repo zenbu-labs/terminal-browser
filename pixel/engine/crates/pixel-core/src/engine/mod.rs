@@ -302,6 +302,7 @@ pub struct Engine {
     frame_due: Option<Instant>,
     scroll_requests: Vec<(usize, scroll::ScrollRequest, bool, bool)>,
     pub stats: FrameStats,
+    pub presented: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 const PRECISE_WAIT_TAIL: Duration = Duration::from_micros(1500);
@@ -384,6 +385,7 @@ impl Engine {
             frame_due: None,
             scroll_requests: Vec::new(),
             stats: FrameStats::default(),
+            presented: Default::default(),
         };
         for view in &mut engine.comp.views {
             view.tree.set_lattice(engine.device.lattice);
