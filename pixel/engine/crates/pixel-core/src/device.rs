@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::scroll::ScrollProfile;
-use crate::scroll::profiles::Smooth;
+use crate::scroll::profiles::Notch;
 use crate::text_metrics::{FontMetrics, TextMetrics};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +34,7 @@ impl Default for Device {
             name: "pixels".into(),
             text: Arc::new(FontMetrics),
             lattice: (1.0, 1.0),
-            scroll: Arc::new(Smooth { tau: 0.08, brake: 0.025 }),
+            scroll: Arc::new(Notch { rows: 1.0, tau: 0.03 }),
             colors: ColorDepth::TrueColor,
             pointer: Pointer::Precise,
         }

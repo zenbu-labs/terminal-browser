@@ -1,6 +1,7 @@
 pub mod profiles;
 
 pub trait ScrollProfile: std::fmt::Debug + Send + Sync {
+    fn land(&self, _state: &mut ScrollState, _max: f32) {}
     fn tick(&self, _state: &mut ScrollState, _delta: f32, _max: f32) {}
     fn step(&self, state: &mut ScrollState, dt: f32, max: f32);
 }
@@ -19,6 +20,7 @@ impl ScrollState {
     pub fn tick<P: ScrollProfile + ?Sized>(&mut self, profile: &P, delta: f32, max: f32) {
         self.idle = 0.0;
         self.reveal = true;
+        profile.land(self, max);
         self.target = (self.target + delta).clamp(0.0, max);
         profile.tick(self, delta, max);
     }
