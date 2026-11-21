@@ -6,7 +6,7 @@ import {
   onPermissionFor,
   routeThroughProxy,
 } from "./browser-session";
-import type { DownloadProgress, PermissionCheck, PermissionGate, PermissionRequest } from "./browser-session";
+import type { DownloadProgress, PermissionCheck, PermissionGate, PermissionRequest, ProxySetting } from "./browser-session";
 import { cursorShapeFor } from "./cursor";
 import { DevtoolsWindow } from "./devtools";
 import { FaviconCache } from "./favicon";
@@ -78,7 +78,7 @@ export interface HostOptions {
   url: string;
   background: string;
   clipboardRead: boolean;
-  proxy: string | null;
+  proxy: ProxySetting | null;
   browserWindowOptions: BrowserWindowOptions;
 }
 
@@ -153,7 +153,8 @@ export class PageHost {
       windowOptions(this.browserWindowOptions, size, offscreenPreferences(this.renderScale)),
     );
     prepareSession(this.window.webContents.session);
-    if (options.proxy) void routeThroughProxy(this.window.webContents.session, options.proxy);
+    const proxied = options.proxy ? routeThroughProxy(this.window.webContents.session, options.proxy) : null;
+    if (options.proxy) this.window.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
     if (this.clipboardRead) allowClipboardRead(this.window.webContents);
     onDownloadFor(this.window.webContents, (progress) => this.onDownload?.(progress));
     this.gatePermissions(this.window.webContents);
@@ -248,7 +249,12 @@ export class PageHost {
       this.handleWindowOpen(details, this.window.webContents),
     );
     this.window.webContents.on("did-create-window", (child) => this.adoptPopup(child));
-    void this.window.loadURL(options.url);
+    if (proxied) {
+      void proxied.catch(() => {}).then(() => {
+        if (!this.window.isDestroyed()) void this.window.loadURL(options.url);
+      });
+    }
+    else void this.window.loadURL(options.url);
     this.onState(this.state);
   }
 

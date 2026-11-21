@@ -34,6 +34,10 @@
       "types": "./dist/terminal/index.d.ts",
       "default": "./dist/terminal/index.js"
     },
+    "./embed": {
+      "types": "./dist/embed.d.ts",
+      "default": "./dist/embed.js"
+    },
     "./app-executable": {
       "types": "./dist/app-executable.d.ts",
       "default": "./dist/app-executable.js"
@@ -41,6 +45,10 @@
     "./ssh": {
       "types": "./dist/ssh/index.d.ts",
       "default": "./dist/ssh/index.js"
+    },
+    "./pair": {
+      "types": "./dist/pair/index.d.ts",
+      "default": "./dist/pair/index.js"
     },
     "./package.json": "./package.json"
   },

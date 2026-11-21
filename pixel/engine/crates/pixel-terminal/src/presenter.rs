@@ -83,13 +83,17 @@ pub(crate) trait Presenter: Send {
 pub(crate) struct KittyPresenter {
     kitty: Kitty,
     raster: pixel_raster::Raster,
+    local_terminal: bool,
 }
 
 impl KittyPresenter {
     pub(crate) const PIXEL_MOUSE: bool = true;
 
     pub(crate) fn new(term: &mut Terminal, env: &SessionEnv) -> io::Result<Self> {
-        let mut presenter = Self { kitty: Kitty::new(term, env)?, raster: pixel_raster::Raster::new() };
+        let local_terminal = env
+            .var("PIXEL_TERMINAL_FEATURES")
+            .is_some_and(|features| features.split(',').any(|feature| feature.trim() == "local-terminal"));
+        let mut presenter = Self { kitty: Kitty::new(term, env)?, raster: pixel_raster::Raster::new(), local_terminal };
         presenter.relay(term);
         Ok(presenter)
     }
@@ -196,7 +200,7 @@ impl Presenter for KittyPresenter {
     }
 
     fn start_input(&mut self, term: &mut Terminal) {
-        if term.is_hosted() && !term.is_embedded() {
+        if (term.is_hosted() && !term.is_embedded()) || (term.is_stream() && !self.local_terminal) {
             self.kitty.native().stop();
             return;
         }

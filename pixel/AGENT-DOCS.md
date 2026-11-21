@@ -25,6 +25,8 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | `packages/pixel/src/instances.ts` | instance records, `listInstances`, `findOwner` |
 | `packages/pixel/src/host/` | same-pane tabs and TUI embedding |
 | `packages/pixel/src/ssh/index.ts` | `@zenbu-labs/pixel/ssh` |
+| `packages/pixel/src/pair/` | `@zenbu-labs/pixel/pair`: `attach`, `host`, `paired` |
+| `packages/pixel/src/terminal/stream.ts` | drawing into a stream terminal: the frontend's env names, building and reading them |
 | `packages/pixel/src/terminal/` | `@zenbu-labs/pixel/terminal`, one file per terminal in `terminals/` |
 | `packages/pixel/src/preload/index.ts` | `@zenbu-labs/pixel/preload` types for `window.pixel` |
 | `packages/pixel/src/electron/index.ts` | `@zenbu-labs/pixel/electron`, re-exports `electron` |
@@ -351,6 +353,61 @@ pixel.quit(): void                     // same as navigating to pixel://quit
 | `REMOTE_BUNDLES_DIR` | `:272` | remote bundle location |
 
 Usage: `<WebView src={session.url} {...session.view} />`. Example: `examples/ssh`.
+
+## @zenbu-labs/pixel/pair
+
+`packages/pixel/src/pair/`
+
+Runs an app's frontend (Electron and pixel) on the computer with the screen while its backend stays on the computer you
+ssh'd to, drawing into the same ssh session: frames stay on the screen's computer (shared memory into the terminal) and
+input is native. pixel/pair only hands the terminal over. It gives each side messages to deliver and takes the ones that
+arrive; how they travel, who may connect, and everything else the app's two halves say to each other is the app's.
+
+| export | line | what it does |
+| --- | --- | --- |
+| `attach({ send, args?, meta?, terminal?, signal?, onStarted? }): Attachment` | `attach.ts:60` | remote side: takes the terminal (raw mode, input, resizes, output, put back on exit, drop or kill) |
+| `Attachment` | `attach.ts:40` | `{ receive(message), disconnected(), done: Promise<Attached> }` |
+| `Attached` | `attach.ts:38` | `{ started: true, code, lost } \| { started: false, error: AttachError }`; `lost` means the connection dropped while the frontend ran |
+| `AttachError` | `attach.ts:31` | `noTerminal`, `protocol` (with `older`), `refused`, `disconnected` (before start), `timeout` |
+| `host({ send, start, log? }): Hosted` | `host.ts:50` | screen side: starts the frontend with `start({ args, env, meta })`, relays its terminal |
+| `Hosted` | `host.ts:36` | `{ receive(message), disconnected(), stop(), closed }` |
+| `paired(env?)` | `index.ts:9` | `{ meta } \| null` inside a frontend `host` started |
+
+```ts
+// remote
+const session = attach({ send: (m) => conn.send({ pixel: m }), args: ["--open", file], meta: { machine } });
+conn.on("message", (m) => m.pixel && session.receive(m.pixel));
+conn.on("close", () => session.disconnected());
+const attached = await session.done;
+
+// screen
+const hosted = host({ send: (m) => conn.send({ pixel: m }), start: (launch) => ({ command, args: launch.args, env: appEnv }) });
+conn.on("message", (m) => m.pixel && hosted.receive(m.pixel));
+conn.on("close", () => hosted.disconnected());
+```
+
+What the app's transport must do: deliver each message whole (`Uint8Array`), in order, both ways, and call
+`disconnected()` on both sides when the connection is gone. Each side also pings every 2 s and treats 6 s of silence as
+a disconnect. Terminal output is acked: the screen side stops reading the frontend's output while more than 4 MB is
+unacked. The first message carries the protocol range (`wire.ts`); ranges that don't overlap are refused
+(`PIXEL_PAIR_PROTOCOL=a-b` overrides it, for tests).
+
+`start` may return a `{ pid, stop(), exited }` handle instead of a command. The app passes the frontend whatever it needs
+to reach its own messages in `start`'s `env`. Whoever can deliver messages to `receive` can start the frontend with
+chosen args: only do that for connections the app has authenticated, and treat `args` and `meta` as input from that
+computer.
+
+The frontend's env (`terminal/stream.ts`, built by `streamEnv`): `PIXEL_TERMINAL_STREAM` (the socket it draws into),
+`PIXEL_TERMINAL_SIZE`, `PIXEL_TERMINAL_ENV` (the terminal's description, JSON) and `PIXEL_PAIRED` (`{ meta }`). The
+description comes from the remote, the side attached to the terminal: `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`,
+`COLORTERM`, `COLORFGBG`, `LANG`, `LANGUAGE`, `LC_*`, plus `PIXEL_TERMINAL_FEATURES=local-terminal` (shared memory and
+native input, read in `engine/crates/pixel-terminal/src/presenter.rs`). The screen side drops any other name. A streamed
+frontend hands that description to the engine as its session env (`root.tsx`) and skips terminal detection: it never
+reads its own environment for the terminal, so the variables of whatever started it on the screen's computer (a `TMUX`,
+a `KITTY_WINDOW_ID`) don't apply. Pane integrations (kitty remote control, tmux, multiplexer panes) are off when paired:
+neither the remote nor the terminal can say which pane on the screen's computer it is.
+
+Tests: `packages/pixel/test/pair.test.js`.
 
 ## @zenbu-labs/pixel/terminal
 
