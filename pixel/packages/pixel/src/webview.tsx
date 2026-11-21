@@ -44,7 +44,7 @@ import type {
 } from "./web/browser-session";
 import { PageHost, decideOpenWindow } from "./web/host";
 import type { BrowserWindowOptions, OpenWindowDecision, OpenWindowPolicy } from "./web/host";
-import { memoryPartition, persistentPartition } from "./web/browser-session";
+import { memoryPartition, persistentPartition, type ProxySetting } from "./web/browser-session";
 import { initialWebViewState, snapToCssGrid } from "./web/types";
 import type { DevtoolsDock, MediaCapture, SurfaceLayout, WebViewState } from "./web/types";
 import type { ZoomDirection } from "./web/zoom";
@@ -68,7 +68,7 @@ export interface WebViewProps {
   partition?: string;
   persist?: boolean;
   clipboardRead?: boolean;
-  proxy?: string;
+  proxy?: ProxySetting;
   browserWindowOptions?: BrowserWindowOptions;
   autoFocus?: boolean;
   passWheel?: boolean;

@@ -52,6 +52,7 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("disable-features", "FedCm");
 if (process.env.PIXEL_DISABLE_GPU === "1") app.commandLine.appendSwitch("disable-gpu");
+if (process.env.PIXEL_MOCK_KEYCHAIN === "1") app.commandLine.appendSwitch("use-mock-keychain");
 try {
   const logs = app.getPath("logs");
   fs.mkdirSync(logs, { recursive: true });
