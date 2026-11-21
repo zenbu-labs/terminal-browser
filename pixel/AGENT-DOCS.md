@@ -369,8 +369,8 @@ arrive; how they travel, who may connect, and everything else the app's two side
 | `transferToLocalRendering({ send, tty?, env?, args?, meta?, signal?, onStarted? }): LocalRendering` | `transfer.ts:106` | remote side: hands its terminal to rendering on the screen's computer (raw mode, input, resizes, output; put back on exit, drop or kill) |
 | `LocalRendering` | `transfer.ts:36` | `{ receive(message), disconnected(), done: Promise<LocalRenderingResult> }` |
 | `LocalRenderingResult` | `transfer.ts:34` | `{ started: true, code, lost } \| { started: false, error: LocalRenderingError }`; `lost` means the connection dropped while it rendered |
-| `LocalRenderingError` | `transfer.ts:27` | `noTerminal`, `protocol` (with `older`), `refused`, `disconnected` (before start), `timeout` |
-| `handleLocalRendering({ send, start, log? }): HandledRendering` | `handle.ts:50` | screen side: runs the app's pixel process with `start({ args, env, meta })` and relays its terminal |
+| `LocalRenderingError` | `transfer.ts:27` | `noTerminal`, `protocol` (with `older`), `refused` (also when the app's process can't be started or exits before it draws), `disconnected` (before start), `timeout` |
+| `handleLocalRendering({ send, start, log? }): HandledRendering` | `handle.ts:59` | screen side: runs the app's pixel process with `start({ args, env, meta })` and relays its terminal |
 | `HandledRendering` | `handle.ts:36` | `{ receive(message), disconnected(), stop(), closed }` |
 
 ```ts
@@ -413,7 +413,12 @@ remote, the side attached to the terminal: `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM
 `engine/crates/pixel-terminal/src/presenter.rs`). The screen side drops any other name. A streamed process hands that
 description to the engine as its session env (`root.tsx`) and skips terminal detection: it never reads its own
 environment for the terminal, so the variables of whatever started it on the screen's computer (a `TMUX`, a
-`KITTY_WINDOW_ID`) don't apply. Pane integrations (kitty remote control, tmux, multiplexer panes) are off: neither the
+`KITTY_WINDOW_ID`) don't apply. A streamed process always draws with kitty graphics and ignores `PIXEL_RENDERER`: transferring rendering
+only pays off for graphics, and a terminal without them is served as well by cells drawn on the remote. Terminal probes
+cross the connection and ssh, so with `local-terminal` the engine waits up to 1.5 s for their replies instead of 300 ms
+before falling back to sending frames inline. When the app's process exits, its remaining output is relayed before
+`exit` is sent, and the remote resets the terminal whenever a transfer ends. Pane integrations (kitty remote control,
+tmux, multiplexer panes) are off: neither the
 remote nor the terminal can say which pane on the screen's computer it is.
 
 Tests: `packages/pixel/test/pair.test.js`.

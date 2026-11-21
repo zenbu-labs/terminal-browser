@@ -1,7 +1,3 @@
-"""Holds a pty open for a test: prints the device path, then copies what's written to the pty to stdout and stdin to the pty.
-
-usage: pty-holder.py  (exits when stdin closes)
-"""
 import fcntl
 import os
 import select

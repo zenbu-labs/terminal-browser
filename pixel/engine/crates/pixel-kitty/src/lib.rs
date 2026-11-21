@@ -82,6 +82,7 @@ pub struct Kitty {
     cell_change: Option<(u32, u32)>,
     transport: FrameTransport,
     transport_retry: TransportRetry,
+    relayed_replies: bool,
     herdr: Option<herdr::Herdr>,
     herdr_target: Option<HerdrTarget>,
     herdr_retry: Option<(Instant, Duration)>,
@@ -154,6 +155,9 @@ impl Kitty {
                 if kitty.herdr.is_none() && kitty.herdr_target.is_some() {
                     kitty.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
                 }
+                kitty.relayed_replies = env
+                    .var("PIXEL_TERMINAL_FEATURES")
+                    .is_some_and(|features| features.split(',').any(|feature| feature.trim() == "local-terminal"));
                 kitty.transport = kitty.probe_transport(tty, env)?;
                 kitty.identity = kitty.probe_identity(tty, env)?;
                 kitty.present = kitty.choose_present(tty, env)?;
@@ -173,6 +177,7 @@ impl Kitty {
             cell_change: None,
             transport: FrameTransport::Inline,
             transport_retry: TransportRetry::Settled,
+            relayed_replies: false,
             herdr: None,
             herdr_target,
             herdr_retry: None,
@@ -322,6 +327,10 @@ impl Kitty {
         Ok(())
     }
 
+    fn frame_probe_ms(&self) -> u64 {
+        if self.relayed_replies { RELAYED_PROBE_TIMEOUT_MS } else { FRAME_PROBE_TIMEOUT_MS }
+    }
+
     fn probe_frame_file(&mut self, tty: &mut dyn Tty) -> io::Result<Option<bool>> {
         let path = self.frame_path(FRAME_SLOTS, 0);
         if std::fs::write(&path, [0u8, 0, 0, 255]).is_err() {
@@ -337,7 +346,7 @@ impl Kitty {
             self.wrapper,
         ))?;
         self.io.out().flush()?;
-        let reply = ask(tty, FRAME_PROBE_TIMEOUT_MS, true, |buf| {
+        let reply = ask(tty, self.frame_probe_ms(), true, |buf| {
             parse_probe_reply(buf, b"Gi=300;")
         })?;
         let _ = std::fs::remove_file(&path);
@@ -358,7 +367,7 @@ impl Kitty {
             self.wrapper,
         ))?;
         self.io.out().flush()?;
-        let reply = ask(tty, FRAME_PROBE_TIMEOUT_MS, true, |buf| {
+        let reply = ask(tty, self.frame_probe_ms(), true, |buf| {
             parse_probe_reply(buf, b"Gi=299;")
         })?;
         let _ = rustix::shm::unlink(&name);
@@ -629,6 +638,7 @@ impl Kitty {
 const SHM_PROBE_ID: u32 = 299;
 const FILE_PROBE_ID: u32 = 300;
 const FRAME_PROBE_TIMEOUT_MS: u64 = 300;
+const RELAYED_PROBE_TIMEOUT_MS: u64 = 1500;
 const TRANSPORT_RETRY_GAP: Duration = Duration::from_secs(1);
 
 const FRAME_SLOTS: u64 = 8;

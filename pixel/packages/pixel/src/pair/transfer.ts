@@ -151,7 +151,7 @@ export function transferToLocalRendering(options: TransferToLocalRenderingOption
     input.off("data", onInput);
     input.on("data", () => {});
     setTimeout(() => {
-      restore(code !== 0 || lost);
+      restore(true);
       trace("done", { code, written, lost });
       wire.open = false;
       resolveDone({ started: true, code, lost });

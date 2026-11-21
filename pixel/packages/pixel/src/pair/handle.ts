@@ -40,12 +40,21 @@ export interface HandledRendering {
   closed: Promise<void>;
 }
 
-// fixme: placeholder copy
 const COPY = {
   noStart: "the app didn't start",
+  exitedEarly: (code: number) => `the app exited with code ${code} before it started`,
 };
 
 const START_MS = 20_000;
+const DRAIN_MS = 5000;
+
+function drained(socket: net.Socket): Promise<void> {
+  if (socket.destroyed) return Promise.resolve();
+  return new Promise((resolve) => {
+    socket.once("close", () => resolve());
+    setTimeout(resolve, DRAIN_MS).unref();
+  });
+}
 
 export function handleLocalRendering(options: HandleLocalRenderingOptions): HandledRendering {
   const wire = new Wire(options.send);
@@ -116,8 +125,10 @@ export function handleLocalRendering(options: HandleLocalRenderingOptions): Hand
     frontend = "command" in how ? spawned(how.command, how.args, { ...env, ...how.env }, log) : how;
     trace("app-started", { session: h.session, pid: frontend.pid });
     log(`started: pid ${frontend.pid ?? "?"}`);
-    void frontend.exited.then((code) => {
+    void frontend.exited.then(async (code) => {
       trace("app-exit", { session: h.session, code });
+      if (!terminal) return refuse(COPY.exitedEarly(code));
+      await drained(terminal);
       wire.send({ type: "exit", code });
       cleanup();
     });
@@ -167,9 +178,16 @@ function spawned(command: string, args: string[], env: Record<string, string>, l
     env: { ...process.env, ...env },
   });
   child.stderr?.on("data", (data: Buffer) => log(data.toString().trim()));
+  const exited = new Promise<number>((resolve) => {
+    child.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 0)));
+    child.on("error", (error) => {
+      log(`${command}: ${error.message}`);
+      resolve(127);
+    });
+  });
   return {
     pid: child.pid,
-    exited: new Promise((resolve) => child.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 0)))),
+    exited,
     stop() {
       if (child.exitCode !== null || child.signalCode !== null) return;
       const pid = child.pid!;

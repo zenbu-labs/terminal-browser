@@ -215,7 +215,8 @@ impl Kitty {
         }
         self.io.out().write_all(b"\x1b[>0q")?;
         self.io.out().flush()?;
-        Ok(ask(tty, IDENTITY_PROBE_TIMEOUT_MS, false, |buf| parse_xtversion(buf).map(|identity| (identity, 0..buf.len())))?
+        let wait = if self.relayed_replies { crate::RELAYED_PROBE_TIMEOUT_MS } else { IDENTITY_PROBE_TIMEOUT_MS };
+        Ok(ask(tty, wait, false, |buf| parse_xtversion(buf).map(|identity| (identity, 0..buf.len())))?
             .unwrap_or(Identity::Unknown))
     }
 

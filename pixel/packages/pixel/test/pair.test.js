@@ -47,15 +47,18 @@ function connection() {
   return { ends, toScreen: deliver("screen"), toRemote: deliver("remote") };
 }
 
-async function rig({ env = {} } = {}) {
+async function rig({ env = {}, start, signal } = {}) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "pair-rig-"));
   const frontend = path.join(base, "frontend.js");
   fs.writeFileSync(frontend, FRONTEND);
   const c = connection();
   const terminal = pty();
   const device = await terminal.ready;
-  c.ends.screen = handleLocalRendering({ send: c.toRemote, start: (launch) => ({ command: process.execPath, args: [frontend, ...launch.args], env: { ...env, META: JSON.stringify(launch.meta) } }) });
-  c.ends.remote = transferToLocalRendering({ send: c.toScreen, tty: device, env: ENV, args: ["--open", "x.db"], meta: { machine: "remote" } });
+  c.ends.screen = handleLocalRendering({
+    send: c.toRemote,
+    start: start ?? ((launch) => ({ command: process.execPath, args: [frontend, ...launch.args], env: { ...env, META: JSON.stringify(launch.meta) } })),
+  });
+  c.ends.remote = transferToLocalRendering({ send: c.toScreen, tty: device, env: ENV, signal, args: ["--open", "x.db"], meta: { machine: "remote" } });
   return {
     c,
     result: c.ends.remote.done.then(async (result) => {
@@ -156,4 +159,24 @@ test("the screen side keeps only terminal variables from what the remote describ
   assert.deepEqual(Object.keys(launched.env).sort(), ["PIXEL_TERMINAL_ENV", "PIXEL_TERMINAL_SIZE", "PIXEL_TERMINAL_STREAM"]);
   assert.deepEqual(JSON.parse(launched.env.PIXEL_TERMINAL_ENV), { TERM: "xterm-ghostty", PIXEL_TERMINAL_FEATURES: "local-terminal" });
   screen.stop();
+});
+
+test("cancelling on the remote resets the terminal", async () => {
+  const cancel = new AbortController();
+  const r = await rig({ env: { MODE: "hang" }, signal: cancel.signal });
+  setTimeout(() => cancel.abort(), 1500);
+  const { result, written } = await r.result;
+  assert.deepEqual(result, { started: true, code: 0, lost: false });
+  assert.ok(written.includes("\x1b[?1049l"));
+  await r.c.ends.screen.closed;
+});
+
+test("a program that doesn't exist is refused, and the screen side keeps running", async () => {
+  const r = await rig({ start: () => ({ command: "/nonexistent/pixel-app", args: [] }) });
+  assert.deepEqual((await r.result).result, { started: false, error: { kind: "refused", message: "the app exited with code 127 before it started" } });
+});
+
+test("an app that exits before it starts drawing is refused, not started", async () => {
+  const r = await rig({ start: () => ({ command: process.execPath, args: ["-e", "process.exit(3)"] }) });
+  assert.deepEqual((await r.result).result, { started: false, error: { kind: "refused", message: "the app exited with code 3 before it started" } });
 });
