@@ -168,6 +168,12 @@ pub(super) fn parse_frame_edit_reply(buf: &[u8]) -> Option<bool> {
     Some(answer.starts_with(b"OK"))
 }
 
+pub(super) fn find_xtversion(buf: &[u8]) -> Option<(Identity, std::ops::Range<usize>)> {
+    let at = buf.windows(4).position(|w| w == b"\x1bP>|")?;
+    let end = buf[at + 4..].windows(2).position(|w| w == b"\x1b\\")?;
+    Some((parse_xtversion(&buf[at..])?, at..at + 4 + end + 2))
+}
+
 pub(super) fn parse_xtversion(buf: &[u8]) -> Option<Identity> {
     let start = buf.windows(4).position(|w| w == b"\x1bP>|")? + 4;
     let rest = &buf[start..];
@@ -216,8 +222,7 @@ impl Kitty {
         self.io.out().write_all(b"\x1b[>0q")?;
         self.io.out().flush()?;
         let wait = if self.relayed_replies { crate::RELAYED_PROBE_TIMEOUT_MS } else { IDENTITY_PROBE_TIMEOUT_MS };
-        Ok(ask(tty, wait, false, |buf| parse_xtversion(buf).map(|identity| (identity, 0..buf.len())))?
-            .unwrap_or(Identity::Unknown))
+        Ok(ask(tty, wait, true, find_xtversion)?.unwrap_or(Identity::Unknown))
     }
 
     fn probe_frame_edits(&mut self, tty: &mut dyn Tty) -> io::Result<bool> {
@@ -318,6 +323,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn xtversion_reply_spans_only_the_reply() {
+        let buf = b"ab\x1bP>|ghostty 1.2.0\x1b\\cd";
+        let (identity, range) = find_xtversion(buf).unwrap();
+        assert_eq!(identity, Identity::Ghostty { version: (1, 2, 0) });
+        assert_eq!(&buf[range], b"\x1bP>|ghostty 1.2.0\x1b\\");
+        assert!(find_xtversion(b"keys only").is_none());
+        assert!(find_xtversion(b"\x1bP>|kitty(0.41").is_none());
+    }
+
+    #[test]
     fn only_rex_prefers_tiles() {
         assert!(Identity::Rex.prefers_tiles());
         assert!(!Identity::Ghostty { version: (1, 3, 2) }.prefers_tiles());
@@ -406,3 +421,4 @@ mod tests {
         assert!(matches!(straight_pixels(&canvas, true), Cow::Owned(_)));
     }
 }
+

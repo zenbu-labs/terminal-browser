@@ -11,12 +11,15 @@ const FRONTEND = `
 const net = require("node:net");
 const stream = require(${JSON.stringify(require.resolve("@zenbu-labs/pixel/pair").replace(/pair[\\/]index\.js$/, "terminal/stream.js"))});
 const out = net.connect(process.env.PIXEL_TERMINAL_STREAM, () => {
+  if (process.env.MODE === "graceful") return process.on("SIGTERM", () => out.end("torn down", () => process.exit(0)));
   if (process.env.MODE === "hang") return;
   const big = Number(process.env.BIG || 0);
   if (big) out.write(Buffer.alloc(big, 120));
   out.write(JSON.stringify({ meta: JSON.parse(process.env.META), args: process.argv.slice(2), terminal: stream.terminalFromEnv(), inherited: process.env.TERM ?? null }), () => process.exit(Number(process.env.EXIT_CODE) || 0));
 });
 `;
+
+const RESET = "\x1b_Ga=d,d=A";
 
 const ENV = { TERM: "xterm-ghostty", NODE_OPTIONS: "--require /tmp/nope.js" };
 
@@ -74,8 +77,9 @@ async function rig({ env = {}, start, signal } = {}) {
 
 test("transferToLocalRendering and handleLocalRendering render on the other side with nothing but send and receive", async () => {
   const r = await rig();
-  const { result, report } = await r.result;
+  const { result, report, written } = await r.result;
   assert.deepEqual(result, { started: true, code: 0, lost: false });
+  assert.ok(!written.includes(RESET));
   assert.deepEqual(report, {
     meta: { machine: "remote" },
     args: ["--open", "x.db"],
@@ -93,9 +97,11 @@ test("output past the window waits for acks and all of it arrives", async () => 
   assert.equal(report.meta.machine, "remote");
 });
 
-test("the frontend's exit code comes back", async () => {
+test("the frontend's exit code comes back, and a failing exit resets the terminal", async () => {
   const r = await rig({ env: { EXIT_CODE: "3" } });
-  assert.deepEqual((await r.result).result, { started: true, code: 3, lost: false });
+  const { result, written } = await r.result;
+  assert.deepEqual(result, { started: true, code: 3, lost: false });
+  assert.ok(written.includes(RESET));
 });
 
 test("disconnected after the frontend started reports lost, and the screen side stops it", async () => {
@@ -161,14 +167,35 @@ test("the screen side keeps only terminal variables from what the remote describ
   screen.stop();
 });
 
-test("cancelling on the remote resets the terminal", async () => {
+test("cancelling stops the app gracefully, and its own teardown reaches the terminal without a reset", async () => {
+  const cancel = new AbortController();
+  const r = await rig({ env: { MODE: "graceful" }, signal: cancel.signal });
+  setTimeout(() => cancel.abort(), 1500);
+  const { result, written } = await r.result;
+  assert.deepEqual(result, { started: true, code: 0, lost: false });
+  assert.ok(written.includes("torn down"));
+  assert.ok(!written.includes(RESET));
+  await r.c.ends.screen.closed;
+});
+
+test("cancelling an app that dies without tearing down resets the terminal", async () => {
   const cancel = new AbortController();
   const r = await rig({ env: { MODE: "hang" }, signal: cancel.signal });
   setTimeout(() => cancel.abort(), 1500);
   const { result, written } = await r.result;
-  assert.deepEqual(result, { started: true, code: 0, lost: false });
-  assert.ok(written.includes("\x1b[?1049l"));
+  assert.equal(result.started, true);
+  assert.notEqual(result.code, 0);
+  assert.ok(written.includes(RESET));
   await r.c.ends.screen.closed;
+});
+
+test("cancelling before the app starts drawing", async () => {
+  const cancel = new AbortController();
+  const terminal = pty();
+  const remote = transferToLocalRendering({ send: () => {}, tty: await terminal.ready, signal: cancel.signal });
+  cancel.abort();
+  assert.deepEqual(await remote.done, { started: false, error: { kind: "cancelled" } });
+  terminal.close();
 });
 
 test("a program that doesn't exist is refused, and the screen side keeps running", async () => {

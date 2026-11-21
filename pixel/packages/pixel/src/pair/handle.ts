@@ -48,11 +48,18 @@ const COPY = {
 const START_MS = 20_000;
 const DRAIN_MS = 5000;
 
-function drained(socket: net.Socket): Promise<void> {
-  if (socket.destroyed) return Promise.resolve();
+function drained(socket: net.Socket): Promise<boolean> {
+  if (socket.destroyed) return Promise.resolve(true);
   return new Promise((resolve) => {
-    socket.once("close", () => resolve());
-    setTimeout(resolve, DRAIN_MS).unref();
+    let timer = setTimeout(() => resolve(false), DRAIN_MS);
+    socket.on("data", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => resolve(false), DRAIN_MS);
+    });
+    socket.once("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
   });
 }
 
@@ -128,8 +135,8 @@ export function handleLocalRendering(options: HandleLocalRenderingOptions): Hand
     void frontend.exited.then(async (code) => {
       trace("app-exit", { session: h.session, code });
       if (!terminal) return refuse(COPY.exitedEarly(code));
-      await drained(terminal);
-      wire.send({ type: "exit", code });
+      const complete = await drained(terminal);
+      wire.send({ type: "exit", code, complete });
       cleanup();
     });
     setTimeout(() => {
@@ -158,7 +165,8 @@ export function handleLocalRendering(options: HandleLocalRenderingOptions): Hand
       terminal?.write(`\x1b[48;${message.rows};${message.cols};0;0t`);
     } else if (message.type === "stop") {
       trace("stop", { session: hello?.session });
-      cleanup();
+      if (frontend) frontend.stop();
+      else cleanup();
     }
   };
 

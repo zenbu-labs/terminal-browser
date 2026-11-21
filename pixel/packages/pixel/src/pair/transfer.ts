@@ -8,6 +8,7 @@ import { Wire, olderSide, protocolRange, trace, type Control, type ProtocolRange
 
 const START_MS = 30_000;
 const QUIT_DRAIN_MS = 250;
+const STOP_MS = 3000;
 const TERMINAL_RESET =
   "\x1b\\\x1b[?2026l\x1b_Ga=d,d=A,q=2\x1b\\\x1b[>4;0m\x1b[?2031l\x1b[0m\x1b[0 q" +
   "\x1b[<u\x1b[?2048l\x1b[?2004l\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?25h\x1b[?1049l";
@@ -29,6 +30,7 @@ export type LocalRenderingError =
   | { kind: "protocol"; older: "screen" | "remote"; screen: ProtocolRange; remote: ProtocolRange }
   | { kind: "refused"; message: string }
   | { kind: "disconnected" }
+  | { kind: "cancelled" }
   | { kind: "timeout" };
 
 export type LocalRenderingResult = { started: true; code: number; lost: boolean } | { started: false; error: LocalRenderingError };
@@ -145,13 +147,16 @@ export function transferToLocalRendering(options: TransferToLocalRenderingOption
     resolveDone({ started: false, error });
   };
 
-  const end = (code: number, lost: boolean) => {
+  let stopping: ReturnType<typeof setTimeout> | null = null;
+
+  const end = (code: number, lost: boolean, reset: boolean) => {
     if (finished) return;
     finished = true;
+    if (stopping) clearTimeout(stopping);
     input.off("data", onInput);
     input.on("data", () => {});
     setTimeout(() => {
-      restore(true);
+      restore(reset);
       trace("done", { code, written, lost });
       wire.open = false;
       resolveDone({ started: true, code, lost });
@@ -161,14 +166,17 @@ export function transferToLocalRendering(options: TransferToLocalRenderingOption
   const disconnected = () => {
     if (!started) return notStarted({ kind: "disconnected" });
     trace("link-lost", {});
-    end(1, true);
+    end(1, true, true);
   };
 
   const onInput = (data: Buffer) => wire.input(data);
   const onResize = () => wire.send({ type: "resize", ...terminal.size() });
   const onGone = () => {
+    if (stopping || finished) return;
     wire.send({ type: "stop" });
-    end(0, false);
+    if (!started) return notStarted({ kind: "cancelled" });
+    input.off("data", onInput);
+    stopping = setTimeout(() => end(0, false, true), STOP_MS);
   };
 
   const startTimer = setTimeout(() => notStarted({ kind: "timeout" }), START_MS);
@@ -194,7 +202,10 @@ export function transferToLocalRendering(options: TransferToLocalRenderingOption
       const screen = message.protocol as ProtocolRange | undefined;
       if (screen) notStarted({ kind: "protocol", older: olderSide(screen, protocol) === "mine" ? "screen" : "remote", screen, remote: protocol });
       else notStarted({ kind: "refused", message: String(message.reason) });
-    } else if (message.type === "exit") end(Number(message.code) || 0, false);
+    } else if (message.type === "exit") {
+      const code = Number(message.code) || 0;
+      end(code, false, code !== 0 || message.complete !== true);
+    }
   };
 
   input.setRawMode(true);
