@@ -1,10 +1,11 @@
-import type { DiffRow, HighlightSpan, HostOptions, MarkdownBlock, NativeEngine } from "./native";
+import type { DiffRow, HighlightSpan, HostOptions, MarkdownBlock, NativeEngine, TerminalStream } from "./native";
 
 export interface NativeBinding {
   PixelEngine: {
-    new (tty?: string, wrapper?: string, sessionEnv?: Record<string, string>, host?: HostOptions): NativeEngine;
+    new (tty?: string, wrapper?: string, sessionEnv?: Record<string, string>, host?: HostOptions, stream?: TerminalStream): NativeEngine;
     withBackend(name: string, options?: string): NativeEngine;
   };
+  prepareFonts?(): void;
   highlight(source: string, language: string): HighlightSpan[];
   highlightCaptures(): string[];
   diff(oldSource: string, newSource: string, contextLines?: number): DiffRow[];

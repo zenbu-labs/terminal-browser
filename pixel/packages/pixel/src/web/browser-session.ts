@@ -28,7 +28,10 @@ const proxied = new WeakSet<Session>();
 let webrtcGuard = false;
 
 
-export function routeThroughProxy(target: Session, rules: string): Promise<void> {
+export type ProxySetting = string | { rules: string; bypass?: string[] };
+
+export function routeThroughProxy(target: Session, proxy: ProxySetting): Promise<void> {
+  const { rules, bypass = [] } = typeof proxy === "string" ? { rules: proxy } : proxy;
   proxied.add(target);
   if (!webrtcGuard) {
     webrtcGuard = true;
@@ -36,7 +39,7 @@ export function routeThroughProxy(target: Session, rules: string): Promise<void>
       if (proxied.has(contents.session)) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
     });
   }
-  return target.setProxy({ proxyRules: rules, proxyBypassRules: "<-loopback>" });
+  return target.setProxy({ proxyRules: rules, proxyBypassRules: ["<-loopback>", ...bypass].join(",") });
 }
 const clipboardReaders = new WeakSet<WebContents>();
 

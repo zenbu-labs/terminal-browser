@@ -146,6 +146,11 @@ enum TtyHandle {
         stream: std::os::unix::net::UnixStream,
         tty: std::fs::File,
     },
+    Stream {
+        stream: std::os::unix::net::UnixStream,
+        size: WindowSize,
+        hung_up: bool,
+    },
 }
 
 impl TtyHandle {
@@ -156,7 +161,12 @@ impl TtyHandle {
             TtyHandle::File(file) => file.as_fd(),
             TtyHandle::Hosted { stream, .. } => stream.as_fd(),
             TtyHandle::Embedded { stream, .. } => stream.as_fd(),
+            TtyHandle::Stream { stream, .. } => stream.as_fd(),
         }
+    }
+
+    fn is_tty(&self) -> bool {
+        matches!(self, TtyHandle::Stdio { .. } | TtyHandle::File(_))
     }
 
     fn out(&mut self) -> &mut dyn io::Write {
@@ -165,6 +175,7 @@ impl TtyHandle {
             TtyHandle::File(file) => file,
             TtyHandle::Hosted { sink, .. } => sink,
             TtyHandle::Embedded { tty, .. } => tty,
+            TtyHandle::Stream { stream, .. } => stream,
         }
     }
 }
@@ -290,6 +301,16 @@ impl Terminal {
         Self::with_handle(TtyHandle::File(file), wrapper, pixel_mouse)
     }
 
+    pub fn connect_stream(socket: &str, size: WindowSize, wrapper: Wrapper, pixel_mouse: bool) -> io::Result<Self> {
+        let stream = std::os::unix::net::UnixStream::connect(socket)
+            .map_err(|e| io::Error::new(e.kind(), format!("connect {socket}: {e}")))?;
+        Self::with_handle(TtyHandle::Stream { stream, size, hung_up: false }, wrapper, pixel_mouse)
+    }
+
+    pub fn is_stream(&self) -> bool {
+        matches!(self.io, TtyHandle::Stream { .. })
+    }
+
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         if bytes.is_empty() {
             return Ok(());
@@ -375,10 +396,15 @@ impl Terminal {
 
     fn with_handle(mut io: TtyHandle, wrapper: Wrapper, pixel_mouse: bool) -> io::Result<Self> {
         let step = |name: &str, error: io::Error| io::Error::new(error.kind(), format!("{name}: {error}"));
-        let saved = retry_intr(|| termios::tcgetattr(io.read_fd())).map_err(|e| step("tcgetattr", e.into()))?;
-        let mut raw = saved.clone();
-        raw.make_raw();
-        retry_intr(|| termios::tcsetattr(io.read_fd(), OptionalActions::Drain, &raw)).map_err(|e| step("tcsetattr", e.into()))?;
+        let saved = if io.is_tty() {
+            let saved = retry_intr(|| termios::tcgetattr(io.read_fd())).map_err(|e| step("tcgetattr", e.into()))?;
+            let mut raw = saved.clone();
+            raw.make_raw();
+            retry_intr(|| termios::tcsetattr(io.read_fd(), OptionalActions::Drain, &raw)).map_err(|e| step("tcsetattr", e.into()))?;
+            Some(saved)
+        } else {
+            None
+        };
 
         // would prefer if they weren't magic and linked to some known doc on the internet
         io.out().write_all(if pixel_mouse {
@@ -388,7 +414,7 @@ impl Terminal {
         })?; // enable many reporting modes so we get info about mouse/keyboard
         io.out().flush()?;
 
-        let mut terminal = Self::blank(io, Some(saved), wrapper);
+        let mut terminal = Self::blank(io, saved, wrapper);
         terminal.pixel_mouse = pixel_mouse;
         terminal.kitty_keyboard = terminal.probe_kitty_keyboard()?;
         if !terminal.kitty_keyboard {
@@ -480,6 +506,10 @@ impl Terminal {
        
             return self.poll_host_event(timeout);
         }
+        if let TtyHandle::Stream { hung_up: true, .. } = self.io {
+            self.wait_for_wake(timeout)?;
+            return Ok(None);
+        }
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
             if let Some((raw, used)) = parse_event_kitty(&self.pending, self.kitty_keyboard) {
@@ -493,7 +523,12 @@ impl Terminal {
                         self.focused = focused;
                         Event::Focus(focused)
                     }
-                    RawEvent::WindowSize(ws) => Event::WindowSize(ws),
+                    RawEvent::WindowSize(ws) => {
+                        if let TtyHandle::Stream { size, .. } = &mut self.io {
+                            *size = ws;
+                        }
+                        Event::WindowSize(ws)
+                    }
                     RawEvent::CellSize(cell) => {
                         let Some(cell) = self.accept_cell_report(cell) else {
                             continue;
@@ -573,6 +608,11 @@ impl Terminal {
                 Err(e) => return Err(e.into()),
             };
             if n == 0 {
+                if let TtyHandle::Stream { hung_up, .. } = &mut self.io {
+                    *hung_up = true;
+                    self.pending.clear();
+                    return Ok(Some(Event::HostClosed));
+                }
                 return Err(io::ErrorKind::UnexpectedEof.into());
             }
             self.pending.extend_from_slice(&chunk[..n]);
@@ -754,6 +794,9 @@ impl Terminal {
     pub fn size(&self) -> io::Result<WindowSize> {
         if let Some(state) = &self.hosted {
             return Ok(state.size);
+        }
+        if let TtyHandle::Stream { size, .. } = &self.io {
+            return Ok(*size);
         }
         let ws = retry_intr(|| termios::tcgetwinsize(self.io.read_fd()))?;
         Ok(WindowSize {
@@ -1127,6 +1170,7 @@ impl pixel_kitty::Tty for Terminal {
             TtyHandle::File(file) => tty(file),
             TtyHandle::Hosted { .. } => Ok(pixel_kitty::Output::new(Box::new(io::sink()), None)),
             TtyHandle::Embedded { tty: file, .. } => tty(file),
+            TtyHandle::Stream { stream, .. } => Ok(pixel_kitty::Output::new(Box::new(stream.try_clone()?), None)),
         }
     }
 

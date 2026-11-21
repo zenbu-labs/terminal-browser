@@ -43,6 +43,7 @@ export interface NativeEngine {
   ): void;
   removeSurface(id: number): void;
   surfaceStats(): string;
+  framesPresented?(): number;
   startSurfaceCapture(surfaceId: number, dir: string): number;
   stopSurfaceCapture(captureId: number): string;
   captureIndex(captureId: number): string;
@@ -89,6 +90,14 @@ export interface HostOptions {
   pane: string;
   name: string;
   tty?: string;
+}
+
+export interface TerminalStream {
+  socket: string;
+  cols: number;
+  rows: number;
+  widthPx?: number;
+  heightPx?: number;
 }
 
 export interface HighlightSpan {
@@ -156,6 +165,7 @@ export function createNativeEngine(
   wrapper?: string,
   sessionEnv?: NodeJS.ProcessEnv,
   host?: HostOptions,
+  stream?: TerminalStream,
 ): NativeEngine {
   const env = sessionEnv
     ? Object.fromEntries(
@@ -164,9 +174,13 @@ export function createNativeEngine(
         ),
       )
     : undefined;
-  const pixelEngine = new (requireBinding().PixelEngine)(tty, wrapper, env, host);
+  const pixelEngine = new (requireBinding().PixelEngine)(tty, wrapper, env, host, stream);
 
   return pixelEngine
+}
+
+export function prepareFonts(): void {
+  requireBinding().prepareFonts?.();
 }
 
 export function highlight(source: string, language: string): HighlightSpan[] {

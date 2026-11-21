@@ -15,7 +15,7 @@ import {
 import type { PasteSource, PastedImage, SelectionPart } from "./reconciler-config";
 import type { FontFace } from "./styles";
 import { createNativeEngine } from "./native";
-import type { EngineInfo, HostOptions, NativeEngine, TerminalColors } from "./native";
+import type { EngineInfo, HostOptions, NativeEngine, TerminalColors, TerminalStream } from "./native";
 import { Surface } from "./surface";
 import { handleDevtoolsKey } from "./devtools/app";
 import {
@@ -110,8 +110,9 @@ export type {
   Rgba,
   SurfaceShm,
   TerminalColors,
+  TerminalStream,
 } from "./native";
-export { HIGHLIGHT_CAPTURES, captureFilmstrip, diff, encodeRecording, highlight, parseMarkdown } from "./native";
+export { HIGHLIGHT_CAPTURES, captureFilmstrip, diff, encodeRecording, highlight, parseMarkdown, prepareFonts } from "./native";
 export { useTerminalColors } from "./colors";
 export { Surface, SurfaceCapture } from "./surface";
 export type {
@@ -201,6 +202,7 @@ export interface RootOptions {
   cwd?: string;
   tty?: string;
   host?: HostOptions;
+  stream?: TerminalStream;
   wrapper?: "tmux";
   sessionEnv?: NodeJS.ProcessEnv;
 }
@@ -226,6 +228,7 @@ export interface PixelRoot {
   registerFont(face: FontFace): Promise<void>;
   createSurface(): Surface;
   surfaceStats(): SurfaceStats;
+  framesPresented(): number;
   stop(): void;
   openDevtools(tab?: DevtoolsTab): void;
   closeDevtools(): void;
@@ -347,8 +350,8 @@ export interface RootPlatform {
 export function createEngineRoot(options: EngineRootOptions, platform: RootPlatform): EngineRoot {
   const bridge = options.engine
     ? new Bridge(options.engine)
-    : options.tty || options.host
-      ? new Bridge(createNativeEngine(options.tty, options.wrapper, options.sessionEnv, options.host))
+    : options.tty || options.host || options.stream
+      ? new Bridge(createNativeEngine(options.tty, options.wrapper, options.sessionEnv, options.host, options.stream))
       : getBridge(options.wrapper);
   const devtoolsEnabled = options.devtools !== false;
   setProfileExporter(platform.exportProfile);
@@ -776,6 +779,9 @@ export function createEngineRoot(options: EngineRootOptions, platform: RootPlatf
     },
     surfaceStats() {
       return JSON.parse(bridge.engine.surfaceStats()) as SurfaceStats;
+    },
+    framesPresented() {
+      return bridge.engine.framesPresented?.() ?? 0;
     },
     stop() {
       reconciler.flushSync(() => {

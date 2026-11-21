@@ -25,6 +25,8 @@ Paths are relative to this directory (`pixel/`). Source: `packages/pixel/src/`. 
 | `packages/pixel/src/instances.ts` | instance records, `listInstances`, `findOwner` |
 | `packages/pixel/src/host/` | same-pane tabs and TUI embedding |
 | `packages/pixel/src/ssh/index.ts` | `@zenbu-labs/pixel/ssh` |
+| `packages/pixel/src/pair/` | `@zenbu-labs/pixel/pair`: `transferToLocalRendering`, `handleLocalRendering` |
+| `packages/pixel/src/terminal/stream.ts` | drawing into a stream terminal: the env names, building and reading them |
 | `packages/pixel/src/terminal/` | `@zenbu-labs/pixel/terminal`, one file per terminal in `terminals/` |
 | `packages/pixel/src/preload/index.ts` | `@zenbu-labs/pixel/preload` types for `window.pixel` |
 | `packages/pixel/src/electron/index.ts` | `@zenbu-labs/pixel/electron`, re-exports `electron` |
@@ -351,6 +353,70 @@ pixel.quit(): void                     // same as navigating to pixel://quit
 | `REMOTE_BUNDLES_DIR` | `:272` | remote bundle location |
 
 Usage: `<WebView src={session.url} {...session.view} />`. Example: `examples/ssh`.
+
+## @zenbu-labs/pixel/pair
+
+`packages/pixel/src/pair/`
+
+Renders a pixel app on the computer with the screen while it runs on the computer you ssh'd to, into the same ssh
+session: frames stay on the screen's computer (shared memory into the terminal) and input is native. The remote side
+transfers to local rendering; the screen's computer handles it by running the app's pixel process there, drawing into the
+remote's terminal. pixel/pair only carries the terminal. It gives each side messages to deliver and takes the ones that
+arrive; how they travel, who may connect, and everything else the app's two sides say to each other is the app's.
+
+| export | line | what it does |
+| --- | --- | --- |
+| `transferToLocalRendering({ send, tty?, env?, args?, meta?, signal?, onStarted? }): LocalRendering` | `transfer.ts:106` | remote side: hands its terminal to rendering on the screen's computer (raw mode, input, resizes, output; put back on exit, drop or kill) |
+| `LocalRendering` | `transfer.ts:36` | `{ receive(message), disconnected(), done: Promise<LocalRenderingResult> }` |
+| `LocalRenderingResult` | `transfer.ts:34` | `{ started: true, code, lost } \| { started: false, error: LocalRenderingError }`; `lost` means the connection dropped while it rendered |
+| `LocalRenderingError` | `transfer.ts:27` | `noTerminal`, `protocol` (with `older`), `refused`, `disconnected` (before start), `timeout` |
+| `handleLocalRendering({ send, start, log? }): HandledRendering` | `handle.ts:50` | screen side: runs the app's pixel process with `start({ args, env, meta })` and relays its terminal |
+| `HandledRendering` | `handle.ts:36` | `{ receive(message), disconnected(), stop(), closed }` |
+
+```ts
+// remote
+const rendering = transferToLocalRendering({ send: (m) => conn.send({ pixel: m }), args: ["--open", file], meta: { machine } });
+conn.on("message", (m) => m.pixel && rendering.receive(m.pixel));
+conn.on("close", () => rendering.disconnected());
+const result = await rendering.done;
+
+// screen
+const handled = handleLocalRendering({
+  send: (m) => conn.send({ pixel: m }),
+  start: (launch) => ({ command, args: launch.args, env: { ...launch.env, MY_APP_REMOTE: String(launch.meta.machine) } }),
+});
+conn.on("message", (m) => m.pixel && handled.receive(m.pixel));
+conn.on("close", () => handled.disconnected());
+```
+
+What the app's transport must do: deliver each message whole (`Uint8Array`), in order, both ways, and call
+`disconnected()` on both sides when the connection is gone. Each side also pings every 2 s and treats 6 s of silence as
+a disconnect. Terminal output is acked: the screen side stops reading the pixel process's output while more than 4 MB is
+unacked. The first message carries the protocol range (`wire.ts`); ranges that don't overlap are refused
+(`PIXEL_PAIR_PROTOCOL=a-b` overrides it, for tests).
+
+The terminal transferred is this process's own (stdin and stdout, resizes from `SIGWINCH`, `process.env`) unless `tty`
+names a terminal device, for a process that isn't in the terminal it serves, like a daemon handed `/dev/ttys012` by
+the CLI the user ran: it opens the device (`O_NOCTTY`), watches its size, and reads the terminal's description from
+`env`. Either way it resets and restores the terminal if the process is killed (a watcher on the same tty).
+
+`start` gets `args` and `meta` from the remote and the `env` the process must run with; it may return a
+`{ pid, stop(), exited }` handle instead of a command. `meta` reaches the process only if the app passes it on, through
+`env` or `args`, along with whatever it needs to reach the app's own messages. Whoever can deliver messages to `receive`
+can start the app's process with chosen args: only do that for connections the app has authenticated, and treat `args`
+and `meta` as input from that computer.
+
+The process's env (`terminal/stream.ts`, built by `streamEnv`): `PIXEL_TERMINAL_STREAM` (the socket it draws into),
+`PIXEL_TERMINAL_SIZE` and `PIXEL_TERMINAL_ENV` (the terminal's description, JSON). The description comes from the
+remote, the side attached to the terminal: `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`, `COLORFGBG`,
+`LANG`, `LANGUAGE`, `LC_*`, plus `PIXEL_TERMINAL_FEATURES=local-terminal` (shared memory and native input, read in
+`engine/crates/pixel-terminal/src/presenter.rs`). The screen side drops any other name. A streamed process hands that
+description to the engine as its session env (`root.tsx`) and skips terminal detection: it never reads its own
+environment for the terminal, so the variables of whatever started it on the screen's computer (a `TMUX`, a
+`KITTY_WINDOW_ID`) don't apply. Pane integrations (kitty remote control, tmux, multiplexer panes) are off: neither the
+remote nor the terminal can say which pane on the screen's computer it is.
+
+Tests: `packages/pixel/test/pair.test.js`.
 
 ## @zenbu-labs/pixel/terminal
 
