@@ -32,14 +32,14 @@ export interface NativeEngine {
     damageY: number,
     damageWidth: number,
     damageHeight: number,
-    scrollY?: number,
+    scrollTree?: string,
   ): void;
   updateSurfaceShm?(
     id: number,
     shm: SurfaceShm,
     damage?: DamageRect,
     released?: (...args: unknown[]) => void,
-    scrollY?: number,
+    scrollTree?: string,
   ): void;
   removeSurface(id: number): void;
   surfaceStats(): string;

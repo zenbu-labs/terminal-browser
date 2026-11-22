@@ -16,6 +16,7 @@ mod patched;
 mod transmit_strategy;
 mod screen;
 mod tiles;
+mod webview;
 
 pub(crate) use flash::Flashes;
 pub(crate) use animation::Animation;

@@ -29,7 +29,7 @@ function presentTexture(
     surface.present({
       ioSurface,
       damage: wholeSurface ? undefined : damageOf(info),
-      scrollY: pageScrollY(info.metadata),
+      scrollTree: scrollTreeJson(info.metadata),
     });
     return true;
   } finally {
@@ -63,7 +63,7 @@ function presentShmFrame(
           size: info.dataSize,
         },
         damage,
-        scrollY: pageScrollY(info.metadata),
+        scrollTree: scrollTreeJson(info.metadata),
         released: () => frame.release(),
       });
     } catch {
@@ -77,14 +77,15 @@ function presentShmFrame(
 }
 
 interface ScrollMetadata {
-  rootScrollOffset?: { x: number; y: number };
   pageScaleFactor?: number;
+  scrollTree?: unknown[];
+  drawnLayers?: unknown[];
 }
 
-function pageScrollY(metadata: object): number | undefined {
-  const { rootScrollOffset, pageScaleFactor } = metadata as ScrollMetadata;
-  if (!rootScrollOffset || pageScaleFactor !== 1) return undefined;
-  return rootScrollOffset.y;
+function scrollTreeJson(metadata: object): string | undefined {
+  const { pageScaleFactor, scrollTree, drawnLayers } = metadata as ScrollMetadata;
+  if (!scrollTree || pageScaleFactor !== 1) return undefined;
+  return JSON.stringify({ scrollTree, drawnLayers: drawnLayers ?? [] });
 }
 
 function presentBitmap(surface: Surface, image: NativeImage, dirtyRect?: Rectangle): boolean {

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pixel_core::surfaces::Rect;
+use std::sync::Arc;
+
+use pixel_core::surfaces::{Rect, ScrollTree};
 
 pub enum SurfacePixels {
     #[cfg(target_os = "macos")]
@@ -19,7 +21,7 @@ pub struct SurfaceFrame {
     pub id: u32,
     pub pixels: SurfacePixels,
     pub damage: Option<Vec<Rect>>,
-    pub scroll_y: Option<i64>,
+    pub scroll_tree: Option<Arc<ScrollTree>>,
 }
 
 pub enum SurfaceCommand {
@@ -50,7 +52,7 @@ pub struct SurfaceMailbox {
 }
 
 impl SurfaceMailbox {
-    pub fn submit(&self, id: u32, pixels: SurfacePixels, damage: Option<Rect>, scroll_y: Option<i64>) {
+    pub fn submit(&self, id: u32, pixels: SurfacePixels, damage: Option<Rect>, scroll_tree: Option<Arc<ScrollTree>>) {
         let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
         let slot = slots.entry(id).or_default();
         let damage: Option<Vec<Rect>> = match slot.pending.take() {
@@ -75,7 +77,7 @@ impl SurfaceMailbox {
             }
             Some(Pending::Remove) | None => damage.map(|rect| vec![rect]),
         };
-        slot.pending = Some(Pending::Frame(SurfaceFrame { id, pixels, damage, scroll_y }));
+        slot.pending = Some(Pending::Frame(SurfaceFrame { id, pixels, damage, scroll_tree }));
         self.submitted.fetch_add(1, Ordering::Relaxed);
     }
 

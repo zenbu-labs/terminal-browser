@@ -980,31 +980,3 @@ fn label_items(a: &str, b: &str) -> Vec<Desc> {
         },
     ]
 }
-
-#[test]
-fn a_scrolled_surface_drawn_one_to_one_becomes_a_scroll_layer() {
-    let mut tree = Tree::new((200.0, 100.0));
-    let surface = tree.create(Props {
-        style: Style { width: Dimension::Px(200.0), height: Dimension::Px(60.0), ..Style::default() },
-        surface: Some(31),
-        ..Props::default()
-    });
-    tree.append(tree.root(), surface);
-    let mut fonts = crate::tests::fonts();
-    tree.flush_layout(&mut fonts, 16.0);
-    let scene = record_scene(&tree, &fonts, None);
-    let pixels = vec![0u8; 200 * 60 * 4];
-    pixel_core::surfaces::write(31, 200, 60, None, &pixels, 200 * 4);
-
-    assert!(crate::scrolled_surface_layer(&scene.root, (200, 100)).is_none(), "no scroll reported, no layer");
-
-    pixel_core::surfaces::set_scroll(31, Some(450));
-    let (id, layer) = crate::scrolled_surface_layer(&scene.root, (200, 100)).unwrap();
-    assert_eq!(id, 31);
-    assert_eq!(layer.area, pixel_core::surfaces::Rect { x: 0, y: 0, w: 200, h: 60 });
-    assert_eq!(layer.origin_y, -450, "content row 0 sits 450 px above the surface's top");
-
-    pixel_core::surfaces::write(31, 100, 30, None, &pixels[..100 * 30 * 4], 100 * 4);
-    assert!(crate::scrolled_surface_layer(&scene.root, (200, 100)).is_none(), "a surface scaled to its box is not moved by whole rows");
-    pixel_core::surfaces::remove(31);
-}
