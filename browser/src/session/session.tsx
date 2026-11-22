@@ -593,6 +593,8 @@ class Session {
         devtools={this.devtoolsView()}
         profiling={this.profiling}
         grabActive={this.activeGrab()?.active ?? false}
+        env={this.ctx.env}
+        displayScale={this.root.displayScale}
       />,
     );
   }

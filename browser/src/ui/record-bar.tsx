@@ -776,11 +776,13 @@ export function ReviewToolbar({
   actions,
   layout,
   theme,
+  safeRight,
 }: {
   view: RecordView;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
+  safeRight: number;
 }) {
   const rem = layout.rem;
   return (
@@ -790,7 +792,7 @@ export function ReviewToolbar({
         flexShrink: 0,
         alignItems: "center",
         gap: rem * 0.25,
-        padding: { left: rem * 0.4, right: rem * 0.4 },
+        padding: { left: rem * 0.4, right: rem * 0.4 + safeRight },
       }}
     >
       <Box

@@ -21,6 +21,7 @@ import { TabStrip } from "./tab-strip";
 import { makeTheme, mix, withAlpha } from "./theme";
 import type { Theme } from "./theme";
 import { usePulse } from "./pulse";
+import { REX_ZOOM_BUTTONS_POINTS, useInsideRexZoom } from "./rex-zoom";
 import type { RecordView } from "../record/types";
 import type {
   ChromeActions,
@@ -64,6 +65,8 @@ export function Chrome({
   devtools,
   profiling,
   grabActive,
+  env,
+  displayScale,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -89,11 +92,14 @@ export function Chrome({
   devtools: DevtoolsView | null;
   profiling: boolean;
   grabActive: boolean;
+  env: NodeJS.ProcessEnv;
+  displayScale: number;
 }) {
   const theme = useMemo(() => makeTheme(colors), [colors]);
   const progress = useProgress(state.loading);
   const agentActive = tabs.some((tab) => tab.active && tab.agentControlled);
   const glowPulse = usePulse(agentActive);
+  const safeRight = useInsideRexZoom(env) ? Math.round(REX_ZOOM_BUTTONS_POINTS * displayScale) : 0;
   return (
     <Box
       style={{
@@ -107,7 +113,7 @@ export function Chrome({
     >
       {layout.toolbarHeight > 0 &&
         (record?.stopped ? (
-          <ReviewToolbar view={record} actions={actions} layout={layout} theme={theme} />
+          <ReviewToolbar view={record} actions={actions} layout={layout} theme={theme} safeRight={safeRight} />
         ) : (
           <Toolbar
             state={state}
@@ -118,6 +124,7 @@ export function Chrome({
             record={record}
             profiling={profiling}
             grabActive={grabActive}
+            safeRight={safeRight}
           />
         ))}
       <BrowserTabContents
@@ -280,6 +287,7 @@ function Toolbar({
   record,
   profiling,
   grabActive,
+  safeRight,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -289,6 +297,7 @@ function Toolbar({
   record: RecordView | null;
   profiling: boolean;
   grabActive: boolean;
+  safeRight: number;
 }) {
   const rem = layout.rem;
   const stopIcon = useStopIcon(state.loading);
@@ -300,7 +309,8 @@ function Toolbar({
     rem * 3.5 -
     (nav ? rem * 3.5 : 0) -
     (record ? rem * 7.25 : 0) -
-    (profiling ? rem * 6.5 : 0);
+    (profiling ? rem * 6.5 : 0) -
+    safeRight;
   return (
     <Box
       style={{
@@ -308,7 +318,7 @@ function Toolbar({
         flexShrink: 0,
         alignItems: "center",
         gap: rem * 0.25,
-        padding: { left: rem * 0.4, right: rem * 0.4 },
+        padding: { left: rem * 0.4, right: rem * 0.4 + safeRight },
       }}
     >
       {(state.canGoBack || state.canGoForward) && (
