@@ -11,11 +11,13 @@ export function FindBar({
   actions,
   layout,
   theme,
+  safeRight,
 }: {
   state: WebViewState;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
+  safeRight: number;
 }) {
   const rem = layout.rem;
   const [text, setText] = useState("");
@@ -29,7 +31,7 @@ export function FindBar({
     <Box
       style={{
         position: "absolute",
-        inset: { top: layout.toolbarHeight + rem * 0.45, right: rem * 0.75 },
+        inset: { top: layout.toolbarHeight + rem * 0.45, right: rem * 0.75 + safeRight },
         width: rem * 16,
         height: rem * 2,
         alignItems: "center",
@@ -133,11 +135,13 @@ export function Toast({
   actions,
   layout,
   theme,
+  safeRight,
 }: {
   toast: ToastView;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
+  safeRight: number;
 }) {
   const rem = layout.rem;
   const detailLines = toast.detail ? toast.detail.split("\n") : [];
@@ -146,11 +150,11 @@ export function Toast({
     <Box
       style={{
         position: "absolute",
-        inset: { top: layout.toolbarHeight + rem * 0.5, right: rem * 0.75 },
+        inset: { top: layout.toolbarHeight + rem * 0.5, right: rem * 0.75 + safeRight },
         flexDirection: "column",
         justifyContent: "center",
         gap: rem * 0.6,
-        maxWidth: Math.min(rem * 21, layout.width - rem * 1.5),
+        maxWidth: Math.min(rem * 21, layout.width - rem * 1.5 - safeRight),
         padding: { left: rem * 0.9, right: rem * 0.9, top: rem * 0.5, bottom: rem * 0.5 },
         background: toast.alert ? mix(theme.overlay, theme.red, 0.22) : theme.overlay,
         cornerRadius: rem * 0.5,

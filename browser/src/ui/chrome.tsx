@@ -21,6 +21,7 @@ import { TabStrip } from "./tab-strip";
 import { makeTheme, mix, withAlpha } from "./theme";
 import type { Theme } from "./theme";
 import { usePulse } from "./pulse";
+import { REX_ZOOM_BUTTONS_POINTS, useInsideRexZoom } from "./rex-zoom";
 import type { RecordView } from "../record/types";
 import type {
   ChromeActions,
@@ -64,6 +65,8 @@ export function Chrome({
   devtools,
   profiling,
   grabActive,
+  env,
+  displayScale,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -89,11 +92,15 @@ export function Chrome({
   devtools: DevtoolsView | null;
   profiling: boolean;
   grabActive: boolean;
+  env: NodeJS.ProcessEnv;
+  displayScale: number;
 }) {
   const theme = useMemo(() => makeTheme(colors), [colors]);
   const progress = useProgress(state.loading);
   const agentActive = tabs.some((tab) => tab.active && tab.agentControlled);
   const glowPulse = usePulse(agentActive);
+  const safeRight = useInsideRexZoom(env) ? Math.round(REX_ZOOM_BUTTONS_POINTS * displayScale) : 0;
+  const pageSafeRight = layout.toolbarHeight > 0 ? 0 : safeRight;
   return (
     <Box
       style={{
@@ -107,7 +114,7 @@ export function Chrome({
     >
       {layout.toolbarHeight > 0 &&
         (record?.stopped ? (
-          <ReviewToolbar view={record} actions={actions} layout={layout} theme={theme} />
+          <ReviewToolbar view={record} actions={actions} layout={layout} theme={theme} safeRight={safeRight} />
         ) : (
           <Toolbar
             state={state}
@@ -118,6 +125,7 @@ export function Chrome({
             record={record}
             profiling={profiling}
             grabActive={grabActive}
+            safeRight={safeRight}
           />
         ))}
       <BrowserTabContents
@@ -152,13 +160,13 @@ export function Chrome({
         <RecordBar view={record} actions={actions} layout={layout} theme={theme} />
       )}
       {record && layout.toolbarHeight === 0 && (
-        <RecordCornerButton view={record} actions={actions} layout={layout} theme={theme} />
+        <RecordCornerButton view={record} actions={actions} layout={layout} theme={theme} safeRight={pageSafeRight} />
       )}
       {pageMenu && (
         <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
       )}
       {findOpen && (
-        <FindBar state={state} actions={actions} layout={layout} theme={theme} />
+        <FindBar state={state} actions={actions} layout={layout} theme={theme} safeRight={pageSafeRight} />
       )}
       {permissionPrompt && !record?.canvas && (
         <PermissionPrompt view={permissionPrompt} actions={actions} layout={layout} theme={theme} />
@@ -167,7 +175,7 @@ export function Chrome({
         <ZoomHud factor={zoomHud} layout={layout} theme={theme} findOpen={findOpen} />
       )}
       {download && <DownloadHud download={download} layout={layout} theme={theme} />}
-      {toast && <Toast toast={toast} actions={actions} layout={layout} theme={theme} />}
+      {toast && <Toast toast={toast} actions={actions} layout={layout} theme={theme} safeRight={pageSafeRight} />}
       {progress != null && (
         <Box
           style={{
@@ -280,6 +288,7 @@ function Toolbar({
   record,
   profiling,
   grabActive,
+  safeRight,
 }: {
   state: WebViewState;
   actions: ChromeActions;
@@ -289,6 +298,7 @@ function Toolbar({
   record: RecordView | null;
   profiling: boolean;
   grabActive: boolean;
+  safeRight: number;
 }) {
   const rem = layout.rem;
   const stopIcon = useStopIcon(state.loading);
@@ -300,7 +310,8 @@ function Toolbar({
     rem * 3.5 -
     (nav ? rem * 3.5 : 0) -
     (record ? rem * 7.25 : 0) -
-    (profiling ? rem * 6.5 : 0);
+    (profiling ? rem * 6.5 : 0) -
+    safeRight;
   return (
     <Box
       style={{
@@ -308,7 +319,7 @@ function Toolbar({
         flexShrink: 0,
         alignItems: "center",
         gap: rem * 0.25,
-        padding: { left: rem * 0.4, right: rem * 0.4 },
+        padding: { left: rem * 0.4, right: rem * 0.4 + safeRight },
       }}
     >
       {(state.canGoBack || state.canGoForward) && (

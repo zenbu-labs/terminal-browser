@@ -776,11 +776,13 @@ export function ReviewToolbar({
   actions,
   layout,
   theme,
+  safeRight,
 }: {
   view: RecordView;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
+  safeRight: number;
 }) {
   const rem = layout.rem;
   return (
@@ -790,7 +792,7 @@ export function ReviewToolbar({
         flexShrink: 0,
         alignItems: "center",
         gap: rem * 0.25,
-        padding: { left: rem * 0.4, right: rem * 0.4 },
+        padding: { left: rem * 0.4, right: rem * 0.4 + safeRight },
       }}
     >
       <Box
@@ -915,14 +917,16 @@ export function RecordCornerButton({
   actions,
   layout,
   theme,
+  safeRight,
 }: {
   view: RecordView;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
+  safeRight: number;
 }) {
   const rem = layout.rem;
-  const right = layout.width - (layout.page.x + layout.page.width) + rem * 0.9;
+  const right = layout.width - (layout.page.x + layout.page.width) + rem * 0.9 + safeRight;
   return (
     <Box style={{ position: "absolute", inset: { right, top: layout.page.y + rem * 0.9 } }}>
       <RecordToolbarPill view={view} actions={actions} rem={rem} theme={theme} />
