@@ -100,6 +100,7 @@ export function Chrome({
   const agentActive = tabs.some((tab) => tab.active && tab.agentControlled);
   const glowPulse = usePulse(agentActive);
   const safeRight = useInsideRexZoom(env) ? Math.round(REX_ZOOM_BUTTONS_POINTS * displayScale) : 0;
+  const pageSafeRight = layout.toolbarHeight > 0 ? 0 : safeRight;
   return (
     <Box
       style={{
@@ -159,13 +160,13 @@ export function Chrome({
         <RecordBar view={record} actions={actions} layout={layout} theme={theme} />
       )}
       {record && layout.toolbarHeight === 0 && (
-        <RecordCornerButton view={record} actions={actions} layout={layout} theme={theme} />
+        <RecordCornerButton view={record} actions={actions} layout={layout} theme={theme} safeRight={pageSafeRight} />
       )}
       {pageMenu && (
         <PageContextMenu view={pageMenu} actions={actions} layout={layout} theme={theme} />
       )}
       {findOpen && (
-        <FindBar state={state} actions={actions} layout={layout} theme={theme} />
+        <FindBar state={state} actions={actions} layout={layout} theme={theme} safeRight={pageSafeRight} />
       )}
       {permissionPrompt && !record?.canvas && (
         <PermissionPrompt view={permissionPrompt} actions={actions} layout={layout} theme={theme} />
@@ -174,7 +175,7 @@ export function Chrome({
         <ZoomHud factor={zoomHud} layout={layout} theme={theme} findOpen={findOpen} />
       )}
       {download && <DownloadHud download={download} layout={layout} theme={theme} />}
-      {toast && <Toast toast={toast} actions={actions} layout={layout} theme={theme} />}
+      {toast && <Toast toast={toast} actions={actions} layout={layout} theme={theme} safeRight={pageSafeRight} />}
       {progress != null && (
         <Box
           style={{

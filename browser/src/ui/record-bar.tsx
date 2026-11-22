@@ -917,14 +917,16 @@ export function RecordCornerButton({
   actions,
   layout,
   theme,
+  safeRight,
 }: {
   view: RecordView;
   actions: ChromeActions;
   layout: ChromeLayout;
   theme: Theme;
+  safeRight: number;
 }) {
   const rem = layout.rem;
-  const right = layout.width - (layout.page.x + layout.page.width) + rem * 0.9;
+  const right = layout.width - (layout.page.x + layout.page.width) + rem * 0.9 + safeRight;
   return (
     <Box style={{ position: "absolute", inset: { right, top: layout.page.y + rem * 0.9 } }}>
       <RecordToolbarPill view={view} actions={actions} rem={rem} theme={theme} />
