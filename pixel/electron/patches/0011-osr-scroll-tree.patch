@@ -1,0 +1,877 @@
+diff --git a/docs/api/structures/offscreen-shared-texture.md b/docs/api/structures/offscreen-shared-texture.md
+--- a/docs/api/structures/offscreen-shared-texture.md
++++ b/docs/api/structures/offscreen-shared-texture.md
+@@ -18,6 +18,33 @@
+     * `rootScrollOffset` [Point](point.md) (optional) - How far the page's main scroller was scrolled when this frame was drawn, in the frame's pixels.
+     * `pageScaleFactor` number (optional) - Pinch zoom of the page when this frame was drawn; `1` when not zoomed.
+     * `deviceScaleFactor` number (optional) - The compositor's scale for this frame, page zoom included.
++    * `scrollTree` Object[] (optional) - The page compositor's scroll tree when this frame was drawn: the nodes of cc's `ScrollTree` that have an element, parents before children, with their current scroll offsets. Scrollers in cross-origin iframes are not included.
++      * `elementId` number - The scroller's compositor element id, stable while the element lives.
++      * `id` Integer - Index of this node in the compositor's scroll tree.
++      * `parentId` Integer - `id` of the parent node, which may not be in the list.
++      * `transformId` Integer - The node's scroll transform, `-1` when it has none this frame; `toScreen` and `containerToScreen` are then identity.
++      * `containerScrollNodeId` Integer - `id` of the node the scroll container moves with this frame, found the same way as a drawn layer's `scrollNodeId`. `-1` when the container is fixed to the frame, `-2` when it is anchor-positioned.
++      * `containerOrigin` [Point](point.md) - Top left of the scroll container in the space mapped by `containerToScreen`.
++      * `containerBounds` [Size](size.md) - Size of the scroll container, without non-overlay scrollbars.
++      * `bounds` [Size](size.md) - Size of the scrolled content.
++      * `scrollOffset` [Point](point.md) - Current scroll offset.
++      * `userScrollableHorizontal` boolean
++      * `userScrollableVertical` boolean
++      * `isComposited` boolean - Whether the compositor scrolls the node; otherwise it is repainted.
++      * `scrollsInnerViewport` boolean - Whether this is the visual viewport (pinch zoom).
++      * `scrollsOuterViewport` boolean - Whether this is the page's main scroller.
++      * `mainThreadRepaintReasons` Integer - Why the node is repainted when scrolled, `0` when it is not.
++      * `toScreen` number[] - Column-major 4x4 transform from the scrolled content to the frame's pixels.
++      * `containerToScreen` number[] - Column-major 4x4 transform from the space of `containerOrigin` to the frame's pixels.
++    * `drawnLayers` Object[] (optional) - The layers the page compositor drew for this frame, in draw order (later layers are on top).
++      * `layerId` Integer - The compositor's id for the layer, the same in every frame while the layer exists.
++      * `elementId` number - The layer's compositor element id, or `0` when it has none.
++      * `rect` [Rectangle](rectangle.md) - The part of the layer that is visible, in the frame's pixels.
++      * `screenSpaceTransform` number[] - Column-major 4x4 transform from the layer's own space to the frame's pixels, as drawn this frame.
++      * `wholePixelTranslation` boolean - Whether `screenSpaceTransform` only moves the layer by whole pixels, so it is drawn unscaled and unfiltered.
++      * `scrollNodeId` Integer - `id` of the `scrollTree` node the layer moves with this frame: its nearest scrolling ancestor, skipping one level past a sticky element that is currently stuck. `-1` when the layer is fixed to the frame, `-2` when it is anchor-positioned.
++      * `transformId` Integer - The compositor transform node the layer is drawn with.
++      * `contentsOpaque` boolean - Whether the layer paints every pixel of its rect opaquely.
+     * `frameCount` number (optional) - The increasing count of captured frame. May contain gaps if frames are dropped between two consecutively received frames.
+   * `handle` [SharedTextureHandle](shared-texture-handle.md) - The shared texture handle data.
+ * `release` Function - Release the resources. The `texture` cannot be directly passed to another process, users need to maintain texture lifecycles in
+diff --git a/docs/api/structures/offscreen-software-frame.md b/docs/api/structures/offscreen-software-frame.md
+--- a/docs/api/structures/offscreen-software-frame.md
++++ b/docs/api/structures/offscreen-software-frame.md
+@@ -17,6 +17,33 @@
+     * `rootScrollOffset` [Point](point.md) (optional) - How far the page's main scroller was scrolled when this frame was drawn, in the frame's pixels.
+     * `pageScaleFactor` number (optional) - Pinch zoom of the page when this frame was drawn; `1` when not zoomed.
+     * `deviceScaleFactor` number (optional) - The compositor's scale for this frame, page zoom included.
++    * `scrollTree` Object[] (optional) - The page compositor's scroll tree when this frame was drawn: the nodes of cc's `ScrollTree` that have an element, parents before children, with their current scroll offsets. Scrollers in cross-origin iframes are not included.
++      * `elementId` number - The scroller's compositor element id, stable while the element lives.
++      * `id` Integer - Index of this node in the compositor's scroll tree.
++      * `parentId` Integer - `id` of the parent node, which may not be in the list.
++      * `transformId` Integer - The node's scroll transform, `-1` when it has none this frame; `toScreen` and `containerToScreen` are then identity.
++      * `containerScrollNodeId` Integer - `id` of the node the scroll container moves with this frame, found the same way as a drawn layer's `scrollNodeId`. `-1` when the container is fixed to the frame, `-2` when it is anchor-positioned.
++      * `containerOrigin` [Point](point.md) - Top left of the scroll container in the space mapped by `containerToScreen`.
++      * `containerBounds` [Size](size.md) - Size of the scroll container, without non-overlay scrollbars.
++      * `bounds` [Size](size.md) - Size of the scrolled content.
++      * `scrollOffset` [Point](point.md) - Current scroll offset.
++      * `userScrollableHorizontal` boolean
++      * `userScrollableVertical` boolean
++      * `isComposited` boolean - Whether the compositor scrolls the node; otherwise it is repainted.
++      * `scrollsInnerViewport` boolean - Whether this is the visual viewport (pinch zoom).
++      * `scrollsOuterViewport` boolean - Whether this is the page's main scroller.
++      * `mainThreadRepaintReasons` Integer - Why the node is repainted when scrolled, `0` when it is not.
++      * `toScreen` number[] - Column-major 4x4 transform from the scrolled content to the frame's pixels.
++      * `containerToScreen` number[] - Column-major 4x4 transform from the space of `containerOrigin` to the frame's pixels.
++    * `drawnLayers` Object[] (optional) - The layers the page compositor drew for this frame, in draw order (later layers are on top).
++      * `layerId` Integer - The compositor's id for the layer, the same in every frame while the layer exists.
++      * `elementId` number - The layer's compositor element id, or `0` when it has none.
++      * `rect` [Rectangle](rectangle.md) - The part of the layer that is visible, in the frame's pixels.
++      * `screenSpaceTransform` number[] - Column-major 4x4 transform from the layer's own space to the frame's pixels, as drawn this frame.
++      * `wholePixelTranslation` boolean - Whether `screenSpaceTransform` only moves the layer by whole pixels, so it is drawn unscaled and unfiltered.
++      * `scrollNodeId` Integer - `id` of the `scrollTree` node the layer moves with this frame: its nearest scrolling ancestor, skipping one level past a sticky element that is currently stuck. `-1` when the layer is fixed to the frame, `-2` when it is anchor-positioned.
++      * `transformId` Integer - The compositor transform node the layer is drawn with.
++      * `contentsOpaque` boolean - Whether the layer paints every pixel of its rect opaquely.
+     * `frameCount` number (optional) - The increasing count of captured frame. May contain gaps if frames are dropped between two consecutively received frames.
+   * `fd` Integer _Linux_ - A file descriptor over the shared memory region holding the pixels, valid until `release()` is called.
+ * `release` Function - Release the resources. The `softwareFrame` cannot be directly passed to another process, users need to maintain frame lifecycles in
+diff --git a/patches/chromium/.patches b/patches/chromium/.patches
+--- a/patches/chromium/.patches
++++ b/patches/chromium/.patches
+@@ -238,3 +238,4 @@ cherry-pick-b5559b26c2f3.patch
+ cherry-pick-194c74ee5e48.patch
+ cherry-pick-564bdde2ce69.patch
+ cherry-pick-5a8114db13d5.patch
++osr_expose_the_compositor_scroll_tree.patch
+diff --git a/patches/chromium/osr_expose_the_compositor_scroll_tree.patch b/patches/chromium/osr_expose_the_compositor_scroll_tree.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/chromium/osr_expose_the_compositor_scroll_tree.patch
+@@ -0,0 +1,582 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: Rob Pruzan <97781863+RobPruzan@users.noreply.github.com>
++Date: Fri, 20 Nov 2026 01:41:42 -0500
++Subject: feat: expose the compositor scroll tree and drawn layers with captured frames
++
++Carries the active tree's scroll nodes (cc names: element id, parent, container origin/bounds, content bounds, current offset, user-scrollable axes, is_composited, viewport flags, main-thread repaint reasons), the screen transforms of their contents and container, and the scroll node each container moves with, in viz::CompositorFrameMetadata, plus the drawn layers in draw order: layer id, element id, visible rect in frame pixels, screen-space transform, contents_opaque, and the scroll node each moves with (found by walking the transform tree to the nearest scroll transform; a stuck sticky box moves with the scroller it sticks in, anchor-positioned layers are marked -2, layers fixed to the frame -1). FrameSinkVideoCapturer copies them into VideoFrameInfo, so an offscreen consumer gets the exact scroll state of the frame it receives.
++
++diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
++index b1379146423335fd053a48bb74e2016d4ce65740..4b8299c478572e758dc071912e267f5fb469ebbb 100644
++--- a/cc/trees/layer_tree_host_impl.cc
+++++ b/cc/trees/layer_tree_host_impl.cc
++@@ -2579,6 +2579,94 @@ viz::CompositorFrameMetadata LayerTreeHostImpl::MakeCompositorFrameMetadata(
++     metadata.root_scroll_offset = active_tree_->TotalScrollOffset();
++   }
++ 
+++  const ScrollTree& scroll_tree = active_tree_->property_trees()->scroll_tree();
+++  const TransformTree& transform_tree =
+++      active_tree_->property_trees()->transform_tree();
+++  base::flat_map<int, int> scroll_node_of_transform;
+++  for (int i = kSecondaryRootPropertyNodeId;
+++       i < static_cast<int>(scroll_tree.size()); ++i) {
+++    const ScrollNode& node = scroll_tree.Node(i);
+++    if (node.transform_id > kRootPropertyNodeId) {
+++      scroll_node_of_transform[node.transform_id] = node.id;
+++    }
+++  }
+++  auto moves_with = [&](int transform_id) {
+++    int skip = 0;
+++    for (int id = transform_id; id > kRootPropertyNodeId;
+++         id = transform_tree.Node(id).parent_id) {
+++      const TransformNode& node = transform_tree.Node(id);
+++      if (node.anchor_position_scroll_data_id != kInvalidPropertyNodeId) {
+++        return -2;
+++      }
+++      if (node.sticky_position_constraint_id != kInvalidPropertyNodeId) {
+++        const StickyPositionNodeData* sticky =
+++            transform_tree.GetStickyPositionData(id);
+++        if (sticky && !sticky->total_sticky_box_sticky_offset.IsZero()) {
+++          skip = 1;
+++        }
+++      }
+++      auto scroll = scroll_node_of_transform.find(id);
+++      if (scroll == scroll_node_of_transform.end()) {
+++        continue;
+++      }
+++      if (skip > 0) {
+++        --skip;
+++        continue;
+++      }
+++      return scroll->second;
+++    }
+++    return -1;
+++  };
+++  for (int i = kSecondaryRootPropertyNodeId;
+++       i < static_cast<int>(scroll_tree.size()); ++i) {
+++    const ScrollNode& node = scroll_tree.Node(i);
+++    if (!node.element_id) {
+++      continue;
+++    }
+++    viz::ScrollTreeNode& out = metadata.scroll_tree.emplace_back();
+++    out.element_id = node.element_id.GetInternalValue();
+++    out.id = node.id;
+++    out.parent_id = node.parent_id;
+++    out.container_origin = node.container_origin;
+++    out.container_bounds = scroll_tree.container_bounds(node.id);
+++    out.bounds = node.bounds;
+++    out.scroll_offset = scroll_tree.current_scroll_offset(node.element_id);
+++    out.user_scrollable_horizontal = node.user_scrollable_horizontal;
+++    out.user_scrollable_vertical = node.user_scrollable_vertical;
+++    out.is_composited = node.is_composited;
+++    out.scrolls_inner_viewport = node.scrolls_inner_viewport;
+++    out.scrolls_outer_viewport = node.scrolls_outer_viewport;
+++    out.main_thread_repaint_reasons = node.main_thread_repaint_reasons;
+++    if (node.transform_id <= kRootPropertyNodeId ||
+++        node.transform_id >= static_cast<int>(transform_tree.size())) {
+++      continue;
+++    }
+++    const TransformNode& transform = transform_tree.Node(node.transform_id);
+++    if (transform.parent_id == kInvalidPropertyNodeId) {
+++      continue;
+++    }
+++    out.transform_id = transform.id;
+++    out.to_screen = transform_tree.ToScreen(transform.id);
+++    out.container_to_screen = transform_tree.ToScreen(transform.parent_id);
+++    out.container_scroll_node_id = moves_with(transform.parent_id);
+++  }
+++
+++  for (LayerImpl* layer : *active_tree_) {
+++    if (!layer->contributes_to_drawn_render_surface() ||
+++        !layer->draws_content() || layer->visible_layer_rect().IsEmpty()) {
+++      continue;
+++    }
+++    viz::DrawnLayer& out = metadata.drawn_layers.emplace_back();
+++    out.layer_id = layer->id();
+++    out.element_id = layer->element_id().GetInternalValue();
+++    out.screen_space_transform = layer->ScreenSpaceTransform();
+++    out.rect = MathUtil::MapEnclosingClippedRect(out.screen_space_transform,
+++                                                 layer->visible_layer_rect());
+++    out.transform_id = layer->transform_tree_index();
+++    out.contents_opaque = layer->contents_opaque();
+++    out.scroll_node_id = moves_with(layer->transform_tree_index());
+++  }
+++
++   metadata.display_transform_hint = active_tree_->display_transform_hint();
++ 
++   metadata.is_mobile_optimized = IsMobileOptimized(active_tree_.get());
++diff --git a/components/viz/common/quads/compositor_frame_metadata.cc b/components/viz/common/quads/compositor_frame_metadata.cc
++index 8a7b74a648b894a4ff6b78fa8af2539a9c211b25..f3eaeb1ab2c89581b9dc403805434a92e1140367 100644
++--- a/components/viz/common/quads/compositor_frame_metadata.cc
+++++ b/components/viz/common/quads/compositor_frame_metadata.cc
++@@ -10,6 +10,17 @@
++ 
++ namespace viz {
++ 
+++ScrollTreeNode::ScrollTreeNode() = default;
+++ScrollTreeNode::ScrollTreeNode(const ScrollTreeNode& other) = default;
+++ScrollTreeNode& ScrollTreeNode::operator=(const ScrollTreeNode& other) =
+++    default;
+++ScrollTreeNode::~ScrollTreeNode() = default;
+++
+++DrawnLayer::DrawnLayer() = default;
+++DrawnLayer::DrawnLayer(const DrawnLayer& other) = default;
+++DrawnLayer& DrawnLayer::operator=(const DrawnLayer& other) = default;
+++DrawnLayer::~DrawnLayer() = default;
+++
++ CompositorFrameMetadata::CompositorFrameMetadata() = default;
++ 
++ CompositorFrameMetadata::CompositorFrameMetadata(
++diff --git a/components/viz/common/quads/compositor_frame_metadata.h b/components/viz/common/quads/compositor_frame_metadata.h
++index b5a64e05c6ffddf640dfe4c52e15c000161f34e3..a4d18f8581d362cf1cf4a18732784b421bf821b3 100644
++--- a/components/viz/common/quads/compositor_frame_metadata.h
+++++ b/components/viz/common/quads/compositor_frame_metadata.h
++@@ -29,7 +29,12 @@
++ #include "third_party/skia/include/core/SkColor.h"
++ #include "ui/gfx/delegated_ink_metadata.h"
++ #include "ui/gfx/display_color_spaces.h"
+++#include "ui/gfx/geometry/point.h"
+++#include "ui/gfx/geometry/point_f.h"
+++#include "ui/gfx/geometry/rect.h"
+++#include "ui/gfx/geometry/size.h"
++ #include "ui/gfx/geometry/size_f.h"
+++#include "ui/gfx/geometry/transform.h"
++ #include "ui/gfx/geometry/vector2d_f.h"
++ #include "ui/gfx/overlay_transform.h"
++ #include "ui/latency/latency_info.h"
++@@ -66,6 +71,46 @@ class VIZ_COMMON_EXPORT FrameTokenGenerator {
++ 
++ // NOTE: Remember to update the private copy constructor if the new field added
++ // needs to be copied (via `Clone()`)!
+++struct VIZ_COMMON_EXPORT ScrollTreeNode {
+++  ScrollTreeNode();
+++  ScrollTreeNode(const ScrollTreeNode& other);
+++  ScrollTreeNode& operator=(const ScrollTreeNode& other);
+++  ~ScrollTreeNode();
+++
+++  uint64_t element_id = 0;
+++  int id = -1;
+++  int parent_id = -1;
+++  int transform_id = -1;
+++  int container_scroll_node_id = -1;
+++  gfx::Point container_origin;
+++  gfx::Size container_bounds;
+++  gfx::Size bounds;
+++  gfx::PointF scroll_offset;
+++  bool user_scrollable_horizontal = false;
+++  bool user_scrollable_vertical = false;
+++  bool is_composited = false;
+++  bool scrolls_inner_viewport = false;
+++  bool scrolls_outer_viewport = false;
+++  uint32_t main_thread_repaint_reasons = 0;
+++  gfx::Transform to_screen;
+++  gfx::Transform container_to_screen;
+++};
+++
+++struct VIZ_COMMON_EXPORT DrawnLayer {
+++  DrawnLayer();
+++  DrawnLayer(const DrawnLayer& other);
+++  DrawnLayer& operator=(const DrawnLayer& other);
+++  ~DrawnLayer();
+++
+++  int layer_id = -1;
+++  uint64_t element_id = 0;
+++  gfx::Rect rect;
+++  int scroll_node_id = -1;
+++  int transform_id = -1;
+++  bool contents_opaque = false;
+++  gfx::Transform screen_space_transform;
+++};
+++
++ class VIZ_COMMON_EXPORT CompositorFrameMetadata {
++  public:
++   CompositorFrameMetadata();
++@@ -227,6 +272,10 @@ class VIZ_COMMON_EXPORT CompositorFrameMetadata {
++   // coordinate space of the root render pass.
++   TrackedElementRects tracked_element_rects;
++ 
+++  std::vector<ScrollTreeNode> scroll_tree;
+++
+++  std::vector<DrawnLayer> drawn_layers;
+++
++  private:
++   CompositorFrameMetadata(const CompositorFrameMetadata& other);
++   CompositorFrameMetadata operator=(const CompositorFrameMetadata&) = delete;
++diff --git a/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc b/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc
++index 719a1c8ef890a9d945caba7ad7d347885ae4dc28..cdb43489772195d3b4a45efa1ad8e4ff9e954782 100644
++--- a/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc
+++++ b/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.cc
++@@ -1070,6 +1070,8 @@ void FrameSinkVideoCapturerImpl::MaybeCaptureFrame(
++     FrameCapture frame_capture(
++         capture_frame_number, oracle_frame_number, content_version_,
++         content_rect, *region_properties, std::move(frame), capture_begin_time);
+++    frame_capture.scroll_tree = frame_metadata.scroll_tree;
+++    frame_capture.drawn_layers = frame_metadata.drawn_layers;
++     frame_capture.CaptureSucceeded();
++     OnFrameReadyForDelivery(frame_capture);
++     return;
++@@ -1089,6 +1091,8 @@ void FrameSinkVideoCapturerImpl::MaybeCaptureFrame(
++     FrameCapture frame_capture(
++         capture_frame_number, oracle_frame_number, content_version_,
++         gfx::Rect(), *region_properties, std::move(frame), capture_begin_time);
+++    frame_capture.scroll_tree = frame_metadata.scroll_tree;
+++    frame_capture.drawn_layers = frame_metadata.drawn_layers;
++     frame_capture.CaptureSucceeded();
++     OnFrameReadyForDelivery(frame_capture);
++     return;
++@@ -1118,6 +1122,8 @@ void FrameSinkVideoCapturerImpl::MaybeCaptureFrame(
++   FrameCapture frame_capture(capture_frame_number, oracle_frame_number,
++                              content_version_, content_rect, *region_properties,
++                              std::move(frame), capture_begin_time);
+++  frame_capture.scroll_tree = frame_metadata.scroll_tree;
+++  frame_capture.drawn_layers = frame_metadata.drawn_layers;
++ 
++   // TODO(crbug.com/346799708): The condition to check `pixel_format_` shouldn't
++   // be necessary but video capture is started with I420+mappable SI in tests.
++@@ -1532,6 +1538,28 @@ void FrameSinkVideoCapturerImpl::MaybeDeliverFrame(FrameCapture frame_capture) {
++   info->natural_size = frame->natural_size();
++   DCHECK(frame->ColorSpace().IsValid());  // Ensure it was set by this point.
++   info->color_space = frame->ColorSpace();
+++  std::vector<media::mojom::VideoFrameScrollNodePtr> scroll_tree;
+++  scroll_tree.reserve(frame_capture.scroll_tree.size());
+++  for (const ScrollTreeNode& node : frame_capture.scroll_tree) {
+++    scroll_tree.push_back(media::mojom::VideoFrameScrollNode::New(
+++        node.element_id, node.id, node.parent_id, node.transform_id,
+++        node.container_scroll_node_id, node.container_origin, node.container_bounds, node.bounds,
+++        node.scroll_offset, node.user_scrollable_horizontal,
+++        node.user_scrollable_vertical, node.is_composited,
+++        node.scrolls_inner_viewport, node.scrolls_outer_viewport,
+++        node.main_thread_repaint_reasons, node.to_screen,
+++        node.container_to_screen));
+++  }
+++  info->scroll_tree = std::move(scroll_tree);
+++  std::vector<media::mojom::VideoFrameDrawnLayerPtr> drawn_layers;
+++  drawn_layers.reserve(frame_capture.drawn_layers.size());
+++  for (const DrawnLayer& layer : frame_capture.drawn_layers) {
+++    drawn_layers.push_back(media::mojom::VideoFrameDrawnLayer::New(
+++        layer.layer_id, layer.element_id, layer.rect, layer.scroll_node_id,
+++        layer.transform_id, layer.contents_opaque,
+++        layer.screen_space_transform));
+++  }
+++  info->drawn_layers = std::move(drawn_layers);
++ 
++   // Create an InFlightFrameDelivery for this frame, owned by its mojo receiver.
++   // It responds to the consumer's Done() notification by returning the video
++diff --git a/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.h b/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.h
++index 104f1ab6baa233a2f7800fb9975b03015e647314..276f71c5b962f5e04a9aba9fc998adf07882b6ce 100644
++--- a/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.h
+++++ b/components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.h
++@@ -341,6 +341,9 @@ class VIZ_SERVICE_EXPORT FrameSinkVideoCapturerImpl final
++     // When the request for capture was made.
++     base::TimeTicks request_time;
++ 
+++    std::vector<ScrollTreeNode> scroll_tree;
+++    std::vector<DrawnLayer> drawn_layers;
+++
++    private:
++     // A copy of the frame's metadata retained even if the original frame is
++     // discarded.
++diff --git a/media/capture/mojom/video_capture_buffer.mojom b/media/capture/mojom/video_capture_buffer.mojom
++index a9373b9baf6f2ce4f5600eb2a7c8510a026087db..12e717990267cc7e5e5fa028b0eec15b3b9af50c 100644
++--- a/media/capture/mojom/video_capture_buffer.mojom
+++++ b/media/capture/mojom/video_capture_buffer.mojom
++@@ -13,6 +13,7 @@ import "mojo/public/mojom/base/time.mojom";
++ import "ui/gfx/geometry/mojom/geometry.mojom";
++ import "ui/gfx/mojom/buffer_types.mojom";
++ import "ui/gfx/mojom/color_space.mojom";
+++import "ui/gfx/mojom/transform.mojom";
++ 
++ struct VideoFrameInfo {
++   mojo_base.mojom.TimeDelta timestamp;
++@@ -38,6 +39,38 @@ struct VideoFrameInfo {
++   // Optionally, stride information can be provided.
++   // If not provided, it is assumed that frame data is tightly packed.
++   PlaneStrides? strides;
+++  [MinVersion=1] array<VideoFrameScrollNode>? scroll_tree;
+++  [MinVersion=2] array<VideoFrameDrawnLayer>? drawn_layers;
+++};
+++
+++struct VideoFrameDrawnLayer {
+++  int32 layer_id;
+++  uint64 element_id;
+++  gfx.mojom.Rect rect;
+++  int32 scroll_node_id;
+++  int32 transform_id;
+++  bool contents_opaque;
+++  gfx.mojom.Transform screen_space_transform;
+++};
+++
+++struct VideoFrameScrollNode {
+++  uint64 element_id;
+++  int32 id;
+++  int32 parent_id;
+++  int32 transform_id;
+++  int32 container_scroll_node_id;
+++  gfx.mojom.Point container_origin;
+++  gfx.mojom.Size container_bounds;
+++  gfx.mojom.Size bounds;
+++  gfx.mojom.PointF scroll_offset;
+++  bool user_scrollable_horizontal;
+++  bool user_scrollable_vertical;
+++  bool is_composited;
+++  bool scrolls_inner_viewport;
+++  bool scrolls_outer_viewport;
+++  uint32 main_thread_repaint_reasons;
+++  gfx.mojom.Transform to_screen;
+++  gfx.mojom.Transform container_to_screen;
++ };
++ 
++ // Represents a buffer that is ready for consumption. |buffer_id| has video
++diff --git a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
++index d0655cf592c615efe6e5d99728429ff2f52611c1..9e1df3048d6d24297d1e99931bc3cb1abef6d9fb 100644
++--- a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
+++++ b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
++@@ -22,6 +22,28 @@
++ 
++ namespace mojo {
++ 
+++// static
+++bool StructTraits<viz::mojom::ScrollTreeNodeDataView, viz::ScrollTreeNode>::
+++    Read(viz::mojom::ScrollTreeNodeDataView data, viz::ScrollTreeNode* out) {
+++  out->element_id = data.element_id();
+++  out->id = data.id();
+++  out->parent_id = data.parent_id();
+++  out->transform_id = data.transform_id();
+++  out->container_scroll_node_id = data.container_scroll_node_id();
+++  out->user_scrollable_horizontal = data.user_scrollable_horizontal();
+++  out->user_scrollable_vertical = data.user_scrollable_vertical();
+++  out->is_composited = data.is_composited();
+++  out->scrolls_inner_viewport = data.scrolls_inner_viewport();
+++  out->scrolls_outer_viewport = data.scrolls_outer_viewport();
+++  out->main_thread_repaint_reasons = data.main_thread_repaint_reasons();
+++  return data.ReadContainerOrigin(&out->container_origin) &&
+++         data.ReadContainerBounds(&out->container_bounds) &&
+++         data.ReadBounds(&out->bounds) &&
+++         data.ReadScrollOffset(&out->scroll_offset) &&
+++         data.ReadToScreen(&out->to_screen) &&
+++         data.ReadContainerToScreen(&out->container_to_screen);
+++}
+++
++ // static
++ bool StructTraits<viz::mojom::CompositorFrameMetadataDataView,
++                   viz::CompositorFrameMetadata>::
++@@ -82,7 +104,9 @@ bool StructTraits<viz::mojom::CompositorFrameMetadataDataView,
++         data.ReadOffsetTagValues(&out->offset_tag_values) &&
++         data.ReadFrameIntervalInputs(&out->frame_interval_inputs) &&
++         data.ReadTreesInVizTiming(&out->trees_in_viz_timing_details) &&
++-        data.ReadTrackedElementRects(&out->tracked_element_rects))) {
+++        data.ReadTrackedElementRects(&out->tracked_element_rects) &&
+++        data.ReadScrollTree(&out->scroll_tree) &&
+++        data.ReadDrawnLayers(&out->drawn_layers))) {
++     return false;
++   }
++ 
++diff --git a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
++index bb0dbb10dab4872de85ccd951586ff5c06388c25..37a6dc8238291fa05d3dace6c66d69183c390c41 100644
++--- a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
+++++ b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
++@@ -26,9 +26,103 @@
++ #include "ui/gfx/mojom/delegated_ink_metadata_mojom_traits.h"
++ #include "ui/gfx/mojom/display_color_spaces_mojom_traits.h"
++ #include "ui/gfx/mojom/overlay_transform_mojom_traits.h"
+++#include "ui/gfx/mojom/transform_mojom_traits.h"
++ 
++ namespace mojo {
++ 
+++template <>
+++struct StructTraits<viz::mojom::ScrollTreeNodeDataView, viz::ScrollTreeNode> {
+++  static uint64_t element_id(const viz::ScrollTreeNode& node) {
+++    return node.element_id;
+++  }
+++  static int32_t id(const viz::ScrollTreeNode& node) { return node.id; }
+++  static int32_t parent_id(const viz::ScrollTreeNode& node) {
+++    return node.parent_id;
+++  }
+++  static int32_t transform_id(const viz::ScrollTreeNode& node) {
+++    return node.transform_id;
+++  }
+++  static int32_t container_scroll_node_id(const viz::ScrollTreeNode& node) {
+++    return node.container_scroll_node_id;
+++  }
+++  static const gfx::Point& container_origin(const viz::ScrollTreeNode& node) {
+++    return node.container_origin;
+++  }
+++  static const gfx::Size& container_bounds(const viz::ScrollTreeNode& node) {
+++    return node.container_bounds;
+++  }
+++  static const gfx::Size& bounds(const viz::ScrollTreeNode& node) {
+++    return node.bounds;
+++  }
+++  static const gfx::PointF& scroll_offset(const viz::ScrollTreeNode& node) {
+++    return node.scroll_offset;
+++  }
+++  static bool user_scrollable_horizontal(const viz::ScrollTreeNode& node) {
+++    return node.user_scrollable_horizontal;
+++  }
+++  static bool user_scrollable_vertical(const viz::ScrollTreeNode& node) {
+++    return node.user_scrollable_vertical;
+++  }
+++  static bool is_composited(const viz::ScrollTreeNode& node) {
+++    return node.is_composited;
+++  }
+++  static bool scrolls_inner_viewport(const viz::ScrollTreeNode& node) {
+++    return node.scrolls_inner_viewport;
+++  }
+++  static bool scrolls_outer_viewport(const viz::ScrollTreeNode& node) {
+++    return node.scrolls_outer_viewport;
+++  }
+++  static uint32_t main_thread_repaint_reasons(const viz::ScrollTreeNode& node) {
+++    return node.main_thread_repaint_reasons;
+++  }
+++  static const gfx::Transform& to_screen(const viz::ScrollTreeNode& node) {
+++    return node.to_screen;
+++  }
+++  static const gfx::Transform& container_to_screen(
+++      const viz::ScrollTreeNode& node) {
+++    return node.container_to_screen;
+++  }
+++
+++  static bool Read(viz::mojom::ScrollTreeNodeDataView data,
+++                   viz::ScrollTreeNode* out);
+++};
+++
+++template <>
+++struct StructTraits<viz::mojom::DrawnLayerDataView, viz::DrawnLayer> {
+++  static int32_t layer_id(const viz::DrawnLayer& layer) {
+++    return layer.layer_id;
+++  }
+++  static uint64_t element_id(const viz::DrawnLayer& layer) {
+++    return layer.element_id;
+++  }
+++  static const gfx::Transform& screen_space_transform(
+++      const viz::DrawnLayer& layer) {
+++    return layer.screen_space_transform;
+++  }
+++  static const gfx::Rect& rect(const viz::DrawnLayer& layer) {
+++    return layer.rect;
+++  }
+++  static int32_t scroll_node_id(const viz::DrawnLayer& layer) {
+++    return layer.scroll_node_id;
+++  }
+++  static int32_t transform_id(const viz::DrawnLayer& layer) {
+++    return layer.transform_id;
+++  }
+++  static bool contents_opaque(const viz::DrawnLayer& layer) {
+++    return layer.contents_opaque;
+++  }
+++
+++  static bool Read(viz::mojom::DrawnLayerDataView data, viz::DrawnLayer* out) {
+++    out->layer_id = data.layer_id();
+++    out->element_id = data.element_id();
+++    out->scroll_node_id = data.scroll_node_id();
+++    out->transform_id = data.transform_id();
+++    out->contents_opaque = data.contents_opaque();
+++    return data.ReadRect(&out->rect) &&
+++           data.ReadScreenSpaceTransform(&out->screen_space_transform);
+++  }
+++};
+++
++ template <>
++ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
++                     viz::CompositorFrameMetadata> {
++@@ -196,6 +290,16 @@ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
++     return metadata.tracked_element_rects;
++   }
++ 
+++  static const std::vector<viz::ScrollTreeNode>& scroll_tree(
+++      const viz::CompositorFrameMetadata& metadata) {
+++    return metadata.scroll_tree;
+++  }
+++
+++  static const std::vector<viz::DrawnLayer>& drawn_layers(
+++      const viz::CompositorFrameMetadata& metadata) {
+++    return metadata.drawn_layers;
+++  }
+++
++   static bool Read(viz::mojom::CompositorFrameMetadataDataView data,
++                    viz::CompositorFrameMetadata* out);
++ };
++diff --git a/services/viz/public/mojom/BUILD.gn b/services/viz/public/mojom/BUILD.gn
++index f78fa897f7b277e170c16a9d848f6c862f9d039f..99a5645e0b62f3cd129fd60791e1599c37338e31 100644
++--- a/services/viz/public/mojom/BUILD.gn
+++++ b/services/viz/public/mojom/BUILD.gn
++@@ -238,6 +238,14 @@ mojom("mojom") {
++           cpp = "::viz::CompositorFrameMetadata"
++           move_only = true
++         },
+++        {
+++          mojom = "viz.mojom.ScrollTreeNode"
+++          cpp = "::viz::ScrollTreeNode"
+++        },
+++        {
+++          mojom = "viz.mojom.DrawnLayer"
+++          cpp = "::viz::DrawnLayer"
+++        },
++       ]
++       traits_sources = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc" ]
++       traits_headers = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h" ]
++@@ -563,6 +571,14 @@ mojom("mojom") {
++           cpp = "::viz::CompositorFrameMetadata"
++           move_only = true
++         },
+++        {
+++          mojom = "viz.mojom.ScrollTreeNode"
+++          cpp = "::viz::ScrollTreeNode"
+++        },
+++        {
+++          mojom = "viz.mojom.DrawnLayer"
+++          cpp = "::viz::DrawnLayer"
+++        },
++       ]
++       traits_headers = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h" ]
++       traits_public_deps = [ "//components/viz/common" ]
++diff --git a/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom b/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
++index ba76572f8b5e8009982402f24fb385a2bc996fc6..8bd02bd4db64da839803ebe1c7cded1d29b17803 100644
++--- a/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
+++++ b/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
++@@ -21,6 +21,7 @@ import "third_party/blink/public/mojom/tokens/tokens.mojom";
++ import "ui/gfx/geometry/mojom/geometry.mojom";
++ import "ui/gfx/mojom/display_color_spaces.mojom";
++ import "ui/gfx/mojom/overlay_transform.mojom";
+++import "ui/gfx/mojom/transform.mojom";
++ import "ui/latency/mojom/latency_info.mojom";
++ 
++ // See cc/trees/render_frame_metadata.h
++@@ -97,4 +98,38 @@ struct CompositorFrameMetadata {
++ 
++   // Tracked element rects for the frame.
++   TrackedElementRects tracked_element_rects;
+++
+++  array<ScrollTreeNode> scroll_tree;
+++
+++  array<DrawnLayer> drawn_layers;
+++};
+++
+++struct DrawnLayer {
+++  int32 layer_id;
+++  uint64 element_id;
+++  gfx.mojom.Rect rect;
+++  int32 scroll_node_id;
+++  int32 transform_id;
+++  bool contents_opaque;
+++  gfx.mojom.Transform screen_space_transform;
+++};
+++
+++struct ScrollTreeNode {
+++  uint64 element_id;
+++  int32 id;
+++  int32 parent_id;
+++  int32 transform_id;
+++  int32 container_scroll_node_id;
+++  gfx.mojom.Point container_origin;
+++  gfx.mojom.Size container_bounds;
+++  gfx.mojom.Size bounds;
+++  gfx.mojom.PointF scroll_offset;
+++  bool user_scrollable_horizontal;
+++  bool user_scrollable_vertical;
+++  bool is_composited;
+++  bool scrolls_inner_viewport;
+++  bool scrolls_outer_viewport;
+++  uint32 main_thread_repaint_reasons;
+++  gfx.mojom.Transform to_screen;
+++  gfx.mojom.Transform container_to_screen;
++ };
+diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_event.h
+--- a/shell/browser/osr/osr_paint_event.h
++++ b/shell/browser/osr/osr_paint_event.h
+@@ -8,6 +8,7 @@
+ 
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/read_only_shared_memory_region.h"
++#include "components/viz/common/quads/compositor_frame_metadata.h"
+ #include "content/public/common/widget_type.h"
+ #include "media/base/video_types.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+@@ -98,6 +99,8 @@ struct OffscreenSharedTextureValue {
+   std::optional<gfx::PointF> root_scroll_offset;
+   std::optional<double> page_scale_factor;
+   std::optional<double> device_scale_factor;
++  std::optional<std::vector<viz::ScrollTreeNode>> scroll_tree;
++  std::optional<std::vector<viz::DrawnLayer>> drawn_layers;
+ 
+   // The capture timestamp, microseconds since capture start
+   int64_t timestamp = 0;
+@@ -162,6 +165,8 @@ struct OffscreenSoftwareFrameValue {
+   std::optional<gfx::PointF> root_scroll_offset;
+   std::optional<double> page_scale_factor;
+   std::optional<double> device_scale_factor;
++  std::optional<std::vector<viz::ScrollTreeNode>> scroll_tree;
++  std::optional<std::vector<viz::DrawnLayer>> drawn_layers;
+ 
+   // Releaser holder
+   raw_ptr<OffscreenReleaserHolder> releaser_holder = nullptr;
+diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_video_consumer.cc
+--- a/shell/browser/osr/osr_video_consumer.cc
++++ b/shell/browser/osr/osr_video_consumer.cc
+@@ -64,6 +64,54 @@ std::optional<gfx::PointF> RootScrollOffset(
+                      *metadata.root_scroll_offset_y);
+ }
+ 
++std::optional<std::vector<viz::ScrollTreeNode>> ScrollTree(
++    const media::mojom::VideoFrameInfo& info) {
++  if (!info.scroll_tree)
++    return std::nullopt;
++  std::vector<viz::ScrollTreeNode> nodes;
++  nodes.reserve(info.scroll_tree->size());
++  for (const auto& from : *info.scroll_tree) {
++    viz::ScrollTreeNode& node = nodes.emplace_back();
++    node.element_id = from->element_id;
++    node.id = from->id;
++    node.parent_id = from->parent_id;
++    node.transform_id = from->transform_id;
++    node.container_scroll_node_id = from->container_scroll_node_id;
++    node.container_origin = from->container_origin;
++    node.container_bounds = from->container_bounds;
++    node.bounds = from->bounds;
++    node.scroll_offset = from->scroll_offset;
++    node.user_scrollable_horizontal = from->user_scrollable_horizontal;
++    node.user_scrollable_vertical = from->user_scrollable_vertical;
++    node.is_composited = from->is_composited;
++    node.scrolls_inner_viewport = from->scrolls_inner_viewport;
++    node.scrolls_outer_viewport = from->scrolls_outer_viewport;
++    node.main_thread_repaint_reasons = from->main_thread_repaint_reasons;
++    node.to_screen = from->to_screen;
++    node.container_to_screen = from->container_to_screen;
++  }
++  return nodes;
++}
++
++std::optional<std::vector<viz::DrawnLayer>> DrawnLayers(
++    const media::mojom::VideoFrameInfo& info) {
++  if (!info.drawn_layers)
++    return std::nullopt;
++  std::vector<viz::DrawnLayer> layers;
++  layers.reserve(info.drawn_layers->size());
++  for (const auto& from : *info.drawn_layers) {
++    viz::DrawnLayer& layer = layers.emplace_back();
++    layer.layer_id = from->layer_id;
++    layer.element_id = from->element_id;
++    layer.screen_space_transform = from->screen_space_transform;
++    layer.rect = from->rect;
++    layer.scroll_node_id = from->scroll_node_id;
++    layer.transform_id = from->transform_id;
++    layer.contents_opaque = from->contents_opaque;
++  }
++  return layers;
++}
++
+ }  // namespace
+ 
+ namespace electron {
+@@ -163,6 +211,8 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+     texture.root_scroll_offset = RootScrollOffset(info->metadata);
+     texture.page_scale_factor = info->metadata.page_scale_factor;
+     texture.device_scale_factor = info->metadata.device_scale_factor;
++    texture.scroll_tree = ScrollTree(*info);
++    texture.drawn_layers = DrawnLayers(*info);
+     texture.widget_type = view_->GetWidgetType();
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -255,6 +305,8 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+     frame.root_scroll_offset = RootScrollOffset(info->metadata);
+     frame.page_scale_factor = info->metadata.page_scale_factor;
+     frame.device_scale_factor = info->metadata.device_scale_factor;
++    frame.scroll_tree = ScrollTree(*info);
++    frame.drawn_layers = DrawnLayers(*info);
+ 
+     base::ReadOnlySharedMemoryRegion region =
+         std::move(data->get_read_only_shmem_region());
+diff --git a/shell/common/gin_converters/osr_converter.cc b/shell/common/gin_converters/osr_converter.cc
+--- a/shell/common/gin_converters/osr_converter.cc
++++ b/shell/common/gin_converters/osr_converter.cc
+@@ -5,6 +5,7 @@
+ #include "shell/common/gin_converters/osr_converter.h"
+ 
+ #include "gin/dictionary.h"
++#include "v8-container.h"
+ #include "v8-external.h"
+ #include "v8-function.h"
+ 
+@@ -23,6 +24,69 @@
+ namespace gin {
+ 
+ namespace {
++std::vector<double> TransformToVector(const gfx::Transform& transform) {
++  std::vector<double> matrix(16);
++  transform.GetColMajor(base::span<double, 16>(matrix));
++  return matrix;
++}
++
++v8::Local<v8::Value> ScrollTreeToV8(
++    v8::Isolate* isolate,
++    const std::vector<viz::ScrollTreeNode>& scroll_tree) {
++  v8::Local<v8::Array> nodes = v8::Array::New(isolate, scroll_tree.size());
++  for (size_t i = 0; i < scroll_tree.size(); ++i) {
++    const viz::ScrollTreeNode& node = scroll_tree[i];
++    gin::Dictionary dict(isolate, v8::Object::New(isolate));
++    dict.Set("elementId", static_cast<double>(node.element_id));
++    dict.Set("id", node.id);
++    dict.Set("parentId", node.parent_id);
++    dict.Set("transformId", node.transform_id);
++    dict.Set("containerScrollNodeId", node.container_scroll_node_id);
++    dict.Set("containerOrigin", node.container_origin);
++    dict.Set("containerBounds", node.container_bounds);
++    dict.Set("bounds", node.bounds);
++    dict.Set("scrollOffset", node.scroll_offset);
++    dict.Set("userScrollableHorizontal", node.user_scrollable_horizontal);
++    dict.Set("userScrollableVertical", node.user_scrollable_vertical);
++    dict.Set("isComposited", node.is_composited);
++    dict.Set("scrollsInnerViewport", node.scrolls_inner_viewport);
++    dict.Set("scrollsOuterViewport", node.scrolls_outer_viewport);
++    dict.Set("mainThreadRepaintReasons", node.main_thread_repaint_reasons);
++    dict.Set("toScreen", TransformToVector(node.to_screen));
++    dict.Set("containerToScreen", TransformToVector(node.container_to_screen));
++    nodes
++        ->Set(isolate->GetCurrentContext(), static_cast<uint32_t>(i),
++              ConvertToV8(isolate, dict))
++        .Check();
++  }
++  return nodes;
++}
++
++v8::Local<v8::Value> DrawnLayersToV8(
++    v8::Isolate* isolate,
++    const std::vector<viz::DrawnLayer>& drawn_layers) {
++  v8::Local<v8::Array> layers = v8::Array::New(isolate, drawn_layers.size());
++  for (size_t i = 0; i < drawn_layers.size(); ++i) {
++    const viz::DrawnLayer& layer = drawn_layers[i];
++    gin::Dictionary dict(isolate, v8::Object::New(isolate));
++    dict.Set("layerId", layer.layer_id);
++    dict.Set("elementId", static_cast<double>(layer.element_id));
++    dict.Set("screenSpaceTransform",
++             TransformToVector(layer.screen_space_transform));
++    dict.Set("wholePixelTranslation",
++             layer.screen_space_transform.IsIdentityOrIntegerTranslation());
++    dict.Set("rect", layer.rect);
++    dict.Set("scrollNodeId", layer.scroll_node_id);
++    dict.Set("transformId", layer.transform_id);
++    dict.Set("contentsOpaque", layer.contents_opaque);
++    layers
++        ->Set(isolate->GetCurrentContext(), static_cast<uint32_t>(i),
++              ConvertToV8(isolate, dict))
++        .Check();
++  }
++  return layers;
++}
++
+ std::string OsrVideoPixelFormatToString(media::VideoPixelFormat format) {
+   switch (format) {
+     case media::PIXEL_FORMAT_ARGB:
+@@ -119,6 +183,10 @@ v8::Local<v8::Value> Converter<electron::OffscreenSharedTextureValue>::ToV8(
+   metadata.Set("rootScrollOffset", val.root_scroll_offset);
+   metadata.Set("pageScaleFactor", val.page_scale_factor);
+   metadata.Set("deviceScaleFactor", val.device_scale_factor);
++  if (val.scroll_tree)
++    metadata.Set("scrollTree", ScrollTreeToV8(isolate, *val.scroll_tree));
++  if (val.drawn_layers)
++    metadata.Set("drawnLayers", DrawnLayersToV8(isolate, *val.drawn_layers));
+   dict.Set("metadata", ConvertToV8(isolate, metadata));
+ 
+   gin::Dictionary sharedTexture(isolate, v8::Object::New(isolate));
+@@ -241,6 +309,10 @@ v8::Local<v8::Value> Converter<electron::OffscreenSoftwareFrameValue>::ToV8(
+   metadata.Set("rootScrollOffset", val.root_scroll_offset);
+   metadata.Set("pageScaleFactor", val.page_scale_factor);
+   metadata.Set("deviceScaleFactor", val.device_scale_factor);
++  if (val.scroll_tree)
++    metadata.Set("scrollTree", ScrollTreeToV8(isolate, *val.scroll_tree));
++  if (val.drawn_layers)
++    metadata.Set("drawnLayers", DrawnLayersToV8(isolate, *val.drawn_layers));
+   dict.Set("metadata", ConvertToV8(isolate, metadata));
+ 
+ #if BUILDFLAG(IS_LINUX)

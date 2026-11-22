@@ -54,6 +54,10 @@ else
     git -C "$SRC" apply --index "$patch"
     git -C "$SRC" -c user.name=pixel -c user.email=pixel@zenbu.dev commit -q -m "$name"
   done
+  for added in $(git -C "$SRC" diff --name-only --diff-filter=A "$TAG" HEAD -- patches/chromium); do
+    echo "applying $added to chromium"
+    git -C "$SRC/.." apply "electron/$added"
+  done
 fi
 
 # gn derives the version from .git/packed-refs, which a history-less clone never writes
