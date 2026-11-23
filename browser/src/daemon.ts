@@ -26,7 +26,8 @@ interface OpenRequest {
 export function buildStamp(): string {
   try {
     const built = Math.floor(fs.statSync(path.join(__dirname, "main.js")).mtimeMs);
-    return `${built} ${fs.realpathSync(process.execPath)}`;
+    const overrides = Object.keys(process.env).filter((key) => key.startsWith("PIXEL_")).sort().map((key) => `${key}=${process.env[key]}`);
+    return [built, fs.realpathSync(process.execPath), ...overrides].join(" ");
   } catch {
     return "unknown";
   }

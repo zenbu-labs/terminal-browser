@@ -165,7 +165,8 @@ function interactiveTty(): string | null {
 function browserBuildStamp(): string {
   const main = path.resolve(__dirname, "..", "..", "browser", "dist", "main.js");
   try {
-    return `${Math.floor(fs.statSync(main).mtimeMs)} ${fs.realpathSync(electronBinary())}`;
+    const overrides = [...PASSED_TO_DAEMON].filter((key) => process.env[key] !== undefined).sort().map((key) => `${key}=${process.env[key]}`);
+    return [Math.floor(fs.statSync(main).mtimeMs), fs.realpathSync(electronBinary()), ...overrides].join(" ");
   } catch {
     return "unknown";
   }
