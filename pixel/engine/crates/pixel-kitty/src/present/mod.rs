@@ -110,7 +110,11 @@ fn env_number<T: std::str::FromStr>(name: &str) -> Option<T> {
 pub(super) fn keep_screens_for(identity: Identity) -> i64 {
     static FORCED: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
     let forced = *FORCED.get_or_init(|| env_number::<i64>("PIXEL_KEEP_SCREENS").map(|k| k.clamp(0, 6)));
-    forced.unwrap_or(if identity.keeps_hidden_images_cheaply() { layer::KEEP_SCREENS } else { 0 })
+    forced.unwrap_or(default_keep_screens(identity))
+}
+
+fn default_keep_screens(identity: Identity) -> i64 {
+    if identity.keeps_hidden_images_cheaply() { layer::KEEP_SCREENS } else { 0 }
 }
 
 fn rex_image_scale() -> f64 {
@@ -403,9 +407,9 @@ mod tests {
 
     #[test]
     fn rex_keeps_no_hidden_strips_and_other_terminals_keep_three_screens() {
-        assert_eq!(keep_screens_for(Identity::Rex), 0);
-        assert_eq!(keep_screens_for(Identity::Ghostty { version: (1, 3, 2) }), layer::KEEP_SCREENS);
-        assert_eq!(keep_screens_for(Identity::Kitty { version: (0, 48, 0) }), layer::KEEP_SCREENS);
+        assert_eq!(default_keep_screens(Identity::Rex), 0);
+        assert_eq!(default_keep_screens(Identity::Ghostty { version: (1, 3, 2) }), layer::KEEP_SCREENS);
+        assert_eq!(default_keep_screens(Identity::Kitty { version: (0, 48, 0) }), layer::KEEP_SCREENS);
     }
 
     #[test]
