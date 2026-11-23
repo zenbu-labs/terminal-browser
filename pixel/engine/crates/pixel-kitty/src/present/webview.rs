@@ -3,7 +3,7 @@ use std::io;
 use std::time::Instant;
 
 use crate::Kitty;
-use super::layer::{all_opaque, Layer};
+use super::layer::{all_opaque, ImageIds, Layer};
 use super::tiles::{intersect, subtract};
 use pixel_core::surfaces::{DrawnLayer, Rect, ScrollNode, ScrollTree, SurfacePlacement};
 use pixel_raster::{Canvas, PixelFrame as Frame, ScrollLayer};
@@ -23,7 +23,8 @@ pub(crate) struct WebLayers {
     pub(super) area: Rect,
     nodes: HashMap<u64, NodeLayer>,
     seen: HashMap<u64, Seen>,
-    opaque: HashMap<u64, (Rect, Option<Rect>)>,
+    see_through: HashMap<u64, (Rect, Option<Rect>)>,
+    clears_all_holes: bool,
     pinned: Vec<Rect>,
     retired: Vec<(u32, Layer)>,
 }
@@ -39,6 +40,7 @@ struct NodeLayer {
 
 #[derive(Debug, Clone, Copy)]
 struct Planned {
+    placed: Rect,
     area: Rect,
     origin: Option<i64>,
 }
@@ -91,12 +93,13 @@ fn clip(a: Rect, x0: i64, y0: i64, x1: i64, y1: i64) -> Rect {
     Rect { x: l as u32, y: t as u32, w: (r - l) as u32, h: (b - t) as u32 }
 }
 
+fn row_opaque(canvas: &Canvas, rect: Rect, y: u32) -> bool {
+    let at = y as usize * canvas.width as usize * 4 + rect.x as usize * 4;
+    all_opaque(&canvas.pixels[at..at + rect.w as usize * 4])
+}
+
 fn opaque_rows(canvas: &Canvas, rect: Rect) -> Option<Rect> {
-    let stride = canvas.width as usize * 4;
-    let opaque = |y: u32| {
-        let at = y as usize * stride + rect.x as usize * 4;
-        all_opaque(&canvas.pixels[at..at + rect.w as usize * 4])
-    };
+    let opaque = |y: u32| row_opaque(canvas, rect, y);
     let mut top = rect.y;
     let mut bottom = rect.y + rect.h;
     while top < bottom && !opaque(top) {
@@ -108,19 +111,19 @@ fn opaque_rows(canvas: &Canvas, rect: Rect) -> Option<Rect> {
     (top < bottom && (top..bottom).all(opaque)).then_some(Rect { y: top, h: bottom - top, ..rect })
 }
 
-fn still_opaque(canvas: &Canvas, rect: Rect, was: Option<Rect>, damage: &[Rect]) -> bool {
-    let touched: Vec<Rect> = damage.iter().map(|d| intersect(*d, rect)).filter(|d| !d.is_empty()).collect();
-    if touched.is_empty() {
-        return true;
+fn regained_rows(canvas: &Canvas, full: Rect, kept: Option<Rect>, damage: &[Rect]) -> Option<Rect> {
+    let Some(kept) = kept else {
+        return if damage.iter().any(|d| !intersect(*d, full).is_empty()) { opaque_rows(canvas, full) } else { None };
+    };
+    let mut top = kept.y;
+    while top > full.y && row_opaque(canvas, full, top - 1) {
+        top -= 1;
     }
-    let Some(was) = was else { return false };
-    let stride = canvas.width as usize * 4;
-    touched.iter().all(|d| {
-        (d.y.max(was.y)..(d.y + d.h).min(was.y + was.h)).all(|y| {
-            let at = y as usize * stride + was.x as usize * 4;
-            all_opaque(&canvas.pixels[at..at + was.w as usize * 4])
-        })
-    })
+    let mut bottom = kept.y + kept.h;
+    while bottom < full.y + full.h && row_opaque(canvas, full, bottom) {
+        bottom += 1;
+    }
+    Some(Rect { y: top, h: bottom - top, ..kept })
 }
 
 struct Owners<'a> {
@@ -258,12 +261,12 @@ impl WebLayers {
         self.nodes.values().any(|n| n.layer.holding())
     }
 
-    pub(super) fn delete_all(&self, out: &mut Vec<u8>) {
+    pub(super) fn delete_all(&self, out: &mut Vec<u8>, ids: &mut ImageIds) {
         for node in self.nodes.values() {
-            node.layer.delete_all(out);
+            node.layer.delete_all(out, ids);
         }
         for (_, layer) in &self.retired {
-            layer.delete_all(out);
+            layer.delete_all(out, ids);
         }
     }
 
@@ -291,12 +294,10 @@ impl WebLayers {
         (0..MAX_LAYERS as u32).find(|s| !self.nodes.values().any(|n| n.slot == *s) && !self.retired.iter().any(|(r, _)| r == s))
     }
 
-    fn plan(&mut self, tree: &ScrollTree, frame: Frame<'_>, now: Instant) {
-        self.opaque.retain(|id, _| self.seen.contains_key(id));
+    fn plan(&mut self, tree: &ScrollTree, frame: Frame<'_>, now: Instant, stripe_px: u32) {
         for layer in self.nodes.values_mut() {
             layer.plan = None;
         }
-        let damage: Vec<Rect> = frame.changed.iter().chain(frame.repainted).copied().collect();
         let layered: HashSet<u64> = self.nodes.keys().copied().collect();
         let owners = Owners::new(tree, &layered);
         let mut placed = place(tree, &owners, self.area);
@@ -316,18 +317,21 @@ impl WebLayers {
             let depth = placed.get(&owners.of(layer.scroll_node_id)).map_or(1, |p| p.depth) + 1;
             placed.insert(key, Placed { rect, origin: Some(i64::from(self.area.y) + i64::from(y)), depth });
         }
-        let regions: Vec<u64> = placed.keys().copied().collect();
-        for id in regions {
-            let Some(at) = placed.get_mut(&id) else { continue };
-            let rect = match self.opaque.get(&id) {
-                Some(&(from, to)) if from == at.rect && still_opaque(frame.canvas, at.rect, to, &damage) => to,
-                _ => opaque_rows(frame.canvas, at.rect),
-            };
-            self.opaque.insert(id, (at.rect, rect));
-            match rect {
-                Some(rect) => at.rect = rect,
+        let full: HashMap<u64, Rect> = placed.iter().map(|(id, p)| (*id, p.rect)).collect();
+        let damage: Vec<Rect> = frame.changed.iter().chain(frame.repainted).copied().collect();
+        self.see_through.retain(|id, _| full.contains_key(id));
+        for (id, (from, rows)) in self.see_through.iter_mut() {
+            let Some(at) = placed.get_mut(id) else { continue };
+            if *from != at.rect {
+                *from = at.rect;
+                *rows = opaque_rows(frame.canvas, at.rect);
+            } else {
+                *rows = regained_rows(frame.canvas, at.rect, *rows, &damage);
+            }
+            match rows {
+                Some(rows) => at.rect = *rows,
                 None => {
-                    placed.remove(&id);
+                    placed.remove(id);
                 }
             }
         }
@@ -343,7 +347,7 @@ impl WebLayers {
                 let keeps = at.depth <= 1 || at.origin.is_some();
                 if keeps && layer.depth == at.depth && layer.layer.area.x == at.rect.x && layer.layer.area.w == at.rect.w {
                     layer.layer.area = at.rect;
-                    layer.plan = Some(Planned { area: at.rect, origin: at.origin });
+                    layer.plan = Some(Planned { placed: full.get(&id).copied().unwrap_or(at.rect), area: at.rect, origin: at.origin });
                 }
                 continue;
             }
@@ -364,14 +368,33 @@ impl WebLayers {
                 }
             }
             let Some(slot) = self.free_slot() else { continue };
-            let layer = if id == SCREEN { Layer::for_screen(at.rect, slot, at.depth) } else { Layer::for_node(at.rect, slot, at.depth) };
-            self.nodes.insert(id, NodeLayer { layer, slot, depth: at.depth, origin: None, plan: Some(Planned { area: at.rect, origin: at.origin }) });
+            let layer = if id == SCREEN { Layer::for_screen(at.rect, at.depth, stripe_px) } else { Layer::for_node(at.rect, at.depth, stripe_px) };
+            self.nodes.insert(id, NodeLayer { layer, slot, depth: at.depth, origin: None, plan: Some(Planned { placed: full.get(&id).copied().unwrap_or(at.rect), area: at.rect, origin: at.origin }) });
         }
+        self.watch_see_through();
         let gone: Vec<u64> = self.nodes.iter().filter(|(_, n)| n.plan.is_none()).map(|(id, _)| *id).collect();
         for id in gone {
             if let Some(node) = self.nodes.remove(&id) {
                 self.retired.push((node.slot, node.layer));
             }
+        }
+    }
+
+    fn watch_see_through(&mut self) {
+        let regions: Vec<Rect> = self.nodes.iter().filter(|(id, _)| **id != SCREEN).filter_map(|(_, n)| n.plan.map(|p| p.area)).collect();
+        let pinned_over_regions: Vec<Rect> = self.pinned.iter().flat_map(|p| regions.iter().map(|r| intersect(*p, *r))).filter(|r| !r.is_empty()).collect();
+        let clears_all_holes = self.clears_all_holes;
+        for (id, node) in self.nodes.iter_mut() {
+            let Some(plan) = node.plan else { continue };
+            let under = match *id {
+                _ if clears_all_holes => {
+                    node.layer.clear_holes();
+                    Vec::new()
+                }
+                SCREEN => pinned_over_regions.clone(),
+                _ => vec![plan.area],
+            };
+            node.layer.watch_see_through_over(under);
         }
     }
 }
@@ -388,24 +411,46 @@ impl Kitty {
         });
         let Some((surface, area, tree)) = found.flatten() else {
             if let Some(old) = self.patches.web.take() {
-                old.delete_all(out);
+                old.delete_all(out, &mut self.patches.ids);
             }
             return None;
         };
         if self.patches.web.as_ref().is_some_and(|w| w.surface != surface || w.area != area) {
             if let Some(old) = self.patches.web.take() {
-                old.delete_all(out);
+                old.delete_all(out, &mut self.patches.ids);
             }
         }
-        let web = self.patches.web.get_or_insert_with(|| WebLayers { surface, area, nodes: HashMap::new(), seen: HashMap::new(), opaque: HashMap::new(), pinned: Vec::new(), retired: Vec::new() });
+        let stripe_px = super::layer::web_stripe_px().unwrap_or_else(|| super::stripe_px_for(self.identity, super::layer::STRIPE_PX, canvas.1));
+        let web = self.patches.web.get_or_insert_with(|| WebLayers { surface, area, nodes: HashMap::new(), seen: HashMap::new(), see_through: HashMap::new(), clears_all_holes: false, pinned: Vec::new(), retired: Vec::new() });
         let now = Instant::now();
         web.note_scrolls(&tree, now);
-        web.plan(&tree, frame, now);
+        web.plan(&tree, frame, now, stripe_px);
         Some((surface, area))
     }
 
     pub(super) fn draw_web(&mut self, frame: Frame<'_>, out: &mut Vec<u8>) -> io::Result<()> {
-        let Some(mut web) = self.patches.web.take() else { return Ok(()) };
+        for _ in 0..=MAX_LAYERS {
+            match self.draw_web_pass(frame, out)? {
+                Some(id) => {
+                    let Some(web) = self.patches.web.as_mut() else { return Ok(()) };
+                    if id == SCREEN {
+                        web.clears_all_holes = true;
+                    } else {
+                        let Some(placed) = web.nodes.get(&id).and_then(|n| n.plan).map(|p| p.placed) else { return Ok(()) };
+                        web.see_through.insert(id, (placed, opaque_rows(frame.canvas, placed)));
+                    }
+                    pixel_core::profiler::count("present.web_see_through", || 1);
+                    self.plan_web(frame, out);
+                }
+                None => return Ok(()),
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_web_pass(&mut self, frame: Frame<'_>, out: &mut Vec<u8>) -> io::Result<Option<u64>> {
+        let Some(mut web) = self.patches.web.take() else { return Ok(None) };
+        let mut see_through_in = None;
         let scrollers: Vec<(u32, Rect)> = web.nodes.iter().filter(|(id, _)| **id != SCREEN).filter_map(|(_, n)| n.plan.map(|p| (n.depth, p.area))).collect();
         let mut order = Vec::new();
         for (id, node) in web.nodes.iter_mut() {
@@ -434,13 +479,20 @@ impl Kitty {
                 node.origin = Some(*origin);
                 staged.push(*id);
                 match report {
-                    Ok(report) => held |= report.waiting,
+                    Ok(report) => {
+                        held |= report.waiting;
+                        see_through_in = see_through_in.or(report.see_through.then_some(*id));
+                    }
                     Err(error) => {
                         self.patches.web = Some(web);
                         return Err(error);
                     }
                 }
             }
+        }
+        if see_through_in.is_some() {
+            self.patches.web = Some(web);
+            return Ok(see_through_in);
         }
         let mut result = Ok(());
         for (_, _, id, origin, area, holes) in order {
@@ -456,6 +508,10 @@ impl Kitty {
                 Ok(report) => {
                     node.origin = Some(origin);
                     held = report.waiting;
+                    if report.see_through {
+                        see_through_in = Some(id);
+                        break;
+                    }
                 }
                 Err(error) => {
                     result = Err(error);
@@ -463,16 +519,20 @@ impl Kitty {
                 }
             }
         }
+        if see_through_in.is_some() {
+            self.patches.web = Some(web);
+            return result.map(|()| see_through_in);
+        }
         if held {
             pixel_core::profiler::count("present.web_held", || 1);
         }
         if !held {
             for (_, layer) in web.retired.drain(..) {
-                layer.delete_all(out);
+                layer.delete_all(out, &mut self.patches.ids);
             }
         }
         self.patches.web = Some(web);
-        result
+        result.map(|()| None)
     }
 }
 
@@ -576,16 +636,52 @@ mod tests {
         assert_eq!(child.layer.upload_cost(&canvas, child.origin.unwrap(), &[]), 0);
     }
 
-    #[test]
-    fn a_child_layer_never_covers_see_through_rows() {
-        let mut canvas = page(0);
-        let last = CHILD.y + CHILD.h - 1;
-        for x in CHILD.x..CHILD.x + CHILD.w {
-            canvas.pixels[((last * SURFACE.w + x) * 4 + 3) as usize] = 243;
+    fn draw_canvas(kitty: &mut Kitty, canvas: &Canvas, scroll: u32) {
+        let tree = Arc::new(ScrollTree { nodes: vec![node(5, 2, 1, SURFACE, 0.0, true), node(7, 3, 2, CHILD, scroll as f32, false)], drawn_layers: Vec::new() });
+        let layout = SurfaceLayout { placements: vec![SurfacePlacement { surface: 1, rect: [0.0, 0.0, 320.0, 300.0], visible: [0.0, 0.0, 320.0, 300.0], size: (320, 300), scroll_tree: Some(tree) }], covers: Vec::new() };
+        let frame = Frame { canvas, premultiplied: false, changed: &[CHILD], repainted: &[], opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: Some(&layout) };
+        let mut out = Vec::new();
+        if kitty.plan_web(frame, &mut out).is_some() {
+            kitty.draw_web(frame, &mut out).unwrap();
         }
-        assert_eq!(opaque_rows(&canvas, CHILD), Some(Rect { h: CHILD.h - 1, ..CHILD }));
-        canvas.pixels[(((CHILD.y + 50) * SURFACE.w + CHILD.x) * 4 + 3) as usize] = 0;
-        assert_eq!(opaque_rows(&canvas, CHILD), None, "a see-through row inside the scroller keeps it in its parent");
+    }
+
+    #[test]
+    fn a_see_through_pixel_inside_the_page_puts_it_all_on_the_screen_layer() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        draw(&mut kitty, 0);
+        draw(&mut kitty, 30);
+        assert!(kitty.patches.web.as_ref().unwrap().nodes.contains_key(&7));
+        let mut canvas = page(60);
+        canvas.pixels[(((CHILD.y + 50) * SURFACE.w + CHILD.x + 3) * 4 + 3) as usize] = 0;
+        draw_canvas(&mut kitty, &canvas, 60);
+        let web = kitty.patches.web.as_ref().unwrap();
+        assert!(!web.nodes.contains_key(&7), "a see-through pixel over the page would blend with stale strips");
+        assert!(!web.nodes.contains_key(&5), "and the page would show it over whatever its own hole held");
+        assert_eq!(web.see_through[&7], (CHILD, None));
+        assert_eq!(web.nodes[&SCREEN].layer.upload_cost(&canvas, 0, &[]), 0, "the screen layer has nothing beneath it");
+        let canvas = page(90);
+        draw_canvas(&mut kitty, &canvas, 90);
+        let web = kitty.patches.web.as_ref().unwrap();
+        assert!(web.nodes.contains_key(&5), "the page scrolls on its own layer again once it is opaque");
+        assert_eq!(web.see_through[&5], (SURFACE, Some(SURFACE)));
+        assert_eq!(web.nodes[&5].layer.upload_cost(&canvas, 0, &[CHILD]), 0);
+    }
+
+    #[test]
+    fn see_through_rows_at_the_page_edge_go_to_the_screen_layer() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        let mut canvas = page(0);
+        for x in [0, 1, SURFACE.w - 2, SURFACE.w - 1] {
+            canvas.pixels[((SURFACE.h - 1) * SURFACE.w + x) as usize * 4 + 3] = 0;
+        }
+        draw_canvas(&mut kitty, &canvas, 0);
+        let web = kitty.patches.web.as_ref().unwrap();
+        let rows = Rect { h: SURFACE.h - 1, ..SURFACE };
+        assert_eq!(web.nodes[&5].layer.area, rows, "rounded window corners stay off the scrolling page layer");
+        assert_eq!(web.nodes[&SCREEN].layer.upload_cost(&canvas, 0, &[rows]), 0, "the screen layer draws them, with nothing beneath");
+        draw_canvas(&mut kitty, &canvas, 0);
+        assert_eq!(kitty.patches.web.as_ref().unwrap().see_through[&5], (SURFACE, Some(rows)));
     }
 
     fn layer(rect: (i32, i32, u32, u32), scroll_node_id: i32) -> pixel_core::surfaces::DrawnLayer {
@@ -697,6 +793,50 @@ mod tests {
             let outside_sidebar = subtract(&[SURFACE], SIDEBAR);
             assert_eq!(screen.layer.upload_cost(&canvas, 0, &outside_sidebar), 0);
         }
+    }
+
+    fn draw_pinned(kitty: &mut Kitty, canvas: &Canvas, scroll: u32, pinned: (i32, i32, u32, u32), probe: bool) -> Option<u64> {
+        let mut root = node(5, 2, 1, SURFACE, scroll as f32, true);
+        root.to_screen = translate(0.0, -(scroll as f32));
+        let tree = Arc::new(ScrollTree { nodes: vec![root], drawn_layers: vec![layer((0, 0, 320, 300), 2), layer(pinned, -1)] });
+        let layout = SurfaceLayout { placements: vec![SurfacePlacement { surface: 1, rect: [0.0, 0.0, 320.0, 300.0], visible: [0.0, 0.0, 320.0, 300.0], size: (320, 300), scroll_tree: Some(tree) }], covers: Vec::new() };
+        let frame = Frame { canvas, premultiplied: false, changed: &[SURFACE], repainted: &[], opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: Some(&layout) };
+        let mut out = Vec::new();
+        kitty.plan_web(frame, &mut out)?;
+        let first = if probe { kitty.draw_web_pass(frame, &mut out).unwrap() } else { None };
+        kitty.draw_web(frame, &mut out).unwrap();
+        first
+    }
+
+    #[test]
+    fn a_see_through_corner_under_a_fixed_header_lies_over_nothing() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        for scroll in [0u32, 40] {
+            let mut canvas = page_with_header(scroll);
+            canvas.pixels[3] = 0;
+            assert_eq!(draw_pinned(&mut kitty, &canvas, scroll, (0, 0, 320, 48), true), None);
+        }
+        assert!(!kitty.patches.web.as_ref().unwrap().clears_all_holes);
+    }
+
+    #[test]
+    fn a_see_through_pixel_on_a_stuck_sidebar_makes_every_layer_clear_its_holes_once() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        let sidebar = (SIDEBAR.x as i32, SIDEBAR.y as i32, SIDEBAR.w, SIDEBAR.h);
+        assert_eq!(draw_pinned(&mut kitty, &page_with_sidebar(0), 0, sidebar, true), None);
+        let see_through = |scroll| {
+            let mut canvas = page_with_sidebar(scroll);
+            canvas.pixels[(((SIDEBAR.y + 10) * SURFACE.w + SIDEBAR.x + 10) * 4 + 3) as usize] = 90;
+            canvas
+        };
+        assert!(!kitty.patches.web.as_ref().unwrap().clears_all_holes);
+        draw_pinned(&mut kitty, &see_through(40), 40, sidebar, false);
+        assert!(kitty.patches.web.as_ref().unwrap().clears_all_holes);
+        let canvas = see_through(100);
+        assert_eq!(draw_pinned(&mut kitty, &canvas, 100, sidebar, true), None, "it never trips again");
+        let web = kitty.patches.web.as_ref().unwrap();
+        assert_eq!(web.nodes[&5].layer.upload_cost(&canvas, -100, &[SIDEBAR]), 0);
+        assert_eq!(web.nodes[&SCREEN].layer.upload_cost(&canvas, 0, &subtract(&[SURFACE], SIDEBAR)), 0);
     }
 
     const EDITOR: Rect = Rect { x: 60, y: 40, w: 240, h: 240 };

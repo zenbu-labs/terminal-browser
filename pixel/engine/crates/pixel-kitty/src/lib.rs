@@ -449,8 +449,10 @@ impl Kitty {
                 return Ok(0);
             }
             if self.embedded {
+                frame_log(format_args!("path=embedded size={}x{}", canvas.width, canvas.height));
                 return self.draw_embedded(tty, canvas);
             }
+            frame_log(format_args!("path=host-stream size={}x{}", canvas.width, canvas.height));
             let herdr = self
                 .herdr
                 .as_mut()
@@ -495,6 +497,23 @@ impl Kitty {
             Presenter::Animation => self.draw_animation(frame, &mut out),
         };
         self.write_synchronized(&out)?;
+        if frame_log_enabled() {
+            let count = |needle: &[u8]| out.windows(needle.len()).filter(|w| *w == needle).count();
+            frame_log(format_args!(
+                "path={:?} terminal={:?} size={}x{} cell={:?} tile_px={} stripe_px={} bytes={} uploads={} puts={} deletes={}",
+                self.present,
+                self.identity,
+                canvas.width,
+                canvas.height,
+                self.cell,
+                present::tile_px_for(self.identity, (canvas.width, canvas.height)),
+                present::stripe_px_for(self.identity, 128, canvas.height),
+                out.len(),
+                count(b"\x1b_Ga=t,"),
+                count(b"\x1b_Ga=p,"),
+                count(b"\x1b_Ga=d,"),
+            ));
+        }
         drawn
     }
 
@@ -921,5 +940,27 @@ mod tests {
         assert_eq!(nearest_shape_ghostty_macos_draws("nesw-resize"), "ns-resize");
         assert_eq!(nearest_shape_ghostty_macos_draws("ew-resize"), "ew-resize");
         assert_eq!(nearest_shape_ghostty_macos_draws("pointer"), "pointer");
+    }
+}
+
+fn frame_log_file() -> &'static Option<std::sync::Mutex<std::fs::File>> {
+    static FILE: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        let path = std::env::var_os("PIXEL_KITTY_LOG")?;
+        std::fs::OpenOptions::new().create(true).append(true).open(path).ok().map(std::sync::Mutex::new)
+    })
+}
+
+fn frame_log_enabled() -> bool {
+    frame_log_file().is_some()
+}
+
+fn frame_log(line: std::fmt::Arguments<'_>) {
+    if let Some(file) = frame_log_file() {
+        use std::io::Write as _;
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        if let Ok(mut file) = file.lock() {
+            let _ = writeln!(file, "{ms} {line}");
+        }
     }
 }

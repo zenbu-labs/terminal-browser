@@ -10,6 +10,7 @@ use crate::wrapper::Wrapper;
 const FIRST_ID: u32 = 10_000;
 const MAX_FLASHES: usize = 256;
 const STRIPS: usize = 4;
+pub(super) const LAST_ID: u32 = FIRST_ID + (MAX_FLASHES * STRIPS) as u32;
 const THICKNESS: u32 = 3;
 const LIFETIME: Duration = Duration::from_millis(700);
 const DIMMED_ALPHA: u8 = 110;

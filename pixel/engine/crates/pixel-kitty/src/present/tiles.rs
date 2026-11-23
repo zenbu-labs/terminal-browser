@@ -37,22 +37,22 @@ pub(super) fn subtract(rects: &[Rect], hole: Rect) -> Vec<Rect> {
     out
 }
 
-pub(super) fn tiles_for(frame: (u32, u32), opaque: &[Rect]) -> Vec<Tile> {
+pub(super) fn tiles_for(frame: (u32, u32), opaque: &[Rect], tile_px: u32) -> Vec<Tile> {
     let mut tiles = Vec::new();
     let mut y = 0;
     while y < frame.1 {
         let mut x = 0;
         while x < frame.0 {
-            let mut pieces = vec![Rect { x, y, w: TILE_PX.min(frame.0 - x), h: TILE_PX.min(frame.1 - y) }];
+            let mut pieces = vec![Rect { x, y, w: tile_px.min(frame.0 - x), h: tile_px.min(frame.1 - y) }];
             for &area in opaque {
                 pieces = subtract(&pieces, area);
             }
             for rect in pieces {
                 tiles.push(Tile { id: FIRST_TILE_ID + tiles.len() as u32, rect, sent: false, dirty: true });
             }
-            x += TILE_PX;
+            x += tile_px;
         }
-        y += TILE_PX;
+        y += tile_px;
     }
     tiles
 }
@@ -116,7 +116,7 @@ mod tests {
     fn a_rounded_webview_below_a_toolbar_leaves_tiles_only_where_something_shows() {
         let frame = (2560u32, 1530u32);
         let opaque = [rect(19, 54, 2514, 14), rect(5, 68, 2542, 1442), rect(19, 1510, 2514, 14)];
-        let tiles = tiles_for(frame, &opaque);
+        let tiles = tiles_for(frame, &opaque, TILE_PX);
         for (a, ta) in tiles.iter().enumerate() {
             assert_eq!(ta.id, FIRST_TILE_ID + a as u32);
             assert!(!ta.rect.is_empty());
@@ -130,14 +130,14 @@ mod tests {
         let opaque_area: u64 = opaque.iter().map(|o| o.area()).sum();
         assert_eq!(shown + opaque_area, u64::from(frame.0) * u64::from(frame.1), "tiles and opaque areas together cover the frame once");
 
-        let strip = tiles_for((1000, 1000), &[rect(0, 40, 1000, 960)]);
+        let strip = tiles_for((1000, 1000), &[rect(0, 40, 1000, 960)], TILE_PX);
         assert_eq!(strip.len(), 4, "{:?}", strip.iter().map(|t| t.rect).collect::<Vec<_>>());
         assert!(strip.iter().all(|t| t.rect.h == 40 && t.rect.w <= TILE_PX), "tiles over a thin strip are only as tall as the strip");
     }
 
     #[test]
     fn nothing_opaque_gives_a_full_grid() {
-        let tiles = tiles_for((600, 300), &[]);
+        let tiles = tiles_for((600, 300), &[], TILE_PX);
         assert_eq!(tiles.len(), 3 * 2);
         assert_eq!(tiles.iter().map(|t| t.rect.area()).sum::<u64>(), 600 * 300);
         assert_eq!(tiles[5].rect, rect(512, 256, 88, 44), "the last cell is clipped to the frame");
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn damage_dirties_only_the_tiles_it_touches() {
-        let mut tiles = tiles_for((1000, 1000), &[rect(0, 40, 1000, 960)]);
+        let mut tiles = tiles_for((1000, 1000), &[rect(0, 40, 1000, 960)], TILE_PX);
         for tile in &mut tiles {
             tile.dirty = false;
         }

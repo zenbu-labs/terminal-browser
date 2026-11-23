@@ -6,41 +6,47 @@ use super::tiles::{TILE_Z, intersect, subtract};
 use pixel_raster::{PixelFrame as Frame, ScrollLayer};
 use pixel_core::surfaces::Rect;
 
-const STRIPE_PX: u32 = 128;
-fn web_stripe_px() -> u32 {
-    static PX: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *PX.get_or_init(|| std::env::var("PIXEL_WEB_STRIPE_PX").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(128).clamp(16, 512))
+pub(super) const STRIPE_PX: u32 = 128;
+pub(super) fn web_stripe_px() -> Option<u32> {
+    static PX: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *PX.get_or_init(|| std::env::var("PIXEL_WEB_STRIPE_PX").ok().and_then(|v| v.trim().parse::<u32>().ok()).map(|px| px.clamp(16, 512)))
 }
 const MAX_PATCHES: usize = 6;
 const JUMP_UPLOAD_BUDGET: usize = 2_200_000;
 const INLINE_JUMP_UPLOAD_BUDGET: usize = 900_000;
 const MAX_HOLD_FRAMES: u32 = 4;
 const PATCH_Z: i32 = TILE_Z;
-const FIRST_STRIPE_ID: u32 = 2_000;
 const FIRST_OVERLAY_ID: u32 = 30_000;
 const OVERLAY_Z: i32 = TILE_Z + 1;
 const KEEP_SCREENS: i64 = 3;
-const NODE_ID_SPAN: u32 = 6_000;
-const DEPTH_Z: i32 = 8;
-#[cfg(test)]
-const COST_SAMPLE_ROWS: u32 = 4;
-const SPLIT_GAP_PX: u32 = 32;
+const DEPTH_Z: i32 = PATCH_Z + MAX_PATCHES as i32;
+const STRIP_IDS: std::ops::Range<u32> = 1_000_000..2_000_000;
+
+fn keep_screens() -> i64 {
+    static KEEP: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *KEEP.get_or_init(|| std::env::var("PIXEL_KEEP_SCREENS").ok().and_then(|v| v.trim().parse::<i64>().ok()).map_or(KEEP_SCREENS, |k| k.clamp(0, 6)))
+}
 const RUN_BLOCK_PX: usize = 8;
-const PIECE_GAP_PX: u32 = 64;
-const MAX_DIFF_RECTS: usize = 4;
+const _: () = assert!(super::MIN_IMAGE_COST_BYTES >= 4 * RUN_BLOCK_PX as u64);
+const _: () = assert!(
+    FIRST_OVERLAY_ID < STRIP_IDS.start
+        && super::tiles::FIRST_TILE_ID < STRIP_IDS.start
+        && super::flash::LAST_ID < STRIP_IDS.start
+        && super::overlay::STATUS_ID < STRIP_IDS.start
+        && super::transmit_strategy::FIRST_PATCH_ID + super::transmit_strategy::POOL < STRIP_IDS.start
+);
 
 #[derive(Debug)]
 pub(crate) struct Layer {
     pub(super) area: Rect,
     stripes: BTreeMap<i64, Stripe>,
     overlays: Vec<SentOverlay>,
-    free_ids: Vec<u32>,
-    next_id: u32,
     holding: u32,
     z: i32,
     whole_at_percent: u64,
     stacks: bool,
     clears_holes: bool,
+    see_through_over: Vec<Rect>,
     stripe_px: u32,
     compared: Option<(i64, Rect, Vec<Rect>)>,
 }
@@ -88,32 +94,43 @@ pub(super) struct LayerReport {
     pub overlays_sent: u64,
     pub moved: u64,
     pub waiting: bool,
+    pub see_through: bool,
 }
 
 impl Layer {
-    pub(super) fn new(area: Rect) -> Self {
-        Self { whole_at_percent: 50, stacks: false, stripe_px: STRIPE_PX, ..Self::for_node(area, 0, 0) }
+    pub(super) fn new(area: Rect, stripe_px: u32) -> Self {
+        Self { whole_at_percent: 50, stacks: false, ..Self::for_node(area, 0, stripe_px) }
     }
 
-    pub(super) fn for_node(area: Rect, slot: u32, depth: u32) -> Self {
+    pub(super) fn for_node(area: Rect, depth: u32, stripe_px: u32) -> Self {
         Self {
             whole_at_percent: 80,
             stacks: true,
             clears_holes: false,
-            stripe_px: web_stripe_px(),
+            see_through_over: Vec::new(),
+            stripe_px,
             compared: None,
             area,
             stripes: BTreeMap::new(),
             overlays: Vec::new(),
-            free_ids: Vec::new(),
-            next_id: FIRST_STRIPE_ID + slot * NODE_ID_SPAN,
             holding: 0,
             z: depth as i32 * DEPTH_Z,
         }
     }
 
-    pub(super) fn for_screen(area: Rect, slot: u32, depth: u32) -> Self {
-        Self { clears_holes: true, ..Self::for_node(area, slot, depth) }
+    pub(super) fn watch_see_through_over(&mut self, others: Vec<Rect>) {
+        self.see_through_over = others;
+    }
+
+    pub(super) fn clear_holes(&mut self) {
+        if !self.clears_holes {
+            self.clears_holes = true;
+            self.compared = None;
+        }
+    }
+
+    pub(super) fn for_screen(area: Rect, depth: u32, stripe_px: u32) -> Self {
+        Self { clears_holes: true, ..Self::for_node(area, depth, stripe_px) }
     }
 
     #[cfg(test)]
@@ -143,7 +160,7 @@ impl Layer {
                     diff = Some(diff.map_or(part, |d| union(d, part)));
                 }
             }
-            for r in (0..band.h).step_by(COST_SAMPLE_ROWS as usize) {
+            for r in 0..band.h {
                 let y = shown_top as u32 + r;
                 let start = y as usize * stride + area.x as usize * 4;
                 let row = &canvas.pixels[start..start + row_len];
@@ -155,7 +172,7 @@ impl Layer {
                     if stored != row {
                         let first = stored.chunks_exact(4).zip(row.chunks_exact(4)).position(|(p, q)| p != q).unwrap_or(0) as u32;
                         let last = stored.chunks_exact(4).zip(row.chunks_exact(4)).rposition(|(p, q)| p != q).unwrap_or(0) as u32;
-                        let changed = Rect { x: span.start + first, y: band.y + r, w: last + 1 - first, h: COST_SAMPLE_ROWS.min(band.h - r) };
+                        let changed = Rect { x: span.start + first, y: band.y + r, w: last + 1 - first, h: 1 };
                         diff = Some(diff.map_or(changed, |d| union(d, changed)));
                     }
                 }
@@ -185,22 +202,37 @@ impl Layer {
         self.holding > 0
     }
 
-    fn next_id(&mut self) -> u32 {
-        self.free_ids.pop().unwrap_or_else(|| {
-            self.next_id += 1;
-            self.next_id - 1
-        })
-    }
-
-    pub(super) fn delete_all(&self, out: &mut Vec<u8>) {
+    pub(super) fn delete_all(&self, out: &mut Vec<u8>, ids: &mut ImageIds) {
         for stripe in self.stripes.values() {
             for id in stripe.ids() {
                 out.extend_from_slice(&crate::kitty::kitty_delete_one(id));
             }
+            ids.give_back(stripe.ids());
         }
         for index in 0..self.overlays.len() {
             out.extend_from_slice(&crate::kitty::kitty_delete_one(FIRST_OVERLAY_ID + index as u32));
         }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ImageIds {
+    free: Vec<u32>,
+    issued: u32,
+}
+
+impl ImageIds {
+    fn take(&mut self) -> u32 {
+        self.free.pop().unwrap_or_else(|| {
+            let id = STRIP_IDS.start + self.issued;
+            assert!(id < STRIP_IDS.end, "web layers ran out of image ids");
+            self.issued += 1;
+            id
+        })
+    }
+
+    fn give_back(&mut self, ids: impl IntoIterator<Item = u32>) {
+        self.free.extend(ids);
     }
 }
 
@@ -232,14 +264,14 @@ pub(super) fn open_spans(area: Rect, holes: &[Rect], y: u32) -> Vec<std::ops::Ra
     spans
 }
 
-fn seen_columns(unknown: &[Rect], width: u32, stripe_px: u32) -> Vec<std::ops::Range<u32>> {
+fn seen_columns(unknown: &[Rect], width: u32, stripe_px: u32, image_cost: u64) -> Vec<std::ops::Range<u32>> {
     let mut unseen_rows = vec![0u32; width as usize];
     for rect in unknown {
         for x in rect.x..(rect.x + rect.w).min(width) {
             unseen_rows[x as usize] += rect.h;
         }
     }
-    column_runs((0..width).filter(|x| unseen_rows[*x as usize] < stripe_px))
+    column_runs((0..width).filter(|x| unseen_rows[*x as usize] < stripe_px), stripe_px, image_cost)
 }
 
 fn only_columns(pixels: &[u8], width: u32, columns: &[std::ops::Range<u32>]) -> Vec<u8> {
@@ -253,25 +285,26 @@ fn only_columns(pixels: &[u8], width: u32, columns: &[std::ops::Range<u32>]) -> 
     kept
 }
 
-fn column_runs(columns: impl Iterator<Item = u32>) -> Vec<std::ops::Range<u32>> {
+fn column_runs(columns: impl Iterator<Item = u32>, height: u32, image_cost: u64) -> Vec<std::ops::Range<u32>> {
     let mut runs: Vec<std::ops::Range<u32>> = Vec::new();
     for x in columns {
         match runs.last_mut() {
-            Some(run) if x - run.end <= PIECE_GAP_PX => run.end = x + 1,
+            Some(run) if worth_one_image(u64::from(x - run.end) * u64::from(height), image_cost) => run.end = x + 1,
             _ => runs.push(x..x + 1),
         }
     }
     runs
 }
 
-fn drawn_columns(pixels: &[u8], width: u32) -> Vec<std::ops::Range<u32>> {
+fn drawn_columns(pixels: &[u8], width: u32, image_cost: u64) -> Vec<std::ops::Range<u32>> {
     let mut drawn = vec![false; width as usize];
     for row in pixels.chunks_exact(width as usize * 4) {
         for (x, px) in row.chunks_exact(4).enumerate() {
             drawn[x] |= px[3] != 0;
         }
     }
-    column_runs((0..width).filter(|x| drawn[*x as usize]))
+    let height = (pixels.len() / (width as usize * 4)) as u32;
+    column_runs((0..width).filter(|x| drawn[*x as usize]), height, image_cost)
 }
 
 fn closed_spans(width: u32, open: &[std::ops::Range<u32>]) -> Vec<std::ops::Range<u32>> {
@@ -304,10 +337,18 @@ fn uploads_whole(rect: Rect, width: u32, stripe_px: u32, patches: usize, whole_a
     rect.area() * 100 >= u64::from(width * stripe_px) * whole_at_percent || patches >= MAX_PATCHES
 }
 
-fn changed_runs(stored: &[u8], now: &[u8]) -> Vec<(u32, u32)> {
+fn worth_one_image(extra_px: u64, image_cost: u64) -> bool {
+    extra_px * 4 <= image_cost
+}
+
+fn merge_extra_px(a: Rect, b: Rect) -> u64 {
+    union(a, b).area().saturating_sub(a.area() + b.area() - intersect(a, b).area())
+}
+
+fn changed_runs(stored: &[u8], now: &[u8], image_cost: u64) -> Vec<(u32, u32)> {
     let mut runs: Vec<(u32, u32)> = Vec::new();
     let mut extend = |x: u32| match runs.last_mut() {
-        Some(run) if x - run.1 <= SPLIT_GAP_PX => run.1 = x,
+        Some(run) if worth_one_image(u64::from(x.saturating_sub(run.1 + 1)), image_cost) => run.1 = x,
         _ => runs.push((x, x)),
     };
     let differs = |x: usize| stored[x * 4..x * 4 + 4] != now[x * 4..x * 4 + 4];
@@ -334,36 +375,30 @@ fn opaque(pixels: &[u8], rect: Rect, row_len: usize) -> bool {
 }
 
 pub(super) fn all_opaque(rgba: &[u8]) -> bool {
-    rgba.chunks_exact(4).fold(255, |alpha, px| alpha & px[3]) == 255
+    const ALPHA: u128 = u128::from_le_bytes([0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255]);
+    let blocks = rgba.chunks_exact(16);
+    let rest = blocks.remainder();
+    let all = blocks.fold(ALPHA, |all, block| all & u128::from_le_bytes(block.try_into().expect("16 bytes")));
+    all & ALPHA == ALPHA && rest.chunks_exact(4).all(|px| px[3] == 255)
 }
 
 fn contains(outer: Rect, inner: Rect) -> bool {
     inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h
 }
 
-fn near(a: Rect, b: Rect) -> bool {
-    a.x <= b.x + b.w + SPLIT_GAP_PX && b.x <= a.x + a.w + SPLIT_GAP_PX && a.y <= b.y + b.h + SPLIT_GAP_PX && b.y <= a.y + a.h + SPLIT_GAP_PX
-}
-
-fn add_changed(diff: &mut Vec<Rect>, rect: Rect) {
-    match diff.iter_mut().find(|d| near(**d, rect)) {
+fn add_changed(diff: &mut Vec<Rect>, rect: Rect, image_cost: u64) {
+    match diff.iter_mut().find(|d| worth_one_image(merge_extra_px(**d, rect), image_cost)) {
         Some(d) => *d = union(*d, rect),
         None => diff.push(rect),
     }
 }
 
-fn settle(mut rects: Vec<Rect>) -> Vec<Rect> {
+fn settle(mut rects: Vec<Rect>, image_cost: u64) -> Vec<Rect> {
     loop {
-        let pair = (0..rects.len()).flat_map(|i| (i + 1..rects.len()).map(move |j| (i, j))).find(|&(i, j)| near(rects[i], rects[j]));
-        let pair = pair.or_else(|| {
-            (rects.len() > MAX_DIFF_RECTS).then(|| {
-                (0..rects.len())
-                    .flat_map(|i| (i + 1..rects.len()).map(move |j| (i, j)))
-                    .min_by_key(|&(i, j)| union(rects[i], rects[j]).area() - rects[i].area() - rects[j].area())
-                    .expect("more than one rect")
-            })
-        });
-        let Some((i, j)) = pair else { return rects };
+        let cheapest = (0..rects.len())
+            .flat_map(|i| (i + 1..rects.len()).map(move |j| (i, j)))
+            .min_by_key(|&(i, j)| merge_extra_px(rects[i], rects[j]));
+        let Some((i, j)) = cheapest.filter(|&(i, j)| worth_one_image(merge_extra_px(rects[i], rects[j]), image_cost)) else { return rects };
         let merged = union(rects[i], rects[j]);
         rects.swap_remove(j);
         rects[i] = merged;
@@ -486,6 +521,10 @@ impl Kitty {
         let stride = canvas.width as usize * 4;
         let premultiplied = frame.premultiplied;
         let clears_holes = state.clears_holes;
+        let watched = state.see_through_over.clone();
+        let mut watched_cols: Vec<(u32, u32)> = Vec::new();
+        let mut see_through = false;
+        let image_cost = self.identity.image_cost(self.patch_medium().is_none(), (canvas.width, canvas.height));
         let clear = vec![0u8; row_len];
         let mut consolidated = false;
         let moved = state.compared.as_ref().is_none_or(|(origin, ..)| *origin != layer.origin_y);
@@ -532,20 +571,40 @@ impl Kitty {
                 }
                 let at = (band.y + r) as usize * row_len;
                 let open = open_spans(area, holes, y);
-                let closed = if clears_holes && (holes_changed || moved) { closed_spans(area.w, &open) } else { Vec::new() };
-                let wanted = open.into_iter().map(|span| (span.clone(), &row[span.start as usize * 4..span.end as usize * 4]));
-                let cleared = closed.into_iter().map(|span| (span.clone(), &clear[span.start as usize * 4..span.end as usize * 4]));
-                for (span, row) in wanted.chain(cleared) {
+                let reopens = clears_holes && (holes_changed || moved);
+                let closed = if reopens { closed_spans(area.w, &open) } else { Vec::new() };
+                watched_cols.clear();
+                watched_cols.extend(
+                    watched
+                        .iter()
+                        .filter(|o| y >= o.y && y < o.y + o.h)
+                        .map(|o| (o.x.max(area.x) - area.x, (o.x + o.w).min(area.x + area.w).saturating_sub(area.x)))
+                        .filter(|(a, b)| a < b),
+                );
+                let wanted = open.into_iter().map(|span| (span.clone(), &row[span.start as usize * 4..span.end as usize * 4], true));
+                let cleared = closed.into_iter().map(|span| (span.clone(), &clear[span.start as usize * 4..span.end as usize * 4], false));
+                for (span, pixels, shown) in wanted.chain(cleared) {
                     let stored = &mut entry.pixels[at + span.start as usize * 4..at + span.end as usize * 4];
-                    if stored != row {
-                        for (first, last) in changed_runs(stored, row) {
-                            add_changed(&mut diff, Rect { x: span.start + first, y: band.y + r, w: last + 1 - first, h: 1 });
+                    let see_through_in = |from: u32, to: u32| {
+                        watched_cols.iter().any(|&(a, b)| {
+                            let (a, b) = (a.max(from), b.min(to));
+                            a < b && !all_opaque(&row[a as usize * 4..b as usize * 4])
+                        })
+                    };
+                    if stored != pixels {
+                        for (first, last) in changed_runs(stored, pixels, image_cost) {
+                            see_through |= shown && see_through_in(span.start + first, span.start + last + 1);
+                            add_changed(&mut diff, Rect { x: span.start + first, y: band.y + r, w: last + 1 - first, h: 1 }, image_cost);
                         }
-                        stored.copy_from_slice(row);
+                        stored.copy_from_slice(pixels);
+                    } else if shown && reopens {
+                        see_through |= see_through_in(span.start, span.end);
                     }
                 }
             }
             let hidden = if clears_holes { Vec::new() } else { local_holes(holes, area, y0, band) };
+            let watched_here = local_holes(&watched, area, y0, band);
+            let shown_holes = if watched_here.is_empty() { Vec::new() } else { local_holes(holes, area, y0, band) };
             let mut still_unknown = Vec::new();
             for unseen in std::mem::take(&mut entry.unknown) {
                 still_unknown.extend(subtract(&[unseen], band));
@@ -556,11 +615,21 @@ impl Kitty {
                 let seen = subtract_all(vec![shown], &hidden);
                 still_unknown.extend(subtract_all(vec![shown], &seen));
                 for part in seen {
-                    add_changed(&mut diff, part);
+                    see_through |= watched_here
+                        .iter()
+                        .map(|w| intersect(part, *w))
+                        .filter(|w| !w.is_empty())
+                        .flat_map(|w| subtract_all(vec![w], &shown_holes))
+                        .any(|w| !opaque(&entry.pixels, w, row_len));
+                    add_changed(&mut diff, part, image_cost);
                 }
             }
             entry.unknown = still_unknown;
-            entry.pending = settle(diff);
+            entry.pending = settle(diff, image_cost);
+        }
+        if see_through {
+            report.see_through = true;
+            return Ok(report);
         }
         let medium = self.patch_medium();
         let budget = if medium.is_some() { JUMP_UPLOAD_BUDGET } else { INLINE_JUMP_UPLOAD_BUDGET };
@@ -607,10 +676,10 @@ impl Kitty {
                 if whole {
                     freed.extend(entry.patches.drain(..).map(|p| p.placed.id));
                     let mut old: Vec<u32> = entry.images.drain(..).map(|p| p.placed.id).collect();
-                    let columns = if clears_holes { drawn_columns(&entry.pixels, area.w) } else { seen_columns(&entry.unknown, area.w, stripe_px) };
+                    let columns = if clears_holes { drawn_columns(&entry.pixels, area.w, image_cost) } else { seen_columns(&entry.unknown, area.w, stripe_px, image_cost) };
                     let mut images = Vec::new();
                     for columns in columns {
-                        let id = old.pop().or_else(|| freed.pop()).unwrap_or_else(|| state.next_id());
+                        let id = old.pop().or_else(|| freed.pop()).unwrap_or_else(|| self.patches.ids.take());
                         let part = Rect { x: columns.start, y: 0, w: columns.end - columns.start, h: stripe_px };
                         let entry = state.stripes.get_mut(&k).expect("inserted above");
                         self.send_part(out, id, part, &entry.pixels, &[], area.w, premultiplied)?;
@@ -623,7 +692,7 @@ impl Kitty {
                     entry.images = images;
                     report.stripes_sent += 1;
                 } else {
-                    let id = freed.pop().unwrap_or_else(|| state.next_id());
+                    let id = freed.pop().unwrap_or_else(|| self.patches.ids.take());
                     let entry = state.stripes.get_mut(&k).expect("inserted above");
                     self.send_part(out, id, rect, &entry.pixels, &entry.sent, area.w, premultiplied)?;
                     self.flash_stripe_upload(out, area, stripe_top, rect);
@@ -632,7 +701,7 @@ impl Kitty {
                 }
                 for id in freed {
                     out.extend_from_slice(&crate::kitty::kitty_delete_one(id));
-                    state.free_ids.push(id);
+                    self.patches.ids.give_back([id]);
                 }
                 if whole {
                     break;
@@ -672,7 +741,7 @@ impl Kitty {
             entry.images = images;
             entry.patches = patches;
         }
-        let keep = KEEP_SCREENS * i64::from(area.h) / stripe;
+        let keep = keep_screens() * i64::from(area.h) / stripe;
         let (first, last) = (*visible.start(), *visible.end());
         let mut dropped = Vec::new();
         for (&k, entry) in state.stripes.iter_mut() {
@@ -694,7 +763,7 @@ impl Kitty {
         }
         for k in dropped {
             if let Some(entry) = state.stripes.remove(&k) {
-                state.free_ids.extend(entry.ids());
+                self.patches.ids.give_back(entry.ids());
             }
         }
         pixel_core::profiler::count("present.stripes", || report.stripes_sent);
@@ -740,6 +809,7 @@ impl Kitty {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::Identity;
     use pixel_raster::Canvas;
 
     fn content(width: u32, height: u32, origin_y: i64) -> Canvas {
@@ -761,11 +831,26 @@ mod tests {
     }
 
     #[test]
+    fn all_opaque_finds_any_see_through_pixel_at_any_width() {
+        for width in 0..40 {
+            let opaque = vec![255u8; width * 4];
+            assert!(all_opaque(&opaque));
+            for at in 0..width {
+                for channel in 0..4 {
+                    let mut pixels = opaque.clone();
+                    pixels[at * 4 + channel] = 254;
+                    assert_eq!(all_opaque(&pixels), channel != 3, "width {width} pixel {at} channel {channel}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn inline_layers_send_stripes_once_and_scroll_by_placing_them() {
         let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
         assert!(kitty.patch_medium().is_none());
         let area = Rect::sized(64, 2 * STRIPE_PX);
-        kitty.patches.layer = Some(Layer::new(area));
+        kitty.patches.layer = Some(Layer::new(area, STRIPE_PX));
         let first = ScrollLayer { area, origin_y: 0, under: Vec::new(), overlays: Vec::new() };
         let out = draw(&mut kitty, &content(64, area.h, 0), &first);
         assert_eq!(out.matches("a=t,f=32,o=z,s=64,v=128,t=d,").count(), 2);
@@ -774,34 +859,35 @@ mod tests {
         let scrolled = ScrollLayer { origin_y: -i64::from(STRIPE_PX), ..first };
         let out = draw(&mut kitty, &content(64, area.h, scrolled.origin_y), &scrolled);
         assert_eq!(out.matches("a=t,").count(), 1, "only the stripe scrolled into view is uploaded");
-        assert!(out.contains("\x1b[1;1H\x1b_Ga=p,i=2001,p=1,C=1,q=2"), "the second stripe moves to the top");
-        assert!(out.contains("a=d,d=i,i=2000,p=1"), "the stripe scrolled out of view is hidden but kept");
+        let (first_id, second_id) = (STRIP_IDS.start, STRIP_IDS.start + 1);
+        assert!(out.contains(&format!("\x1b[1;1H\x1b_Ga=p,i={second_id},p=1,C=1,q=2")), "the second stripe moves to the top");
+        assert!(out.contains(&format!("a=d,d=i,i={first_id},p=1")), "the stripe scrolled out of view is hidden but kept");
     }
 
     #[test]
     fn far_apart_changes_in_a_stripe_stay_separate_patches() {
-        let stored = vec![0u8; 400 * 4];
+        let stored = vec![0u8; 8000 * 4];
         let mut now = stored.clone();
-        for x in [3usize, 5, 300] {
+        for x in [3usize, 5, 7000] {
             now[x * 4] = 9;
         }
-        assert_eq!(changed_runs(&stored, &now), vec![(3, 5), (300, 300)]);
+        assert_eq!(changed_runs(&stored, &now, super::super::MIN_IMAGE_COST_BYTES), vec![(3, 5), (7000, 7000)]);
         let mut diff = Vec::new();
         for y in 0..4 {
-            add_changed(&mut diff, Rect { x: 3, y, w: 3, h: 1 });
-            add_changed(&mut diff, Rect { x: 300, y, w: 1, h: 1 });
+            add_changed(&mut diff, Rect { x: 3, y, w: 3, h: 1 }, super::super::MIN_IMAGE_COST_BYTES);
+            add_changed(&mut diff, Rect { x: 7000, y, w: 1, h: 1 }, super::super::MIN_IMAGE_COST_BYTES);
         }
-        assert_eq!(settle(diff), vec![Rect { x: 3, y: 0, w: 3, h: 4 }, Rect { x: 300, y: 0, w: 1, h: 4 }]);
+        assert_eq!(settle(diff, super::super::MIN_IMAGE_COST_BYTES), vec![Rect { x: 3, y: 0, w: 3, h: 4 }, Rect { x: 7000, y: 0, w: 1, h: 4 }]);
     }
 
     #[test]
     fn change_runs_match_a_pixel_by_pixel_scan() {
-        let naive = |a: &[u8], b: &[u8]| {
+        let naive = |a: &[u8], b: &[u8], cost: u64| {
             let mut runs: Vec<(u32, u32)> = Vec::new();
             for (x, _) in a.chunks_exact(4).zip(b.chunks_exact(4)).enumerate().filter(|(_, (p, q))| p != q) {
                 let x = x as u32;
                 match runs.last_mut() {
-                    Some(run) if x - run.1 <= SPLIT_GAP_PX => run.1 = x,
+                    Some(run) if worth_one_image(u64::from(x - run.1 - 1), cost) => run.1 = x,
                     _ => runs.push((x, x)),
                 }
             }
@@ -818,8 +904,41 @@ mod tests {
                         b[x * 4 + (seed as usize % 4)] ^= 0x5a;
                     }
                 }
-                assert_eq!(changed_runs(&a, &b), naive(&a, &b), "width {width} density {density}");
+                for cost in [super::super::MIN_IMAGE_COST_BYTES, 26_150, 107_150] {
+                    assert_eq!(changed_runs(&a, &b, cost), naive(&a, &b, cost), "width {width} density {density} cost {cost}");
+                }
             }
         }
+    }
+
+    #[test]
+    fn web_layers_share_one_pool_of_image_ids() {
+        let mut ids = ImageIds::default();
+        let first: Vec<u32> = (0..20_000).map(|_| ids.take()).collect();
+        assert!(first.iter().all(|id| STRIP_IDS.contains(id)));
+        assert_eq!(first.iter().collect::<std::collections::HashSet<_>>().len(), first.len(), "no id is handed out twice");
+        ids.give_back(first[..10].iter().copied());
+        let reused: Vec<u32> = (0..10).map(|_| ids.take()).collect();
+        assert!(reused.iter().all(|id| first[..10].contains(id)), "freed ids come back before new ones");
+        assert_eq!(ids.take(), STRIP_IDS.start + 20_000);
+    }
+
+    #[test]
+    fn changes_merge_while_the_extra_pixels_cost_less_than_one_more_image() {
+        let inline = Identity::Ghostty { version: (1, 3, 1) }.image_cost(true, (1650, 1188));
+        let rex = Identity::Rex.image_cost(false, (3024, 1964));
+        let rex_5k = Identity::Rex.image_cost(false, (5120, 2880));
+        assert_eq!(Identity::Rex.image_cost(false, (1512, 982)), rex, "below the baseline window a Rex image costs the same");
+        assert!(rex_5k > 2 * rex && rex_5k < 3 * rex, "a 5K window is 2.5x the baseline area, so an image is worth 2.5x the pixels");
+        assert_eq!(settle(vec![Rect { x: 0, y: 0, w: 4, h: 4 }, Rect { x: 2996, y: 0, w: 4, h: 4 }], rex_5k).len(), 1);
+        assert_eq!(settle(vec![Rect { x: 0, y: 0, w: 4, h: 4 }, Rect { x: 2996, y: 0, w: 4, h: 4 }], rex).len(), 2);
+        let apart = vec![Rect { x: 0, y: 0, w: 4, h: 4 }, Rect { x: 1500, y: 0, w: 4, h: 4 }];
+        assert_eq!(settle(apart.clone(), inline).len(), 2, "over ssh 5,984 extra pixels still compress to more than an image");
+        assert_eq!(settle(apart, rex), vec![Rect { x: 0, y: 0, w: 1504, h: 4 }], "in Rex one image beats two");
+        let near = vec![Rect { x: 3, y: 0, w: 3, h: 4 }, Rect { x: 300, y: 0, w: 1, h: 4 }];
+        assert_eq!(settle(near, inline).len(), 1, "over ssh pixels go out compressed, so a 1,180-pixel gap is cheaper than another image");
+        assert_eq!(column_runs([0, 1, 2, 43, 44].into_iter(), 128, inline), vec![0..3, 43..45]);
+        assert_eq!(column_runs([0, 1, 2, 43, 44].into_iter(), 128, rex), vec![0..45]);
+        assert_eq!(column_runs([0, 1, 2, 90, 91].into_iter(), 128, rex), vec![0..3, 90..92], "a 44 kB gap still costs more than one image in Rex");
     }
 }

@@ -19,6 +19,7 @@ pub(crate) struct Patched {
     pub(super) tiles: Vec<Tile>,
     pub(super) layer: Option<super::layer::Layer>,
     pub(super) web: Option<super::webview::WebLayers>,
+    pub(super) ids: super::layer::ImageIds,
     pub(super) last_draw: Option<std::time::Instant>,
     pub(super) last_flatten: Option<std::time::Instant>,
     pub(super) stats: Stats,
@@ -80,7 +81,7 @@ impl Kitty {
             let rects = self.patches.opaque_rects();
             pixel_core::logging::info(
                 "present",
-                format!("opaque areas now {:?}, {} tiles cover the rest", rects, tiles_for(size, &rects).len()),
+                format!("opaque areas now {:?}, {} tiles cover the rest", rects, tiles_for(size, &rects, super::tile_px_for(self.identity, size)).len()),
             );
         }
         let previous_ui = std::mem::replace(
@@ -91,9 +92,10 @@ impl Kitty {
         if layer.map(|l| l.area) != self.patches.layer.as_ref().map(|l| l.area) {
             pixel_core::profiler::span("present.new_layer", || {
                 if let Some(old) = self.patches.layer.take() {
-                    old.delete_all(out);
+                    old.delete_all(out, &mut self.patches.ids);
                 }
-                self.patches.layer = layer.map(|l| super::layer::Layer::new(l.area));
+                let stripe_px = super::stripe_px_for(self.identity, super::layer::STRIPE_PX, size.1);
+                self.patches.layer = layer.map(|l| super::layer::Layer::new(l.area, stripe_px));
             });
             self.patches.opaque_shape_changed = true;
         }
@@ -306,7 +308,7 @@ impl Kitty {
             for tile in self.patches.tiles.iter().filter(|t| t.sent) {
                 prelude.extend_from_slice(&crate::kitty::kitty_delete_one(tile.id));
             }
-            self.patches.tiles = tiles_for(size, &self.patches.tile_holes());
+            self.patches.tiles = tiles_for(size, &self.patches.tile_holes(), super::tile_px_for(self.identity, size));
             self.patches.opaque_shape_changed = false;
         } else {
             for tile in &mut self.patches.tiles {
