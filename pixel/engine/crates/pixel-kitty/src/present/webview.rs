@@ -291,7 +291,7 @@ impl WebLayers {
     }
 
     fn free_slot(&self) -> Option<u32> {
-        (0..MAX_LAYERS as u32).find(|s| !self.nodes.values().any(|n| n.slot == *s) && !self.retired.iter().any(|(r, _)| r == s))
+        (0..MAX_LAYERS as u32).find(|s| !self.nodes.values().any(|n| n.slot == *s))
     }
 
     fn plan(&mut self, tree: &ScrollTree, frame: Frame<'_>, now: Instant, stripe_px: u32, keep_screens: i64) {
@@ -348,8 +348,11 @@ impl WebLayers {
                 if keeps && layer.depth == at.depth && layer.layer.area.x == at.rect.x && layer.layer.area.w == at.rect.w {
                     layer.layer.area = at.rect;
                     layer.plan = Some(Planned { placed: full.get(&id).copied().unwrap_or(at.rect), area: at.rect, origin: at.origin });
+                    continue;
                 }
-                continue;
+                if let Some(node) = self.nodes.remove(&id) {
+                    self.retired.push((node.slot, node.layer));
+                }
             }
             let node = tree.nodes.iter().find(|n| n.element_id == id);
             let scrolled_now = self.seen.get(&id).is_some_and(|s| s.changed == Some(now));
@@ -372,6 +375,10 @@ impl WebLayers {
             self.nodes.insert(id, NodeLayer { layer, slot, depth: at.depth, origin: None, plan: Some(Planned { placed: full.get(&id).copied().unwrap_or(at.rect), area: at.rect, origin: at.origin }) });
         }
         self.watch_see_through();
+        let planned = self.nodes.values().filter(|n| n.plan.is_some()).count().max(1) as u64;
+        for node in self.nodes.values_mut() {
+            node.layer.share_hidden_budget(super::layer::HIDDEN_STRIPS_BUDGET_BYTES / planned);
+        }
         let gone: Vec<u64> = self.nodes.iter().filter(|(_, n)| n.plan.is_none()).map(|(id, _)| *id).collect();
         for id in gone {
             if let Some(node) = self.nodes.remove(&id) {
@@ -750,6 +757,29 @@ mod tests {
             assert_eq!(page.layer.upload_cost(&canvas, -i64::from(scroll), &[]), 0, "page at {scroll} held {}", page.layer.holding());
             assert_eq!(screen.layer.upload_cost(&canvas, 0, &[page.layer.area]), 0);
         }
+    }
+
+    #[test]
+    fn closing_a_fixed_sidebar_redraws_the_wider_page_in_the_same_frame() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        let canvas = page_with_header(0);
+        let mut out = Vec::new();
+        for sidebar in [true, false] {
+            let mut drawn = vec![layer((0, 0, 320, 300), 2)];
+            if sidebar {
+                drawn.push(layer((0, 0, 64, 300), -1));
+            }
+            let tree = Arc::new(ScrollTree { nodes: vec![node(5, 2, 1, SURFACE, 0.0, true)], drawn_layers: drawn });
+            let layout = SurfaceLayout { placements: vec![SurfacePlacement { surface: 1, rect: [0.0, 0.0, 320.0, 300.0], visible: [0.0, 0.0, 320.0, 300.0], size: (320, 300), scroll_tree: Some(tree) }], covers: Vec::new() };
+            let frame = Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &[], opaque: &[], ui_over_surfaces: &[], layer: None, surfaces: Some(&layout) };
+            assert!(kitty.plan_web(frame, &mut out).is_some());
+            kitty.draw_web(frame, &mut out).unwrap();
+        }
+        let web = kitty.patches.web.as_ref().unwrap();
+        let page = &web.nodes[&5];
+        assert_eq!(page.layer.area, SURFACE, "the page takes the space the sidebar left");
+        assert_eq!(page.layer.upload_cost(&canvas, 0, &[]), 0, "nothing is left blank waiting for another redraw");
+        assert!(web.retired.is_empty(), "the narrower layer is deleted once its replacement is drawn");
     }
 
     const SIDEBAR: Rect = Rect { x: 120, y: 60, w: 80, h: 140 };
