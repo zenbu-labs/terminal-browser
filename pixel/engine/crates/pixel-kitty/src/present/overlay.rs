@@ -9,7 +9,7 @@ use pixel_core::surfaces::Rect;
 use crate::wrapper::Wrapper;
 
 const FIRST_NOTE_ID: u32 = 20_000;
-const STATUS_ID: u32 = 20_100;
+pub(super) const STATUS_ID: u32 = 20_100;
 const MAX_NOTES: usize = 6;
 // overflow protection
 const Z: i32 = (1 << 30) + 1;

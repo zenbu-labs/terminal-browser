@@ -152,8 +152,111 @@ impl Autoprofile {
 }
 
 
-fn whole_rows(scroll_y: Option<f64>) -> Option<i64> {
-    scroll_y.filter(|y| y.is_finite()).map(|y| y.round() as i64)
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScrollNodeJson {
+    element_id: f64,
+    id: i32,
+    parent_id: i32,
+    transform_id: i32,
+    container_scroll_node_id: i32,
+    container_origin: PointJson,
+    container_bounds: SizeJson,
+    bounds: SizeJson,
+    scroll_offset: PointJson,
+    user_scrollable_horizontal: bool,
+    user_scrollable_vertical: bool,
+    is_composited: bool,
+    scrolls_inner_viewport: bool,
+    scrolls_outer_viewport: bool,
+    to_screen: Vec<f64>,
+    container_to_screen: Vec<f64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScrollTreeJson {
+    scroll_tree: Vec<ScrollNodeJson>,
+    #[serde(default)]
+    drawn_layers: Vec<DrawnLayerJson>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DrawnLayerJson {
+    layer_id: i32,
+    rect: RectJson,
+    scroll_node_id: i32,
+    contents_opaque: bool,
+    screen_space_transform: Vec<f64>,
+    whole_pixel_translation: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct RectJson {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct PointJson {
+    x: f64,
+    y: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct SizeJson {
+    width: f64,
+    height: f64,
+}
+
+fn matrix(values: &[f64]) -> Option<[f32; 16]> {
+    let values: [f64; 16] = values.try_into().ok()?;
+    Some(values.map(|v| v as f32))
+}
+
+fn scroll_tree(json: Option<String>) -> Option<std::sync::Arc<pixel_core::surfaces::ScrollTree>> {
+    let tree: ScrollTreeJson = serde_json::from_str(&json?).ok()?;
+    let drawn_layers = tree
+        .drawn_layers
+        .into_iter()
+        .map(|l| pixel_core::surfaces::DrawnLayer {
+            layer_id: l.layer_id,
+            rect: (l.rect.x as i32, l.rect.y as i32, l.rect.width.max(0.0) as u32, l.rect.height.max(0.0) as u32),
+            scroll_node_id: l.scroll_node_id,
+            contents_opaque: l.contents_opaque,
+            translation: (l.whole_pixel_translation && l.screen_space_transform.len() == 16)
+                .then(|| (l.screen_space_transform[12] as i32, l.screen_space_transform[13] as i32)),
+        })
+        .collect();
+    let nodes = tree.scroll_tree;
+    let size = |s: SizeJson| (s.width.max(0.0).round() as u32, s.height.max(0.0).round() as u32);
+    let nodes = nodes
+        .into_iter()
+        .map(|n| {
+            Some(pixel_core::surfaces::ScrollNode {
+                element_id: n.element_id as u64,
+                id: n.id,
+                parent_id: n.parent_id,
+                transform_id: n.transform_id,
+                container_scroll_node_id: n.container_scroll_node_id,
+                container_origin: (n.container_origin.x.round() as i32, n.container_origin.y.round() as i32),
+                container_bounds: size(n.container_bounds),
+                bounds: size(n.bounds),
+                scroll_offset: (n.scroll_offset.x as f32, n.scroll_offset.y as f32),
+                user_scrollable_horizontal: n.user_scrollable_horizontal,
+                user_scrollable_vertical: n.user_scrollable_vertical,
+                is_composited: n.is_composited,
+                scrolls_inner_viewport: n.scrolls_inner_viewport,
+                scrolls_outer_viewport: n.scrolls_outer_viewport,
+                to_screen: matrix(&n.to_screen)?,
+                container_to_screen: matrix(&n.container_to_screen)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(std::sync::Arc::new(pixel_core::surfaces::ScrollTree { nodes, drawn_layers }))
 }
 
 fn ingest_frame(engine: &mut Engine, frame: &surface::SurfaceFrame) -> std::result::Result<u32, String> {
@@ -200,7 +303,7 @@ fn ingest_pixels(
     stride: usize,
 ) -> std::result::Result<u32, String> {
     engine
-        .ingest_surface(frame.id, width, height, pixels, stride, frame.damage.as_deref(), frame.scroll_y)
+        .ingest_surface(frame.id, width, height, pixels, stride, frame.damage.as_deref(), frame.scroll_tree.clone())
         .map(|_| height)
         .map_err(|error| error.to_string())
 }
@@ -701,7 +804,7 @@ impl PixelEngine {
         damage_y: u32,
         damage_width: u32,
         damage_height: u32,
-        scroll_y: Option<f64>,
+        scroll_tree_json: Option<String>,
     ) -> Result<()> {
         let surface = iosurface::RetainedSurface::retain(handle as u64 as usize).map_err(Error::from_reason)?;
         let damage = (damage_width > 0 && damage_height > 0).then_some(pixel_core::surfaces::Rect {
@@ -722,7 +825,7 @@ impl PixelEngine {
             );
         }
         self.surfaces
-            .submit(id, SurfacePixels::IoSurface(surface), damage, whole_rows(scroll_y));
+            .submit(id, SurfacePixels::IoSurface(surface), damage, scroll_tree(scroll_tree_json));
         self.waker.wake();
         Ok(())
     }
@@ -737,7 +840,7 @@ impl PixelEngine {
         shm: SurfaceShm,
         damage: Option<DamageRect>,
         released: Option<ThreadsafeFunction<u32>>,
-        scroll_y: Option<f64>,
+        scroll_tree_json: Option<String>,
     ) -> Result<()> {
         let release_hook = released.map(|tsfn| {
             Box::new(move || {
@@ -770,7 +873,7 @@ impl PixelEngine {
             );
         }
         self.surfaces
-            .submit(id, SurfacePixels::Shm(surface), damage, whole_rows(scroll_y));
+            .submit(id, SurfacePixels::Shm(surface), damage, scroll_tree(scroll_tree_json));
         self.waker.wake();
         Ok(())
     }

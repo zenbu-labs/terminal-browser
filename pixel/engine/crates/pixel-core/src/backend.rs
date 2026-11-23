@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 pub use crate::scene::{Frame, Scene};
 pub use crate::text_metrics::measure_text;
 pub use crate::input::{Key, KeyEvent, KeyKind, Mods, Mouse, MouseButton, MouseKind};
-pub use crate::surfaces::{OpaqueArea, Rect, SurfaceCover, SurfaceLayout, SurfacePlacement};
+pub use crate::surfaces::{OpaqueArea, Rect, ScrollNode, ScrollTree, SurfaceCover, SurfaceLayout, SurfacePlacement};
 
 pub const API_VERSION: u32 = 1;
 

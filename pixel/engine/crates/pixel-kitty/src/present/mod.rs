@@ -16,6 +16,7 @@ mod patched;
 mod transmit_strategy;
 mod screen;
 mod tiles;
+mod webview;
 
 pub(crate) use flash::Flashes;
 pub(crate) use animation::Animation;
@@ -35,6 +36,15 @@ pub(crate) enum Presenter {
     // https://sw.kovidgoyal.net/kitty/graphics-protocol/#animation
     Animation,
 }
+
+const IMAGE_HEADER_BYTES: u64 = 150;
+const INLINE_IMAGE_OVERHEAD_BYTES: u64 = 765;
+const INLINE_WIRE_PERCENT_OF_PIXELS: u64 = 5;
+const INLINE_IMAGE_COST_BYTES: u64 = (IMAGE_HEADER_BYTES + INLINE_IMAGE_OVERHEAD_BYTES) * 100 / INLINE_WIRE_PERCENT_OF_PIXELS;
+const REX_IMAGE_OVERHEAD_BYTES: u64 = 26_000;
+const GHOSTTY_LOCAL_IMAGE_OVERHEAD_BYTES: u64 = 107_000;
+pub(super) const MIN_IMAGE_COST_BYTES: u64 = INLINE_IMAGE_COST_BYTES;
+const _: () = assert!(MIN_IMAGE_COST_BYTES <= IMAGE_HEADER_BYTES + REX_IMAGE_OVERHEAD_BYTES && MIN_IMAGE_COST_BYTES <= IMAGE_HEADER_BYTES + GHOSTTY_LOCAL_IMAGE_OVERHEAD_BYTES);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Identity {
@@ -58,8 +68,24 @@ impl Identity {
             Identity::Unknown => false,
         }
     }
+    pub(super) fn image_cost(self, inline: bool, frame: (u32, u32)) -> u64 {
+        match (self, inline) {
+            (_, true) => INLINE_IMAGE_COST_BYTES,
+            (Identity::Rex, false) => IMAGE_HEADER_BYTES + REX_IMAGE_OVERHEAD_BYTES * window_scale(frame) / WINDOW_SCALE_ONE,
+            _ => IMAGE_HEADER_BYTES + GHOSTTY_LOCAL_IMAGE_OVERHEAD_BYTES,
+        }
+    }
+
     fn prefers_tiles(self) -> bool {
         matches!(self, Identity::Rex)
+    }
+
+    fn scales_images_with_window(self) -> bool {
+        matches!(self, Identity::Rex)
+    }
+
+    fn keeps_hidden_images_cheaply(self) -> bool {
+        !matches!(self, Identity::Rex)
     }
 
     pub(crate) fn is_ghostty(self) -> bool {
@@ -73,6 +99,63 @@ impl Identity {
     pub(super) fn transient_images(self) -> bool {
         matches!(self, Identity::Kitty { version } if version >= (0, 48, 0))
     }
+}
+
+const IMAGE_COUNT_BASELINE: (u64, u64) = (3024, 1964);
+
+fn env_number<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok().and_then(|v| v.trim().parse::<T>().ok())
+}
+
+pub(super) fn keep_screens_for(identity: Identity) -> i64 {
+    static FORCED: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
+    let forced = *FORCED.get_or_init(|| env_number::<i64>("PIXEL_KEEP_SCREENS").map(|k| k.clamp(0, 6)));
+    forced.unwrap_or(default_keep_screens(identity))
+}
+
+fn default_keep_screens(identity: Identity) -> i64 {
+    if identity.keeps_hidden_images_cheaply() { layer::KEEP_SCREENS } else { 0 }
+}
+
+fn rex_image_scale() -> f64 {
+    static SCALE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| env_number::<f64>("PIXEL_REX_IMAGE_SCALE").filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0).clamp(0.25, 16.0))
+}
+
+fn forced_tile_px() -> Option<u32> {
+    static PX: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *PX.get_or_init(|| env_number::<u32>("PIXEL_TILE_PX").map(|px| px.clamp(16, 4096)))
+}
+
+const WINDOW_SCALE_ONE: u64 = 1_000;
+
+fn window_scale(frame: (u32, u32)) -> u64 {
+    let area = u64::from(frame.0) * u64::from(frame.1);
+    let baseline = IMAGE_COUNT_BASELINE.0 * IMAGE_COUNT_BASELINE.1;
+    (area * WINDOW_SCALE_ONE).div_ceil(baseline).max(WINDOW_SCALE_ONE)
+}
+
+pub(super) fn tile_px_for(identity: Identity, frame: (u32, u32)) -> u32 {
+    if let Some(px) = forced_tile_px() {
+        return px;
+    }
+    if !identity.scales_images_with_window() {
+        return tiles::TILE_PX;
+    }
+    let area = u64::from(frame.0) * u64::from(frame.1);
+    let baseline = IMAGE_COUNT_BASELINE.0 * IMAGE_COUNT_BASELINE.1;
+    let growth = (area as f64 / baseline as f64).sqrt().max(1.0);
+    let scaled = (f64::from(tiles::TILE_PX) * growth * rex_image_scale()).ceil() as u32;
+    scaled.clamp(16, 4096).next_multiple_of(16)
+}
+
+pub(super) fn stripe_px_for(identity: Identity, stripe_px: u32, height: u32) -> u32 {
+    if !identity.scales_images_with_window() {
+        return stripe_px;
+    }
+    let growth = (f64::from(height) / IMAGE_COUNT_BASELINE.1 as f64).max(1.0);
+    let scaled = (f64::from(stripe_px) * growth * rex_image_scale()).ceil() as u32;
+    scaled.clamp(16, 2048).next_multiple_of(16)
 }
 
 pub(super) fn select(
@@ -321,6 +404,27 @@ impl Kitty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rex_keeps_no_hidden_strips_and_other_terminals_keep_three_screens() {
+        assert_eq!(default_keep_screens(Identity::Rex), 0);
+        assert_eq!(default_keep_screens(Identity::Ghostty { version: (1, 3, 2) }), layer::KEEP_SCREENS);
+        assert_eq!(default_keep_screens(Identity::Kitty { version: (0, 48, 0) }), layer::KEEP_SCREENS);
+    }
+
+    #[test]
+    fn rex_grows_images_with_the_window_so_their_count_stays_near_the_baseline() {
+        let ghostty = Identity::Ghostty { version: (1, 3, 2) };
+        assert_eq!(tile_px_for(Identity::Rex, (3024, 1964)), tiles::TILE_PX);
+        assert_eq!(tile_px_for(Identity::Rex, (1512, 982)), tiles::TILE_PX);
+        assert_eq!(tile_px_for(Identity::Rex, (5120, 2880)), 416);
+        assert_eq!(tile_px_for(ghostty, (5120, 2880)), tiles::TILE_PX);
+        assert_eq!(stripe_px_for(Identity::Rex, 128, 1964), 128);
+        assert_eq!(stripe_px_for(Identity::Rex, 128, 2880), 192);
+        assert_eq!(stripe_px_for(ghostty, 128, 2880), 128);
+        let tiles_at = |frame: (u32, u32)| tiles::tiles_for(frame, &[], tile_px_for(Identity::Rex, frame)).len();
+        assert!(tiles_at((5120, 2880)) <= tiles_at((3024, 1964)) + 13, "a 5K window needs about as many tiles as the baseline");
+    }
 
     #[test]
     fn xtversion_reply_spans_only_the_reply() {

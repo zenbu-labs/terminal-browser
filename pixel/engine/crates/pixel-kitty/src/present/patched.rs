@@ -18,6 +18,8 @@ pub(crate) struct Patched {
     pub(super) ui_over_surfaces: Vec<Rect>,
     pub(super) tiles: Vec<Tile>,
     pub(super) layer: Option<super::layer::Layer>,
+    pub(super) web: Option<super::webview::WebLayers>,
+    pub(super) ids: super::layer::ImageIds,
     pub(super) last_draw: Option<std::time::Instant>,
     pub(super) last_flatten: Option<std::time::Instant>,
     pub(super) stats: Stats,
@@ -30,7 +32,7 @@ const IDLE_COMPACT_MAX_UNION_PX: u64 = 400 * 400;
 
 impl Patched {
     pub(crate) fn holds_a_frame(&self) -> bool {
-        self.layer.as_ref().is_some_and(super::layer::Layer::holding)
+        self.layer.as_ref().is_some_and(super::layer::Layer::holding) || self.web.as_ref().is_some_and(super::webview::WebLayers::holding)
     }
 
     pub(super) fn opaque_rects(&self) -> Vec<Rect> {
@@ -38,7 +40,7 @@ impl Patched {
     }
 
     fn tile_holes(&self) -> Vec<Rect> {
-        self.opaque_rects().into_iter().chain(self.layer.as_ref().map(|layer| layer.area)).collect()
+        self.opaque_rects().into_iter().chain(self.layer.as_ref().map(|layer| layer.area)).chain(self.web.as_ref().map(|web| web.area)).collect()
     }
 }
 
@@ -66,25 +68,35 @@ impl Kitty {
             let rect = area.rect.clamped(size.0, size.1);
             (!rect.is_empty()).then_some(OpaqueArea { surface: area.surface, rect }) // im not entirely sure why we are passing area.surface here? hm
         }));
+        let web_before = self.patches.web.as_ref().map(|w| w.area);
+        let web = pixel_core::profiler::span("present.web_plan", || self.plan_web(frame, out));
+        if let Some((surface, _)) = web {
+            self.patches.opaque.retain(|area| area.surface != Some(surface));
+        }
+        if web.map(|(_, area)| area) != web_before {
+            self.patches.opaque_shape_changed = true;
+        }
         if on_screen.iter().map(|a| a.rect).ne(self.patches.opaque.iter().map(|a| a.rect)) {
             self.patches.opaque_shape_changed = true;
             let rects = self.patches.opaque_rects();
             pixel_core::logging::info(
                 "present",
-                format!("opaque areas now {:?}, {} tiles cover the rest", rects, tiles_for(size, &rects).len()),
+                format!("opaque areas now {:?}, {} tiles cover the rest", rects, tiles_for(size, &rects, super::tile_px_for(self.identity, size)).len()),
             );
         }
         let previous_ui = std::mem::replace(
             &mut self.patches.ui_over_surfaces,
             frame.ui_over_surfaces.iter().map(|r| r.clamped(size.0, size.1)).filter(|r| !r.is_empty()).collect(),
         );
-        let layer = frame.layer.filter(|_| self.patches.opaque.is_empty());
+        let layer = frame.layer.filter(|_| self.patches.opaque.is_empty() && web.is_none());
         if layer.map(|l| l.area) != self.patches.layer.as_ref().map(|l| l.area) {
             pixel_core::profiler::span("present.new_layer", || {
                 if let Some(old) = self.patches.layer.take() {
-                    old.delete_all(out);
+                    old.delete_all(out, &mut self.patches.ids);
                 }
-                self.patches.layer = layer.map(|l| super::layer::Layer::new(l.area));
+                let stripe_px = super::stripe_px_for(self.identity, super::layer::STRIPE_PX, size.1);
+                let keep = super::keep_screens_for(self.identity);
+                self.patches.layer = layer.map(|l| super::layer::Layer::new(l.area, stripe_px).keeping(keep));
             });
             self.patches.opaque_shape_changed = true;
         }
@@ -135,6 +147,11 @@ impl Kitty {
         if let Some(layer) = layer {
             let start = out.len();
             pixel_core::profiler::span("present.layer", || self.draw_layer(frame, layer, out))?;
+            written += out.len() - start;
+        }
+        if web.is_some() {
+            let start = out.len();
+            pixel_core::profiler::span("present.web", || self.draw_web(frame, out))?;
             written += out.len() - start;
         }
         if let Some(strategy_line) = strategy_line {
@@ -292,7 +309,7 @@ impl Kitty {
             for tile in self.patches.tiles.iter().filter(|t| t.sent) {
                 prelude.extend_from_slice(&crate::kitty::kitty_delete_one(tile.id));
             }
-            self.patches.tiles = tiles_for(size, &self.patches.tile_holes());
+            self.patches.tiles = tiles_for(size, &self.patches.tile_holes(), super::tile_px_for(self.identity, size));
             self.patches.opaque_shape_changed = false;
         } else {
             for tile in &mut self.patches.tiles {

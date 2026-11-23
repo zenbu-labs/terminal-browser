@@ -79,6 +79,12 @@ for patch in "$REPO_DIR"/patches/*.patch; do
   git apply "$patch"
 done
 
+echo "== apply the chromium patches those patches add =="
+for added in $(git ls-files --others --exclude-standard -- patches/chromium | grep '\.patch$'); do
+  echo "applying $added"
+  git -C .. apply "electron/$added"
+done
+
 echo "== typescript definitions =="
 # electron generates its types from docs/api, so the patched docs yield types
 # that describe the patched binary; the checkout's yarn install already ran

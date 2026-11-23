@@ -44,6 +44,7 @@ import { claudeBridgeCommand } from "./claude-bridge";
 import { configCommand } from "./config";
 
 const DIST_ROOT = process.env.TERMINAL_BROWSER_DIST_ROOT ?? null;
+const PASSED_TO_DAEMON = new Set(["PIXEL_KITTY_LOG", "PIXEL_REX_IMAGE_SCALE", "PIXEL_TILE_PX", "PIXEL_KEEP_SCREENS", "PIXEL_WEB_STRIPE_PX"]);
 const CAPABILITIES = ["embedding", "image-frames"] as const;
 delete process.env.ELECTRON_RUN_AS_NODE;
 
@@ -164,7 +165,8 @@ function interactiveTty(): string | null {
 function browserBuildStamp(): string {
   const main = path.resolve(__dirname, "..", "..", "browser", "dist", "main.js");
   try {
-    return `${Math.floor(fs.statSync(main).mtimeMs)} ${fs.realpathSync(electronBinary())}`;
+    const overrides = [...PASSED_TO_DAEMON].filter((key) => process.env[key] !== undefined).sort().map((key) => `${key}=${process.env[key]}`);
+    return [Math.floor(fs.statSync(main).mtimeMs), fs.realpathSync(electronBinary()), ...overrides].join(" ");
   } catch {
     return "unknown";
   }
@@ -181,7 +183,7 @@ function connectDaemon(): Promise<net.Socket> {
 function spawnDaemon() {
   const { command, cwd } = browserLaunchCommand(["--daemon"]);
   const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_")),
+    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_") || PASSED_TO_DAEMON.has(key)),
   );
   env.NODE_ENV ??= "production";
   const child = spawn(command[0], command.slice(1), { cwd, detached: true, stdio: "ignore", env });

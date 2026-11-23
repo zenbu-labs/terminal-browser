@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 mod convert;
 
@@ -11,11 +12,48 @@ pub struct OpaqueArea {
     pub rect: Rect,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SurfacePlacement {
     pub surface: u32,
     pub rect: [f32; 4],
     pub visible: [f32; 4],
+    pub size: (u32, u32),
+    pub scroll_tree: Option<Arc<ScrollTree>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScrollTree {
+    pub nodes: Vec<ScrollNode>,
+    pub drawn_layers: Vec<DrawnLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawnLayer {
+    pub layer_id: i32,
+    pub rect: (i32, i32, u32, u32),
+    pub scroll_node_id: i32,
+    pub contents_opaque: bool,
+    pub translation: Option<(i32, i32)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollNode {
+    pub element_id: u64,
+    pub id: i32,
+    pub parent_id: i32,
+    pub transform_id: i32,
+    pub container_scroll_node_id: i32,
+    pub container_origin: (i32, i32),
+    pub container_bounds: (u32, u32),
+    pub bounds: (u32, u32),
+    pub scroll_offset: (f32, f32),
+    pub user_scrollable_horizontal: bool,
+    pub user_scrollable_vertical: bool,
+    pub is_composited: bool,
+    pub scrolls_inner_viewport: bool,
+    pub scrolls_outer_viewport: bool,
+    pub to_screen: [f32; 16],
+    pub container_to_screen: [f32; 16],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,17 +185,17 @@ pub struct Surface {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
-    pub scroll_y: Option<i64>,
+    pub scroll_tree: Option<Arc<ScrollTree>>,
 }
 
 thread_local! {
     static SURFACES: RefCell<HashMap<u32, Surface>> = RefCell::new(HashMap::new());
 }
 
-pub fn set_scroll(id: u32, scroll_y: Option<i64>) {
+pub fn set_scroll_tree(id: u32, scroll_tree: Option<Arc<ScrollTree>>) {
     SURFACES.with_borrow_mut(|surfaces| {
         if let Some(surface) = surfaces.get_mut(&id) {
-            surface.scroll_y = scroll_y;
+            surface.scroll_tree = scroll_tree;
         }
     });
 }
@@ -176,7 +214,7 @@ pub fn write(
             width: 0,
             height: 0,
             pixels: Vec::new(),
-            scroll_y: None,
+            scroll_tree: None,
         });
         let resized = surface.width != width || surface.height != height;
         if resized {
