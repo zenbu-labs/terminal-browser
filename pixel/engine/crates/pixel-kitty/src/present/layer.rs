@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io;
 
 use crate::Kitty;
@@ -19,6 +19,7 @@ const PATCH_Z: i32 = TILE_Z;
 const FIRST_OVERLAY_ID: u32 = 30_000;
 const OVERLAY_Z: i32 = TILE_Z + 1;
 pub(super) const KEEP_SCREENS: i64 = 3;
+pub(super) const HIDDEN_STRIPS_BUDGET_BYTES: u64 = super::transmit_strategy::TERMINAL_IMAGE_BUDGET_BYTES / 4;
 const DEPTH_Z: i32 = PATCH_Z + MAX_PATCHES as i32;
 const STRIP_IDS: std::ops::Range<u32> = 1_000_000..2_000_000;
 
@@ -45,6 +46,7 @@ pub(crate) struct Layer {
     see_through_over: Vec<Rect>,
     stripe_px: u32,
     keep_screens: i64,
+    hidden_budget_bytes: u64,
     compared: Option<(i64, Rect, Vec<Rect>)>,
 }
 
@@ -107,6 +109,7 @@ impl Layer {
             see_through_over: Vec::new(),
             stripe_px,
             keep_screens: KEEP_SCREENS,
+            hidden_budget_bytes: HIDDEN_STRIPS_BUDGET_BYTES,
             compared: None,
             area,
             stripes: BTreeMap::new(),
@@ -114,6 +117,10 @@ impl Layer {
             holding: 0,
             z: depth as i32 * DEPTH_Z,
         }
+    }
+
+    pub(super) fn share_hidden_budget(&mut self, bytes: u64) {
+        self.hidden_budget_bytes = bytes;
     }
 
     pub(super) fn keeping(mut self, screens: i64) -> Self {
@@ -240,6 +247,12 @@ impl ImageIds {
 }
 
 impl Stripe {
+    fn image_bytes(&self, stripe_px: u32) -> u64 {
+        let pieces: u64 = self.images.iter().map(|p| u64::from(p.w) * u64::from(stripe_px)).sum();
+        let patches: u64 = self.patches.iter().map(|p| u64::from(p.rect.w) * u64::from(p.rect.h)).sum();
+        (pieces + patches) * 4
+    }
+
     fn ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.images.iter().map(|p| p.placed.id).chain(self.patches.iter().map(|p| p.placed.id))
     }
@@ -746,12 +759,24 @@ impl Kitty {
         }
         let keep = state.keep_screens * i64::from(area.h) / stripe;
         let (first, last) = (*visible.start(), *visible.end());
+        let distance = |k: i64| if k < first { first - k } else { k - last };
+        let mut hidden: Vec<(i64, i64)> = state.stripes.keys().filter(|k| !visible.contains(k)).map(|&k| (distance(k), k)).collect();
+        hidden.sort_unstable();
+        let mut hidden_bytes = 0u64;
+        let within_budget: HashSet<i64> = hidden
+            .into_iter()
+            .take_while(|&(d, k)| {
+                hidden_bytes += state.stripes[&k].image_bytes(stripe_px);
+                d <= keep && hidden_bytes <= state.hidden_budget_bytes
+            })
+            .map(|(_, k)| k)
+            .collect();
         let mut dropped = Vec::new();
         for (&k, entry) in state.stripes.iter_mut() {
             if visible.contains(&k) {
                 continue;
             }
-            if k < first - keep || k > last + keep {
+            if !within_budget.contains(&k) {
                 for id in entry.ids() {
                     out.extend_from_slice(&crate::kitty::kitty_delete_one(id));
                 }
@@ -865,6 +890,23 @@ mod tests {
         let (first_id, second_id) = (STRIP_IDS.start, STRIP_IDS.start + 1);
         assert!(out.contains(&format!("\x1b[1;1H\x1b_Ga=p,i={second_id},p=1,C=1,q=2")), "the second stripe moves to the top");
         assert!(out.contains(&format!("a=d,d=i,i={first_id},p=1")), "the stripe scrolled out of view is hidden but kept");
+    }
+
+    #[test]
+    fn hidden_stripes_beyond_the_shared_budget_are_deleted_not_kept() {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        let area = Rect::sized(64, 2 * STRIPE_PX);
+        let stripe_bytes = 64 * u64::from(STRIPE_PX) * 4;
+        let mut layer = Layer::new(area, STRIPE_PX);
+        layer.share_hidden_budget(stripe_bytes);
+        kitty.patches.layer = Some(layer);
+        let first = ScrollLayer { area, origin_y: 0, under: Vec::new(), overlays: Vec::new() };
+        draw(&mut kitty, &content(64, area.h, 0), &first);
+        let (first_id, second_id) = (STRIP_IDS.start, STRIP_IDS.start + 1);
+        let away = ScrollLayer { origin_y: -4 * i64::from(STRIPE_PX), ..first };
+        let out = draw(&mut kitty, &content(64, area.h, away.origin_y), &away);
+        assert!(out.contains(&format!("a=d,d=i,i={second_id},p=1")), "the nearer hidden stripe fits the budget and is kept");
+        assert!(out.contains(&format!("a=d,d=I,i={first_id}")), "the farther one would exceed what the terminal can hold, so it is deleted");
     }
 
     #[test]
