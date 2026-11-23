@@ -84,7 +84,7 @@ diff --git a/patches/chromium/osr_expose_the_compositor_scroll_tree.patch b/patc
 new file mode 100644
 --- /dev/null
 +++ b/patches/chromium/osr_expose_the_compositor_scroll_tree.patch
-@@ -0,0 +1,582 @@
+@@ -0,0 +1,607 @@
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: Rob Pruzan <97781863+RobPruzan@users.noreply.github.com>
 +Date: Fri, 20 Nov 2026 01:41:42 -0500
@@ -192,7 +192,7 @@ new file mode 100644
 + 
 +   metadata.is_mobile_optimized = IsMobileOptimized(active_tree_.get());
 +diff --git a/components/viz/common/quads/compositor_frame_metadata.cc b/components/viz/common/quads/compositor_frame_metadata.cc
-+index 8a7b74a648b894a4ff6b78fa8af2539a9c211b25..f3eaeb1ab2c89581b9dc403805434a92e1140367 100644
++index 8a7b74a648b894a4ff6b78fa8af2539a9c211b25..93daecb983c65357f4f4565223f332e727ea5d01 100644
 +--- a/components/viz/common/quads/compositor_frame_metadata.cc
 ++++ b/components/viz/common/quads/compositor_frame_metadata.cc
 +@@ -10,6 +10,17 @@
@@ -213,6 +213,17 @@ new file mode 100644
 + CompositorFrameMetadata::CompositorFrameMetadata() = default;
 + 
 + CompositorFrameMetadata::CompositorFrameMetadata(
++@@ -155,7 +166,9 @@ CompositorFrameMetadata::CompositorFrameMetadata(
++       offset_tag_definitions(other.offset_tag_definitions),
++       offset_tag_values(other.offset_tag_values),
++       frame_interval_inputs(other.frame_interval_inputs),
++-      tracked_element_rects(other.tracked_element_rects) {
+++      tracked_element_rects(other.tracked_element_rects),
+++      scroll_tree(other.scroll_tree),
+++      drawn_layers(other.drawn_layers) {
++   if (other.delegated_ink_metadata) {
++     delegated_ink_metadata = std::make_unique<gfx::DelegatedInkMetadata>(
++         *other.delegated_ink_metadata.get());
 +diff --git a/components/viz/common/quads/compositor_frame_metadata.h b/components/viz/common/quads/compositor_frame_metadata.h
 +index b5a64e05c6ffddf640dfe4c52e15c000161f34e3..a4d18f8581d362cf1cf4a18732784b421bf821b3 100644
 +--- a/components/viz/common/quads/compositor_frame_metadata.h
@@ -363,7 +374,7 @@ new file mode 100644
 +     // A copy of the frame's metadata retained even if the original frame is
 +     // discarded.
 +diff --git a/media/capture/mojom/video_capture_buffer.mojom b/media/capture/mojom/video_capture_buffer.mojom
-+index a9373b9baf6f2ce4f5600eb2a7c8510a026087db..12e717990267cc7e5e5fa028b0eec15b3b9af50c 100644
++index a9373b9baf6f2ce4f5600eb2a7c8510a026087db..3b37cff019fac46c1f73f68eeddcc92712cb1aaf 100644
 +--- a/media/capture/mojom/video_capture_buffer.mojom
 ++++ b/media/capture/mojom/video_capture_buffer.mojom
 +@@ -13,6 +13,7 @@ import "mojo/public/mojom/base/time.mojom";
@@ -378,8 +389,8 @@ new file mode 100644
 +   // Optionally, stride information can be provided.
 +   // If not provided, it is assumed that frame data is tightly packed.
 +   PlaneStrides? strides;
-++  [MinVersion=1] array<VideoFrameScrollNode>? scroll_tree;
-++  [MinVersion=2] array<VideoFrameDrawnLayer>? drawn_layers;
+++  array<VideoFrameScrollNode>? scroll_tree;
+++  array<VideoFrameDrawnLayer>? drawn_layers;
 ++};
 ++
 ++struct VideoFrameDrawnLayer {
@@ -413,6 +424,20 @@ new file mode 100644
 + };
 + 
 + // Represents a buffer that is ready for consumption. |buffer_id| has video
++diff --git a/media/capture/video/video_capture_device_client.cc b/media/capture/video/video_capture_device_client.cc
++index 38310848b32c88f8af2982d3981cfac72bfc0cd5..91f1077d8a7c17ccc58643b575c944d379eb8e43 100644
++--- a/media/capture/video/video_capture_device_client.cc
+++++ b/media/capture/video/video_capture_device_client.cc
++@@ -245,7 +245,8 @@ mojom::VideoFrameInfoPtr CreateNewVideoFrameInfo(
++ 
++   return mojom::VideoFrameInfo::New(
++       timestamp, metadata, format.pixel_format, format.frame_size, visible_rect,
++-      natural_size, is_premapped, color_space, mojom::PlaneStridesPtr{});
+++      natural_size, is_premapped, color_space, mojom::PlaneStridesPtr{},
+++      std::nullopt, std::nullopt);
++ }
++ 
++ class ScopedAccessPermissionEndWithCallback
 +diff --git a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
 +index d0655cf592c615efe6e5d99728429ff2f52611c1..9e1df3048d6d24297d1e99931bc3cb1abef6d9fb 100644
 +--- a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
