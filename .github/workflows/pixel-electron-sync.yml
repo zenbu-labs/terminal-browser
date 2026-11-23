@@ -56,6 +56,7 @@ jobs:
             --jq '.[] | select(.status=="queued" or .status=="in_progress") | .displayTitle' > active-builds.txt || true
 
           conflicts=0
+          unchecked=0
           for version in $candidates; do
             if grep -qx "$version" published.txt; then
               echo "v$version: already released, skipping"
@@ -71,9 +72,14 @@ jobs:
             fi
 
             echo "v$version: checking patches"
-            if bash pixel/electron/scripts/check-patches.sh "$version"; then
+            checked=0
+            bash pixel/electron/scripts/check-patches.sh "$version" || checked=$?
+            if [ "$checked" -eq 0 ]; then
               echo "v$version: dispatching build"
               gh workflow run pixel-electron-build.yml -R "$GITHUB_REPOSITORY" -f "version=$version"
+            elif [ "$checked" -eq 2 ]; then
+              unchecked=1
+              echo "v$version: could not fetch the sources to check the patches; the next run tries again"
             else
               conflicts=1
               title="🚨 Patch conflict: electron v$version"
@@ -96,5 +102,9 @@ jobs:
 
           if [ "$conflicts" -ne 0 ]; then
             echo "::error::Patch conflict detected — see the issue(s) created above"
+            exit 1
+          fi
+          if [ "$unchecked" -ne 0 ]; then
+            echo "::error::Could not fetch the sources to check some versions' patches; the next run tries again"
             exit 1
           fi

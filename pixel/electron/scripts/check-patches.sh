@@ -10,7 +10,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "Cloning electron v$VERSION (shallow)..."
-git clone --quiet --depth 1 --branch "v$VERSION" https://github.com/electron/electron "$WORK/electron"
+git clone --quiet --depth 1 --branch "v$VERSION" https://github.com/electron/electron "$WORK/electron" || { echo "could not clone electron v$VERSION"; exit 2; }
 
 # patches form an ordered series, so each one is applied before checking the next
 failed=0
@@ -36,7 +36,12 @@ if [ "$failed" -eq 0 ] && [ -n "$added" ]; then
   for f in $files; do
     includes+=("--include=$f")
     mkdir -p "$CHROMIUM/$(dirname "$f")"
-    curl -fsSL "https://chromium.googlesource.com/chromium/src/+/refs/tags/$chromium_version/$f?format=TEXT" | base64 --decode > "$CHROMIUM/$f" || rm -f "$CHROMIUM/$f"
+    code="$(curl -sS -o "$WORK/fetched.txt" -w '%{http_code}' "https://chromium.googlesource.com/chromium/src/+/refs/tags/$chromium_version/$f?format=TEXT")" || code=000
+    case "$code" in
+      200) base64 --decode < "$WORK/fetched.txt" > "$CHROMIUM/$f" ;;
+      404) ;;
+      *) echo "could not fetch $f from chromium $chromium_version (HTTP $code)"; exit 2 ;;
+    esac
   done
   while read -r name; do
     case "$name" in ''|'#'*) continue ;; esac
