@@ -294,7 +294,7 @@ impl WebLayers {
         (0..MAX_LAYERS as u32).find(|s| !self.nodes.values().any(|n| n.slot == *s) && !self.retired.iter().any(|(r, _)| r == s))
     }
 
-    fn plan(&mut self, tree: &ScrollTree, frame: Frame<'_>, now: Instant, stripe_px: u32) {
+    fn plan(&mut self, tree: &ScrollTree, frame: Frame<'_>, now: Instant, stripe_px: u32, keep_screens: i64) {
         for layer in self.nodes.values_mut() {
             layer.plan = None;
         }
@@ -368,7 +368,7 @@ impl WebLayers {
                 }
             }
             let Some(slot) = self.free_slot() else { continue };
-            let layer = if id == SCREEN { Layer::for_screen(at.rect, at.depth, stripe_px) } else { Layer::for_node(at.rect, at.depth, stripe_px) };
+            let layer = if id == SCREEN { Layer::for_screen(at.rect, at.depth, stripe_px) } else { Layer::for_node(at.rect, at.depth, stripe_px) }.keeping(keep_screens);
             self.nodes.insert(id, NodeLayer { layer, slot, depth: at.depth, origin: None, plan: Some(Planned { placed: full.get(&id).copied().unwrap_or(at.rect), area: at.rect, origin: at.origin }) });
         }
         self.watch_see_through();
@@ -420,11 +420,12 @@ impl Kitty {
                 old.delete_all(out, &mut self.patches.ids);
             }
         }
+        let keep_screens = super::keep_screens_for(self.identity);
         let stripe_px = super::layer::web_stripe_px().unwrap_or_else(|| super::stripe_px_for(self.identity, super::layer::STRIPE_PX, canvas.1));
         let web = self.patches.web.get_or_insert_with(|| WebLayers { surface, area, nodes: HashMap::new(), seen: HashMap::new(), see_through: HashMap::new(), clears_all_holes: false, pinned: Vec::new(), retired: Vec::new() });
         let now = Instant::now();
         web.note_scrolls(&tree, now);
-        web.plan(&tree, frame, now, stripe_px);
+        web.plan(&tree, frame, now, stripe_px, keep_screens);
         Some((surface, area))
     }
 

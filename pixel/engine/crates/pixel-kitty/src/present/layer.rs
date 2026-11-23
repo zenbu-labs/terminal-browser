@@ -18,14 +18,10 @@ const MAX_HOLD_FRAMES: u32 = 4;
 const PATCH_Z: i32 = TILE_Z;
 const FIRST_OVERLAY_ID: u32 = 30_000;
 const OVERLAY_Z: i32 = TILE_Z + 1;
-const KEEP_SCREENS: i64 = 3;
+pub(super) const KEEP_SCREENS: i64 = 3;
 const DEPTH_Z: i32 = PATCH_Z + MAX_PATCHES as i32;
 const STRIP_IDS: std::ops::Range<u32> = 1_000_000..2_000_000;
 
-fn keep_screens() -> i64 {
-    static KEEP: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-    *KEEP.get_or_init(|| std::env::var("PIXEL_KEEP_SCREENS").ok().and_then(|v| v.trim().parse::<i64>().ok()).map_or(KEEP_SCREENS, |k| k.clamp(0, 6)))
-}
 const RUN_BLOCK_PX: usize = 8;
 const _: () = assert!(super::MIN_IMAGE_COST_BYTES >= 4 * RUN_BLOCK_PX as u64);
 const _: () = assert!(
@@ -48,6 +44,7 @@ pub(crate) struct Layer {
     clears_holes: bool,
     see_through_over: Vec<Rect>,
     stripe_px: u32,
+    keep_screens: i64,
     compared: Option<(i64, Rect, Vec<Rect>)>,
 }
 
@@ -109,6 +106,7 @@ impl Layer {
             clears_holes: false,
             see_through_over: Vec::new(),
             stripe_px,
+            keep_screens: KEEP_SCREENS,
             compared: None,
             area,
             stripes: BTreeMap::new(),
@@ -116,6 +114,11 @@ impl Layer {
             holding: 0,
             z: depth as i32 * DEPTH_Z,
         }
+    }
+
+    pub(super) fn keeping(mut self, screens: i64) -> Self {
+        self.keep_screens = screens;
+        self
     }
 
     pub(super) fn watch_see_through_over(&mut self, others: Vec<Rect>) {
@@ -741,7 +744,7 @@ impl Kitty {
             entry.images = images;
             entry.patches = patches;
         }
-        let keep = keep_screens() * i64::from(area.h) / stripe;
+        let keep = state.keep_screens * i64::from(area.h) / stripe;
         let (first, last) = (*visible.start(), *visible.end());
         let mut dropped = Vec::new();
         for (&k, entry) in state.stripes.iter_mut() {

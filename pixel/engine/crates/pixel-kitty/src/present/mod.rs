@@ -84,6 +84,10 @@ impl Identity {
         matches!(self, Identity::Rex)
     }
 
+    fn keeps_hidden_images_cheaply(self) -> bool {
+        !matches!(self, Identity::Rex)
+    }
+
     pub(crate) fn is_ghostty(self) -> bool {
         matches!(self, Identity::Ghostty { .. })
     }
@@ -101,6 +105,12 @@ const IMAGE_COUNT_BASELINE: (u64, u64) = (3024, 1964);
 
 fn env_number<T: std::str::FromStr>(name: &str) -> Option<T> {
     std::env::var(name).ok().and_then(|v| v.trim().parse::<T>().ok())
+}
+
+pub(super) fn keep_screens_for(identity: Identity) -> i64 {
+    static FORCED: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
+    let forced = *FORCED.get_or_init(|| env_number::<i64>("PIXEL_KEEP_SCREENS").map(|k| k.clamp(0, 6)));
+    forced.unwrap_or(if identity.keeps_hidden_images_cheaply() { layer::KEEP_SCREENS } else { 0 })
 }
 
 fn rex_image_scale() -> f64 {
@@ -390,6 +400,13 @@ impl Kitty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rex_keeps_no_hidden_strips_and_other_terminals_keep_three_screens() {
+        assert_eq!(keep_screens_for(Identity::Rex), 0);
+        assert_eq!(keep_screens_for(Identity::Ghostty { version: (1, 3, 2) }), layer::KEEP_SCREENS);
+        assert_eq!(keep_screens_for(Identity::Kitty { version: (0, 48, 0) }), layer::KEEP_SCREENS);
+    }
 
     #[test]
     fn rex_grows_images_with_the_window_so_their_count_stays_near_the_baseline() {

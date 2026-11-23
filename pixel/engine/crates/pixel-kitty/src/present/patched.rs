@@ -95,7 +95,8 @@ impl Kitty {
                     old.delete_all(out, &mut self.patches.ids);
                 }
                 let stripe_px = super::stripe_px_for(self.identity, super::layer::STRIPE_PX, size.1);
-                self.patches.layer = layer.map(|l| super::layer::Layer::new(l.area, stripe_px));
+                let keep = super::keep_screens_for(self.identity);
+                self.patches.layer = layer.map(|l| super::layer::Layer::new(l.area, stripe_px).keeping(keep));
             });
             self.patches.opaque_shape_changed = true;
         }
