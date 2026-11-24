@@ -43,6 +43,7 @@ const DEMOS: Demo[] = [
 
 const TERMINALS = [
   { name: "Ghostty", icon: "/terminals/ghostty.png" },
+  { name: "Rex", icon: "/terminals/rex.png" },
   { name: "iTerm2", icon: "/terminals/iterm2.png" },
   { name: "xterm.js", icon: "/terminals/xtermjs.png" },
   { name: "Konsole", icon: "/terminals/konsole.svg" },
