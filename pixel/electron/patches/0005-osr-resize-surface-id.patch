@@ -1,7 +1,7 @@
 diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
 --- a/shell/browser/osr/osr_render_widget_host_view.cc
 +++ b/shell/browser/osr/osr_render_widget_host_view.cc
-@@ -281,6 +281,15 @@ void OffScreenRenderWidgetHostView::InitAsChild(gfx::NativeView) {
+@@ -288,6 +288,15 @@ void OffScreenRenderWidgetHostView::InitAsChild(gfx::NativeView) {
  }
  
  void OffScreenRenderWidgetHostView::SetSize(const gfx::Size& size) {
@@ -17,7 +17,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
    size_ = size;
    SynchronizeVisualProperties();
  }
-@@ -736,6 +745,10 @@ void OffScreenRenderWidgetHostView::SynchronizeVisualProperties() {
+@@ -755,6 +764,10 @@ void OffScreenRenderWidgetHostView::SynchronizeVisualProperties() {
      return;
    }
  
@@ -28,7 +28,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
    ResizeRootLayer(true);
  }
  
-@@ -1012,16 +1025,26 @@ void OffScreenRenderWidgetHostView::UpdateScreenInfo() {
+@@ -1031,16 +1044,26 @@ void OffScreenRenderWidgetHostView::UpdateScreenInfo() {
  void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
    SetupFrameRate(false);
  
@@ -59,7 +59,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
    root_layer()->SetBounds(gfx::Rect(size));
  
    auto sf = GetDeviceScaleFactor();
-@@ -1034,10 +1057,6 @@ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
+@@ -1053,10 +1076,6 @@ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
      compositor_->SetDisplayColorSpaces(new_screen_info.display_color_spaces);
    }
  
@@ -70,7 +70,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
    delegated_frame_host()->EmbedSurface(
        delegated_frame_host_surface_id_, size,
        cc::DeadlinePolicy::UseDefaultDeadline());
-@@ -1050,6 +1069,12 @@ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
+@@ -1069,6 +1088,12 @@ void OffScreenRenderWidgetHostView::ResizeRootLayer(bool force) {
    }
  }
  
@@ -94,15 +94,15 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr
  #include <string>
  #include <vector>
  
-@@ -278,6 +279,7 @@ class OffScreenRenderWidgetHostView
+@@ -274,6 +275,7 @@ class OffScreenRenderWidgetHostView
+ #if BUILDFLAG(IS_MAC)
    void UpdateVSyncDisplay();
  #endif
-   void ResizeRootLayer(bool force);
 +  void AllocateDelegatedFrameHostSurfaceId();
  
    viz::FrameSinkId AllocateFrameSinkId();
  
-@@ -315,6 +317,7 @@ class OffScreenRenderWidgetHostView
+@@ -311,6 +313,7 @@ class OffScreenRenderWidgetHostView
  
    bool hold_resize_ = false;
    bool pending_resize_ = false;

@@ -75,16 +75,19 @@ diff --git a/docs/api/structures/offscreen-software-frame.md b/docs/api/structur
 diff --git a/patches/chromium/.patches b/patches/chromium/.patches
 --- a/patches/chromium/.patches
 +++ b/patches/chromium/.patches
-@@ -238,3 +238,4 @@ cherry-pick-b5559b26c2f3.patch
- cherry-pick-194c74ee5e48.patch
- cherry-pick-564bdde2ce69.patch
- cherry-pick-5a8114db13d5.patch
+@@ -259,6 +259,7 @@ cherry-pick-d9fcba36b9c9.patch
+ cherry-pick-ceae6307946c.patch
+ cherry-pick-4b95848e7725.patch
+ cherry-pick-042b1cede3d4.patch
 +osr_expose_the_compositor_scroll_tree.patch
+ cherry-pick-4abf39e95876.patch
+ cherry-pick-3ca2b715e796.patch
+ cherry-pick-ceb08025008a.patch
 diff --git a/patches/chromium/osr_expose_the_compositor_scroll_tree.patch b/patches/chromium/osr_expose_the_compositor_scroll_tree.patch
 new file mode 100644
 --- /dev/null
 +++ b/patches/chromium/osr_expose_the_compositor_scroll_tree.patch
-@@ -0,0 +1,607 @@
+@@ -0,0 +1,634 @@
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: Rob Pruzan <97781863+RobPruzan@users.noreply.github.com>
 +Date: Fri, 20 Nov 2026 01:41:42 -0500
@@ -93,10 +96,10 @@ new file mode 100644
 +Carries the active tree's scroll nodes (cc names: element id, parent, container origin/bounds, content bounds, current offset, user-scrollable axes, is_composited, viewport flags, main-thread repaint reasons), the screen transforms of their contents and container, and the scroll node each container moves with, in viz::CompositorFrameMetadata, plus the drawn layers in draw order: layer id, element id, visible rect in frame pixels, screen-space transform, contents_opaque, and the scroll node each moves with (found by walking the transform tree to the nearest scroll transform; a stuck sticky box moves with the scroller it sticks in, anchor-positioned layers are marked -2, layers fixed to the frame -1). FrameSinkVideoCapturer copies them into VideoFrameInfo, so an offscreen consumer gets the exact scroll state of the frame it receives.
 +
 +diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
-+index b1379146423335fd053a48bb74e2016d4ce65740..4b8299c478572e758dc071912e267f5fb469ebbb 100644
++index b1379146423335fd053a48bb74e2016d4ce65740..5653921354758952a7db8850d6e73a40d27c61bc 100644
 +--- a/cc/trees/layer_tree_host_impl.cc
 ++++ b/cc/trees/layer_tree_host_impl.cc
-+@@ -2579,6 +2579,94 @@ viz::CompositorFrameMetadata LayerTreeHostImpl::MakeCompositorFrameMetadata(
++@@ -2579,6 +2579,122 @@ viz::CompositorFrameMetadata LayerTreeHostImpl::MakeCompositorFrameMetadata(
 +     metadata.root_scroll_offset = active_tree_->TotalScrollOffset();
 +   }
 + 
@@ -138,6 +141,33 @@ new file mode 100644
 ++    }
 ++    return -1;
 ++  };
+++  // Reported as the bits the reasons had when they were a uint32_t bitmask,
+++  // so the value means the same whether cc stores a bitmask or an EnumSet.
+++  auto repaint_reason_bits = [](const auto& reasons) -> uint32_t {
+++    using Reasons = std::decay_t<decltype(reasons)>;
+++    if constexpr (std::is_integral_v<Reasons>) {
+++      return reasons;
+++    } else {
+++      using Reason = typename Reasons::EnumType;
+++      uint32_t bits = 0;
+++      if (reasons.Has(Reason::kHasBackgroundAttachmentFixedObjects)) {
+++        bits |= 1u << 2;
+++      }
+++      if (reasons.Has(Reason::kNotOpaqueForTextAndLCDText)) {
+++        bits |= 1u << 5;
+++      }
+++      if (reasons.Has(Reason::kPreferNonCompositedScrolling)) {
+++        bits |= 1u << 15;
+++      }
+++      if (reasons.Has(Reason::kBackgroundNeedsRepaintOnScroll)) {
+++        bits |= 1u << 16;
+++      }
+++      if (bits == 0 && !reasons.empty()) {
+++        bits = 1u << 1;
+++      }
+++      return bits;
+++    }
+++  };
 ++  for (int i = kSecondaryRootPropertyNodeId;
 ++       i < static_cast<int>(scroll_tree.size()); ++i) {
 ++    const ScrollNode& node = scroll_tree.Node(i);
@@ -157,7 +187,8 @@ new file mode 100644
 ++    out.is_composited = node.is_composited;
 ++    out.scrolls_inner_viewport = node.scrolls_inner_viewport;
 ++    out.scrolls_outer_viewport = node.scrolls_outer_viewport;
-++    out.main_thread_repaint_reasons = node.main_thread_repaint_reasons;
+++    out.main_thread_repaint_reasons =
+++        repaint_reason_bits(node.main_thread_repaint_reasons);
 ++    if (node.transform_id <= kRootPropertyNodeId ||
 ++        node.transform_id >= static_cast<int>(transform_tree.size())) {
 ++      continue;
@@ -439,54 +470,29 @@ new file mode 100644
 + 
 + class ScopedAccessPermissionEndWithCallback
 +diff --git a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
-+index d0655cf592c615efe6e5d99728429ff2f52611c1..9e1df3048d6d24297d1e99931bc3cb1abef6d9fb 100644
++index d0655cf592c615efe6e5d99728429ff2f52611c1..a43e487d5ff4925c96ec3deec400c1aa5b40e303 100644
 +--- a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
 ++++ b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
-+@@ -22,6 +22,28 @@
-+ 
-+ namespace mojo {
-+ 
-++// static
-++bool StructTraits<viz::mojom::ScrollTreeNodeDataView, viz::ScrollTreeNode>::
-++    Read(viz::mojom::ScrollTreeNodeDataView data, viz::ScrollTreeNode* out) {
-++  out->element_id = data.element_id();
-++  out->id = data.id();
-++  out->parent_id = data.parent_id();
-++  out->transform_id = data.transform_id();
-++  out->container_scroll_node_id = data.container_scroll_node_id();
-++  out->user_scrollable_horizontal = data.user_scrollable_horizontal();
-++  out->user_scrollable_vertical = data.user_scrollable_vertical();
-++  out->is_composited = data.is_composited();
-++  out->scrolls_inner_viewport = data.scrolls_inner_viewport();
-++  out->scrolls_outer_viewport = data.scrolls_outer_viewport();
-++  out->main_thread_repaint_reasons = data.main_thread_repaint_reasons();
-++  return data.ReadContainerOrigin(&out->container_origin) &&
-++         data.ReadContainerBounds(&out->container_bounds) &&
-++         data.ReadBounds(&out->bounds) &&
-++         data.ReadScrollOffset(&out->scroll_offset) &&
-++         data.ReadToScreen(&out->to_screen) &&
-++         data.ReadContainerToScreen(&out->container_to_screen);
-++}
-++
-+ // static
-+ bool StructTraits<viz::mojom::CompositorFrameMetadataDataView,
-+                   viz::CompositorFrameMetadata>::
-+@@ -82,7 +104,9 @@ bool StructTraits<viz::mojom::CompositorFrameMetadataDataView,
-+         data.ReadOffsetTagValues(&out->offset_tag_values) &&
-+         data.ReadFrameIntervalInputs(&out->frame_interval_inputs) &&
-+         data.ReadTreesInVizTiming(&out->trees_in_viz_timing_details) &&
-+-        data.ReadTrackedElementRects(&out->tracked_element_rects))) {
-++        data.ReadTrackedElementRects(&out->tracked_element_rects) &&
-++        data.ReadScrollTree(&out->scroll_tree) &&
-++        data.ReadDrawnLayers(&out->drawn_layers))) {
-+     return false;
-+   }
-+ 
++@@ -61,6 +61,14 @@ bool StructTraits<viz::mojom::CompositorFrameMetadataDataView,
++   out->is_handling_animation = data.is_handling_animation();
++   out->send_frame_token_to_embedder = data.send_frame_token_to_embedder();
++   out->min_page_scale_factor = data.min_page_scale_factor();
+++  // The scroll state is informational, so a malformed one is dropped rather
+++  // than failing the whole frame.
+++  if (!data.ReadScrollTree(&out->scroll_tree)) {
+++    out->scroll_tree.clear();
+++  }
+++  if (!data.ReadDrawnLayers(&out->drawn_layers)) {
+++    out->drawn_layers.clear();
+++  }
++   out->is_mobile_optimized = data.is_mobile_optimized();
++   out->is_software = data.is_software();
++   out->top_controls_visible_height = data.top_controls_visible_height();
 +diff --git a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
-+index bb0dbb10dab4872de85ccd951586ff5c06388c25..37a6dc8238291fa05d3dace6c66d69183c390c41 100644
++index bb0dbb10dab4872de85ccd951586ff5c06388c25..d4c0c6768a922bfef54a5d1fa604733ac0a929d8 100644
 +--- a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
 ++++ b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
-+@@ -26,9 +26,103 @@
++@@ -26,6 +26,7 @@
 + #include "ui/gfx/mojom/delegated_ink_metadata_mojom_traits.h"
 + #include "ui/gfx/mojom/display_color_spaces_mojom_traits.h"
 + #include "ui/gfx/mojom/overlay_transform_mojom_traits.h"
@@ -494,6 +500,29 @@ new file mode 100644
 + 
 + namespace mojo {
 + 
++@@ -191,6 +192,16 @@ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
++     return metadata.trees_in_viz_timing_details;
++   }
++ 
+++  static const std::vector<viz::ScrollTreeNode>& scroll_tree(
+++      const viz::CompositorFrameMetadata& metadata) {
+++    return metadata.scroll_tree;
+++  }
+++
+++  static const std::vector<viz::DrawnLayer>& drawn_layers(
+++      const viz::CompositorFrameMetadata& metadata) {
+++    return metadata.drawn_layers;
+++  }
+++
++   static const viz::TrackedElementRects& tracked_element_rects(
++       const viz::CompositorFrameMetadata& metadata) {
++     return metadata.tracked_element_rects;
++@@ -202,4 +213,119 @@ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
++ 
++ }  // namespace mojo
++ 
+++namespace mojo {
+++
 ++template <>
 ++struct StructTraits<viz::mojom::ScrollTreeNodeDataView, viz::ScrollTreeNode> {
 ++  static uint64_t element_id(const viz::ScrollTreeNode& node) {
@@ -548,7 +577,25 @@ new file mode 100644
 ++  }
 ++
 ++  static bool Read(viz::mojom::ScrollTreeNodeDataView data,
-++                   viz::ScrollTreeNode* out);
+++                   viz::ScrollTreeNode* out) {
+++    out->element_id = data.element_id();
+++    out->id = data.id();
+++    out->parent_id = data.parent_id();
+++    out->transform_id = data.transform_id();
+++    out->container_scroll_node_id = data.container_scroll_node_id();
+++    out->user_scrollable_horizontal = data.user_scrollable_horizontal();
+++    out->user_scrollable_vertical = data.user_scrollable_vertical();
+++    out->is_composited = data.is_composited();
+++    out->scrolls_inner_viewport = data.scrolls_inner_viewport();
+++    out->scrolls_outer_viewport = data.scrolls_outer_viewport();
+++    out->main_thread_repaint_reasons = data.main_thread_repaint_reasons();
+++    return data.ReadContainerOrigin(&out->container_origin) &&
+++           data.ReadContainerBounds(&out->container_bounds) &&
+++           data.ReadBounds(&out->bounds) &&
+++           data.ReadScrollOffset(&out->scroll_offset) &&
+++           data.ReadToScreen(&out->to_screen) &&
+++           data.ReadContainerToScreen(&out->container_to_screen);
+++  }
 ++};
 ++
 ++template <>
@@ -587,26 +634,9 @@ new file mode 100644
 ++  }
 ++};
 ++
-+ template <>
-+ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
-+                     viz::CompositorFrameMetadata> {
-+@@ -196,6 +290,16 @@ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
-+     return metadata.tracked_element_rects;
-+   }
-+ 
-++  static const std::vector<viz::ScrollTreeNode>& scroll_tree(
-++      const viz::CompositorFrameMetadata& metadata) {
-++    return metadata.scroll_tree;
-++  }
+++}  // namespace mojo
 ++
-++  static const std::vector<viz::DrawnLayer>& drawn_layers(
-++      const viz::CompositorFrameMetadata& metadata) {
-++    return metadata.drawn_layers;
-++  }
-++
-+   static bool Read(viz::mojom::CompositorFrameMetadataDataView data,
-+                    viz::CompositorFrameMetadata* out);
-+ };
++ #endif  // SERVICES_VIZ_PUBLIC_CPP_COMPOSITING_COMPOSITOR_FRAME_METADATA_MOJOM_TRAITS_H_
 +diff --git a/services/viz/public/mojom/BUILD.gn b/services/viz/public/mojom/BUILD.gn
 +index f78fa897f7b277e170c16a9d848f6c862f9d039f..99a5645e0b62f3cd129fd60791e1599c37338e31 100644
 +--- a/services/viz/public/mojom/BUILD.gn
@@ -642,17 +672,17 @@ new file mode 100644
 +       traits_headers = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h" ]
 +       traits_public_deps = [ "//components/viz/common" ]
 +diff --git a/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom b/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
-+index ba76572f8b5e8009982402f24fb385a2bc996fc6..8bd02bd4db64da839803ebe1c7cded1d29b17803 100644
++index ba76572f8b5e8009982402f24fb385a2bc996fc6..37050b6d4c7555300b5fdfecd24059c47d5cdf97 100644
 +--- a/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
 ++++ b/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
-+@@ -21,6 +21,7 @@ import "third_party/blink/public/mojom/tokens/tokens.mojom";
++@@ -20,6 +20,7 @@ import "skia/public/mojom/skcolor4f.mojom";
++ import "third_party/blink/public/mojom/tokens/tokens.mojom";
 + import "ui/gfx/geometry/mojom/geometry.mojom";
 + import "ui/gfx/mojom/display_color_spaces.mojom";
-+ import "ui/gfx/mojom/overlay_transform.mojom";
 ++import "ui/gfx/mojom/transform.mojom";
++ import "ui/gfx/mojom/overlay_transform.mojom";
 + import "ui/latency/mojom/latency_info.mojom";
 + 
-+ // See cc/trees/render_frame_metadata.h
 +@@ -97,4 +98,38 @@ struct CompositorFrameMetadata {
 + 
 +   // Tracked element rects for the frame.
@@ -695,15 +725,15 @@ new file mode 100644
 diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_event.h
 --- a/shell/browser/osr/osr_paint_event.h
 +++ b/shell/browser/osr/osr_paint_event.h
-@@ -8,6 +8,7 @@
+@@ -15,6 +15,7 @@
+ #include <cstdint>
  
- #include "base/functional/callback_helpers.h"
  #include "base/memory/read_only_shared_memory_region.h"
 +#include "components/viz/common/quads/compositor_frame_metadata.h"
- #include "content/public/common/widget_type.h"
- #include "media/base/video_types.h"
- #include "mojo/public/cpp/bindings/pending_remote.h"
-@@ -98,6 +99,8 @@ struct OffscreenSharedTextureValue {
+ #include "ui/gfx/geometry/point_f.h"
+ 
+ namespace electron {
+@@ -96,6 +97,8 @@ struct OffscreenSharedTextureValue {
    std::optional<gfx::PointF> root_scroll_offset;
    std::optional<double> page_scale_factor;
    std::optional<double> device_scale_factor;
@@ -712,7 +742,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
  
    // The capture timestamp, microseconds since capture start
    int64_t timestamp = 0;
-@@ -162,6 +165,8 @@ struct OffscreenSoftwareFrameValue {
+@@ -160,6 +163,8 @@ struct OffscreenSoftwareFrameValue {
    std::optional<gfx::PointF> root_scroll_offset;
    std::optional<double> page_scale_factor;
    std::optional<double> device_scale_factor;
@@ -724,7 +754,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
 diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_video_consumer.cc
 --- a/shell/browser/osr/osr_video_consumer.cc
 +++ b/shell/browser/osr/osr_video_consumer.cc
-@@ -64,6 +64,54 @@ std::optional<gfx::PointF> RootScrollOffset(
+@@ -63,6 +63,54 @@ std::optional<gfx::PointF> RootScrollOffset(
                       *metadata.root_scroll_offset_y);
  }
  
@@ -779,7 +809,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
  }  // namespace
  
  namespace electron {
-@@ -163,6 +211,8 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -162,6 +210,8 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      texture.root_scroll_offset = RootScrollOffset(info->metadata);
      texture.page_scale_factor = info->metadata.page_scale_factor;
      texture.device_scale_factor = info->metadata.device_scale_factor;
@@ -788,7 +818,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
      texture.widget_type = view_->GetWidgetType();
  
  #if BUILDFLAG(IS_WIN)
-@@ -255,6 +305,8 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -254,6 +304,8 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      frame.root_scroll_offset = RootScrollOffset(info->metadata);
      frame.page_scale_factor = info->metadata.page_scale_factor;
      frame.device_scale_factor = info->metadata.device_scale_factor;

@@ -27,15 +27,15 @@ diff --git a/docs/api/structures/offscreen-software-frame.md b/docs/api/structur
 diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_event.h
 --- a/shell/browser/osr/osr_paint_event.h
 +++ b/shell/browser/osr/osr_paint_event.h
-@@ -14,6 +14,7 @@
- #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
- #include "third_party/skia/include/core/SkCanvas.h"
- #include "ui/gfx/canvas.h"
-+#include "ui/gfx/geometry/point_f.h"
- #include "ui/gfx/native_ui_types.h"
- 
+@@ -15,6 +15,7 @@
  #include <cstdint>
-@@ -94,6 +95,9 @@ struct OffscreenSharedTextureValue {
+ 
+ #include "base/memory/read_only_shared_memory_region.h"
++#include "ui/gfx/geometry/point_f.h"
+ 
+ namespace electron {
+ 
+@@ -92,6 +93,9 @@ struct OffscreenSharedTextureValue {
    std::optional<gfx::Rect> capture_update_rect;
    std::optional<gfx::Size> source_size;
    std::optional<gfx::Rect> region_capture_rect;
@@ -45,7 +45,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
  
    // The capture timestamp, microseconds since capture start
    int64_t timestamp = 0;
-@@ -155,6 +159,9 @@ struct OffscreenSoftwareFrameValue {
+@@ -153,6 +157,9 @@ struct OffscreenSoftwareFrameValue {
    // Extra metadata for the video frame.
    std::optional<gfx::Rect> capture_update_rect;
    std::optional<gfx::Size> source_size;
@@ -58,7 +58,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
 diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_video_consumer.cc
 --- a/shell/browser/osr/osr_video_consumer.cc
 +++ b/shell/browser/osr/osr_video_consumer.cc
-@@ -56,6 +56,14 @@ bool IsPlatformSharedTextureHandle(const gfx::GpuMemoryBufferHandle& handle) {
+@@ -55,6 +55,14 @@ bool IsPlatformSharedTextureHandle(const gfx::GpuMemoryBufferHandle& handle) {
  #endif
  }
  
@@ -73,7 +73,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
  }  // namespace
  
  namespace electron {
-@@ -152,6 +160,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -151,6 +159,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      texture.capture_update_rect = info->metadata.capture_update_rect;
      texture.source_size = info->metadata.source_size;
      texture.region_capture_rect = info->metadata.region_capture_rect;
@@ -83,7 +83,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
      texture.widget_type = view_->GetWidgetType();
  
  #if BUILDFLAG(IS_WIN)
-@@ -241,6 +252,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -240,6 +251,9 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      frame.frame_count = info->metadata.capture_counter.value_or(0);
      frame.capture_update_rect = info->metadata.capture_update_rect;
      frame.source_size = info->metadata.source_size;

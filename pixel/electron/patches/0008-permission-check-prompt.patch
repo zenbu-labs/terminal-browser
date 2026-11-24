@@ -1,7 +1,7 @@
 diff --git a/docs/api/session.md b/docs/api/session.md
 --- a/docs/api/session.md
 +++ b/docs/api/session.md
-@@ -1030,7 +1030,7 @@ session.fromPartition('some-partition').setPermissionRequestHandler((webContents
+@@ -1120,7 +1120,7 @@ session.defaultSession.setPermissionRequestHandler((webContents, permission, cal
  
  #### `ses.setPermissionCheckHandler(handler)`
  
@@ -10,7 +10,7 @@ diff --git a/docs/api/session.md b/docs/api/session.md
    * `webContents` ([WebContents](web-contents.md) | null) - WebContents that contains the frame checking the permission. This is `null` when the check is not made on behalf of a document, for example for a service worker or for a `notifications` check. If the check comes from a subframe, `webContents` is the top-level WebContents; use `requestingOrigin`, `requestingUrl` and `isMainFrame` to identify the frame that is asking.
    * `permission` string - Type of permission check. Electron forwards every permission type that Chromium checks, so this list mirrors Chromium's permission types and includes some that have no effect on desktop or are only used by specific platforms or features.
      * `ar` - Access to augmented reality sessions via the [WebXR Device API](https://developer.mozilla.org/en-US/docs/Web/API/WebXR_Device_API).
-@@ -1114,6 +1114,10 @@ session.fromPartition('some-partition').setPermissionCheckHandler((webContents,
+@@ -1204,6 +1204,10 @@ session.fromPartition('some-partition').setPermissionCheckHandler((webContents,
  > [!NOTE]
  > `isMainFrame` will always be `false` for a `fileSystem` request as a result of Chromium limitations.
  
@@ -24,7 +24,7 @@ diff --git a/docs/api/session.md b/docs/api/session.md
 diff --git a/shell/browser/electron_permission_manager.cc b/shell/browser/electron_permission_manager.cc
 --- a/shell/browser/electron_permission_manager.cc
 +++ b/shell/browser/electron_permission_manager.cc
-@@ -325,10 +325,8 @@ blink::mojom::PermissionStatus ElectronPermissionManager::GetPermissionStatus(
+@@ -323,10 +323,8 @@ blink::mojom::PermissionStatus ElectronPermissionManager::GetPermissionStatus(
        blink::PermissionDescriptorToPermissionType(permission_descriptor);
    base::DictValue details;
    details.Set("embeddingOrigin", embedding_origin.spec());
@@ -37,7 +37,7 @@ diff --git a/shell/browser/electron_permission_manager.cc b/shell/browser/electr
  }
  
  content::PermissionResult
-@@ -359,15 +357,27 @@ bool ElectronPermissionManager::CheckPermissionWithDetails(
+@@ -357,15 +355,27 @@ bool ElectronPermissionManager::CheckPermissionWithDetails(
      content::RenderFrameHost* render_frame_host,
      const GURL& requesting_origin,
      base::DictValue details) const {
@@ -68,7 +68,7 @@ diff --git a/shell/browser/electron_permission_manager.cc b/shell/browser/electr
      }
    }
  
-@@ -391,8 +401,14 @@ bool ElectronPermissionManager::CheckPermissionWithDetails(
+@@ -389,8 +399,14 @@ bool ElectronPermissionManager::CheckPermissionWithDetails(
      default:
        break;
    }
@@ -85,7 +85,7 @@ diff --git a/shell/browser/electron_permission_manager.cc b/shell/browser/electr
  }
  
  bool ElectronPermissionManager::CheckDevicePermission(
-@@ -463,13 +479,9 @@ ElectronPermissionManager::GetPermissionResultForCurrentDocument(
+@@ -461,13 +477,9 @@ ElectronPermissionManager::GetPermissionResultForCurrentDocument(
                content::PermissionUtil::GetLastCommittedOriginAsURL(
                    render_frame_host->GetMainFrame())
                    .spec());
