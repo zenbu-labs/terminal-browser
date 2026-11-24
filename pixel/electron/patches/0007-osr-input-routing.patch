@@ -28,7 +28,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
  #include "components/viz/common/features.h"
  #include "components/viz/common/frame_sinks/begin_frame_args.h"
  #include "components/viz/common/frame_sinks/copy_output_request.h"
-@@ -549,6 +550,26 @@ ui::Compositor* OffScreenRenderWidgetHostView::GetCompositor() {
+@@ -549,6 +550,27 @@ ui::Compositor* OffScreenRenderWidgetHostView::GetCompositor() {
    return compositor_.get();
  }
  
@@ -49,13 +49,14 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
 +  }
 +  if (!compositor_ || !compositor_->frame_sink_id().is_valid())
 +    return false;
-+  return !!render_widget_host_->delegate()->GetInputEventRouter();
++  auto* router = render_widget_host_->delegate()->GetInputEventRouter();
++  return router && router->IsViewInMap(this);
 +}
 +
  const viz::FrameSinkId& OffScreenRenderWidgetHostView::GetFrameSinkId() const {
    return delegated_frame_host()->frame_sink_id();
  }
-@@ -568,7 +589,8 @@ bool OffScreenRenderWidgetHostView::TransformPointToCoordSpaceForView(
+@@ -568,7 +590,8 @@ bool OffScreenRenderWidgetHostView::TransformPointToCoordSpaceForView(
      return true;
    }
  
@@ -65,7 +66,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
  }
  
  void OffScreenRenderWidgetHostView::CancelWidget() {
-@@ -806,6 +828,11 @@ void OffScreenRenderWidgetHostView::SendMouseEvent(
+@@ -806,6 +829,11 @@ void OffScreenRenderWidgetHostView::SendMouseEvent(
  
    if (!render_widget_host_)
      return;
@@ -77,7 +78,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
    render_widget_host_->ForwardMouseEvent(event);
  }
  
-@@ -829,13 +856,11 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
+@@ -829,13 +857,11 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
  
    blink::WebMouseWheelEvent mouse_wheel_event(event);
  
@@ -93,7 +94,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
  
    if (!IsPopupWidget()) {
      if (popup_host_view_) {
-@@ -889,6 +914,11 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
+@@ -889,6 +915,11 @@ void OffScreenRenderWidgetHostView::SendMouseWheelEvent(
    }
    if (!render_widget_host_)
      return;
