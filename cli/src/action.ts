@@ -58,9 +58,17 @@ function sessionName(browser: Browser): string {
   return `terminal-browser-${recordKey(browser)}`;
 }
 
+// Keeps the user's own agent-browser config out, since options like pinTab break against our browser.
+const AGENT_CONFIG_FILE = path.join(AGENT_SOCKETS_DIR, "config.json");
+
 function childEnv(): NodeJS.ProcessEnv {
   fs.mkdirSync(AGENT_SOCKETS_DIR, { recursive: true });
-  return { ...process.env, AGENT_BROWSER_SOCKET_DIR: AGENT_SOCKETS_DIR };
+  if (!fs.existsSync(AGENT_CONFIG_FILE)) {
+    const partial = `${AGENT_CONFIG_FILE}.${process.pid}`;
+    fs.writeFileSync(partial, "{}\n");
+    fs.renameSync(partial, AGENT_CONFIG_FILE);
+  }
+  return { ...process.env, AGENT_BROWSER_SOCKET_DIR: AGENT_SOCKETS_DIR, AGENT_BROWSER_CONFIG: AGENT_CONFIG_FILE };
 }
 
 function runAgent(binary: string, args: string[]): { status: number; stdout: string } {
