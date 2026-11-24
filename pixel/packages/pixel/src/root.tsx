@@ -253,7 +253,7 @@ export function createRoot(options: RootOptions = {}): Root {
 
   registry = new ViewRegistry(
     engineRoot,
-    hostDisplayScale(terminal, env),
+    hostDisplayScale(terminal, env, tty),
     !engineRoot.info.kittyKeyboard,
     { quit: (entry: ViewEntry | null) => quit(entry) },
   );

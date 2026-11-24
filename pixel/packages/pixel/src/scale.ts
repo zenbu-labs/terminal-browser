@@ -2,12 +2,32 @@ import { screen } from "electron";
 
 import type { EngineInfo } from "./react";
 import type { Terminal } from "./terminal";
+import { debug } from "./debug";
+import { terminalWindowScale } from "./terminal/window";
 
-export function hostDisplayScale(terminal: Terminal | null, env: NodeJS.ProcessEnv): number {
+export function hostDisplayScale(
+  terminal: Terminal | null,
+  env: NodeJS.ProcessEnv,
+  tty: string | undefined,
+): number {
+  const [source, scale] = chooseDisplayScale(terminal, env, tty);
+  debug("display scale", { source, scale });
+  return scale;
+}
+
+function chooseDisplayScale(
+  terminal: Terminal | null,
+  env: NodeJS.ProcessEnv,
+  tty: string | undefined,
+): [string, number] {
   const explicit = Number(env.PIXEL_DISPLAY_SCALE);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  if (terminal?.reportsCssPixels) return 1;
-  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).scaleFactor;
+  if (Number.isFinite(explicit) && explicit > 0) return ["PIXEL_DISPLAY_SCALE", explicit];
+  if (terminal?.reportsCssPixels) return ["css pixels", 1];
+  const scales = new Set(screen.getAllDisplays().map((display) => display.scaleFactor));
+  if (scales.size === 1) return ["only display scale", [...scales][0]];
+  const windowScale = tty ? terminalWindowScale(tty) : null;
+  if (windowScale !== null) return ["terminal window", windowScale];
+  return ["display under pointer", screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).scaleFactor];
 }
 
 export class CellZoomFollower {

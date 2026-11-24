@@ -5,7 +5,10 @@ import path from "node:path";
 import { appleScript } from "../applescript";
 import { GHOSTTY_SCRIPT } from "./ghostty-script";
 import { panePixels } from "../graphics";
+import { PROCESS_LIST_ARGS, ancestry, parseProcesses } from "../processes";
+import type { ProcessInfo } from "../processes";
 import { setPaneWorkingDirectory, shellQuote, sleep } from "../shared";
+import { appWindowScale } from "../window";
 import type { Detect, Direction, ListPanesOptions, Pane, PaneContext, PaneDetails } from "../terminal";
 
 
@@ -18,19 +21,8 @@ const DIRECTION_CODES: Record<Direction, string> = {
 
 const GHOSTTY_BINARY = /\.app\/Contents\/MacOS\/ghostty(\s|$)/;
 
-interface Process {
-  parent: number;
-  tty: string;
-  command: string;
-}
-
-function ghosttyAbove(start: number, processes: Map<number, Process>): number | null {
-  for (let pid = start, hops = 0; hops < 64 && processes.has(pid); hops++) {
-    const { parent, command } = processes.get(pid)!;
-    if (GHOSTTY_BINARY.test(command)) return pid;
-    pid = parent;
-  }
-  return null;
+function ghosttyAbove(start: number, processes: Map<number, ProcessInfo>): number | null {
+  return ancestry(start, processes).find((pid) => GHOSTTY_BINARY.test(processes.get(pid)!.command)) ?? null;
 }
 
 function markerDirectory(): string {
@@ -99,11 +91,7 @@ export const ghostty: Detect = (env, run) => {
   async function findOwner(tty: string | null): Promise<number> {
     const ancestor = await ghosttyAncestor();
     if (ancestor !== null) return ancestor;
-    const processes = new Map<number, Process>();
-    for (const line of (await run("ps", ["-axo", "pid=,ppid=,tty=,command="])).split("\n")) {
-      const parts = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
-      if (parts) processes.set(Number(parts[1]), { parent: Number(parts[2]), tty: parts[3], command: parts[4] });
-    }
+    const processes = parseProcesses(await run("ps", PROCESS_LIST_ARGS));
     const above = ghosttyAbove(process.pid, processes);
     if (above !== null) return above;
     if (tty) {
@@ -129,6 +117,8 @@ export const ghostty: Detect = (env, run) => {
 
   let scale: number | null = null;
   async function backingScale(): Promise<number> {
+    if (scale !== null) return scale;
+    scale = appWindowScale(await ownerPid(null));
     if (scale !== null) return scale;
     const read = await run("osascript", [
       "-l",

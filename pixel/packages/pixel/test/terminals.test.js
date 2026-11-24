@@ -278,7 +278,7 @@ const processTable = (rows) => rows.map((row) => row.join(" ")).join("\n") + "\n
 // in as our own parent to get a shell -> ghostty ancestry without knowing the real tree
 test("ghostty scripts the instance this shell runs inside, not the newest one", onMac, async () => {
   const { run, commands } = recorder({
-    "ps -axo pid=,ppid=,tty=,command=": processTable([
+    "ps -axo pid=,ppid=,tty=,comm=": processTable([
       [process.pid, process.ppid, "ttys001", "node test"],
       [process.ppid, 1, "??", FORKY_BIN],
       [9001, 1, "??", GHOSTTY_BIN],
@@ -297,7 +297,7 @@ test("ghostty scripts the instance this shell runs inside, not the newest one", 
 
 test("ghostty falls back to the only instance when this shell is not inside one", onMac, async () => {
   const { run, commands } = recorder({
-    "ps -axo pid=,ppid=,tty=,command=": processTable([
+    "ps -axo pid=,ppid=,tty=,comm=": processTable([
       [process.pid, 1, "ttys001", "node test"],
       [7000, 1, "??", GHOSTTY_BIN],
     ]),
@@ -309,7 +309,7 @@ test("ghostty falls back to the only instance when this shell is not inside one"
 
 test("ghostty finds the instance through the caller tty when ancestry does not reach one", onMac, async () => {
   const { run, commands } = recorder({
-    "ps -axo pid=,ppid=,tty=,command=": processTable([
+    "ps -axo pid=,ppid=,tty=,comm=": processTable([
       [process.pid, 1, "??", "node daemon"],
       [7000, 1, "??", GHOSTTY_BIN],
       [7001, 7000, "ttys009", "login"],
@@ -328,7 +328,7 @@ test("ghostty finds the instance through the caller tty when ancestry does not r
 
 test("ghostty refuses to guess between instances it cannot connect to this shell", onMac, async () => {
   const { run } = recorder({
-    "ps -axo pid=,ppid=,tty=,command=": processTable([
+    "ps -axo pid=,ppid=,tty=,comm=": processTable([
       [process.pid, 1, "ttys001", "node test"],
       [7000, 1, "??", GHOSTTY_BIN],
       [8000, 1, "??", `${GHOSTTY_BIN} -e probe`],
@@ -359,7 +359,7 @@ test("ghostty splits through the owning instance with the direction code", onMac
 
 test("ghostty asks the owning instance for a split's neighbor by window and tab", onMac, async () => {
   const { run, commands } = recorder({
-    "ps -axo pid=,ppid=,tty=,command=": processTable([
+    "ps -axo pid=,ppid=,tty=,comm=": processTable([
       [process.pid, process.ppid, "ttys001", "node test"],
       [process.ppid, 1, "??", GHOSTTY_BIN],
     ]),
