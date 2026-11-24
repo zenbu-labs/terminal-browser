@@ -263,6 +263,29 @@ test("rex reads block rectangles from the window layout tree", async () => {
   assert.deepEqual(await terminal.neighbor(at("block:c"), "left"), at("block:a"));
 });
 
+test("bateri reads pane rectangles from the tab's split tree", async () => {
+  const leaf = (id) => ({ id });
+  const tree = {
+    axis: "side_by_side",
+    ratio: 0.6,
+    first: leaf("p1"),
+    second: { axis: "stacked", ratio: 0.5, first: leaf("p2"), second: leaf("p3") },
+  };
+  const listing = JSON.stringify({
+    caller: "p1",
+    windows: [{ tabs: [{ id: "t1", tree }] }],
+    terminals: [],
+  });
+  const { run } = recorder({ "bateri ls --json": listing });
+  const terminal = detect({ TERM_PROGRAM: "bateri" }, run);
+  assert.equal(terminal?.name, "bateri");
+  const at = (id) => ({ id, tab: "t1" });
+  assert.deepEqual(await terminal.neighbor(at("p1"), "right"), at("p2"));
+  assert.equal(await terminal.neighbor(at("p1"), "left"), null);
+  assert.deepEqual(await terminal.neighbor(at("p3"), "up"), at("p2"));
+  assert.deepEqual(await terminal.neighbor(at("p3"), "left"), at("p1"));
+});
+
 const GHOSTTY_ENV = {
   TERM: "xterm-ghostty",
   TERM_PROGRAM: "ghostty",
