@@ -332,21 +332,22 @@ jobs:
             echo "::error::$tag already exists; delete it first to replace it with $PREVIEW_TAG"
             exit 1
           fi
-          mkdir assets
-          gh release download "$PREVIEW_TAG" -R "$GITHUB_REPOSITORY" --dir assets \
+          assets="$RUNNER_TEMP/promote"
+          mkdir "$assets"
+          gh release download "$PREVIEW_TAG" -R "$GITHUB_REPOSITORY" --dir "$assets" \
             --pattern '*.zip' --pattern electron.d.ts --pattern SHASUMS256.txt
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             zip="electron-v$version-$platform.zip"
-            if [ ! -f "assets/$zip" ] || ! grep -q "\*$zip" assets/SHASUMS256.txt; then
+            if [ ! -f "$assets/$zip" ] || ! grep -q "\*$zip" "$assets/SHASUMS256.txt"; then
               echo "::error::$PREVIEW_TAG is missing $zip"
               exit 1
             fi
           done
-          (cd assets && sha256sum -c SHASUMS256.txt)
+          (cd "$assets" && sha256sum -c SHASUMS256.txt)
           gh release create "$tag" -R "$GITHUB_REPOSITORY" \
             --title "electron v$version (patched)" \
             --notes "$(gh release view "$PREVIEW_TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body)"
-          gh release upload "$tag" -R "$GITHUB_REPOSITORY" assets/*
+          gh release upload "$tag" -R "$GITHUB_REPOSITORY" "$assets"/*
 
       - name: Comment on the branch's PR
         if: ${{ always() }}
