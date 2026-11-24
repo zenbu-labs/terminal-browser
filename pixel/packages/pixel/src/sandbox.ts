@@ -27,9 +27,12 @@ export function deniedRefusal(): string | null {
 
 const APPARMOR_SCRIPT = path.resolve(__dirname, "..", "scripts", "apparmor.sh");
 
-function kernelSetting(file: string): string | null {
-  if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, "utf8").trim();
+export function kernelSetting(file: string): string | null {
+  try {
+    return fs.readFileSync(file, "utf8").trim();
+  } catch {
+    return null;
+  }
 }
 
 function setuidSandbox(electronBinary: string): boolean {

@@ -5,7 +5,13 @@ BINARY="${1:-$(dirname "$0")/../electron/pixel}"
 
 [ "$(uname -s)" = Linux ] || exit 0
 [ -z "${TERMINAL_BROWSER_SKIP_APPARMOR:-}" ] || exit 0
-[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true)" = 1 ] || exit 0
+SYSCTL=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+[ -e "$SYSCTL" ] || exit 0
+if ! RESTRICTED="$(cat "$SYSCTL" 2>/dev/null)"; then
+  echo "could not read $SYSCTL: it is unknown whether an AppArmor profile is needed" >&2
+  exit 0
+fi
+[ "$RESTRICTED" = 1 ] || exit 0
 
 if [ ! -x "$BINARY" ]; then
   echo "no electron binary at $BINARY" >&2
