@@ -40,7 +40,7 @@ diff --git a/docs/api/structures/web-preferences.md b/docs/api/structures/web-pr
 diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
 --- a/docs/api/web-contents.md
 +++ b/docs/api/web-contents.md
-@@ -930,6 +930,7 @@ Returns:
+@@ -927,6 +927,7 @@ Returns:
  
  * `details` Event\<\>
    * `texture` [OffscreenSharedTexture](structures/offscreen-shared-texture.md) (optional) _Experimental_ - The GPU shared texture of the frame, when `webPreferences.offscreen.useSharedTexture` is `true`.
@@ -48,7 +48,7 @@ diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
  * `dirtyRect` [Rectangle](structures/rectangle.md)
  * `image` [NativeImage](native-image.md) - The image data of the whole frame.
  
-@@ -953,6 +954,8 @@ By managing the texture lifecycle by yourself, you can safely pass the `texture.
+@@ -950,6 +951,8 @@ By managing the texture lifecycle by yourself, you can safely pass the `texture.
  
  More details can be found in the [offscreen rendering tutorial](../tutorial/offscreen-rendering.md). To learn about how to handle the texture in native code, refer to [offscreen rendering's code documentation.](../../shell/browser/osr/README.md).
  
@@ -60,7 +60,7 @@ diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
 diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
 --- a/shell/browser/api/electron_api_web_contents.cc
 +++ b/shell/browser/api/electron_api_web_contents.cc
-@@ -927,6 +927,8 @@ WebContents::WebContents(v8::Isolate* isolate,
+@@ -1053,6 +1053,8 @@ WebContents::WebContents(v8::Isolate* isolate,
        options.Get(options::kOffscreen, &use_offscreen_dict);
        use_offscreen_dict.Get(options::kUseSharedTexture,
                               &offscreen_use_shared_texture_);
@@ -69,7 +69,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
        use_offscreen_dict.Get(options::kSharedTexturePixelFormat,
                               &offscreen_shared_texture_pixel_format_);
        use_offscreen_dict.Get(options::kDeviceScaleFactor,
-@@ -976,7 +978,7 @@ WebContents::WebContents(v8::Isolate* isolate,
+@@ -1099,7 +1101,7 @@ WebContents::WebContents(v8::Isolate* isolate,
  
      if (embedder_ && embedder_->IsOffScreen()) {
        auto* view = new OffScreenWebContentsView(
@@ -78,8 +78,8 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
            offscreen_shared_texture_pixel_format_,
            offscreen_device_scale_factor_,
            base::BindRepeating(&WebContents::OnPaint, base::Unretained(this)));
-@@ -1001,7 +1003,8 @@ WebContents::WebContents(v8::Isolate* isolate,
-     params.starting_sandbox_flags = starting_sandbox_flags;
+@@ -1123,7 +1125,8 @@ WebContents::WebContents(v8::Isolate* isolate,
+     content::WebContents::CreateParams params{browser_context};
      auto* view = new OffScreenWebContentsView(
          transparent, offscreen_use_shared_texture_,
 -        offscreen_shared_texture_pixel_format_, offscreen_device_scale_factor_,
@@ -88,7 +88,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
          base::BindRepeating(&WebContents::OnPaint, base::Unretained(this)));
      params.view = view;
      params.delegate_view = view;
-@@ -1446,7 +1449,7 @@ void WebContents::MaybeOverrideCreateParamsForNewWindow(
+@@ -1600,7 +1603,7 @@ void WebContents::MaybeOverrideCreateParamsForNewWindow(
        // Use a no-op callback here. The real OnPaint callback will be bound
        // to the child WebContents in AddNewContents via SetCallback().
        auto* view = new OffScreenWebContentsView(
@@ -97,7 +97,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
            offscreen_shared_texture_pixel_format_,
            offscreen_device_scale_factor_, base::DoNothing());
        create_params->view = view;
-@@ -4295,7 +4298,8 @@ bool WebContents::IsOffScreen() const {
+@@ -4714,7 +4717,8 @@ bool WebContents::IsOffScreen() const {
  
  void WebContents::OnPaint(const gfx::Rect& dirty_rect,
                            const SkBitmap& bitmap,
@@ -107,7 +107,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
    v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
    v8::HandleScope handle_scope(isolate);
  
-@@ -4305,10 +4309,18 @@ void WebContents::OnPaint(const gfx::Rect& dirty_rect,
+@@ -4724,10 +4728,18 @@ void WebContents::OnPaint(const gfx::Rect& dirty_rect,
        event->GetWrapper(isolate).ToLocalChecked();
    gin_helper::Dictionary dict(isolate, event_object);
  
@@ -130,7 +130,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
 diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/electron_api_web_contents.h
 --- a/shell/browser/api/electron_api_web_contents.h
 +++ b/shell/browser/api/electron_api_web_contents.h
-@@ -329,7 +329,8 @@ class WebContents final : public ExclusiveAccessContext,
+@@ -356,7 +356,8 @@ class WebContents final : public ExclusiveAccessContext,
    bool IsOffScreen() const;
    void OnPaint(const gfx::Rect& dirty_rect,
                 const SkBitmap& bitmap,
@@ -140,7 +140,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/e
    void StartPainting();
    void StopPainting();
    bool IsPainting() const;
-@@ -898,6 +899,9 @@ class WebContents final : public ExclusiveAccessContext,
+@@ -947,6 +948,9 @@ class WebContents final : public ExclusiveAccessContext,
    bool offscreen_use_shared_texture_ = false;
    std::string offscreen_shared_texture_pixel_format_ = "argb";
  
@@ -201,15 +201,15 @@ diff --git a/shell/browser/osr/osr_paint_event.cc b/shell/browser/osr/osr_paint_
 diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_event.h
 --- a/shell/browser/osr/osr_paint_event.h
 +++ b/shell/browser/osr/osr_paint_event.h
-@@ -7,6 +7,7 @@
- #define ELECTRON_SHELL_BROWSER_OSR_OSR_PAINT_EVENT_H
+@@ -14,18 +14,20 @@
  
- #include "base/functional/callback_helpers.h"
+ #include <cstdint>
+ 
 +#include "base/memory/read_only_shared_memory_region.h"
- #include "content/public/common/widget_type.h"
- #include "media/base/video_types.h"
- #include "mojo/public/cpp/bindings/pending_remote.h"
-@@ -23,12 +24,12 @@ struct OffscreenNativePixmapPlaneInfo {
++
+ namespace electron {
+ 
+ struct OffscreenNativePixmapPlaneInfo {
    // The strides and offsets in bytes to be used when accessing the buffers
    // via a memory mapping. One per plane per entry. Size in bytes of the
    // plane is necessary to map the buffers.
@@ -224,7 +224,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
  
    OffscreenNativePixmapPlaneInfo() = delete;
    ~OffscreenNativePixmapPlaneInfo();
-@@ -46,10 +47,18 @@ struct OffscreenReleaserHolder {
+@@ -43,10 +45,18 @@ struct OffscreenReleaserHolder {
        gfx::GpuMemoryBufferHandle gmb_handle,
        mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
            releaser);
@@ -243,7 +243,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
    // Releaser, hold this to prevent FrameSinkVideoCapturer recycle frame
    mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
        releaser;
-@@ -61,10 +70,10 @@ struct OffscreenSharedTextureValue {
+@@ -58,10 +68,10 @@ struct OffscreenSharedTextureValue {
    OffscreenSharedTextureValue(const OffscreenSharedTextureValue& other);
  
    // It is user's responsibility to compose popup widget textures.
@@ -256,7 +256,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
  
    // The full dimensions of the video frame data.
    gfx::Size coded_size;
-@@ -87,13 +96,13 @@ struct OffscreenSharedTextureValue {
+@@ -84,13 +94,13 @@ struct OffscreenSharedTextureValue {
    std::optional<gfx::Rect> region_capture_rect;
  
    // The capture timestamp, microseconds since capture start
@@ -273,7 +273,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
    // On Windows it is a HANDLE to the shared D3D11 texture.
-@@ -108,8 +117,61 @@ struct OffscreenSharedTextureValue {
+@@ -105,8 +115,61 @@ struct OffscreenSharedTextureValue {
  
  typedef std::optional<OffscreenSharedTextureValue> OffscreenSharedTexture;
  
@@ -340,7 +340,7 @@ diff --git a/shell/browser/osr/osr_paint_event.h b/shell/browser/osr/osr_paint_e
 diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/osr/osr_render_widget_host_view.cc
 --- a/shell/browser/osr/osr_render_widget_host_view.cc
 +++ b/shell/browser/osr/osr_render_widget_host_view.cc
-@@ -151,6 +151,7 @@ class ElectronDelegatedFrameHostClient
+@@ -157,6 +157,7 @@ class ElectronDelegatedFrameHostClient
  OffScreenRenderWidgetHostView::OffScreenRenderWidgetHostView(
      bool transparent,
      bool offscreen_use_shared_texture,
@@ -348,7 +348,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
      const std::string& offscreen_shared_texture_pixel_format,
      float offscreen_device_scale_factor,
      bool painting,
-@@ -164,6 +165,7 @@ OffScreenRenderWidgetHostView::OffScreenRenderWidgetHostView(
+@@ -170,6 +171,7 @@ OffScreenRenderWidgetHostView::OffScreenRenderWidgetHostView(
        parent_host_view_(parent_host_view),
        transparent_(transparent),
        offscreen_use_shared_texture_(offscreen_use_shared_texture),
@@ -356,7 +356,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
        offscreen_shared_texture_pixel_format_(
            offscreen_shared_texture_pixel_format),
        offscreen_device_scale_factor_(offscreen_device_scale_factor),
-@@ -626,9 +628,10 @@ uint64_t OffScreenRenderWidgetHostView::GetNSViewId() const {
+@@ -645,9 +647,10 @@ uint64_t OffScreenRenderWidgetHostView::GetNSViewId() const {
  void OffScreenRenderWidgetHostView::OnPaint(
      const gfx::Rect& damage_rect,
      const SkBitmap& bitmap,
@@ -370,7 +370,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
      return;
    }
  
-@@ -687,7 +690,7 @@ void OffScreenRenderWidgetHostView::CompositeFrame(
+@@ -706,7 +709,7 @@ void OffScreenRenderWidgetHostView::CompositeFrame(
    }
  
    callback_.Run(gfx::IntersectRects(gfx::Rect(size_in_pixels), damage_rect),
@@ -382,7 +382,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.cc b/shell/browser/os
 diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr/osr_render_widget_host_view.h
 --- a/shell/browser/osr/osr_render_widget_host_view.h
 +++ b/shell/browser/osr/osr_render_widget_host_view.h
-@@ -68,6 +68,7 @@ class OffScreenRenderWidgetHostView
+@@ -61,6 +61,7 @@ class OffScreenRenderWidgetHostView
    OffScreenRenderWidgetHostView(
        bool transparent,
        bool offscreen_use_shared_texture,
@@ -390,7 +390,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr
        const std::string& offscreen_shared_texture_pixel_format,
        float offscreen_device_scale_factor,
        bool painting,
-@@ -204,7 +205,8 @@ class OffScreenRenderWidgetHostView
+@@ -197,7 +198,8 @@ class OffScreenRenderWidgetHostView
  
    void OnPaint(const gfx::Rect& damage_rect,
                 const SkBitmap& bitmap,
@@ -400,7 +400,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr
    void OnPopupPaint(const gfx::Rect& damage_rect);
    void OnProxyViewPaint(const gfx::Rect& damage_rect) override;
  
-@@ -235,6 +237,10 @@ class OffScreenRenderWidgetHostView
+@@ -228,6 +230,10 @@ class OffScreenRenderWidgetHostView
      return offscreen_use_shared_texture_;
    }
  
@@ -411,7 +411,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr
    const std::string offscreen_shared_texture_pixel_format() const {
      return offscreen_shared_texture_pixel_format_;
    }
-@@ -284,6 +290,7 @@ class OffScreenRenderWidgetHostView
+@@ -280,6 +286,7 @@ class OffScreenRenderWidgetHostView
  
    const bool transparent_;
    const bool offscreen_use_shared_texture_;
@@ -422,7 +422,7 @@ diff --git a/shell/browser/osr/osr_render_widget_host_view.h b/shell/browser/osr
 diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_video_consumer.cc
 --- a/shell/browser/osr/osr_video_consumer.cc
 +++ b/shell/browser/osr/osr_video_consumer.cc
-@@ -175,7 +175,7 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -174,7 +174,7 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      texture.releaser_holder = new OffscreenReleaserHolder(std::move(gmb_handle),
                                                            std::move(callbacks));
  
@@ -431,7 +431,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
      return;
    }
  
-@@ -225,6 +225,40 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -224,6 +224,40 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      return;
    }
  
@@ -472,7 +472,7 @@ diff --git a/shell/browser/osr/osr_video_consumer.cc b/shell/browser/osr/osr_vid
    // The SkBitmap's pixels will be marked as immutable, but the installPixels()
    // API requires a non-const pointer. So, cast away the const.
    void* const pixels = const_cast<void*>(mapping.memory());
-@@ -257,7 +291,7 @@ void OffScreenVideoConsumer::OnFrameCaptured(
+@@ -256,7 +290,7 @@ void OffScreenVideoConsumer::OnFrameCaptured(
      update_rect = content_rect;
    }
  
@@ -519,7 +519,7 @@ diff --git a/shell/browser/osr/osr_web_contents_view.cc b/shell/browser/osr/osr_
 diff --git a/shell/browser/osr/osr_web_contents_view.h b/shell/browser/osr/osr_web_contents_view.h
 --- a/shell/browser/osr/osr_web_contents_view.h
 +++ b/shell/browser/osr/osr_web_contents_view.h
-@@ -37,6 +37,7 @@ class OffScreenWebContentsView : public content::WebContentsView,
+@@ -38,6 +38,7 @@ class OffScreenWebContentsView : public content::WebContentsView,
    OffScreenWebContentsView(
        bool transparent,
        bool offscreen_use_shared_texture,
@@ -527,7 +527,7 @@ diff --git a/shell/browser/osr/osr_web_contents_view.h b/shell/browser/osr/osr_w
        const std::string& offscreen_shared_texture_pixel_format,
        float offscreen_device_scale_factor,
        const OnPaintCallback& callback);
-@@ -114,6 +115,7 @@ class OffScreenWebContentsView : public content::WebContentsView,
+@@ -115,6 +116,7 @@ class OffScreenWebContentsView : public content::WebContentsView,
  
    const bool transparent_;
    const bool offscreen_use_shared_texture_;
@@ -652,7 +652,7 @@ diff --git a/shell/common/gin_converters/osr_converter.h b/shell/common/gin_conv
 diff --git a/shell/common/options_switches.h b/shell/common/options_switches.h
 --- a/shell/common/options_switches.h
 +++ b/shell/common/options_switches.h
-@@ -199,6 +199,8 @@ inline constexpr std::string_view kOffscreen = "offscreen";
+@@ -200,6 +200,8 @@ inline constexpr std::string_view kOffscreen = "offscreen";
  
  inline constexpr std::string_view kUseSharedTexture = "useSharedTexture";
  

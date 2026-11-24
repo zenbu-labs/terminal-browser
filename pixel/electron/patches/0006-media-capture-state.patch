@@ -11,7 +11,7 @@ new file mode 100644
 diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
 --- a/docs/api/web-contents.md
 +++ b/docs/api/web-contents.md
-@@ -743,6 +743,15 @@ Returns:
+@@ -740,6 +740,15 @@ Returns:
  
  Emitted when media becomes audible or inaudible.
  
@@ -27,7 +27,7 @@ diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
  #### Event: 'did-change-theme-color'
  
  Returns:
-@@ -1541,6 +1550,10 @@ Returns `boolean` - Whether this page has been muted.
+@@ -1533,6 +1542,10 @@ Returns `boolean` - Whether this page has been muted.
  
  Returns `boolean` - Whether audio is currently playing.
  
@@ -41,7 +41,7 @@ diff --git a/docs/api/web-contents.md b/docs/api/web-contents.md
 diff --git a/filenames.gni b/filenames.gni
 --- a/filenames.gni
 +++ b/filenames.gni
-@@ -442,6 +442,8 @@ filenames = {
+@@ -479,6 +479,8 @@ filenames = {
      "shell/browser/login_handler.h",
      "shell/browser/media/media_capture_devices_dispatcher.cc",
      "shell/browser/media/media_capture_devices_dispatcher.h",
@@ -53,7 +53,7 @@ diff --git a/filenames.gni b/filenames.gni
 diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
 --- a/shell/browser/api/electron_api_web_contents.cc
 +++ b/shell/browser/api/electron_api_web_contents.cc
-@@ -207,6 +207,7 @@
+@@ -216,6 +216,7 @@
  #include "extensions/browser/view_type_utils.h"
  #include "extensions/common/mojom/view_type.mojom.h"
  #include "shell/browser/extensions/electron_extension_web_contents_observer.h"
@@ -61,7 +61,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
  #endif
  
  #if BUILDFLAG(ENABLE_PRINTING)
-@@ -3683,6 +3684,32 @@ bool WebContents::IsCurrentlyAudible() {
+@@ -4019,6 +4020,32 @@ bool WebContents::IsCurrentlyAudible() {
    return web_contents()->IsCurrentlyAudible();
  }
  
@@ -94,18 +94,20 @@ diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/
  #if BUILDFLAG(ENABLE_PRINTING)
  namespace {
  
-@@ -5262,6 +5289,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
-       .SetMethod("setAudioMuted", &WebContents::SetAudioMuted)
-       .SetMethod("isAudioMuted", &WebContents::IsAudioMuted)
-       .SetMethod("isCurrentlyAudible", &WebContents::IsCurrentlyAudible)
+@@ -5787,6 +5814,9 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
+       gin::CreateFunctionTemplate(
+           isolate, base::BindRepeating(&gin_helper::Destroyable::IsDestroyed),
+           options));
++  gin_helper::ObjectTemplateBuilder(isolate, templ)
 +      .SetMethod("getMediaCapture", &WebContents::GetMediaCapture)
-       .SetMethod("setCaretBrowsingEnabled",
-                  &WebContents::SetCaretBrowsingEnabled)
-       .SetMethod("isCaretBrowsingEnabled", &WebContents::IsCaretBrowsingEnabled)
++      .Build();
+   // We use gin_helper::ObjectTemplateBuilder instead of
+   // gin::ObjectTemplateBuilder here to handle the fact that WebContents is
+   // destroyable.
 diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/electron_api_web_contents.h
 --- a/shell/browser/api/electron_api_web_contents.h
 +++ b/shell/browser/api/electron_api_web_contents.h
-@@ -101,6 +101,8 @@ class DevToolsEyeDropper;
+@@ -108,6 +108,8 @@ class DevToolsEyeDropper;
  
  namespace electron {
  
@@ -114,7 +116,7 @@ diff --git a/shell/browser/api/electron_api_web_contents.h b/shell/browser/api/e
  class DevToolsContextMenu;
  class DraggableRegionDebugger;
  class ElectronBrowserContext;
-@@ -263,6 +265,8 @@ class WebContents final : public ExclusiveAccessContext,
+@@ -273,6 +275,8 @@ class WebContents final : public ExclusiveAccessContext,
    void SetAudioMuted(bool muted);
    bool IsAudioMuted();
    bool IsCurrentlyAudible();
@@ -127,7 +129,7 @@ diff --git a/shell/browser/media/media_capture_ui.cc b/shell/browser/media/media
 new file mode 100644
 --- /dev/null
 +++ b/shell/browser/media/media_capture_ui.cc
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,153 @@
 +// Copyright (c) 2026 Zenbu Labs. All rights reserved.
 +// Use of this source code is governed by the MIT license that can be
 +// found in the LICENSE file.
@@ -273,7 +275,8 @@ new file mode 100644
 +content::MediaResponseCallback TrackMediaCapture(
 +    content::WebContents* web_contents,
 +    content::MediaResponseCallback callback) {
-+  return base::BindOnce(&RespondWithTracking, web_contents->GetWeakPtr(),
++  return base::BindOnce(&RespondWithTracking,
++                        web_contents ? web_contents->GetWeakPtr() : nullptr,
 +                        std::move(callback));
 +}
 +
@@ -346,7 +349,7 @@ new file mode 100644
 diff --git a/shell/browser/web_contents_permission_helper.cc b/shell/browser/web_contents_permission_helper.cc
 --- a/shell/browser/web_contents_permission_helper.cc
 +++ b/shell/browser/web_contents_permission_helper.cc
-@@ -18,6 +18,7 @@
+@@ -19,6 +19,7 @@
  #include "shell/browser/electron_browser_context.h"
  #include "shell/browser/electron_permission_manager.h"
  #include "shell/browser/media/media_capture_devices_dispatcher.h"
@@ -354,15 +357,14 @@ diff --git a/shell/browser/web_contents_permission_helper.cc b/shell/browser/web
  #include "third_party/blink/public/common/mediastream/media_stream_request.h"
  #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
  
-@@ -256,8 +257,9 @@ void WebContentsPermissionHelper::RequestFullscreenPermission(
- void WebContentsPermissionHelper::RequestMediaAccessPermission(
-     const content::MediaStreamRequest& request,
-     content::MediaResponseCallback response_callback) {
--  auto callback = base::BindOnce(&MediaAccessAllowed, request,
--                                 std::move(response_callback));
-+  auto callback = base::BindOnce(
-+      &MediaAccessAllowed, request,
-+      TrackMediaCapture(web_contents_.get(), std::move(response_callback)));
- 
-   base::DictValue details;
-   base::ListValue media_types;
+@@ -158,6 +159,10 @@ void OnMediaStreamRequestResponse(
+ void MediaAccessAllowed(const content::MediaStreamRequest& request,
+                         content::MediaResponseCallback callback,
+                         bool allowed) {
++  callback = TrackMediaCapture(
++      content::WebContents::FromRenderFrameHost(content::RenderFrameHost::FromID(
++          request.render_process_id, request.render_frame_id)),
++      std::move(callback));
+   if (allowed) {
+ #if BUILDFLAG(IS_MAC)
+     // If the request was approved, ask for system permissions if needed.
