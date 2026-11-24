@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { adjacentPane, bracketedPaste, paneById, PASTE_KEY } from "../shared";
 import type { PaneRect } from "../shared";
 import type { Detect, Pane, PaneDetails } from "../terminal";
@@ -35,7 +37,8 @@ function layoutRects(layout: RexLayout | undefined, into: PaneRect[] = []): Pane
 export const rex: Detect = (env, run) => {
   if (!env.REX_BLOCK && env.TERM_PROGRAM !== "rex") return null;
 
-  const rex = (args: string[], input?: string) => run("rex", args, input);
+  const bin = env.REX_BIN_DIR ? path.join(env.REX_BIN_DIR, "rex") : "rex";
+  const rex = (args: string[], input?: string) => run(bin, args, input);
 
   async function panes(): Promise<Pane[]> {
     const { blocks } = JSON.parse(await rex(["block", "ls", "--json"])) as {
@@ -90,8 +93,21 @@ export const rex: Detect = (env, run) => {
       await rex(["focus", pane]);
     },
     async split({ from, direction, command, size }) {
-      const ratio = size ? ["--ratio", String(Math.round(size * 100))] : [];
-      await rex(["split", "--block", from.id, "--split", SPLIT_DIRECTION[direction], ...ratio, "--", ...command]);
+      const created = (await rex(["split", "--block", from.id, "--split", SPLIT_DIRECTION[direction], "--", ...command])).trim();
+      if (!size || !created || !env.REX_SESSION) return;
+      const newBlockFirst = direction === "left" || direction === "up";
+      await rex([
+        "api",
+        "call",
+        "session.resize_pane",
+        JSON.stringify({
+          session_id: env.REX_SESSION,
+          direction: direction === "left" || direction === "right" ? "horizontal" : "vertical",
+          before_block_id: newBlockFirst ? created : from.id,
+          after_block_id: newBlockFirst ? from.id : created,
+          ratio: newBlockFirst ? size : 1 - size,
+        }),
+      ]);
     },
   };
 };
