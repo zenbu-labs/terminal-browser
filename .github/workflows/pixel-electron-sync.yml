@@ -66,7 +66,7 @@ jobs:
               echo "v$version: open issue exists (close it to re-enable), skipping"
               continue
             fi
-            if grep -q "v$version" active-builds.txt; then
+            if grep -qx "build patched electron v$version" active-builds.txt; then
               echo "v$version: build already queued or running, skipping"
               continue
             fi

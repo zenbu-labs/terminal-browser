@@ -1,5 +1,5 @@
 name: pixel electron build
-run-name: "build patched electron v${{ inputs.version }}"
+run-name: "${{ inputs.promote && format('promote electron v{0} preview from {1}', inputs.version, github.ref_name) || github.ref_name == github.event.repository.default_branch && format('build patched electron v{0}', inputs.version) || format('preview patched electron v{0} on {1}', inputs.version, github.ref_name) }}"
 
 on:
   workflow_dispatch:
@@ -11,24 +11,60 @@ on:
         description: "Comma separated platforms to build; the others keep their published assets"
         required: false
         default: "darwin-arm64,darwin-x64,linux-x64,linux-arm64"
+      promote:
+        description: "Copy this branch's preview release to the production release instead of building"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 concurrency:
-  group: electron-build-${{ inputs.version }}
+  group: electron-build-${{ inputs.version }}-${{ github.ref_name }}
   cancel-in-progress: false
 
-# Releases are tagged electron-v<version> so they never collide with the pixel-v<version>
-# tags of the pixel packages or terminal-browser's own v<version> tags.
+# Runs on the default branch publish the production release, tagged electron-v<version> so it
+# never collides with the pixel-v<version> tags of the pixel packages or terminal-browser's own
+# v<version> tags. Runs on any other branch publish a prerelease tagged
+# electron-v<version>-preview.<branch>, which installs ignore unless PIXEL_ELECTRON_MIRROR points
+# at it, and report on the branch's PR. Promoting copies a preview's assets to production as is.
 jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      channel: ${{ steps.channel.outputs.channel }}
+      tag: ${{ steps.channel.outputs.tag }}
+      preview_tag: ${{ steps.channel.outputs.preview_tag }}
     steps:
+      - id: channel
+        env:
+          VERSION: ${{ inputs.version }}
+          PROMOTE: ${{ inputs.promote }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          slug=$(printf %s "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9.-' '-')
+          preview_tag="electron-v$VERSION-preview.$slug"
+          if [ "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH" ]; then
+            if [ "$PROMOTE" = "true" ]; then
+              echo "::error::promote runs on the branch whose preview should become production, not on $DEFAULT_BRANCH"
+              exit 1
+            fi
+            channel=production
+            tag="electron-v$VERSION"
+          else
+            channel=preview
+            tag="$preview_tag"
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "preview_tag=$preview_tag" >> "$GITHUB_OUTPUT"
+          echo "channel: $channel, release: $tag"
+
       - id: matrix
         env:
           PLATFORMS: ${{ inputs.platforms || 'darwin-arm64,darwin-x64,linux-x64,linux-arm64' }}
@@ -51,6 +87,7 @@ jobs:
 
   build:
     needs: plan
+    if: ${{ !inputs.promote }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -84,8 +121,9 @@ jobs:
             ${{ runner.temp }}/out/sha-${{ matrix.platform }}.txt
           if-no-files-found: error
 
+      # a preview reports on its PR instead, and must not block the sync workflow
       - name: Report failure loudly
-        if: failure()
+        if: ${{ failure() && needs.plan.outputs.channel == 'production' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -104,11 +142,13 @@ jobs:
   publish:
     # single writer for the release and SHASUMS256.txt: the build legs run in
     # parallel and never touch the release themselves
-    needs: build
-    if: ${{ !cancelled() }}
+    needs: [plan, build]
+    if: ${{ !cancelled() && !inputs.promote }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: electron-asset-*
@@ -118,10 +158,12 @@ jobs:
       - name: Publish whatever built
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          PLATFORMS: ${{ inputs.platforms }}
         run: |
           set -euo pipefail
           version="${{ inputs.version }}"
-          tag="electron-v$version"
           cd out
           ls *.zip electron.d.ts >/dev/null
           # every platform leg generates the same electron.d.ts and lists it
@@ -142,11 +184,19 @@ jobs:
           Build: cookies on disk are encrypted with an OS keychain key (the \`EnableCookieEncryption\` fuse), the macOS app is marked \`LSUIElement\` so it never shows in the Dock, and it is signed with our Developer ID and notarized.
 
           Upstream release: https://github.com/electron/electron/releases/tag/v$version"
-          if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" -R "$GITHUB_REPOSITORY" \
-              --title "electron v$version (patched)" --notes "$notes"
+          if [ "$CHANNEL" = preview ]; then
+            # a full rebuild replaces the preview so its tag points at the commit just built
+            if [ "$PLATFORMS" = "darwin-arm64,darwin-x64,linux-x64,linux-arm64" ]; then
+              gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+            fi
+            create_args=(--prerelease --target "$GITHUB_SHA" --title "electron v$version preview ($GITHUB_REF_NAME)")
+          else
+            create_args=(--title "electron v$version (patched)")
           fi
-          gh release download "$tag" -R "$GITHUB_REPOSITORY" \
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" "${create_args[@]}" --notes "$notes"
+          fi
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
             --pattern "SHASUMS256.txt" || touch SHASUMS256.txt
           # keep existing entries for platforms this run did not rebuild
           while read -r _ starred; do
@@ -154,11 +204,11 @@ jobs:
             mv kept.txt SHASUMS256.txt
           done < new.txt
           cat new.txt >> SHASUMS256.txt
-          gh release upload "$tag" -R "$GITHUB_REPOSITORY" --clobber \
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
             *.zip electron.d.ts SHASUMS256.txt
 
       - name: Report failure loudly
-        if: failure()
+        if: ${{ failure() && needs.plan.outputs.channel == 'production' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -174,7 +224,7 @@ jobs:
           fi
 
   verify-manifest:
-    needs: publish
+    needs: [plan, publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -182,12 +232,12 @@ jobs:
       - name: Every published zip has a manifest entry
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          tag="electron-v${{ inputs.version }}"
-          gh release download "$tag" -R "$GITHUB_REPOSITORY" --pattern "SHASUMS256.txt"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern "SHASUMS256.txt"
           missing=""
-          for zip in $(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep '\.zip$'); do
+          for zip in $(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep '\.zip$'); do
             grep -q "\*$zip" SHASUMS256.txt || missing="$missing $zip"
           done
           if [ -n "$missing" ]; then
@@ -196,7 +246,7 @@ jobs:
           fi
 
       - name: Report failure loudly
-        if: failure()
+        if: ${{ failure() && needs.plan.outputs.channel == 'production' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -210,3 +260,110 @@ jobs:
 
           The run's log lists the missing entries. Re-run the workflow (or fix SHASUMS256.txt by hand), then close this issue."
           fi
+
+  preview-report:
+    needs: [plan, build, publish, verify-manifest]
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.channel == 'preview' && !inputs.promote }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Comment on the branch's PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          MANIFEST: ${{ needs.verify-manifest.result }}
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          rows=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" --paginate \
+            --jq '.jobs[] | select(.name | startswith("build (")) | "| \(.name | capture("build \\((?<p>[^,]+)").p) | \(if .conclusion == "success" then "✅ built" else "❌ \(.conclusion // "unfinished")" end) | [log](\(.html_url)) |"')
+          if [ "$MANIFEST" = success ] && ! printf '%s\n' "$rows" | grep -q '❌'; then
+            # fixme: placeholder copy
+            status="✅ Preview ready"
+          else
+            # fixme: placeholder copy
+            status="❌ Preview incomplete"
+          fi
+          # fixme: placeholder copy
+          cat > body.md <<BODY
+          ### $status: patched Electron v$version
+
+          Built from \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Release: [$TAG]($release_url) (prerelease; installs ignore it).
+
+          | Platform | Status | |
+          |---|---|---|
+          $rows
+
+          Try it:
+          \`\`\`sh
+          PIXEL_ELECTRON_MIRROR=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG pnpm install
+          \`\`\`
+
+          Promote these exact assets to electron-v$version (no rebuild):
+          \`\`\`sh
+          gh workflow run pixel-electron-build.yml --ref $GITHUB_REF_NAME -f version=$version -f promote=true
+          \`\`\`
+
+          [Run]($run_url)
+          BODY
+          bash pixel/electron/scripts/pr-comment.sh "$GITHUB_REF_NAME" pixel-electron-preview body.md
+
+  promote:
+    needs: plan
+    if: ${{ inputs.promote }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy the preview's assets to the production release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_TAG: ${{ needs.plan.outputs.preview_tag }}
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          tag="electron-v$version"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::$tag already exists; delete it first to replace it with $PREVIEW_TAG"
+            exit 1
+          fi
+          assets="$RUNNER_TEMP/promote"
+          mkdir "$assets"
+          gh release download "$PREVIEW_TAG" -R "$GITHUB_REPOSITORY" --dir "$assets" \
+            --pattern '*.zip' --pattern electron.d.ts --pattern SHASUMS256.txt
+          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            zip="electron-v$version-$platform.zip"
+            if [ ! -f "$assets/$zip" ] || ! grep -q "\*$zip" "$assets/SHASUMS256.txt"; then
+              echo "::error::$PREVIEW_TAG is missing $zip"
+              exit 1
+            fi
+          done
+          (cd "$assets" && sha256sum -c SHASUMS256.txt)
+          gh release create "$tag" -R "$GITHUB_REPOSITORY" \
+            --title "electron v$version (patched)" \
+            --notes "$(gh release view "$PREVIEW_TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body)"
+          gh release upload "$tag" -R "$GITHUB_REPOSITORY" "$assets"/*
+
+      - name: Comment on the branch's PR
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_TAG: ${{ needs.plan.outputs.preview_tag }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$OUTCOME" = success ]; then
+            # fixme: placeholder copy
+            echo "### 🚀 Promoted: [$PREVIEW_TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$PREVIEW_TAG) is now [electron-v$version]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/electron-v$version). [Run]($run_url)" > body.md
+          else
+            # fixme: placeholder copy
+            echo "### ❌ Promoting $PREVIEW_TAG to electron-v$version failed. [Run]($run_url)" > body.md
+          fi
+          bash pixel/electron/scripts/pr-comment.sh "$GITHUB_REF_NAME" pixel-electron-promote body.md
