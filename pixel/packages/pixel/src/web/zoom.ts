@@ -37,3 +37,13 @@ export function zoomDirection(key: string): ZoomDirection | null {
   if (key === "0") return 0;
   return null;
 }
+
+// Chromium remembers zoom per hostname, ignoring the port, or per full URL when there is no hostname
+export function zoomSite(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname ? parsed.hostname.replace(/\.$/, "") : parsed.href;
+  } catch {
+    return url;
+  }
+}

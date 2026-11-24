@@ -30,6 +30,7 @@ import {
   settings as settingsTable,
   SETTINGS_FILE,
   SHORTCUTS_FILE,
+  parsePageZoom,
   socketTerminal,
   store,
   SUGGESTIONS_OFF,
@@ -184,6 +185,7 @@ class Session {
   private readonly sessionFlags: {
     clipboardRead: boolean;
     transparent: boolean;
+    forceZoom: number | null;
   };
   private readonly partition: string | null;
   private readonly socksPort: number | null;
@@ -245,6 +247,7 @@ class Session {
   private urlEditOpen = false;
   private palette: { query: string; index: number } | null = null;
   private newTab: NewTabState | null = null;
+  private lastZoom: number;
   private zoomHud: number | null = null;
   private zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   private download: DownloadView | null = null;
@@ -283,7 +286,9 @@ class Session {
     this.sessionFlags = {
       clipboardRead: this.argv.includes("--allow-clipboard-read"),
       transparent: this.argv.includes("--transparent"),
+      forceZoom: parsePageZoom(flagValue(this.argv, "--zoom")),
     };
+    this.lastZoom = this.defaultZoom();
     const sshTarget = flagValue(this.argv, "--ssh");
     const socksPort = Number(flagValue(this.argv, "--socks-port"));
     this.socksPort = Number.isInteger(socksPort) && socksPort > 0 ? socksPort : null;
@@ -334,8 +339,6 @@ class Session {
       this.defaultUrl,
     );
   }
-
-  private lastZoom = 1;
 
   async start(): Promise<void> {
     if (process.platform === "darwin") app.dock?.hide();
@@ -492,6 +495,8 @@ class Session {
       preload: this.browserPreload,
       clipboardRead: this.sessionFlags.clipboardRead,
       transparent: tab.transparent || this.sessionFlags.transparent || this.settings.get("window.transparent") === "on",
+      defaultZoom: this.defaultZoom(),
+      forceZoom: this.sessionFlags.forceZoom,
     }));
   }
 
@@ -994,6 +999,10 @@ class Session {
         this.zoomUi(0);
         return;
     }
+  }
+
+  private defaultZoom(): number {
+    return this.sessionFlags.forceZoom ?? parsePageZoom(this.settings.get("page.zoom")) ?? 1;
   }
 
   private applyZoom(direction: ZoomDirection) {

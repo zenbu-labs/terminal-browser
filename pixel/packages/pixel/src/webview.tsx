@@ -70,6 +70,7 @@ export interface WebViewProps {
   clipboardRead?: boolean;
   proxy?: ProxySetting;
   browserWindowOptions?: BrowserWindowOptions;
+  forceZoom?: number;
   autoFocus?: boolean;
   passWheel?: boolean;
   devtools?: boolean | DevtoolsDock;
@@ -265,6 +266,7 @@ export const WebView = forwardRef<WebViewHandle, WebViewProps>(function WebView(
         clipboardRead: !!initial.clipboardRead,
         proxy: initial.proxy ?? null,
         browserWindowOptions,
+        forceZoom: initial.forceZoom ?? null,
       },
       (state) => {
         debug("state", state);

@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { AUTO, DISPLAY_FPS, UNCAPPED } from "./render";
 import { SEARCH_ENGINES, SUGGESTIONS_OFF } from "./search";
+import { PAGE_ZOOM_RANGE, parsePageZoom } from "./zoom";
 
 export type SettingGroup = "general" | "advanced";
 
@@ -94,6 +95,26 @@ export const SETTINGS = {
     schema: z.enum(["on", "off"]),
     default: "off",
     choices: onOff,
+  }),
+  "page.zoom": setting({
+    group: "general",
+    label: "Default page zoom",
+    hint: "Zoom new tabs start at. Sites you've zoomed before keep their own zoom.",
+    schema: z.coerce
+      .string()
+      .refine((value) => parsePageZoom(value) !== null, `expected ${PAGE_ZOOM_RANGE}`)
+      .transform((value) => String(parsePageZoom(value))),
+    default: "1",
+    choices: [
+      plain("0.8", "80%"),
+      plain("0.9", "90%"),
+      plain("1", "100%"),
+      plain("1.1", "110%"),
+      plain("1.25", "125%"),
+      plain("1.5", "150%"),
+      plain("1.75", "175%"),
+      plain("2", "200%"),
+    ],
   }),
   "render.fps": setting({
     group: "advanced",

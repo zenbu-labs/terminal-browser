@@ -8,11 +8,13 @@ import readline from "node:readline";
 import {
   DAEMON_SOCKET,
   LOGS_DIR,
+  PAGE_ZOOM_RANGE,
   TERMINAL_SOCKET_ENV,
   appId,
   ensureDataDir,
   instanceKey,
   listApps,
+  parsePageZoom,
   registerApp,
   socketTerminal,
   unregisterApp,
@@ -561,6 +563,7 @@ async function requireGraphics(check: TerminalCheck) {
 const BROWSER_FLAGS = [
   "--allow-clipboard-read",
   "--transparent",
+  "--zoom=",
   "--ssh=",
   "--split-dir=",
   "--parent-tty=",
@@ -612,6 +615,18 @@ function takeSshFlags(args: string[]): void {
   }
 }
 
+function takeZoomFlag(args: string[]): void {
+  const zoom = takeFlag(args, "--zoom");
+  if (zoom !== undefined) args.push(`--zoom=${zoom}`);
+  const given = args.filter((arg) => arg.startsWith("--zoom="));
+  if (given.length === 0) return;
+  if (given.length > 1 || args.includes("--zoom")) fail("--zoom given twice");
+  const raw = given[0].slice("--zoom=".length);
+  const factor = parsePageZoom(raw);
+  if (factor === null) fail(`invalid --zoom "${raw}" (${PAGE_ZOOM_RANGE})`);
+  args[args.indexOf(given[0])] = `--zoom=${factor}`;
+}
+
 function requirePaneAccess(): void {
   const refusal = sandboxRefusal();
   if (refusal) fail(refusal);
@@ -648,6 +663,7 @@ async function tryAdopt(args: string[], direction: Direction | null): Promise<bo
 
 async function openCommand(args: string[]) {
   requirePaneAccess();
+  takeZoomFlag(args);
   const owned = process.env.PIXEL_TTY ?? ownTtyPath();
   if (process.env.PIXEL_EMBED || (owned && findOwner(owned))) {
     rejectUnknownFlags(args);
@@ -664,7 +680,8 @@ async function openCommand(args: string[]) {
     fail(`unexpected ${positionals[1]} (one url; --split <direction> opens a new pane)`);
   }
   const targeted = Boolean(process.env.TERMINAL_BROWSER_INTEROP_TARGET);
-  if (!noMerge && (split !== null || targeted) && !args.some((arg) => arg.startsWith("--ssh="))) {
+  const ownsBrowser = args.some((arg) => arg.startsWith("--ssh=") || arg.startsWith("--zoom="));
+  if (!noMerge && (split !== null || targeted) && !ownsBrowser) {
     if (await tryAdopt(args, targeted ? null : split)) return;
   }
   await requireGraphics(await currentTerminal());
