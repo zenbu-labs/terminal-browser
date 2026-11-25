@@ -19,15 +19,16 @@ function insideHerdrApp() {
 }
 const inHerdrApp = { skip: !insideHerdrApp() && "needs a pane in the Herdr desktop app" };
 
-const OWN = process.env.HC_TERMINAL_ID;
 const herdrApp = (...args) => JSON.parse(execFileSync("herdr-app", args, { encoding: "utf8" }) || "null");
 const hcGet = (terminal) => JSON.parse(execFileSync("hc", ["get", terminal, "--json"], { encoding: "utf8" }));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function split(direction, argv) {
-  const own = herdrApp("ls").spaces.flatMap((space) => space.tabs).flatMap((tab) => tab.terminals).find((entry) => entry.terminal === OWN);
-  return herdrApp("do", "pane.split", JSON.stringify({ direction, pane: own.pane, argv }));
+function paneOf(terminal) {
+  const panes = herdrApp("ls").spaces.flatMap((space) => space.tabs).flatMap((tab) => tab.terminals);
+  return panes.find((entry) => entry.terminal === terminal).pane;
 }
+
+const split = (pane, direction, argv) => herdrApp("do", "pane.split", JSON.stringify({ direction, pane, argv }));
 
 async function ttyOf(terminal) {
   for (let waited = 0; waited < 5000; waited += 100) {
@@ -52,34 +53,34 @@ while True:
         f.write(chunk)
 `;
 
-test("send to agent skips the shell the browser was opened from and reaches the agent in the tab", inHerdrApp, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-app-send-"));
-  const agentScript = path.join(dir, "claude");
-  const received = path.join(dir, "received");
-  fs.writeFileSync(agentScript, FAKE_AGENT);
-  const shell = split("right", ["/bin/zsh", "-f", "-i"]);
-  const agent = split("down", ["python3", agentScript, received]);
-  try {
-    const terminal = detect(process.env);
-    const self = await terminal.getCurrentPane({ tty: null, cwd: "/" });
-    for (let waited = 0; waited < 5000 && !hcGet(agent.terminal).status?.app; waited += 100) await sleep(100);
-    const finder = new AgentPaneFinder({
-      terminal,
-      parentTty: await ttyOf(shell.terminal),
-      cwd: "/",
-      self: async () => self,
-    });
-    const delivery = await finder.send("<Button>", null);
-    assert.deepEqual(delivery?.target, { pane: agent.terminal, tier: "agent", agent: true });
-    for (let waited = 0; waited < 5000 && !fs.existsSync(received); waited += 100) await sleep(100);
-    assert.match(fs.readFileSync(received, "utf8"), /<Button>/);
-    assert.doesNotMatch(execFileSync("hc", ["read", shell.terminal], { encoding: "utf8" }), /<Button>/);
-  } finally {
-    for (const pane of [shell.pane, agent.pane]) {
-      try {
-        herdrApp("do", "pane.close", JSON.stringify({ pane }));
-      } catch {}
+// "ssh-relay" stands for an agent reached over ssh: only Herdr's status says it is an agent
+for (const program of ["claude", "ssh-relay"]) {
+  test(`send to agent skips the shell the browser was opened from and reaches the ${program} agent in the tab`, inHerdrApp, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-app-send-"));
+    const agentScript = path.join(dir, program);
+    const received = path.join(dir, "received");
+    fs.writeFileSync(agentScript, FAKE_AGENT);
+    // a tab of its own, so no agent the person is running can receive the text
+    const own = herdrApp("do", "tab.new", JSON.stringify({ name: "herdr-app-send-test", argv: ["sleep", "600"], focus: false }));
+    try {
+      const shell = split(paneOf(own.terminal), "right", ["/bin/zsh", "-f", "-i"]);
+      const agent = split(shell.pane, "down", ["python3", agentScript, received]);
+      const terminal = detect(process.env);
+      const self = { id: own.terminal, tab: own.tab };
+      for (let waited = 0; waited < 5000 && !hcGet(agent.terminal).status?.app; waited += 100) await sleep(100);
+      const finder = new AgentPaneFinder({
+        terminal,
+        parentTty: await ttyOf(shell.terminal),
+        cwd: "/",
+        self: async () => self,
+      });
+      const delivery = await finder.send("<Button>", null);
+      assert.deepEqual(delivery?.target, { pane: agent.terminal, tier: "agent", agent: true });
+      for (let waited = 0; waited < 5000 && !fs.existsSync(received); waited += 100) await sleep(100);
+      assert.match(fs.readFileSync(received, "utf8"), /<Button>/);
+      assert.doesNotMatch(execFileSync("hc", ["read", shell.terminal], { encoding: "utf8" }), /<Button>/);
+    } finally {
+      herdrApp("do", "tab.close", JSON.stringify({ id: own.tab, confirmed: true }));
     }
-    herdrApp("do", "pane.focus", JSON.stringify({ terminal: OWN }));
-  }
-});
+  });
+}

@@ -12,7 +12,7 @@ interface HerdrAppLayout {
 interface HcTerminal {
   pid?: number | null;
   status?: { app?: string | null } | null;
-  foreground?: { name?: string | null } | null;
+  foreground?: { name?: string | null; argv?: string[] } | null;
 }
 
 const SHELL = /^-?(sh|bash|zsh|fish|dash|ksh|tcsh|csh|nu|xonsh|elvish|pwsh|powershell)$/;
@@ -49,8 +49,11 @@ export const herdrApp: Detect = (env, run) => {
 
   const terminalInfo = async (terminal: string) => JSON.parse(await hc(["get", terminal, "--json"])) as HcTerminal;
 
-  async function ttyOf(terminal: string): Promise<string | null> {
-    const { pid } = await terminalInfo(terminal);
+  // Herdr knows which program in a pane is an agent, even one reached over ssh, so trust it over the local process
+  const agentName = (info: HcTerminal) =>
+    info.status?.app && !SHELL.test(info.foreground?.name ?? "") ? info.status.app : null;
+
+  async function ttyOf(pid: number | null | undefined): Promise<string | null> {
     if (!pid) return null;
     const tty = (await run("ps", ["-o", "tty=", "-p", String(pid)])).trim();
     return tty && !tty.startsWith("?") ? `/dev/${tty}` : null;
@@ -58,12 +61,11 @@ export const herdrApp: Detect = (env, run) => {
 
   async function listPanes(): Promise<PaneDetails[]> {
     return Promise.all(
-      (await panes()).map(async ({ id, tab }) => ({
-        id,
-        tab,
-        tty: await ttyOf(id).catch(() => null),
-        command: null,
-      })),
+      (await panes()).map(async ({ id, tab }) => {
+        const info = await terminalInfo(id).catch((): HcTerminal => ({}));
+        const command = agentName(info) ?? info.foreground?.argv?.join(" ") ?? null;
+        return { id, tab, tty: await ttyOf(info.pid).catch(() => null), command };
+      }),
     );
   }
 
@@ -77,10 +79,8 @@ export const herdrApp: Detect = (env, run) => {
     },
     listPanes,
     async sendText(pane, text) {
-      const info = await terminalInfo(pane);
-      if (!info.status?.app || SHELL.test(info.foreground?.name ?? "")) {
-        throw new Error(`terminal ${pane} is not running a coding agent`);
-      }
+      const foreground = (await terminalInfo(pane)).foreground?.name ?? "";
+      if (!foreground || SHELL.test(foreground)) throw new Error(`terminal ${pane} is at a shell prompt`);
       await hc(["send", pane, "--", text]);
     },
     async focusPane(pane) {
