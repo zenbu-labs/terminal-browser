@@ -302,6 +302,8 @@ pub(crate) struct RNode {
     pub taffy: taffy::NodeId,
     pub scroll: ScrollState,
     pub scroll_max: f32,
+    pub scroll_x: ScrollState,
+    pub scroll_max_x: f32,
     pub content_height: Option<f32>,
     pub shape: Option<ShapeProps>,
     pub scroll_events: bool,
@@ -595,6 +597,8 @@ impl Tree {
             taffy,
             scroll: ScrollState::default(),
             scroll_max: 0.0,
+            scroll_x: ScrollState::default(),
+            scroll_max_x: 0.0,
             content_height: props.content_height,
             shape: props.shape,
             scroll_events: props.scroll_events,
@@ -1986,11 +1990,15 @@ impl Tree {
             if node.scroll.target > max {
                 node.scroll.target = max;
             }
+            let max_x = if list { 0.0 } else { (layout.content_size.width - rect.w).max(0.0) };
+            node.scroll_max_x = max_x;
+            node.scroll_x.position = node.scroll_x.position.min(max_x);
+            node.scroll_x.target = node.scroll_x.target.min(max_x);
         }
 
         let node = self.node(id);
         let child_origin = if scrolls {
-            (raw.x, raw.y - node.scroll.shown())
+            (raw.x - node.scroll_x.shown(), raw.y - node.scroll.shown())
         } else {
             (raw.x, raw.y)
         };
@@ -2427,6 +2435,24 @@ impl Tree {
             content_height: node.scroll_max + node.visible.h,
             offset: node.scroll.position,
         })
+    }
+
+    pub fn sideways_scroll_at(&self, x: f32, y: f32) -> Option<NodeId> {
+        self.scroll_nodes().into_iter().rev().find(|&id| {
+            !self.inert(id) && self.get(id).is_some_and(|node| node.scroll_max_x > 0.0 && node.visible.contains(x, y))
+        })
+    }
+
+    pub fn scroll_x_state(&self, id: NodeId) -> Option<&ScrollState> {
+        self.get(id).map(|n| &n.scroll_x)
+    }
+
+    pub fn scroll_x_state_mut(&mut self, id: NodeId) -> Option<&mut ScrollState> {
+        self.get_mut(id).map(|n| &mut n.scroll_x)
+    }
+
+    pub fn scroll_max_x(&self, id: NodeId) -> f32 {
+        self.get(id).map_or(0.0, |n| n.scroll_max_x)
     }
 
     pub(crate) fn scroll_nodes(&self) -> Vec<NodeId> {

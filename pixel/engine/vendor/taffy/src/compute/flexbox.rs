@@ -207,8 +207,19 @@ pub fn compute_flexbox_layout(
     });
 
     // The size of the container should be floored by the padding and border
-    let styled_based_known_dimensions =
+    let mut styled_based_known_dimensions =
         known_dimensions.or(min_max_definite_size.or(clamped_style_size).maybe_max(padding_border_sum));
+
+    if run_mode == RunMode::ComputeSize {
+        let overflow = style.overflow();
+        let empty = min_size.unwrap_or(Size::ZERO).f32_max(padding_border_sum);
+        if overflow.x == Overflow::Scroll && inputs.available_space.width == AvailableSpace::MinContent {
+            styled_based_known_dimensions.width = styled_based_known_dimensions.width.or(Some(empty.width));
+        }
+        if overflow.y == Overflow::Scroll && inputs.available_space.height == AvailableSpace::MinContent {
+            styled_based_known_dimensions.height = styled_based_known_dimensions.height.or(Some(empty.height));
+        }
+    }
 
     // Short-circuit layout if the container's size is fully determined by the container's size and the run mode
     // is ComputeSize (and thus the container's size is all that we're interested in)
