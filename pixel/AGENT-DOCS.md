@@ -67,6 +67,7 @@ npm install @zenbu-labs/pixel react@18
 - Args after `--` are `process.argv[2...]`.
 - stderr goes to `$XDG_STATE_HOME/pixel/logs/<app>.stderr.log`.
 - `PIXEL_SKIP_GRAPHICS_CHECK=1` skips the startup graphics probe.
+- Pages render at the scale of the display the terminal window is on: `PIXEL_DISPLAY_SCALE`, else 1 for terminals reporting CSS pixels, else the only scale if all displays share one, else (macOS) the display holding the terminal app's frontmost window (which may not be the window holding this pane), else the display under the pointer. Under tmux or ssh the window lookup fails and the pointer decides; set `PIXEL_DISPLAY_SCALE` there. `PIXEL_DEBUG=1` logs which one was used.
 - `createRoot()` throws outside the runtime.
 
 Minimal app (`examples/hello/src/main.ts`):
