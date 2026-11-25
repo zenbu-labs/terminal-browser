@@ -15,7 +15,7 @@ interface HcTerminal {
   foreground?: { name?: string | null } | null;
 }
 
-const SHELL = /^-?(sh|bash|zsh|fish|dash|ksh|tcsh|csh|nu|xonsh|elvish)$/;
+const SHELL = /^-?(sh|bash|zsh|fish|dash|ksh|tcsh|csh|nu|xonsh|elvish|pwsh|powershell)$/;
 
 const NATIVE_DIRECTION: Record<Direction, "right" | "down"> = {
   right: "right",
@@ -81,7 +81,7 @@ export const herdrApp: Detect = (env, run) => {
       if (!info.status?.app || SHELL.test(info.foreground?.name ?? "")) {
         throw new Error(`terminal ${pane} is not running a coding agent`);
       }
-      await hc(["send", pane, text]);
+      await hc(["send", pane, "--", text]);
     },
     async focusPane(pane) {
       await app("pane.focus", { terminal: pane });

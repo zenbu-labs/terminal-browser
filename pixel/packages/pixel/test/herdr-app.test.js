@@ -37,8 +37,14 @@ async function withSplit(direction, run, command = ["sleep", "600"]) {
   const argv = ["sh", "-c", 'exec "$@"', marker, ...command];
   const before = new Set(herdrPanes().map((entry) => entry.terminal));
   const from = await terminal.getCurrentPane({ tty: null, cwd: process.cwd() });
-  const ours = () =>
-    herdrPanes().find((entry) => !before.has(entry.terminal) && hcGet(entry.terminal).argv.includes(marker));
+  const isOurs = (entry) => {
+    try {
+      return hcGet(entry.terminal).argv.includes(marker);
+    } catch {
+      return false;
+    }
+  };
+  const ours = () => herdrPanes().find((entry) => !before.has(entry.terminal) && isOurs(entry));
   try {
     await terminal.split({ from, direction, command: argv, size: null, tty: null });
     const created = ours();
