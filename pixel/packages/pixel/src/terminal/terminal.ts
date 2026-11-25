@@ -47,6 +47,11 @@ export interface Terminal {
    */
   readonly reportsCssPixels?: boolean;
   /**
+   * Skips the graphics probe for terminals known to draw kitty graphics that cannot always answer the probe,
+   * such as a Herdr desktop pane that was just opened and is not shown in the window yet
+   */
+  readonly drawsGraphics?: boolean;
+  /**
    * Allows code to be ran at startup, useful for preparing the terminal environment for terminal-browser
    */
   prepare?(): void | Promise<void>;
