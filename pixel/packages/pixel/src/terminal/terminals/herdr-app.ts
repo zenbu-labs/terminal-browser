@@ -63,7 +63,8 @@ export const herdrApp: Detect = (env, run) => {
     return Promise.all(
       (await panes()).map(async ({ id, tab }) => {
         const info = await terminalInfo(id).catch((): HcTerminal => ({}));
-        const command = agentName(info) ?? info.foreground?.argv?.join(" ") ?? null;
+        // "" rather than null: the browser would otherwise guess the program from whatever runs on the pane's tty
+        const command = agentName(info) ?? info.foreground?.argv?.join(" ") ?? "";
         return { id, tab, tty: await ttyOf(info.pid).catch(() => null), command };
       }),
     );

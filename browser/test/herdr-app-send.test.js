@@ -67,7 +67,11 @@ for (const program of ["claude", "ssh-relay"]) {
       const agent = split(shell.pane, "down", ["python3", agentScript, received]);
       const terminal = detect(process.env);
       const self = { id: own.terminal, tab: own.tab };
-      for (let waited = 0; waited < 5000 && !hcGet(agent.terminal).status?.app; waited += 100) await sleep(100);
+      const agentInFront = () => {
+        const info = hcGet(agent.terminal);
+        return info.status?.app && !/sh$/.test(info.foreground?.name ?? "sh");
+      };
+      for (let waited = 0; waited < 5000 && !agentInFront(); waited += 100) await sleep(100);
       const finder = new AgentPaneFinder({
         terminal,
         parentTty: await ttyOf(shell.terminal),
@@ -79,6 +83,18 @@ for (const program of ["claude", "ssh-relay"]) {
       for (let waited = 0; waited < 5000 && !fs.existsSync(received); waited += 100) await sleep(100);
       assert.match(fs.readFileSync(received, "utf8"), /<Button>/);
       assert.doesNotMatch(execFileSync("hc", ["read", shell.terminal], { encoding: "utf8" }), /<Button>/);
+
+      // the agent quits and the pane goes on to run some other program, which must not get the next selection
+      const other = path.join(dir, "other");
+      process.kill(hcGet(agent.terminal).foreground.pid);
+      for (let waited = 0; waited < 5000 && !/sh$/.test(hcGet(agent.terminal).foreground?.name ?? ""); waited += 100) {
+        await sleep(100);
+      }
+      execFileSync("hc", ["send", agent.terminal, "--", `exec cat > ${other}`]);
+      for (let waited = 0; waited < 5000 && hcGet(agent.terminal).foreground?.name !== "cat"; waited += 100) await sleep(100);
+      assert.equal(await finder.send("<AfterExit>", null), null);
+      await sleep(4000);
+      assert.doesNotMatch(fs.readFileSync(other, "utf8"), /<AfterExit>/);
     } finally {
       herdrApp("do", "tab.close", JSON.stringify({ id: own.tab, confirmed: true }));
     }

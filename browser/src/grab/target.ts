@@ -90,6 +90,8 @@ export class AgentPaneFinder {
     }
     const terminal = this.ctx.terminal;
     if (!terminal?.sendText) return null;
+    // the agent may have exited since the target was found, and Enter would then reach whatever runs there now
+    if (terminal.submitsSentText) this.cached = null;
     let target = await this.target();
     if (!target) return null;
     const message = (to: AgentTarget) =>
