@@ -12,7 +12,10 @@ interface HerdrAppLayout {
 interface HcTerminal {
   pid?: number | null;
   status?: { app?: string | null } | null;
+  foreground?: { name?: string | null } | null;
 }
+
+const SHELL = /^-?(sh|bash|zsh|fish|dash|ksh|tcsh|csh|nu|xonsh|elvish)$/;
 
 const NATIVE_DIRECTION: Record<Direction, "right" | "down"> = {
   right: "right",
@@ -20,8 +23,6 @@ const NATIVE_DIRECTION: Record<Direction, "right" | "down"> = {
   down: "down",
   up: "down",
 };
-
-const OPPOSITE: Record<"right" | "down", "left" | "up"> = { right: "left", down: "up" };
 
 // The Herdr desktop app hosts each pane in libghostty, so its panes also say TERM_PROGRAM=ghostty
 export const herdrApp: Detect = (env, run) => {
@@ -76,22 +77,21 @@ export const herdrApp: Detect = (env, run) => {
     listPanes,
     // hc can only paste text followed by Enter, so a shell would run the text as a command
     async sendText(pane, text) {
-      if (!(await terminalInfo(pane)).status?.app) throw new Error(`terminal ${pane} is not running a coding agent`);
+      const info = await terminalInfo(pane);
+      if (!info.status?.app || SHELL.test(info.foreground?.name ?? "")) {
+        throw new Error(`terminal ${pane} is not running a coding agent`);
+      }
       await hc(["send", pane, text]);
     },
     async focusPane(pane) {
       await app("pane.focus", { terminal: pane });
     },
     async split({ from, direction, command }) {
-      const native = NATIVE_DIRECTION[direction];
-      const created = (await app("pane.split", {
-        direction: native,
-        pane: await herdrPaneOf(from.id),
-        argv: command,
-      })) as { pane: string };
-      if (direction === "left" || direction === "up") {
-        await app("pane.swap", { pane: created.pane, direction: OPPOSITE[native] });
-      }
+      const pane = await herdrPaneOf(from.id);
+      const created = (await app("pane.split", { direction: NATIVE_DIRECTION[direction], pane, argv: command })) as {
+        pane: string;
+      };
+      if (direction === "left" || direction === "up") await app("pane.swap", { pane: created.pane, target: pane });
     },
   };
 };
