@@ -308,14 +308,15 @@ test("thurm finds a pane in the quick terminal", async () => {
 });
 
 test("thurm waits for the layout save when its pane is new", async () => {
-  const layouts = [
-    { windows: [{ tabs: [{ root: thurmLeaf(1) }] }] },
-    { windows: [{ tabs: [{ root: thurmSplit("right", 0.5, thurmLeaf(1), thurmLeaf(3)) }] }] },
-  ];
-  let saves = 0;
+  const before = { windows: [{ tabs: [{ root: thurmLeaf(1) }] }] };
+  const saved = { windows: [{ tabs: [{ root: thurmSplit("right", 0.5, thurmLeaf(1), thurmLeaf(3)) }] }] };
+  let firstRead = null;
   const run = async (bin, args) => {
     const command = [bin, ...args].join(" ");
-    if (command === "thurm layout --json") return JSON.stringify(layouts[Math.min(saves++, 1)]);
+    if (command === "thurm layout --json") {
+      firstRead ??= Date.now();
+      return JSON.stringify(Date.now() - firstRead >= 500 ? saved : before);
+    }
     if (command === "thurm list --json") return JSON.stringify([thurmPane(1, 100), thurmPane(3, 300)]);
     throw new Error(`nothing recorded for: ${command}`);
   };
