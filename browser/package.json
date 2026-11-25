@@ -4,7 +4,7 @@
   "private": true,
   "main": "dist/main.js",
   "scripts": {
-    "postinstall": "bash ../scripts/copy-react-grab.sh",
+    "postinstall": "bash ../scripts/copy-page-scripts.sh",
     "build": "tsc -p tsconfig.json",
     "start": "pnpm build && pnpm --filter terminal-browser-cli build && exec node ../cli/dist/main.js",
     "typecheck": "tsc --noEmit",

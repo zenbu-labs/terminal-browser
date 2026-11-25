@@ -3,6 +3,7 @@ import path from "node:path";
 import { app } from "electron";
 import type { WebViewHandle } from "@zenbu-labs/pixel";
 import { bundledAsset } from "../assets";
+import { DARK_READER_PRELOAD } from "../dark-reader";
 
 const CHANNEL = "grab";
 const PLUGIN = "terminal-browser";
@@ -82,7 +83,7 @@ const COPY_ON_SELECT_WATCHER = `;(() => {
 })();`;
 
 let preloadFile: string | null = null;
-export function reactGrabPreloadPath(copyOnSelect = false): string {
+export function browserPreloadPath(copyOnSelect = false): string {
   if (!preloadFile) {
     const early = `window.__REACT_GRAB_DISABLED__ = true;\n${reactGrabLibrary()}`;
     const copyOnSelectInjection = copyOnSelect
@@ -90,12 +91,15 @@ export function reactGrabPreloadPath(copyOnSelect = false): string {
   webFrame.setIsolatedWorldInfo(${COPY_ON_SELECT_WORLD_ID}, { name: ${JSON.stringify(COPY_ON_SELECT_WORLD)} });
   void webFrame.executeJavaScriptInIsolatedWorld(${COPY_ON_SELECT_WORLD_ID}, [{ code: ${JSON.stringify(COPY_ON_SELECT_WATCHER)} }]);`
       : "";
-    preloadFile = path.join(app.getPath("userData"), "terminal-browser-react-grab-preload.js");
+    preloadFile = path.join(app.getPath("userData"), "terminal-browser-preload.js");
     fs.writeFileSync(
       preloadFile,
-      `if (process.isMainFrame) {
-  const { webFrame } = require("electron");
-  void webFrame.executeJavaScript(${JSON.stringify(early)});${copyOnSelectInjection}
+      `{
+  const { contextBridge, ipcRenderer, webFrame } = require("electron");
+${DARK_READER_PRELOAD}
+  if (process.isMainFrame) {
+    void webFrame.executeJavaScript(${JSON.stringify(early)});${copyOnSelectInjection}
+  }
 }
 `,
     );

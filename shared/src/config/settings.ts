@@ -96,6 +96,14 @@ export const SETTINGS = {
     default: "off",
     choices: onOff,
   }),
+  "pages.darkReader": setting({
+    group: "general",
+    label: "Dark Reader",
+    hint: "Darken websites with Dark Reader when the terminal has a dark background",
+    schema: z.enum(["on", "off"]),
+    default: "off",
+    choices: onOff,
+  }),
   "render.fps": setting({
     group: "advanced",
     label: "Frame rate",

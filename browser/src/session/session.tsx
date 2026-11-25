@@ -43,7 +43,8 @@ import type {
   RegisteredApp,
 } from "shared";
 import { bundledAsset } from "../assets";
-import { CopyOnSelect, Grab, reactGrabPreloadPath } from "../grab/grab";
+import { browserPreloadPath, CopyOnSelect, Grab } from "../grab/grab";
+import { refreshDarkReader, registerDarkReader } from "../dark-reader";
 import type { GrabRegion } from "../grab/grab";
 import { grabScreenshot } from "../grab/screenshot";
 import { AgentPaneFinder } from "../grab/target";
@@ -192,7 +193,10 @@ class Session {
   private readonly settings = new SettingsManager(
     {
       requestRender: () => this.render(),
-      settingsChanged: () => this.applyRenderSettings(),
+      settingsChanged: () => {
+        this.applyRenderSettings();
+        this.syncDarkReader();
+      },
       toast: (text, state) => this.showToast(text, state),
       setClipboard: (text) => this.root?.setClipboard(text),
       overlayOpened: () => this.enterOverlay([]),
@@ -260,6 +264,10 @@ class Session {
   private records = new Map<number, RecordSession>();
   private grabs = new Map<number, Grab>();
   private copyWatchers = new Map<number, CopyOnSelect>();
+  private darkReaderOn = false;
+  private readonly unregisterDarkReader = registerDarkReader((contents) =>
+    this.tabs.findByContents(contents.id) ? this.darkReaderOn : null,
+  );
   private readonly copyOnSelect: boolean;
   private readonly agentPanes: AgentPaneFinder;
   private shownRecord: RecordSession | null = null;
@@ -291,7 +299,7 @@ class Session {
     this.partition = sshTarget ? `ssh-${sshTarget.replace(/[^A-Za-z0-9@._-]/g, "-")}` : null;
     this.fallbackState = initialWebViewState(this.initialUrl());
     this.copyOnSelect = ctx.env.TERMINAL_BROWSER_COPY_ON_SELECT === "1";
-    this.browserPreload = reactGrabPreloadPath(this.copyOnSelect);
+    this.browserPreload = browserPreloadPath(this.copyOnSelect);
     this.tabs = new TabManager(
       {
         onActivated: () => {
@@ -355,7 +363,10 @@ class Session {
         this.recalculateLayout();
         this.render();
       },
-      onColors: () => this.render(),
+      onColors: () => {
+        this.syncDarkReader();
+        this.render();
+      },
       onFocus: (focused) => {
         if (focused) this.telemetry.used();
       },
@@ -369,6 +380,7 @@ class Session {
     });
     this.settings.setNoSuper(!this.root.info.kittyKeyboard);
     this.applyRenderSettings();
+    this.syncDarkReader();
     this.settings.watch();
     this.recalculateLayout();
     this.tabs.create(this.fallbackState.url);
@@ -452,6 +464,7 @@ class Session {
     this.registry?.dispose();
     this.registry = null;
     this.settings.dispose();
+    this.unregisterDarkReader();
     this.tabs.stopAll();
     if (this.root) this.root.stop(code);
     else this.ctx.onClose(code);
@@ -1339,6 +1352,14 @@ class Session {
     });
     this.copyWatchers.set(tab.id, watcher);
     void watcher.enable();
+  }
+
+  private syncDarkReader(): void {
+    const [r, g, b] = this.root?.info.colors.background ?? [0, 0, 0];
+    const on = this.settings.get("pages.darkReader") === "on" && 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+    if (on === this.darkReaderOn) return;
+    this.darkReaderOn = on;
+    for (const { ref } of this.tabs.all()) if (ref.current) refreshDarkReader(ref.current.webContents);
   }
 
   private grabFor(tab: Tab, handle: WebViewHandle): Grab {
