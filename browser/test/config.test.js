@@ -311,6 +311,24 @@ test("window.transparent defaults off, persists on, and refuses other values", (
   assert.equal(broken.settings["window.transparent"], "off");
 });
 
+test("page.zoom defaults to 1, stores percents as factors, and refuses other values", () => {
+  const store = tempStore();
+  assert.equal(store.load().settings["page.zoom"], "1");
+
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "page.zoom": "150%" }));
+  const percent = store.load();
+  assert.deepEqual(percent.errors, []);
+  assert.equal(percent.settings["page.zoom"], "1.5");
+
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "page.zoom": 1.25 }));
+  assert.equal(store.load().settings["page.zoom"], "1.25");
+
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "page.zoom": "huge" }));
+  const broken = store.load();
+  assert.equal(broken.errors.length, 1);
+  assert.equal(broken.settings["page.zoom"], "1");
+});
+
 test("render settings map to engine values and the startup env", () => {
   assert.equal(maxFps("display", 120), 120);
   assert.equal(maxFps("uncapped", 120), 0);

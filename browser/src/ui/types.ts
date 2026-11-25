@@ -215,6 +215,8 @@ export interface TabView {
   preload: string | null;
   clipboardRead: boolean;
   transparent: boolean;
+  defaultZoom: number;
+  forceZoom: number | null;
 }
 
 export interface TabActions {

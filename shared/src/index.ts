@@ -58,3 +58,4 @@ export * from "./config/render";
 export * from "./config/search";
 export * from "./config/settings";
 export * from "./config/telemetry";
+export * from "./config/zoom";

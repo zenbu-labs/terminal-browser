@@ -19,7 +19,7 @@ import { PopupWindow } from "./popup";
 import { prepareSession } from "./session";
 import { cssSize, initialWebViewState } from "./types";
 import type { DevtoolsDock, SurfaceLayout, WebViewState } from "./types";
-import { scaleZoom, stepZoom } from "./zoom";
+import { scaleZoom, stepZoom, zoomSite } from "./zoom";
 import type { ZoomDirection } from "./zoom";
 
 export const QUIT_URL = "pixel://quit";
@@ -80,6 +80,7 @@ export interface HostOptions {
   clipboardRead: boolean;
   proxy: ProxySetting | null;
   browserWindowOptions: BrowserWindowOptions;
+  forceZoom: number | null;
 }
 
 export class PageHost {
@@ -87,6 +88,8 @@ export class PageHost {
   private readonly popupSurface: Surface;
   private readonly window: BrowserWindow;
   private readonly browserWindowOptions: BrowserWindowOptions;
+  private readonly forceZoom: number | null;
+  private readonly forcedZoomSites = new Set<string>();
   private readonly onState: (state: WebViewState) => void;
   private renderScale: number;
   private layout: SurfaceLayout;
@@ -147,7 +150,11 @@ export class PageHost {
     this.layout = layout;
     this.onState = onState;
     this.renderScale = renderScaleFor(layout);
-    this.state = initialWebViewState(options.url);
+    this.forceZoom = options.forceZoom;
+    this.state = {
+      ...initialWebViewState(options.url),
+      zoom: options.forceZoom ?? options.browserWindowOptions.webPreferences?.zoomFactor ?? 1,
+    };
     const size = this.contentSize(layout);
     this.window = new BrowserWindow(
       windowOptions(this.browserWindowOptions, size, offscreenPreferences(this.renderScale)),
@@ -214,6 +221,7 @@ export class PageHost {
     this.window.webContents.on("did-stop-loading", () => this.updateNavigation(false));
     this.window.webContents.on("did-navigate", (_event, url) => {
       if (urlHost(url) !== urlHost(this.state.url)) this.updateState({ favicon: null });
+      this.applyForcedZoom(url);
       this.updateNavigation(this.state.loading, url);
     });
     this.window.webContents.on("did-navigate-in-page", (_event, url, mainFrame) => {
@@ -310,6 +318,13 @@ export class PageHost {
   reload() {
     if (this.state.loading) this.window.webContents.stop();
     else this.window.webContents.reload();
+  }
+
+  private applyForcedZoom(url: string) {
+    const site = zoomSite(url);
+    if (this.forceZoom === null || this.forcedZoomSites.has(site)) return;
+    this.forcedZoomSites.add(site);
+    this.window.webContents.setZoomFactor(this.forceZoom);
   }
 
   zoom(direction: ZoomDirection): number {

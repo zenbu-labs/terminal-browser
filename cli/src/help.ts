@@ -24,6 +24,11 @@ Options:
                         Lets websites read from clipboard.
   --transparent         [placeholder copy: Let the terminal show through pages that do not paint
                         a background. Persist it with terminal-browser config set window.transparent on]
+  --zoom <level>        Page zoom for this browser, as a factor (1.5) or percent (150%).
+                        Also becomes the remembered zoom for each site it opens.
+                        Opens its own browser instead of a tab in a neighbor.
+                        For a default that leaves remembered zoom alone, use
+                        terminal-browser config set page.zoom 1.5
   --no-merge            Do not open the terminal-browser instance as a tab in a neighbor terminal-browser
 
 
@@ -32,6 +37,7 @@ Examples:
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
   terminal-browser open --ssh dev@build-box localhost:8080
+  terminal-browser open example.com --zoom 150%
 `,
   },
   ls: {

@@ -273,6 +273,7 @@ KeyMods        { shift: boolean; alt: boolean; ctrl: boolean; super: boolean }
 | `proxy` | proxy rules, e.g. `socks5://127.0.0.1:1080` |
 | `clipboardRead` | allows the page to read the clipboard |
 | `browserWindowOptions` | Electron `BrowserWindow` options except size and offscreen flags |
+| `forceZoom` | zoom factor applied the first time the view reaches each site, overriding the zoom Chromium remembers for that site; it also becomes that site's remembered zoom in every view sharing the partition. For a default that yields to remembered zoom, use `browserWindowOptions.webPreferences.zoomFactor` |
 | `autoFocus` | focuses on mount |
 | `devtools: boolean \| "bottom" \| "right"` | opens Chrome DevTools |
 | `hidden` | hides without unloading |
