@@ -24,7 +24,7 @@ function reactGrabLibrary(): string {
 
 const OVERLAY_STYLE = `
 [data-react-grab-completion] { display: none !important; }
-[data-react-grab-selection-label]:has([data-react-grab-input]) .min-w-\\[150px\\] { min-width: 320px !important; max-width: 440px !important; }
+[data-react-grab-selection-label]:has([data-react-grab-input]) .min-w-\\[150px\\] { min-width: min(320px, calc(100vw - 16px)) !important; max-width: min(440px, calc(100vw - 16px)) !important; }
 [data-react-grab-input] { font-size: 14px !important; line-height: 20px !important; min-height: 60px !important; max-height: 160px !important; }
 [data-react-grab-submit] { width: 24px !important; height: 24px !important; }
 [data-react-grab-submit] svg { width: 13px; height: 13px; }
@@ -210,7 +210,7 @@ const IGNORE_OUTSIDE_CLICKS = `(() => {
     blocking = commentBoxOpen() && !insideCommentBox(event);
     block(event);
   }, { capture: true });
-  for (const type of ["mousedown", "mouseup", "click"]) window.addEventListener(type, block, { capture: true });
+  for (const type of ["mousedown", "mouseup", "click", "contextmenu"]) window.addEventListener(type, block, { capture: true });
   for (const type of ["pointerup", "pointercancel"]) {
     window.addEventListener(type, (event) => {
       block(event);
