@@ -62,11 +62,15 @@ function reportOpened(browser: string, tab?: number | string | null) {
   process.stdout.write(`opened ${where} (terminal-browser ls for details)\n`);
 }
 
-function takeFlag(args: string[], name: string): string | undefined {
+function takeFlag(
+  args: string[],
+  name: string,
+  { valueMayBeFlag = false }: { valueMayBeFlag?: boolean } = {},
+): string | undefined {
   const at = args.indexOf(name);
   if (at < 0) return undefined;
   const value = args[at + 1];
-  if (value === undefined) fail(`${name} requires a value`);
+  if (value === undefined || (!valueMayBeFlag && value.startsWith("--"))) fail(`${name} requires a value`);
   args.splice(at, 2);
   return value;
 }
@@ -657,9 +661,9 @@ async function openCommand(args: string[]) {
   }
   const split = takeSplitFlag(args);
   const size = takeSizeFlag(args);
+  takeSshFlags(args);
   const noMerge = takeBoolFlag(args, "--no-merge") || mergeDisabled();
   if (size !== null && !split) fail("--size only applies to a split (--split <direction>)");
-  takeSshFlags(args);
   rejectUnknownFlags(args);
   const positionals = args.filter((arg) => !arg.startsWith("-"));
   if (positionals.length > 1) {
@@ -714,7 +718,8 @@ function registerAppCommand(args: string[]): number {
   const idFlag = takeFlag(args, "--id");
   const name = takeFlag(args, "--name");
   const bin = takeFlag(args, "--bin");
-  const argsFlag = takeFlag(args, "--args");
+  const argsFlag = takeFlag(args, "--args", { valueMayBeFlag: true });
+  if (args.length > 0) fail(`unexpected ${args[0]} (pass --args as a single quoted string)`);
   if (!name) fail("register-app needs --name");
   if (!bin) fail("register-app needs --bin");
   const binPath = path.resolve(bin);

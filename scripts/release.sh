@@ -134,11 +134,10 @@ tar -czf "$TARBALL" -C "$OUT" terminal-browser
 
 if [ -n "$DARWIN_ARCH" ]; then
   SHA256="$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
-  SIZE="$(stat -f%z "$TARBALL")"
 else
   SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
-  SIZE="$(stat -c%s "$TARBALL")"
 fi
+SIZE="$(wc -c < "$TARBALL" | tr -d ' ')"
 
 cat > "$OUT/manifest-$TARGET.json" <<EOF
 {
