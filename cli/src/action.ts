@@ -217,6 +217,7 @@ const BLOCKED_FLAGS = new Map([
   ["--executable-path", "terminal-browser drives its own browser, not another engine"],
   ["--profile", "terminal-browser drives its own browser, not another engine"],
   ["--provider", "terminal-browser drives the local browser, not a cloud one"],
+  ["--config", "terminal-browser gives agent-browser its own config, use AGENT_BROWSER_* environment variables instead"],
 ]);
 
 function checkGuardrails(args: string[]) {
