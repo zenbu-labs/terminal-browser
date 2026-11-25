@@ -102,6 +102,17 @@ for (const direction of ["right", "left", "down", "up"]) {
   });
 }
 
+test("herdr-app refuses a split size it cannot apply, before opening a pane", inHerdrApp, async () => {
+  const terminal = detect(process.env);
+  const before = herdrPanes().length;
+  const from = await terminal.getCurrentPane({ tty: null, cwd: process.cwd() });
+  await assert.rejects(
+    terminal.split({ from, direction: "right", command: ["sleep", "600"], size: 0.75, tty: null }),
+    /--size/,
+  );
+  assert.equal(herdrPanes().length, before);
+});
+
 test("herdr-app focuses a pane by its terminal", inHerdrApp, async () => {
   await withSplit("right", async ({ terminal, created }) => {
     await terminal.focusPane(OWN);

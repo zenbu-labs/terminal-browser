@@ -156,8 +156,9 @@ export class AgentPaneFinder {
     } catch {}
     const self = await this.ctx.self();
     const inTab = (pane: Pane) => self == null || pane.tab === self.tab;
+    const agentsOnly = terminal.submitsSentText === true;
     const parent = await this.parentPane(panes);
-    if (parent && parent.id !== self?.id && inTab(parent)) {
+    if (parent && parent.id !== self?.id && inTab(parent) && (!agentsOnly || isAgentPane(parent))) {
       if (panes.length === 0 || panes.some((pane) => pane.id === parent.id)) {
         return { pane: parent.id, tier: "parent", agent: isAgentPane(parent) };
       }
@@ -166,7 +167,7 @@ export class AgentPaneFinder {
     const neighbours = panes.filter((pane) => pane.id !== self.id && pane.tab === self.tab);
     const agent = neighbours.find(isAgentPane);
     if (agent) return { pane: agent.id, tier: "agent", agent: true };
-    if (neighbours.length > 0) return { pane: neighbours[0].id, tier: "neighbor", agent: false };
+    if (neighbours.length > 0 && !agentsOnly) return { pane: neighbours[0].id, tier: "neighbor", agent: false };
     return null;
   }
 }

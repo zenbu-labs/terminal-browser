@@ -70,12 +70,12 @@ export const herdrApp: Detect = (env, run) => {
   return {
     name: "herdr-app",
     drawsGraphics: true,
+    submitsSentText: true,
     async getCurrentPane() {
       const found = (await panes()).find((pane) => pane.id === env.HC_TERMINAL_ID);
       return found ? { id: found.id, tab: found.tab } : null;
     },
     listPanes,
-    // hc can only paste text followed by Enter, so a shell would run the text as a command
     async sendText(pane, text) {
       const info = await terminalInfo(pane);
       if (!info.status?.app || SHELL.test(info.foreground?.name ?? "")) {
@@ -86,7 +86,8 @@ export const herdrApp: Detect = (env, run) => {
     async focusPane(pane) {
       await app("pane.focus", { terminal: pane });
     },
-    async split({ from, direction, command }) {
+    async split({ from, direction, command, size }) {
+      if (size) throw new Error("the Herdr desktop app cannot open a pane at a given --size; leave it out");
       const pane = await herdrPaneOf(from.id);
       const created = (await app("pane.split", { direction: NATIVE_DIRECTION[direction], pane, argv: command })) as {
         pane: string;

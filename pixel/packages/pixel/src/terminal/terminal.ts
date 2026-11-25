@@ -52,6 +52,11 @@ export interface Terminal {
    */
   readonly drawsGraphics?: boolean;
   /**
+   * For terminals whose sendText always presses Enter after the text, so it must only ever reach a coding agent:
+   * text sent to a shell would run as a command
+   */
+  readonly submitsSentText?: boolean;
+  /**
    * Allows code to be ran at startup, useful for preparing the terminal environment for terminal-browser
    */
   prepare?(): void | Promise<void>;
