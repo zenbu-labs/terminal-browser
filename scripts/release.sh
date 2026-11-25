@@ -48,9 +48,10 @@ cp -R "$ROOT/skill/build" "$STAGE/skills"
 
 cp "$ROOT/assets/fonts/JetBrainsMono-Regular.ttf" "$STAGE/assets/fonts/"
 
-"$ROOT/scripts/copy-react-grab.sh"
-mkdir -p "$STAGE/assets/react-grab"
+"$ROOT/scripts/copy-page-scripts.sh"
+mkdir -p "$STAGE/assets/react-grab" "$STAGE/assets/darkreader"
 cp "$ROOT/assets/react-grab/"* "$STAGE/assets/react-grab/"
+cp "$ROOT/assets/darkreader/"* "$STAGE/assets/darkreader/"
 
 mkdir -p "$STAGE/assets/search"
 cp "$ROOT/assets/search/"* "$STAGE/assets/search/"
