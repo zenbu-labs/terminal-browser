@@ -49,12 +49,13 @@ impl Engine {
             .unwrap_or(interval)
     }
 
-    pub(super) fn frame_debt(&self) -> Duration {
-        let interval = self.frame_interval();
-        let Some(budget) = self.backend.byte_rate_limit() else {
-            return interval;
+    fn next_frame_at(&self) -> Option<Instant> {
+        let transfer = |bytes: usize, budget: Option<f32>| {
+            budget.map_or(Duration::ZERO, |budget| Duration::from_secs_f32((bytes as f32 / budget).min(0.2)))
         };
-        interval.max(Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2)))
+        let wait = transfer(self.last_frame_bytes, self.backend.byte_rate_limit())
+            .max(transfer(self.backend.last_image_bytes(), self.backend.image_rate_limit()));
+        next_frame_at(self.frame_slot, self.frame_interval(), self.last_frame, wait)
     }
 
     pub fn since_input(&self) -> Duration {
@@ -76,12 +77,13 @@ impl Engine {
 
     pub(super) fn frame(&mut self) -> io::Result<()> {
         self.apply_scroll_requests();
-        let debt = self.frame_debt();
         let now = Instant::now();
-        if !debt.is_zero() && now.duration_since(self.frame_slot) < debt {
+        if let Some(due) = self.next_frame_at()
+            && now < due
+        {
             self.frame_deferred = self.draws_something();
             if self.frame_deferred {
-                self.frame_due = Some(self.frame_slot + debt);
+                self.frame_due = Some(due);
                 self.note_frame_wanted();
                 return Ok(());
             }
@@ -118,8 +120,7 @@ impl Engine {
         crate::profiler::span("frame", || -> io::Result<()> {
             let start = Instant::now();
             let interval = self.frame_interval();
-            let next_slot = self.frame_slot + interval;
-            let slot = if !interval.is_zero() && start >= next_slot && start < next_slot + interval { next_slot } else { start };
+            let slot = slot_for(self.frame_slot, interval, start);
             self.backend.schedule_present((!interval.is_zero()).then(|| slot + self.present_after));
             let mut damage: Vec<(usize, bool, Vec<Rect>)> = Vec::new();
             for (i, whole) in work {
@@ -252,5 +253,46 @@ impl Engine {
             self.node_overlay(self.inspect_view, id, HighlightArea::All, true, &mut ops);
         }
         ops
+    }
+}
+
+fn next_frame_at(slot: Instant, interval: Duration, last_start: Instant, transfer: Duration) -> Option<Instant> {
+    let paced = (!interval.is_zero()).then(|| slot + interval);
+    let transferred = (!transfer.is_zero()).then(|| last_start + transfer);
+    paced.max(transferred)
+}
+
+fn slot_for(previous: Instant, interval: Duration, start: Instant) -> Instant {
+    let next = previous + interval;
+    if !interval.is_zero() && start >= next && start < next + interval { next } else { start }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_transfer_wait_between_one_and_two_intervals_is_kept_even_when_frames_snap_to_earlier_slots() {
+        let interval = Duration::from_secs_f64(1.0 / 60.0);
+        let transfer = Duration::from_millis(24);
+        let origin = Instant::now();
+        let (mut slot, mut start) = (origin, origin);
+        let mut starts = vec![start];
+        for _ in 0..10 {
+            start = next_frame_at(slot, interval, start, transfer).unwrap();
+            slot = slot_for(slot, interval, start);
+            starts.push(start);
+        }
+        for pair in starts.windows(2) {
+            assert!(pair[1] - pair[0] >= transfer, "frames {:?} apart", pair[1] - pair[0]);
+        }
+    }
+
+    #[test]
+    fn without_a_transfer_wait_frames_follow_the_slot_grid() {
+        let interval = Duration::from_millis(10);
+        let origin = Instant::now();
+        assert_eq!(next_frame_at(origin, interval, origin + Duration::from_millis(3), Duration::ZERO), Some(origin + interval));
+        assert_eq!(next_frame_at(origin, Duration::ZERO, origin, Duration::ZERO), None);
     }
 }

@@ -218,6 +218,7 @@ export interface RenderSettings {
   highlightTransmits?: boolean;
   frameEvents?: boolean;
   tiles?: "auto" | "on" | "off";
+  imageRate?: "auto" | number;
 }
 
 export interface PixelRoot {
@@ -828,12 +829,18 @@ export function createEngineRoot(options: EngineRootOptions, platform: RootPlatf
         highlightTransmits: settings.highlightTransmits ?? s.highlightTransmits,
       }));
       bridge.push(APP_VIEW, { op: "setRender", maxFps: settings.maxFps });
-      if (settings.highlightTransmits !== undefined || settings.frameEvents !== undefined || settings.tiles !== undefined) {
+      if (
+        settings.highlightTransmits !== undefined ||
+        settings.frameEvents !== undefined ||
+        settings.tiles !== undefined ||
+        settings.imageRate !== undefined
+      ) {
         bridge.push(APP_VIEW, {
           op: "presenter",
           highlightTransmits: settings.highlightTransmits,
           frameEvents: settings.frameEvents,
           tiles: settings.tiles,
+          imageRate: settings.imageRate,
         });
       }
       bridge.flush();

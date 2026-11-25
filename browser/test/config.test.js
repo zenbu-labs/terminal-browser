@@ -10,7 +10,7 @@ const { defaultKeys } = require("shared");
 const { searchUrlFor, searchOrUrl } = require("../dist/url.js");
 const { SEARCH_ENGINES, engineBySearch, parseSuggestions } = require("shared");
 const { SettingsManager } = require("../dist/session/settings.js");
-const { renderEnv, maxFps } = require("shared");
+const { renderEnv, maxFps, imageRate } = require("shared");
 
 const press = (key, mods = {}) => ({
   key,
@@ -272,6 +272,28 @@ test("render settings accept numbers or their named values and refuse the rest",
   assert.equal(broken.errors.length, 2);
   assert.equal(broken.settings["render.fps"], "display");
   assert.equal(broken.settings["render.transport"], "auto");
+});
+
+test("max image transfer speed is auto or a number of megabytes per second", () => {
+  const store = tempStore();
+  assert.equal(store.load().settings["render.imageRate"], "auto");
+  assert.equal(imageRate("auto"), "auto");
+  assert.equal(imageRate("600"), 600);
+
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "render.imageRate": 450.5 }));
+  const loaded = store.load();
+  assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.settings["render.imageRate"], "450.5");
+
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "render.imageRate": "0.5" }));
+  assert.equal(store.load().settings["render.imageRate"], "0.5");
+
+  for (const bad of ["fast", "0", "-5", "", "Infinity"]) {
+    fs.writeFileSync(store.files.settings, JSON.stringify({ "render.imageRate": bad }));
+    const broken = store.load();
+    assert.equal(broken.errors.length, 1, `accepted ${JSON.stringify(bad)}`);
+    assert.equal(broken.settings["render.imageRate"], "auto");
+  }
 });
 
 test("window.transparent defaults off, persists on, and refuses other values", () => {

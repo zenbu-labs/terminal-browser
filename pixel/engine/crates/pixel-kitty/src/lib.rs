@@ -106,6 +106,9 @@ pub struct Kitty {
     flashes: present::Flashes,
     terminal_id: u64,
     native: native::NativeInput,
+    payload_bytes: usize,
+    image_rate_override: Option<f32>,
+    forced_image_rate: Option<ForcedImageRate>,
 }
 
 fn ask<T>(
@@ -131,6 +134,7 @@ impl Kitty {
             None => HerdrTarget::from_env(env),
         };
         let mut kitty = Self::blank(tty.output()?, tty.wrapper(), target);
+        kitty.forced_image_rate = forced_image_rate(env);
         kitty.cell = tty.cell();
         kitty.connect_herdr();
         match host {
@@ -201,6 +205,9 @@ impl Kitty {
             flashes: present::Flashes::default(),
             terminal_id: NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             native: native::NativeInput::default(),
+            payload_bytes: 0,
+            image_rate_override: None,
+            forced_image_rate: None,
         }
     }
 
@@ -396,6 +403,7 @@ impl Kitty {
                     .push(FrameFile::create(self.frame_path(slot, generation), data.len())?);
             }
         }
+        self.payload_bytes += data.len();
         let index = (self.frame_seq % FRAME_SLOTS) as usize;
         self.frame_seq += 1;
         let file = &mut self.frame_files[index];
@@ -430,6 +438,23 @@ impl Kitty {
         self.force_tiles = on;
     }
 
+    pub fn set_image_rate_limit(&mut self, bytes_per_sec: Option<f32>) {
+        self.image_rate_override = bytes_per_sec;
+    }
+
+    pub fn image_rate_limit(&self) -> Option<f32> {
+        match self.forced_image_rate {
+            Some(ForcedImageRate::Auto) => self.identity.image_bytes_per_sec(),
+            Some(ForcedImageRate::Uncapped) => None,
+            Some(ForcedImageRate::BytesPerSec(rate)) => Some(rate),
+            None => self.image_rate_override.or_else(|| self.identity.image_bytes_per_sec()),
+        }
+    }
+
+    pub fn last_image_bytes(&self) -> usize {
+        self.payload_bytes
+    }
+
     pub fn holds_a_frame(&self) -> bool {
         self.patches.holds_a_frame()
     }
@@ -443,6 +468,7 @@ impl Kitty {
     }
 
     pub fn draw(&mut self, tty: &mut dyn Tty, frame: pixel_raster::PixelFrame<'_>) -> io::Result<usize> {
+        self.payload_bytes = 0;
         let canvas = frame.canvas;
         if self.hosted {
             if tty.host().is_some_and(|host| host.closed) {
@@ -699,6 +725,34 @@ fn unread_output_of(output: &Output) -> Option<usize> {
 const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);
 const HERDR_RETRY_MAX: Duration = Duration::from_secs(10);
 
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ForcedImageRate {
+    Auto,
+    Uncapped,
+    BytesPerSec(f32),
+}
+
+fn forced_image_rate(env: &dyn Vars) -> Option<ForcedImageRate> {
+    let value = env.var("TERMINAL_BROWSER_IMAGE_RATE")?;
+    let forced = match value.trim() {
+        "auto" => Some(ForcedImageRate::Auto),
+        "uncapped" => Some(ForcedImageRate::Uncapped),
+        number => number
+            .parse::<f32>()
+            .ok()
+            .filter(|mb| mb.is_finite() && *mb > 0.0)
+            .map(|mb| ForcedImageRate::BytesPerSec(mb * 1_000_000.0)),
+    };
+    match forced {
+        Some(rate) => pixel_core::logging::info("terminal", format!("image transfer rate forced to {rate:?}")),
+        None => pixel_core::logging::warn(
+            "terminal",
+            format!("ignoring TERMINAL_BROWSER_IMAGE_RATE={value:?}, expected auto, uncapped, or megabytes per second"),
+        ),
+    }
+    forced
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameTransport {

@@ -51,6 +51,13 @@ pub(crate) trait Presenter: Send {
     fn byte_rate_limit(&self) -> Option<f32> {
         None
     }
+    fn image_rate_limit(&self) -> Option<f32> {
+        None
+    }
+    fn last_image_bytes(&self) -> usize {
+        0
+    }
+    fn set_image_rate_limit(&mut self, _bytes_per_sec: Option<f32>) {}
     fn pointer_shape<'a>(&self, shape: &'a str) -> &'a str {
         shape
     }
@@ -193,6 +200,18 @@ impl Presenter for KittyPresenter {
 
     fn byte_rate_limit(&self) -> Option<f32> {
         self.kitty.frames_are_inline().then_some(INLINE_BYTES_PER_SEC)
+    }
+
+    fn image_rate_limit(&self) -> Option<f32> {
+        self.kitty.image_rate_limit()
+    }
+
+    fn last_image_bytes(&self) -> usize {
+        self.kitty.last_image_bytes()
+    }
+
+    fn set_image_rate_limit(&mut self, bytes_per_sec: Option<f32>) {
+        self.kitty.set_image_rate_limit(bytes_per_sec);
     }
 
     fn pointer_shape<'a>(&self, shape: &'a str) -> &'a str {

@@ -111,7 +111,7 @@ export type SettingRow = {
 } & (
   | { kind: "string"; value: string }
   | { kind: "toggle"; value: string; inverted: boolean }
-  | { kind: "choice"; value: string; choices: SettingChoiceView[]; custom: boolean }
+  | { kind: "choice"; value: string; choices: SettingChoiceView[]; custom: boolean; unit: string | null }
 );
 
 export interface SettingsView {

@@ -62,7 +62,14 @@ function settingRow(key: SettingKey, value: string): SettingRow {
   if (values.length === 2 && values.includes("on") && values.includes("off")) {
     return { ...base, kind: "toggle", value, inverted: def.inverted ?? false };
   }
-  return { ...base, kind: "choice", value, choices, custom: !(def.schema instanceof z.ZodEnum) };
+  return {
+    ...base,
+    kind: "choice",
+    value,
+    choices,
+    custom: !(def.schema instanceof z.ZodEnum),
+    unit: def.unit ?? null,
+  };
 }
 
 function agentBrief(files: ConfigFiles): string {

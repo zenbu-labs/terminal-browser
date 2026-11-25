@@ -10,6 +10,10 @@ export function maxFps(value: string, displayHz: number): number {
   return Number(value);
 }
 
+export function imageRate(value: string): typeof AUTO | number {
+  return value === AUTO ? AUTO : Number(value);
+}
+
 export function renderEnv(get: <K extends SettingKey>(key: K) => Settings[K]): Record<string, string> {
   const env: Record<string, string> = {};
   const presenter = get("render.presenter");

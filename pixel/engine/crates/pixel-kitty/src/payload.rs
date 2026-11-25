@@ -81,6 +81,7 @@ impl Kitty {
     }
 
     fn hand_off_shm_with(&mut self, len: usize, fill: impl FnOnce(&mut [u8])) -> io::Result<String> {
+        self.payload_bytes += len;
         let prefix = self.shm_name(0);
         let pool = self.shm_pool.get_or_insert_with(|| crate::shm_pool::ShmPool::new(prefix));
         if let Some(mut region) = pool.take(len) {
@@ -110,6 +111,7 @@ impl Kitty {
     fn hand_off_temp_file(&mut self, data: &[u8]) -> io::Result<String> {
         let seq = self.payloads.next_seq();
         let path = self.temp_payload_path(seq);
+        self.payload_bytes += data.len();
         std::fs::write(&path, data)?;
         self.payloads.track(Payload::File(path.clone()));
         Ok(path.to_string_lossy().into_owned())
