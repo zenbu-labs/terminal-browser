@@ -19,9 +19,9 @@ function asset(name: string): string {
 }
 
 let sites: Sites | null = null;
-let pageSource: string | null = null;
+let sources: { page: string; proxy: string } | null = null;
 const owners = new Set<(contents: WebContents) => boolean | null>();
-const darkThemeDetectedAt = new WeakMap<WebContents, string>();
+const darkThemeDetected = new WeakSet<WebContents>();
 
 function wanted(contents: WebContents): boolean {
   for (const owner of owners) {
@@ -31,30 +31,40 @@ function wanted(contents: WebContents): boolean {
   return false;
 }
 
+// srcdoc and about:blank frames show content from the page that embeds them
+function webUrl(frame: WebFrameMain): string | null {
+  for (let current: WebFrameMain | null = frame; current; current = current.parent) {
+    if (/^https?:/.test(current.url)) return current.url;
+    if (!current.url.startsWith("about:")) return null;
+  }
+  return null;
+}
+
 function themeFor(contents: WebContents, frame: WebFrameMain) {
-  const tabUrl = frame.top?.url ?? frame.url;
-  if (!wanted(contents) || !/^https?:/.test(frame.url)) return null;
+  const tabUrl = frame.top ? webUrl(frame.top) : null;
+  const url = webUrl(frame);
+  if (!wanted(contents) || !tabUrl || !url) return null;
   sites ??= require(asset("sites.js")) as Sites;
-  if (sites.isDarkSite(tabUrl) || darkThemeDetectedAt.get(contents) === tabUrl) return null;
-  const detectorHints = sites.detectorHintsFor(frame.url);
+  if (sites.isDarkSite(tabUrl) || darkThemeDetected.has(contents)) return null;
+  const detectorHints = sites.detectorHintsFor(url);
   return {
-    fixes: sites.fixesFor(frame.url),
+    fixes: sites.fixesFor(url),
     detectDarkTheme: frame === frame.top || Boolean(detectorHints?.some((hint) => hint.iframe)),
     detectorHints,
   };
 }
 
 ipcMain.on(SYNC, (event, loaded: boolean) => {
-  const theme = event.senderFrame && themeFor(event.sender, event.senderFrame);
+  const frame = event.senderFrame;
+  if (frame && frame === frame.top && !loaded) darkThemeDetected.delete(event.sender);
+  const theme = frame && themeFor(event.sender, frame);
   if (!theme) return void (event.returnValue = null);
-  pageSource ??= fs.readFileSync(asset("page.js"), "utf8");
-  event.returnValue = { source: loaded ? null : pageSource, theme };
+  sources ??= { page: fs.readFileSync(asset("page.js"), "utf8"), proxy: fs.readFileSync(asset("proxy.js"), "utf8") };
+  event.returnValue = { sources: loaded ? null : sources, theme };
 });
 
 ipcMain.on(DETECTED, (event) => {
-  const tabUrl = event.senderFrame?.top?.url;
-  if (!tabUrl) return;
-  darkThemeDetectedAt.set(event.sender, tabUrl);
+  darkThemeDetected.add(event.sender);
   refreshDarkReader(event.sender);
 });
 
@@ -72,13 +82,25 @@ export const DARK_READER_PRELOAD = `
   contextBridge.exposeInIsolatedWorld(${WORLD_ID}, "terminalBrowserDarkReader", {
     darkThemeDetected: () => ipcRenderer.send(${JSON.stringify(DETECTED)}),
   });
+  const whenDocumentExists = (run) => {
+    if (document.documentElement) return run();
+    new MutationObserver((_, observer) => {
+      if (!document.documentElement) return;
+      observer.disconnect();
+      run();
+    }).observe(document, { childList: true });
+  };
   let darkReaderLoaded = false;
   const syncDarkReader = () => {
     const reply = ipcRenderer.sendSync(${JSON.stringify(SYNC)}, darkReaderLoaded);
     if (!reply && !darkReaderLoaded) return;
-    const code = reply ? \`\${reply.source ?? ""};darkReader.apply(\${JSON.stringify(reply.theme)})\` : "darkReader.remove()";
     darkReaderLoaded = true;
-    void webFrame.executeJavaScriptInIsolatedWorld(${WORLD_ID}, [{ code }]);
+    whenDocumentExists(() => {
+      if (!reply) return void webFrame.executeJavaScriptInIsolatedWorld(${WORLD_ID}, [{ code: "darkReader.remove()" }]);
+      if (reply.sources) void webFrame.executeJavaScript(reply.sources.proxy);
+      const code = \`\${reply.sources?.page ?? ""};darkReader.apply(\${JSON.stringify(reply.theme)})\`;
+      void webFrame.executeJavaScriptInIsolatedWorld(${WORLD_ID}, [{ code }]);
+    });
   };
   syncDarkReader();
   ipcRenderer.on(${JSON.stringify(SYNC)}, syncDarkReader);

@@ -37,26 +37,16 @@ import { runDarkThemeDetector, stopDarkThemeDetector } from "./inject/detector";
 
 setFetchMethod((url) => fetch(url));
 
-function whenDocumentExists(run) {
-  if (document.documentElement) return run();
-  new MutationObserver((_, observer) => {
-    if (!document.documentElement) return;
-    observer.disconnect();
-    run();
-  }).observe(document, { childList: true });
-}
-
 globalThis.darkReader = {
-  apply: ({ fixes, detectDarkTheme, detectorHints }) =>
-    whenDocumentExists(() => {
-      createOrUpdateDynamicTheme(DEFAULT_THEME, fixes, window !== window.top);
-      if (!detectDarkTheme) return;
-      runDarkThemeDetector((hasDarkTheme) => {
-        if (!hasDarkTheme) return;
-        removeDynamicTheme();
-        terminalBrowserDarkReader.darkThemeDetected();
-      }, detectorHints);
-    }),
+  apply: ({ fixes, detectDarkTheme, detectorHints }) => {
+    createOrUpdateDynamicTheme(DEFAULT_THEME, fixes, window !== window.top);
+    if (!detectDarkTheme) return;
+    runDarkThemeDetector((hasDarkTheme) => {
+      if (!hasDarkTheme) return;
+      removeDynamicTheme();
+      terminalBrowserDarkReader.darkThemeDetected();
+    }, detectorHints);
+  },
   remove: () => {
     stopDarkThemeDetector();
     removeDynamicTheme();
@@ -92,13 +82,22 @@ const shared = {
   define: Object.fromEntries(
     ["DEBUG", "CHROMIUM_MV2", "CHROMIUM_MV3", "FIREFOX_MV2", "THUNDERBIRD", "TEST", "PLUS", "WATCH", "LOG"].map((flag) => [
       `__${flag}__`,
-      "false",
+      String(flag === "CHROMIUM_MV3"),
     ]),
   ),
   logLevel: "warning",
 };
 
+fs.mkdirSync(OUT, { recursive: true });
+fs.copyFileSync(path.join(SOURCE, "LICENSE"), path.join(OUT, "LICENSE"));
+
 await Promise.all([
+  build({
+    ...shared,
+    entryPoints: [path.join(SOURCE, "src", "inject", "dynamic-theme", "mv3-proxy.ts")],
+    format: "iife",
+    outfile: path.join(OUT, "proxy.js"),
+  }),
   build({
     ...shared,
     stdin: { contents: PAGE, resolveDir: path.join(SOURCE, "src"), loader: "ts" },
