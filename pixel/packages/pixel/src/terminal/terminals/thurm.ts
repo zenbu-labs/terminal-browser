@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { adjacentPane, paneById } from "../shared";
+import { adjacentPane, paneById, sleep } from "../shared";
 import type { PaneRect } from "../shared";
 import type { Detect, Pane, PaneDetails } from "../terminal";
 
@@ -22,9 +22,11 @@ interface ThurmTab {
 interface ThurmLayout {
   windows: { tabs: ThurmTab[] }[];
   workspaces?: { tabs: ThurmTab[] }[];
+  quick?: ThurmTab;
 }
 
 const LAYOUT_UNITS = 10_000;
+const LAYOUT_SAVE_MS = 600;
 
 function localPaneIds(node: ThurmNode, into: number[] = []): number[] {
   if (node.type === "pane") {
@@ -70,7 +72,12 @@ export const thurm: Detect = (env, run) => {
 
   async function tabs(): Promise<ThurmTab[]> {
     const layout = JSON.parse(await thurm(["layout", "--json"])) as ThurmLayout;
-    return [...layout.windows, ...(layout.workspaces ?? [])].flatMap((window) => window.tabs);
+    const all = [...layout.windows, ...(layout.workspaces ?? [])].flatMap((window) => window.tabs);
+    return layout.quick ? [...all, layout.quick] : all;
+  }
+
+  async function listed(): Promise<ThurmPane[]> {
+    return JSON.parse(await thurm(["list", "--json"])) as ThurmPane[];
   }
 
   async function livePanes(): Promise<(Pane & { pid: number | null })[]> {
@@ -79,8 +86,7 @@ export const thurm: Detect = (env, run) => {
       const id = tabId(tab);
       if (id) for (const pane of tabPanes(tab)) tabOf.set(String(pane), id);
     }
-    const listed = JSON.parse(await thurm(["list", "--json"])) as ThurmPane[];
-    return listed
+    return (await listed())
       .filter((pane) => pane.alive && tabOf.has(String(pane.id)))
       .map((pane) => ({ id: String(pane.id), tab: tabOf.get(String(pane.id))!, pid: pane.pid }));
   }
@@ -98,6 +104,14 @@ export const thurm: Detect = (env, run) => {
       if (pid && tty && !tty.startsWith("?")) found.set(Number(pid), `/dev/${tty}`);
     }
     return found;
+  }
+
+  async function currentPane(): Promise<Pane | null> {
+    const id = env.THURM_PANE_ID;
+    const pane = await paneById(panes, id);
+    if (pane || !(await listed()).some((live) => live.alive && String(live.id) === id)) return pane;
+    await sleep(LAYOUT_SAVE_MS);
+    return paneById(panes, id);
   }
 
   async function listPanes(): Promise<PaneDetails[]> {
@@ -118,7 +132,7 @@ export const thurm: Detect = (env, run) => {
 
   return {
     name: "thurm",
-    getCurrentPane: () => paneById(panes, env.THURM_PANE_ID),
+    getCurrentPane: currentPane,
     listPanes,
     neighbor,
     async sendText(pane, text) {

@@ -299,6 +299,37 @@ test("thurm lists live panes with their tab and tty", async () => {
   ]);
 });
 
+test("thurm finds a pane in the quick terminal", async () => {
+  const { run } = recorder({
+    "thurm layout --json": JSON.stringify({ windows: [{ tabs: [{ root: thurmLeaf(1) }] }], quick: { root: thurmLeaf(3) } }),
+    "thurm list --json": JSON.stringify([thurmPane(1, 100), thurmPane(3, 300)]),
+  });
+  assert.deepEqual(await detect(THURM_ENV, run).getCurrentPane(), { id: "3", tab: "tab:3" });
+});
+
+test("thurm waits for the layout save when its pane is new", async () => {
+  const layouts = [
+    { windows: [{ tabs: [{ root: thurmLeaf(1) }] }] },
+    { windows: [{ tabs: [{ root: thurmSplit("right", 0.5, thurmLeaf(1), thurmLeaf(3)) }] }] },
+  ];
+  let saves = 0;
+  const run = async (bin, args) => {
+    const command = [bin, ...args].join(" ");
+    if (command === "thurm layout --json") return JSON.stringify(layouts[Math.min(saves++, 1)]);
+    if (command === "thurm list --json") return JSON.stringify([thurmPane(1, 100), thurmPane(3, 300)]);
+    throw new Error(`nothing recorded for: ${command}`);
+  };
+  assert.deepEqual(await detect(THURM_ENV, run).getCurrentPane(), { id: "3", tab: "tab:1" });
+});
+
+test("thurm gives up on a pane that is not live", async () => {
+  const { run } = recorder({
+    "thurm layout --json": JSON.stringify({ windows: [{ tabs: [{ root: thurmLeaf(1) }] }] }),
+    "thurm list --json": JSON.stringify([thurmPane(1, 100)]),
+  });
+  assert.equal(await detect(THURM_ENV, run).getCurrentPane(), null);
+});
+
 test("thurm sends multi-line text as a bracketed paste and one line as typed", async () => {
   const sent = [];
   const run = async (bin, args, input) => {
