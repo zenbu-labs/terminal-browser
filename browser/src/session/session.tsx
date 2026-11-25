@@ -1347,6 +1347,7 @@ class Session {
       grab = new Grab(handle, {
         selected: (content, region) => void this.sendGrab(handle, content, region),
         changed: () => this.render(),
+        theme: () => this.pageContext().theme,
       });
       this.grabs.set(tab.id, grab);
     }
@@ -1362,7 +1363,7 @@ class Session {
       if (grab.active) await grab.deactivate();
       else {
         this.agentPanes.warm();
-        await grab.activate();
+        await grab.activate(this.settings.get("grab.comment") === "on");
       }
     } catch (error) {
       this.showToast(error instanceof Error ? error.message : String(error), "failed");
