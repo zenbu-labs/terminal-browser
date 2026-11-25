@@ -325,3 +325,10 @@ test("render settings map to engine values and the startup env", () => {
     TERMINAL_BROWSER_FRAMES: "inline",
   });
 });
+
+test("link hint shortcuts", () => {
+  for (const os of ["linux", "darwin"]) {
+    assert.deepEqual(defaultKeys("hints.open", os), ["ctrl+f"]);
+    assert.deepEqual(defaultKeys("hints.openTab", os), ["ctrl+alt+f"]);
+  }
+});

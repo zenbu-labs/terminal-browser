@@ -64,6 +64,7 @@ terminal-browser upgrade # upgrade to the latest version
 | Edit URL | cmd+l | ctrl+l |
 | Command palette | cmd+p | ctrl+k or alt+k |
 | Find in page | cmd+shift+f | ctrl+shift+f |
+| Link hints / in new tab | ctrl+f / ctrl+alt+f | ctrl+f / ctrl+alt+f |
 | Next / previous match | enter / shift+enter | enter / shift+enter |
 | Reload | cmd+r | ctrl+r |
 | Back / forward | cmd+[ / cmd+] or ctrl+[ / ctrl+] | ctrl+[ / ctrl+] |
