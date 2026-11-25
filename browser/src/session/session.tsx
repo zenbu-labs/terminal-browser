@@ -1363,7 +1363,7 @@ class Session {
       if (grab.active) await grab.deactivate();
       else {
         this.agentPanes.warm();
-        await grab.activate();
+        await grab.activate(this.settings.get("grab.comment") === "on");
       }
     } catch (error) {
       this.showToast(error instanceof Error ? error.message : String(error), "failed");

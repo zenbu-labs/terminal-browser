@@ -96,6 +96,14 @@ export const SETTINGS = {
     default: "off",
     choices: onOff,
   }),
+  "grab.comment": setting({
+    group: "general",
+    label: "Comment before sending to agent",
+    hint: "Picking an element opens a box to write a comment before it is sent",
+    schema: z.enum(["on", "off"]),
+    default: "on",
+    choices: onOff,
+  }),
   "render.fps": setting({
     group: "advanced",
     label: "Frame rate",

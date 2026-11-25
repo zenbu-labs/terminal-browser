@@ -219,14 +219,16 @@ const IGNORE_OUTSIDE_CLICKS = `(() => {
   }
 })()`;
 
-const ACTIVATE_SCRIPT = `(() => {
+function activateScript(withComment: boolean): string {
+  return `(() => {
   ${IGNORE_OUTSIDE_CLICKS};
   const api = (window.__REACT_GRAB__ ??= globalThis.__REACT_GRAB_MODULE__?.init({ telemetry: false }));
   if (!api) return "missing";
   (${REGISTER_PLUGIN})(api);
-  api.comment();
+  ${withComment ? "api.comment()" : "api.activate()"};
   return "active";
 })()`;
+}
 
 const DEACTIVATE_SCRIPT = "window.__REACT_GRAB__?.deactivate()";
 
@@ -322,11 +324,11 @@ export class Grab {
     return this.view.webContents.executeJavaScript(source, true);
   }
 
-  async activate(): Promise<void> {
+  async activate(withComment: boolean): Promise<void> {
     await this.listen();
     const loaded = await this.runJs("Boolean(window.__REACT_GRAB__)");
     if (!loaded) await this.runJs(reactGrabLibrary());
-    const result = await this.runJs(ACTIVATE_SCRIPT);
+    const result = await this.runJs(activateScript(withComment));
     if (result !== "active") {
       throw new Error("react-grab failed to start");
     }
