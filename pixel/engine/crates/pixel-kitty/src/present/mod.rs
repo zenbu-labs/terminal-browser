@@ -43,6 +43,8 @@ const INLINE_WIRE_PERCENT_OF_PIXELS: u64 = 5;
 const INLINE_IMAGE_COST_BYTES: u64 = (IMAGE_HEADER_BYTES + INLINE_IMAGE_OVERHEAD_BYTES) * 100 / INLINE_WIRE_PERCENT_OF_PIXELS;
 const REX_IMAGE_OVERHEAD_BYTES: u64 = 26_000;
 const GHOSTTY_LOCAL_IMAGE_OVERHEAD_BYTES: u64 = 107_000;
+// this was derived by running a benchmark on a Apple M4 Max against rex to determine the max rate of image data it could handle, then taking 80% of that max value since an m4 max is a fast processor
+const REX_IMAGE_BYTES_PER_SEC: f32 = 480_000_000.0;
 pub(super) const MIN_IMAGE_COST_BYTES: u64 = INLINE_IMAGE_COST_BYTES;
 const _: () = assert!(MIN_IMAGE_COST_BYTES <= IMAGE_HEADER_BYTES + REX_IMAGE_OVERHEAD_BYTES && MIN_IMAGE_COST_BYTES <= IMAGE_HEADER_BYTES + GHOSTTY_LOCAL_IMAGE_OVERHEAD_BYTES);
 
@@ -74,6 +76,10 @@ impl Identity {
             (Identity::Rex, false) => IMAGE_HEADER_BYTES + REX_IMAGE_OVERHEAD_BYTES * window_scale(frame) / WINDOW_SCALE_ONE,
             _ => IMAGE_HEADER_BYTES + GHOSTTY_LOCAL_IMAGE_OVERHEAD_BYTES,
         }
+    }
+
+    pub(crate) fn image_bytes_per_sec(self) -> Option<f32> {
+        matches!(self, Identity::Rex).then_some(REX_IMAGE_BYTES_PER_SEC)
     }
 
     fn prefers_tiles(self) -> bool {

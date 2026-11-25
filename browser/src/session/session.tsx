@@ -19,6 +19,7 @@ import {
   commandLabel,
   ENGINE_LOG_FILE,
   fetchLatestRelease,
+  imageRate,
   installedChannel,
   installedVersion,
   lastUrl,
@@ -1117,6 +1118,7 @@ class Session {
       highlightTransmits: this.settings.get("render.transmitOutlines") === "on",
       frameEvents: this.settings.get("render.frameEvents") === "on",
       tiles: this.settings.get("render.tiles"),
+      imageRate: imageRate(this.settings.get("render.imageRate")),
     };
     root.setRender(render);
     root.setLogFile(this.settings.get("debug.logFile") === "on" ? ENGINE_LOG_FILE : null);

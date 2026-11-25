@@ -159,6 +159,10 @@ impl TerminalBackend {
         self.presenter.force_tiles(on);
     }
 
+    pub fn set_image_rate_limit(&mut self, bytes_per_sec: Option<f32>) {
+        self.presenter.set_image_rate_limit(bytes_per_sec);
+    }
+
     pub fn note(&mut self, text: String) {
         self.presenter.note(text);
     }
@@ -462,6 +466,14 @@ impl Backend for TerminalBackend {
 
     fn byte_rate_limit(&self) -> Option<f32> {
         self.presenter.byte_rate_limit()
+    }
+
+    fn image_rate_limit(&self) -> Option<f32> {
+        self.presenter.image_rate_limit()
+    }
+
+    fn last_image_bytes(&self) -> usize {
+        self.presenter.last_image_bytes()
     }
 
     fn set_title(&mut self, text: &str) -> io::Result<()> {

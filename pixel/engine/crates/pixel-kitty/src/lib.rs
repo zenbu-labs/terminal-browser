@@ -106,6 +106,8 @@ pub struct Kitty {
     flashes: present::Flashes,
     terminal_id: u64,
     native: native::NativeInput,
+    payload_bytes: usize,
+    image_rate_override: Option<f32>,
 }
 
 fn ask<T>(
@@ -201,6 +203,8 @@ impl Kitty {
             flashes: present::Flashes::default(),
             terminal_id: NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             native: native::NativeInput::default(),
+            payload_bytes: 0,
+            image_rate_override: None,
         }
     }
 
@@ -396,6 +400,7 @@ impl Kitty {
                     .push(FrameFile::create(self.frame_path(slot, generation), data.len())?);
             }
         }
+        self.payload_bytes += data.len();
         let index = (self.frame_seq % FRAME_SLOTS) as usize;
         self.frame_seq += 1;
         let file = &mut self.frame_files[index];
@@ -430,6 +435,18 @@ impl Kitty {
         self.force_tiles = on;
     }
 
+    pub fn set_image_rate_limit(&mut self, bytes_per_sec: Option<f32>) {
+        self.image_rate_override = bytes_per_sec;
+    }
+
+    pub fn image_rate_limit(&self) -> Option<f32> {
+        self.image_rate_override.or_else(|| self.identity.image_bytes_per_sec())
+    }
+
+    pub fn last_image_bytes(&self) -> usize {
+        self.payload_bytes
+    }
+
     pub fn holds_a_frame(&self) -> bool {
         self.patches.holds_a_frame()
     }
@@ -443,6 +460,7 @@ impl Kitty {
     }
 
     pub fn draw(&mut self, tty: &mut dyn Tty, frame: pixel_raster::PixelFrame<'_>) -> io::Result<usize> {
+        self.payload_bytes = 0;
         let canvas = frame.canvas;
         if self.hosted {
             if tty.host().is_some_and(|host| host.closed) {

@@ -23,6 +23,7 @@ interface SettingDef<S extends z.ZodType> {
   default: z.infer<S>;
   choices?: SettingChoice[];
   inverted?: boolean;
+  unit?: string;
 }
 
 function setting<S extends z.ZodType>(def: SettingDef<S>): SettingDef<S> {
@@ -106,6 +107,7 @@ export const SETTINGS = {
         "expected display, uncapped, or a number of frames per second",
       ),
     default: DISPLAY_FPS,
+    unit: "fps",
     choices: [
       plain(DISPLAY_FPS, "Display"),
       plain("30"),
@@ -146,6 +148,17 @@ export const SETTINGS = {
     schema: z.enum([AUTO, "on", "off"]),
     default: AUTO,
     choices: [plain(AUTO, "Automatic"), plain("on", "Yes"), plain("off", "No")],
+  }),
+  "render.imageRate": setting({
+    group: "advanced",
+    label: "Max image transfer speed (MB/s)",
+    hint: "How much image data per second is sent to the terminal",
+    schema: z.coerce
+      .string()
+      .regex(/^(auto|[1-9]\d*(\.\d+)?)$/, "auto or number of megabytes per second"),
+    default: AUTO,
+    unit: "MB/s",
+    choices: [plain(AUTO, "Automatic")],
   }),
   "render.frameEvents": setting({
     group: "advanced",

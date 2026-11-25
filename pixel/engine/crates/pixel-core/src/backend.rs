@@ -132,6 +132,14 @@ pub trait Backend: Any + Send {
         None
     }
 
+    fn image_rate_limit(&self) -> Option<f32> {
+        None
+    }
+
+    fn last_image_bytes(&self) -> usize {
+        0
+    }
+
     fn set_title(&mut self, _text: &str) -> io::Result<()> {
         Ok(())
     }

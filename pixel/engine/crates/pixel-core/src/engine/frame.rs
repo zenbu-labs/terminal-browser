@@ -50,11 +50,12 @@ impl Engine {
     }
 
     pub(super) fn frame_debt(&self) -> Duration {
-        let interval = self.frame_interval();
-        let Some(budget) = self.backend.byte_rate_limit() else {
-            return interval;
+        let transfer = |bytes: usize, budget: Option<f32>| {
+            budget.map_or(Duration::ZERO, |budget| Duration::from_secs_f32((bytes as f32 / budget).min(0.2)))
         };
-        interval.max(Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2)))
+        self.frame_interval()
+            .max(transfer(self.last_frame_bytes, self.backend.byte_rate_limit()))
+            .max(transfer(self.backend.last_image_bytes(), self.backend.image_rate_limit()))
     }
 
     pub fn since_input(&self) -> Duration {

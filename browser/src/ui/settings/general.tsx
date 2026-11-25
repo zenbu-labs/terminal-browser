@@ -154,13 +154,21 @@ export function SettingLine({
           />
         )}
         {row.kind === "string" && (
-          <TemplateField row={row} actions={actions} width={dropdownWidth} rem={rem} theme={theme} />
+          <TemplateField row={row} value={row.value} actions={actions} width={dropdownWidth} rem={rem} theme={theme} />
         )}
       </Box>
       <Text style={{ fontSize: rem * 0.85, color: theme.muted, selectable: false }}>{row.hint}</Text>
       {customShown && (
         <Box style={{ justifyContent: "end" }}>
-          <TemplateField row={row} actions={actions} width={dropdownWidth} rem={rem} theme={theme} />
+          <TemplateField
+            row={row}
+            value={preset ? "" : row.value}
+            unit={row.unit}
+            actions={actions}
+            width={dropdownWidth}
+            rem={rem}
+            theme={theme}
+          />
         </Box>
       )}
     </Box>
@@ -169,12 +177,16 @@ export function SettingLine({
 
 function TemplateField({
   row,
+  value,
+  unit,
   actions,
   width,
   rem,
   theme,
 }: {
-  row: SettingRow & { value: string };
+  row: SettingRow;
+  value: string;
+  unit?: string | null;
   actions: SettingsActions;
   width: number;
   rem: number;
@@ -186,6 +198,7 @@ function TemplateField({
         width,
         height: rem * 2.1,
         alignItems: "center",
+        gap: rem * 0.5,
         padding: { left: rem * 0.7, right: rem * 0.7 },
         cornerRadius: rem * 0.35,
         background: theme.field,
@@ -193,14 +206,19 @@ function TemplateField({
       }}
     >
       <Input
-        key={row.value}
-        defaultValue={row.value}
+        key={value}
+        defaultValue={value}
         style={{ flexGrow: 1, flexBasis: 0, wrap: false, fontSize: rem * 0.9 }}
         caretColor={theme.accent}
         selectionColor={theme.selection}
         onChange={(text) => actions.draft(row.key, text)}
         onSubmit={(text) => actions.set(row.key, text)}
       />
+      {unit && (
+        <Text style={{ flexShrink: 0, fontSize: rem * 0.9, color: theme.muted, wrap: false, selectable: false }}>
+          {unit}
+        </Text>
+      )}
     </Box>
   );
 }
