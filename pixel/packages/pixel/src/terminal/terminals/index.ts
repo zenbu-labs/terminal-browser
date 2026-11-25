@@ -6,6 +6,7 @@ import { iterm2 } from "./iterm2";
 import { kitty } from "./kitty";
 import { rex } from "./rex";
 import { supacode } from "./supacode";
+import { thurm } from "./thurm";
 import { tmux } from "./tmux";
 import { tty7 } from "./tty7";
 import { vscode } from "./vscode";
@@ -23,6 +24,7 @@ export const TERMINALS: Detect[] = [
   kitty,
   cmux,
   supacode,
+  thurm,
   iterm2,
   ghostty,
   vscode,

@@ -263,6 +263,62 @@ test("rex reads block rectangles from the window layout tree", async () => {
   assert.deepEqual(await terminal.neighbor(at("block:c"), "left"), at("block:a"));
 });
 
+const THURM_ENV = { TERM_PROGRAM: "ghostty", THURM_PANE_ID: "3" };
+const thurmPane = (id, pid, alive = true) => ({ id, pid, alive });
+const thurmLeaf = (id) => ({ type: "pane", id });
+const thurmSplit = (dir, ratio, first, second) => ({ type: "split", dir, ratio, first, second });
+
+test("thurm reads pane rectangles from the tab's split tree", async () => {
+  const root = thurmSplit("right", 0.6, thurmLeaf(1), thurmSplit("down", 0.5, thurmLeaf(2), thurmLeaf(3)));
+  const layout = JSON.stringify({ windows: [{ tabs: [{ root, floating: [{ id: 4 }] }] }] });
+  const { run } = recorder({ "thurm layout --json": layout });
+  const terminal = detect(THURM_ENV, run);
+  assert.equal(terminal?.name, "thurm");
+  const at = (id) => ({ id, tab: "tab:1" });
+  assert.deepEqual(await terminal.neighbor(at("1"), "right"), at("2"));
+  assert.equal(await terminal.neighbor(at("1"), "left"), null);
+  assert.deepEqual(await terminal.neighbor(at("3"), "up"), at("2"));
+  assert.deepEqual(await terminal.neighbor(at("3"), "left"), at("1"));
+});
+
+test("thurm lists live panes with their tab and tty", async () => {
+  const layout = JSON.stringify({
+    windows: [{ tabs: [{ root: thurmSplit("left", 0.5, thurmLeaf(7), thurmLeaf(3)) }] }],
+    workspaces: [{ tabs: [{ root: thurmLeaf(9) }] }],
+  });
+  const listed = JSON.stringify([thurmPane(3, 300), thurmPane(7, 700), thurmPane(9, 900), thurmPane(11, 1100, false)]);
+  const { run } = recorder({
+    "thurm layout --json": layout,
+    "thurm list --json": listed,
+    "ps -o pid=,tty= -p 300,700,900": "  300 ttys003\n  700 ttys007\n  900 ??\n",
+  });
+  assert.deepEqual(await detect(THURM_ENV, run).listPanes(), [
+    { id: "3", tab: "tab:3", tty: "/dev/ttys003", command: null },
+    { id: "7", tab: "tab:3", tty: "/dev/ttys007", command: null },
+    { id: "9", tab: "tab:9", tty: null, command: null },
+  ]);
+});
+
+test("thurm sends multi-line text as a bracketed paste and one line as typed", async () => {
+  const sent = [];
+  const run = async (bin, args, input) => {
+    sent.push([[bin, ...args].join(" "), input]);
+    return "";
+  };
+  const terminal = detect(THURM_ENV, run);
+  await terminal.sendText("5", "one line");
+  await terminal.sendText("5", "two\nlines");
+  assert.deepEqual(sent, [
+    ["thurm send --pane 5 --no-enter -", "one line"],
+    ["thurm send --pane 5 --no-enter --paste -", "two\nlines"],
+  ]);
+});
+
+test("a Ghostty started from a thurm pane is ghostty, not thurm", () => {
+  const env = { ...THURM_ENV, GHOSTTY_RESOURCES_DIR: "/Applications/Ghostty.app/Contents/Resources/ghostty" };
+  assert.equal(detect(env, async () => "")?.name, "ghostty");
+});
+
 const GHOSTTY_ENV = {
   TERM: "xterm-ghostty",
   TERM_PROGRAM: "ghostty",
