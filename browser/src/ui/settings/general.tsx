@@ -212,7 +212,10 @@ function TemplateField({
         caretColor={theme.accent}
         selectionColor={theme.selection}
         onChange={(text) => actions.draft(row.key, text)}
-        onSubmit={(text) => actions.set(row.key, text)}
+        onSubmit={(text) => {
+          if (row.kind === "choice" && text.trim() === "") return;
+          actions.set(row.key, text);
+        }}
       />
       {unit && (
         <Text style={{ flexShrink: 0, fontSize: rem * 0.9, color: theme.muted, wrap: false, selectable: false }}>

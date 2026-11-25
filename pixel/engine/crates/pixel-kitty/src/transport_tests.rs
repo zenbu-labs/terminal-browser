@@ -247,3 +247,16 @@ fn unanswered_retries_are_bounded() {
     assert_eq!(client.probes.load(Ordering::SeqCst), 6, "a silent focus-in ends the retries");
     assert!(term.frames_are_inline());
 }
+
+#[test]
+fn the_image_rate_env_var_reads_auto_uncapped_or_megabytes_and_ignores_the_rest() {
+    let forced = |value: &str| forced_image_rate(&Env(HashMap::from([("TERMINAL_BROWSER_IMAGE_RATE".to_string(), value.to_string())])));
+    assert_eq!(forced("auto"), Some(ForcedImageRate::Auto));
+    assert_eq!(forced("uncapped"), Some(ForcedImageRate::Uncapped));
+    assert_eq!(forced(" 0.5 "), Some(ForcedImageRate::BytesPerSec(500_000.0)));
+    assert_eq!(forced("300"), Some(ForcedImageRate::BytesPerSec(300_000_000.0)));
+    for bad in ["fast", "0", "-1", "inf", ""] {
+        assert_eq!(forced(bad), None, "accepted {bad:?}");
+    }
+    assert_eq!(forced_image_rate(&Env::default()), None);
+}

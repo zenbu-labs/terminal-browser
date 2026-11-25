@@ -285,10 +285,15 @@ test("max image transfer speed is auto or a number of megabytes per second", () 
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.settings["render.imageRate"], "450.5");
 
-  fs.writeFileSync(store.files.settings, JSON.stringify({ "render.imageRate": "fast" }));
-  const broken = store.load();
-  assert.equal(broken.errors.length, 1);
-  assert.equal(broken.settings["render.imageRate"], "auto");
+  fs.writeFileSync(store.files.settings, JSON.stringify({ "render.imageRate": "0.5" }));
+  assert.equal(store.load().settings["render.imageRate"], "0.5");
+
+  for (const bad of ["fast", "0", "-5", "", "Infinity"]) {
+    fs.writeFileSync(store.files.settings, JSON.stringify({ "render.imageRate": bad }));
+    const broken = store.load();
+    assert.equal(broken.errors.length, 1, `accepted ${JSON.stringify(bad)}`);
+    assert.equal(broken.settings["render.imageRate"], "auto");
+  }
 });
 
 test("window.transparent defaults off, persists on, and refuses other values", () => {

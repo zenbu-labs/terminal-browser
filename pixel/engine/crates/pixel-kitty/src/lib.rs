@@ -108,6 +108,7 @@ pub struct Kitty {
     native: native::NativeInput,
     payload_bytes: usize,
     image_rate_override: Option<f32>,
+    forced_image_rate: Option<ForcedImageRate>,
 }
 
 fn ask<T>(
@@ -133,6 +134,7 @@ impl Kitty {
             None => HerdrTarget::from_env(env),
         };
         let mut kitty = Self::blank(tty.output()?, tty.wrapper(), target);
+        kitty.forced_image_rate = forced_image_rate(env);
         kitty.cell = tty.cell();
         kitty.connect_herdr();
         match host {
@@ -205,6 +207,7 @@ impl Kitty {
             native: native::NativeInput::default(),
             payload_bytes: 0,
             image_rate_override: None,
+            forced_image_rate: None,
         }
     }
 
@@ -440,7 +443,12 @@ impl Kitty {
     }
 
     pub fn image_rate_limit(&self) -> Option<f32> {
-        self.image_rate_override.or_else(|| self.identity.image_bytes_per_sec())
+        match self.forced_image_rate {
+            Some(ForcedImageRate::Auto) => self.identity.image_bytes_per_sec(),
+            Some(ForcedImageRate::Uncapped) => None,
+            Some(ForcedImageRate::BytesPerSec(rate)) => Some(rate),
+            None => self.image_rate_override.or_else(|| self.identity.image_bytes_per_sec()),
+        }
     }
 
     pub fn last_image_bytes(&self) -> usize {
@@ -717,6 +725,34 @@ fn unread_output_of(output: &Output) -> Option<usize> {
 const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);
 const HERDR_RETRY_MAX: Duration = Duration::from_secs(10);
 
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ForcedImageRate {
+    Auto,
+    Uncapped,
+    BytesPerSec(f32),
+}
+
+fn forced_image_rate(env: &dyn Vars) -> Option<ForcedImageRate> {
+    let value = env.var("TERMINAL_BROWSER_IMAGE_RATE")?;
+    let forced = match value.trim() {
+        "auto" => Some(ForcedImageRate::Auto),
+        "uncapped" => Some(ForcedImageRate::Uncapped),
+        number => number
+            .parse::<f32>()
+            .ok()
+            .filter(|mb| mb.is_finite() && *mb > 0.0)
+            .map(|mb| ForcedImageRate::BytesPerSec(mb * 1_000_000.0)),
+    };
+    match forced {
+        Some(rate) => pixel_core::logging::info("terminal", format!("image transfer rate forced to {rate:?}")),
+        None => pixel_core::logging::warn(
+            "terminal",
+            format!("ignoring TERMINAL_BROWSER_IMAGE_RATE={value:?}, expected auto, uncapped, or megabytes per second"),
+        ),
+    }
+    forced
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameTransport {

@@ -155,7 +155,10 @@ export const SETTINGS = {
     hint: "How much image data per second is sent to the terminal",
     schema: z.coerce
       .string()
-      .regex(/^(auto|[1-9]\d*(\.\d+)?)$/, "auto or number of megabytes per second"),
+      .refine(
+        (value) => value === AUTO || (Number.isFinite(Number(value)) && Number(value) > 0),
+        "auto or number of megabytes per second",
+      ),
     default: AUTO,
     unit: "MB/s",
     choices: [plain(AUTO, "Automatic")],
