@@ -314,8 +314,8 @@ test("thurm waits for the layout save when its pane is new", async () => {
   const run = async (bin, args) => {
     const command = [bin, ...args].join(" ");
     if (command === "thurm layout --json") {
-      firstRead ??= Date.now();
-      return JSON.stringify(Date.now() - firstRead >= 500 ? saved : before);
+      firstRead ??= performance.now();
+      return JSON.stringify(performance.now() - firstRead >= 500 ? saved : before);
     }
     if (command === "thurm list --json") return JSON.stringify([thurmPane(1, 100), thurmPane(3, 300)]);
     throw new Error(`nothing recorded for: ${command}`);
