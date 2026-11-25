@@ -123,7 +123,7 @@ test("herdr-app focuses a pane by its terminal", inHerdrApp, async () => {
 
 test("herdr-app will not send text to a shell prompt, where Enter would run it", inHerdrApp, async () => {
   await withSplit("right", async ({ terminal, created }) => {
-    await assert.rejects(terminal.sendText(created.terminal, "echo should-not-run"), /shell prompt/);
+    await assert.rejects(terminal.sendText(created.terminal, "echo should-not-run"), /not running a coding agent/);
     assert.doesNotMatch(execFileSync("hc", ["read", created.terminal], { encoding: "utf8" }), /should-not-run/);
   }, ["/bin/zsh", "-f", "-i"]);
 });

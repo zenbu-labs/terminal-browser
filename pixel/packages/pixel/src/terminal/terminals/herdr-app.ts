@@ -11,7 +11,7 @@ interface HerdrAppLayout {
 
 interface HcTerminal {
   pid?: number | null;
-  status?: { app?: string | null } | null;
+  status?: { app?: string | null; state?: string | null } | null;
   foreground?: { name?: string | null; argv?: string[] } | null;
 }
 
@@ -80,9 +80,12 @@ export const herdrApp: Detect = (env, run) => {
     },
     listPanes,
     async sendText(pane, text) {
-      const foreground = (await terminalInfo(pane)).foreground?.name ?? "";
-      if (!foreground || SHELL.test(foreground)) throw new Error(`terminal ${pane} is at a shell prompt`);
-      await hc(["send", pane, "--", text]);
+      const info = await terminalInfo(pane);
+      if (!agentName(info)) throw new Error(`terminal ${pane} is not running a coding agent`);
+      // Herdr checks the status again as it types, so an agent that quits in the meantime gets nothing
+      const state = info.status?.state;
+      const onlyIf = state === "idle" || state === "working" ? ["--if", state] : [];
+      await hc(["send", pane, ...onlyIf, "--", text]);
     },
     async focusPane(pane) {
       await app("pane.focus", { terminal: pane });
