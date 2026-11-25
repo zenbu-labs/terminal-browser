@@ -1347,6 +1347,7 @@ class Session {
       grab = new Grab(handle, {
         selected: (content, region) => void this.sendGrab(handle, content, region),
         changed: () => this.render(),
+        theme: () => this.pageContext().theme,
       });
       this.grabs.set(tab.id, grab);
     }

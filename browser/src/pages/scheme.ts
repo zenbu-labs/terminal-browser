@@ -125,7 +125,7 @@ export function json(value: unknown): Response {
   return new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
 }
 
-function css(color: Rgba | undefined, fallback: string): string {
+export function cssColor(color: Rgba | undefined, fallback: string): string {
   if (!color) return fallback;
   const [r, g, b, a] = color;
   return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
@@ -137,16 +137,16 @@ export function escape(text: string): string {
 
 export function pageColors(theme: Theme | null) {
   return {
-    bg: css(theme?.bg, "#1e1e1e"),
-    fg: css(theme?.fg, "#e6e6e6"),
-    muted: css(theme?.muted, "#8a8f98"),
-    accent: css(theme?.accent, "#6ea8ff"),
-    hairline: css(theme?.hairline, "rgba(255,255,255,0.12)"),
-    field: css(theme?.field, "rgba(255,255,255,0.06)"),
-    red: css(theme?.red, "#f2777a"),
-    green: css(theme?.green, "#99cc99"),
-    yellow: css(theme?.yellow, "#ffcc66"),
-    magenta: css(theme?.magenta, "#cc99cc"),
-    cyan: css(theme?.cyan, "#66cccc"),
+    bg: cssColor(theme?.bg, "#1e1e1e"),
+    fg: cssColor(theme?.fg, "#e6e6e6"),
+    muted: cssColor(theme?.muted, "#8a8f98"),
+    accent: cssColor(theme?.accent, "#6ea8ff"),
+    hairline: cssColor(theme?.hairline, "rgba(255,255,255,0.12)"),
+    field: cssColor(theme?.field, "rgba(255,255,255,0.06)"),
+    red: cssColor(theme?.red, "#f2777a"),
+    green: cssColor(theme?.green, "#99cc99"),
+    yellow: cssColor(theme?.yellow, "#ffcc66"),
+    magenta: cssColor(theme?.magenta, "#cc99cc"),
+    cyan: cssColor(theme?.cyan, "#66cccc"),
   };
 }
