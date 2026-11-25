@@ -12,7 +12,7 @@ interface HerdrAppLayout {
 interface HcTerminal {
   pid?: number | null;
   status?: { app?: string | null; state?: string | null } | null;
-  foreground?: { name?: string | null; argv?: string[] } | null;
+  foreground?: { name?: string | null } | null;
 }
 
 const SHELL = /^-?(sh|bash|zsh|fish|dash|ksh|tcsh|csh|nu|xonsh|elvish|pwsh|powershell)$/;
@@ -50,8 +50,10 @@ export const herdrApp: Detect = (env, run) => {
   const terminalInfo = async (terminal: string) => JSON.parse(await hc(["get", terminal, "--json"])) as HcTerminal;
 
   // Herdr knows which program in a pane is an agent, even one reached over ssh, so trust it over the local process
-  const agentName = (info: HcTerminal) =>
-    info.status?.app && !SHELL.test(info.foreground?.name ?? "") ? info.status.app : null;
+  const agentName = (info: HcTerminal) => {
+    const foreground = info.foreground?.name;
+    return info.status?.app && foreground && !SHELL.test(foreground) ? info.status.app : null;
+  };
 
   async function ttyOf(pid: number | null | undefined): Promise<string | null> {
     if (!pid) return null;
@@ -64,8 +66,7 @@ export const herdrApp: Detect = (env, run) => {
       (await panes()).map(async ({ id, tab }) => {
         const info = await terminalInfo(id).catch((): HcTerminal => ({}));
         // "" rather than null: the browser would otherwise guess the program from whatever runs on the pane's tty
-        const command = agentName(info) ?? info.foreground?.argv?.join(" ") ?? "";
-        return { id, tab, tty: await ttyOf(info.pid).catch(() => null), command };
+        return { id, tab, tty: await ttyOf(info.pid).catch(() => null), command: agentName(info) ?? "" };
       }),
     );
   }
@@ -75,7 +76,8 @@ export const herdrApp: Detect = (env, run) => {
     drawsGraphics: true,
     submitsSentText: true,
     async getCurrentPane() {
-      const found = (await panes()).find((pane) => pane.id === env.HC_TERMINAL_ID);
+      // hc terminals started outside the app have HC_TERMINAL_ID too, but no window to be a pane in
+      const found = (await panes().catch(() => [])).find((pane) => pane.id === env.HC_TERMINAL_ID);
       return found ? { id: found.id, tab: found.tab } : null;
     },
     listPanes,

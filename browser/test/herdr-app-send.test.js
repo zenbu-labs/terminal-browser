@@ -64,7 +64,12 @@ for (const program of ["claude", "ssh-relay"]) {
     const own = herdrApp("do", "tab.new", JSON.stringify({ name: "herdr-app-send-test", argv: ["sleep", "600"], focus: false }));
     try {
       const shell = split(paneOf(own.terminal), "right", ["/bin/zsh", "-f", "-i"]);
-      const agent = split(shell.pane, "down", ["python3", agentScript, received]);
+      // an agent still starting up has not told Herdr it is an agent yet, so it must not be picked over a ready one
+      const booting = path.join(dir, "booting", "claude");
+      fs.mkdirSync(path.dirname(booting));
+      fs.writeFileSync(booting, "import time\ntime.sleep(600)\n");
+      const starting = split(shell.pane, "down", ["python3", booting]);
+      const agent = split(starting.pane, "down", ["python3", agentScript, received]);
       const terminal = detect(process.env);
       const self = { id: own.terminal, tab: own.tab };
       const agentInFront = () => {
