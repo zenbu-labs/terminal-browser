@@ -192,7 +192,7 @@ Extra notes:
 The client side, including the exact schema terminal-browser accepts for every result, is [shared/src/terminal-socket.ts](shared/src/terminal-socket.ts). A minimal terminal written in node that answers every method is the `fakeTerminal` in [shared/test/terminal-socket.test.js](shared/test/terminal-socket.test.js), which is a good starting point.
 
 #### Built in support
-If a terminal does not implement this API itself, terminal-browser ships built in implementations located in [pixel/packages/pixel/src/terminal/terminals](pixel/packages/pixel/src/terminal/terminals) for: ghostty, rex, kitty, iTerm2, wezterm, cmux, tmux, vscode, tty7, herdr, and supacode. These implement the same operations as the socket methods above as the `Terminal` interface in [pixel/packages/pixel/src/terminal/terminal.ts](pixel/packages/pixel/src/terminal/terminal.ts), using each terminal's own scripting cli. To add support for another terminal or multiplexer, add a file there that implements `Terminal` and register it in `terminals/index.ts`.
+If a terminal does not implement this API itself, terminal-browser ships built in implementations located in [pixel/packages/pixel/src/terminal/terminals](pixel/packages/pixel/src/terminal/terminals) for: ghostty, rex, kitty, iTerm2, wezterm, cmux, tmux, vscode, tty7, herdr, the Herdr desktop app, and supacode. These implement the same operations as the socket methods above as the `Terminal` interface in [pixel/packages/pixel/src/terminal/terminal.ts](pixel/packages/pixel/src/terminal/terminal.ts), using each terminal's own scripting cli. To add support for another terminal or multiplexer, add a file there that implements `Terminal` and register it in `terminals/index.ts`.
 
 ### [Discord](https://discord.gg/t3jzHHfc6z)
 
