@@ -72,7 +72,11 @@ if [ "$(uname -s)" = Linux ]; then
   if [ -n "$missing" ]; then
     echo "warning: missing system libraries:" >&2
     printf '  %s\n' $missing >&2
-    echo "sudo apt-get install libnss3 libgtk-3-0 libasound2t64 libgbm1" >&2
+    if command -v pacman >/dev/null 2>&1; then
+      echo "sudo pacman -S libxcomposite libxdamage libxfixes libxrandr alsa-lib gtk3 libxkbcommon" >&2
+    else
+      echo "sudo apt-get install libnss3 libgtk-3-0 libasound2t64 libgbm1" >&2
+    fi
   fi
 fi
 
