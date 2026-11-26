@@ -944,6 +944,9 @@ class Session {
       case "url.edit":
         this.openUrlEdit();
         return;
+      case "tab.copyLink":
+        this.copyLink();
+        return;
       case "find":
         this.openFind();
         return;
@@ -1454,6 +1457,13 @@ class Session {
     return { x: this.pageMenu.x, y: this.pageMenu.y, items };
   }
 
+  private copyLink() {
+    const url = this.tabs.activeState?.url;
+    if (!url) return;
+    this.root?.setClipboard(url);
+    this.showToast("Copied to clipboard", "done");
+  }
+
   private openUrlEdit() {
     if (this.urlEditOpen) return;
     this.urlEditOpen = true;
@@ -1598,6 +1608,7 @@ class Session {
     });
     return [
       command("find"),
+      command("tab.copyLink"),
       command("tab.next"),
       command("tab.previous"),
       command("record.toggle"),
