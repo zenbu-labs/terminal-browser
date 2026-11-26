@@ -67,7 +67,7 @@ async function withCommands(panes: PaneDetails[]): Promise<PaneDetails[]> {
   return panes;
 }
 
-const isAgentPane = (pane: PaneDetails): boolean => pane.agent != null || codingAgent(pane.command) != null;
+const isAgentPane = (pane: PaneDetails): boolean => Boolean(pane.agent) || codingAgent(pane.command) != null;
 
 const canPaste = (terminal: Terminal, target: AgentTarget, screenshot: Screenshot): boolean =>
   target.agent && terminal.pasteKey != null && screenshot != null;
