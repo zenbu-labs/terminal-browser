@@ -558,7 +558,7 @@ mod tests {
             let delete = format!("a=d,d=I,i={shown},");
             let at = pair[1].find(&delete).unwrap_or_else(|| panic!("the shown image is deleted: {:?}", pair[1]));
             assert!(at > pair[1].find("a=T,").unwrap(), "only after the new image is sent: {:?}", pair[1]);
-            assert!(!pair[1].contains("d=A"), "a shrinking frame keeps the shown image too: {:?}", pair[1]);
+            assert!(!pair[1].contains("d=A") && !pair[1].contains("\x1b[2J"), "a shrinking frame keeps the shown image too: {:?}", pair[1]);
         }
     }
 

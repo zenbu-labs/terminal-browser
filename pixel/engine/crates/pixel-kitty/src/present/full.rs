@@ -26,10 +26,11 @@ impl Kitty {
         let start = out.len();
         out.extend_from_slice(prelude);
         if shrank {
+            // clearing the screen also clears images, which would leave the pane empty until the new frame arrives
             if !double_buffered {
                 out.extend_from_slice(&crate::kitty::kitty_delete(self.image_id, self.wrapper));
+                out.extend_from_slice(b"\x1b[2J");
             }
-            out.extend_from_slice(b"\x1b[2J");
             if let Some(screen) = self.screen {
                 let blank_row = " ".repeat(screen.cols as usize);
                 for row in 1..=screen.rows {
