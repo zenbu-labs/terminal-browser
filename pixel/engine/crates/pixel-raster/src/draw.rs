@@ -164,8 +164,7 @@ impl Painter<'_> {
     fn surface(&mut self, s: &Surface) {
         let rect = s.rect;
         if self.host_surfaces && s.empty {
-            let hole = pixel_core::surfaces::Rect::covering(rect);
-            self.canvas.fill_rect(hole.x, hole.y, hole.w, hole.h, [0, 0, 0, 0]);
+            self.canvas.clear_rounded_rect(rect.x, rect.y, rect.w, rect.h, s.radius);
         }
         let canvas = &mut *self.canvas;
         pixel_core::profiler::span("paint.surface", || {
