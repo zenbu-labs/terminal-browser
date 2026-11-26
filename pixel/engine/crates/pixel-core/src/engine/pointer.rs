@@ -6,6 +6,8 @@ use crate::menu::MenuClick;
 use crate::input::{Mods, Mouse, MouseButton, MouseKind};
 use crate::tree::{HitTarget, NodeId};
 
+const FOCUS_CLICK_MAX_DRIFT_PX: f32 = 3.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DragTarget {
     Input(NodeId),
@@ -26,6 +28,13 @@ impl Engine {
         if matches!(mouse.kind, MouseKind::Down | MouseKind::Up) {
             self.focus_click = None;
             self.last_pointer_click = Some(now);
+        }
+        // A pointer still moving after focus arrived came in by hover, not by a swallowed click.
+        if mouse.kind == MouseKind::Move
+            && let Some((_, armed)) = self.focus_click
+            && (point.0 - armed.0).hypot(point.1 - armed.1) > FOCUS_CLICK_MAX_DRIFT_PX
+        {
+            self.focus_click = None;
         }
         if matches!(
             mouse.kind,
