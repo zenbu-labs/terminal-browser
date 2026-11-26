@@ -10,6 +10,8 @@ export interface Pane {
 export interface PaneDetails extends Pane {
   tty: string | null;
   command: string | null;
+  /** The coding agent running in the pane, for terminals that know it themselves rather than by process name */
+  agent?: string | null;
 }
 
 export interface PaneContext {
@@ -46,6 +48,16 @@ export interface Terminal {
    * Terminals that report css based pixels when queried already perform that normalization, so we need an explicit flag to avoid rescaling
    */
   readonly reportsCssPixels?: boolean;
+  /**
+   * Skips the graphics probe for terminals known to draw kitty graphics that cannot always answer the probe,
+   * such as a Herdr desktop pane that was just opened and is not shown in the window yet
+   */
+  readonly drawsGraphics?: boolean;
+  /**
+   * For terminals whose sendText always presses Enter after the text, so it must only ever reach a coding agent:
+   * text sent to a shell would run as a command
+   */
+  readonly submitsSentText?: boolean;
   /**
    * Allows code to be ran at startup, useful for preparing the terminal environment for terminal-browser
    */

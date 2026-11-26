@@ -17,7 +17,8 @@ The url can be a normal url, a localhost port, or a path to an html file.
 
 Options:
   --split <direction>   Open in a new pane: right, left, down, up
-  --size <fraction>     How much of the space the split takes (0.2 to 0.95)
+  --size <fraction>     How much of the space the split takes (0.2 to 0.95). The Herdr
+                        desktop app cannot size a split, so leave it out there
   --ssh <user@host>     Perform all network requests through a remote server, then
                         proxy the result back to the local terminal-browser instance
   --allow-clipboard-read

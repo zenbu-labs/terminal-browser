@@ -67,7 +67,7 @@ async function withCommands(panes: PaneDetails[]): Promise<PaneDetails[]> {
   return panes;
 }
 
-const isAgentPane = (pane: PaneDetails): boolean => codingAgent(pane.command) != null;
+const isAgentPane = (pane: PaneDetails): boolean => Boolean(pane.agent) || codingAgent(pane.command) != null;
 
 const canPaste = (terminal: Terminal, target: AgentTarget, screenshot: Screenshot): boolean =>
   target.agent && terminal.pasteKey != null && screenshot != null;
@@ -90,6 +90,8 @@ export class AgentPaneFinder {
     }
     const terminal = this.ctx.terminal;
     if (!terminal?.sendText) return null;
+    // the agent may have exited since the target was found, and Enter would then reach whatever runs there now
+    if (terminal.submitsSentText) this.cached = null;
     let target = await this.target();
     if (!target) return null;
     const message = (to: AgentTarget) =>
@@ -138,7 +140,7 @@ export class AgentPaneFinder {
     const found = await this.parent;
     if (!found) return null;
     const known = panes.find((pane) => pane.id === found.id);
-    const [parent] = await withCommands([{ ...found, tty, command: known?.command ?? null }]);
+    const [parent] = await withCommands([{ ...found, tty, command: known?.command ?? null, agent: known?.agent }]);
     return parent;
   }
 
@@ -156,8 +158,9 @@ export class AgentPaneFinder {
     } catch {}
     const self = await this.ctx.self();
     const inTab = (pane: Pane) => self == null || pane.tab === self.tab;
+    const agentsOnly = terminal.submitsSentText === true;
     const parent = await this.parentPane(panes);
-    if (parent && parent.id !== self?.id && inTab(parent)) {
+    if (parent && parent.id !== self?.id && inTab(parent) && (!agentsOnly || isAgentPane(parent))) {
       if (panes.length === 0 || panes.some((pane) => pane.id === parent.id)) {
         return { pane: parent.id, tier: "parent", agent: isAgentPane(parent) };
       }
@@ -166,7 +169,7 @@ export class AgentPaneFinder {
     const neighbours = panes.filter((pane) => pane.id !== self.id && pane.tab === self.tab);
     const agent = neighbours.find(isAgentPane);
     if (agent) return { pane: agent.id, tier: "agent", agent: true };
-    if (neighbours.length > 0) return { pane: neighbours[0].id, tier: "neighbor", agent: false };
+    if (neighbours.length > 0 && !agentsOnly) return { pane: neighbours[0].id, tier: "neighbor", agent: false };
     return null;
   }
 }

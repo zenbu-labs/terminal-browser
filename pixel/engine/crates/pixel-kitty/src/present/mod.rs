@@ -377,7 +377,7 @@ impl Kitty {
         fill: impl FnOnce(&mut [u8]),
     ) -> io::Result<()> {
         let (cw, ch) = self.cell();
-        if replacing && self.identity.deletes_before_replace() {
+        if replacing && self.deletes_before_replace() {
             out.extend_from_slice(&crate::kitty::kitty_delete_placement(id));
         }
         out.extend_from_slice(format!("\x1b[{};{}H", rect.y / ch + 1, rect.x / cw + 1).as_bytes());
@@ -519,6 +519,57 @@ mod tests {
         );
         assert_eq!(parse_frame_edit_reply(b"\x1b_Gi=302,r=1;O"), None);
         assert_eq!(parse_frame_edit_reply(b"\x1b_Gi=301;OK\x1b\\"), None);
+    }
+
+    fn full_frames(herdr_desktop: bool, sizes: &[(u32, u32)]) -> Vec<String> {
+        let mut kitty = Kitty::blank(crate::Output::new(Box::new(io::sink()), None), crate::wrapper::Wrapper::None, None);
+        kitty.identity = Identity::Ghostty { version: (0, 0, 0) };
+        kitty.herdr_desktop = herdr_desktop;
+        sizes
+            .iter()
+            .map(|&(w, h)| {
+                let mut canvas = Canvas::new(w, h);
+                let mut seed = 1u32;
+                for byte in canvas.pixels.iter_mut() {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    *byte = (seed >> 16) as u8;
+                }
+                let mut out = Vec::new();
+                kitty.draw_full(&canvas, &canvas.pixels, &[], &mut out).unwrap();
+                String::from_utf8_lossy(&out).into_owned()
+            })
+            .collect()
+    }
+
+    fn last_chunk_end(frame: &str) -> usize {
+        frame.rfind("m=0;").unwrap()
+    }
+
+    fn first_transmit_id(frame: &str) -> &str {
+        let at = frame.find("a=T,").unwrap();
+        let id = &frame[at..][frame[at..].find(",i=").unwrap() + 3..];
+        &id[..id.find(',').unwrap()]
+    }
+
+    #[test]
+    fn ghostty_clears_the_frame_image_before_replacing_it() {
+        for frame in full_frames(false, &[(4, 4), (4, 4)]) {
+            assert!(frame.find("a=d,").unwrap() < frame.find("a=T,").unwrap(), "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn a_herdr_desktop_pane_draws_each_frame_to_the_other_image_and_only_then_deletes_the_shown_one() {
+        let frames = full_frames(true, &[(8, 8), (8, 8), (4, 4), (4, 4), (256, 256), (256, 256)]);
+        assert!(frames.last().unwrap().contains("m=1;"), "the last frames are sent in several chunks");
+        for pair in frames.windows(2) {
+            let (shown, next) = (first_transmit_id(&pair[0]), first_transmit_id(&pair[1]));
+            assert_ne!(shown, next, "every frame goes to the image that is not on screen");
+            let delete = format!("a=d,d=I,i={shown},");
+            let at = pair[1].find(&delete).unwrap_or_else(|| panic!("the shown image is deleted: {:?}", pair[1]));
+            assert!(at > last_chunk_end(&pair[1]), "only after the last chunk of the new image is sent: {:?}", pair[1]);
+            assert!(!pair[1].contains("d=A") && !pair[1].contains("\x1b[2J"), "a shrinking frame keeps the shown image too: {:?}", pair[1]);
+        }
     }
 
     #[test]
