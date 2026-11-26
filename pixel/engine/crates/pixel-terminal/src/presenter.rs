@@ -11,6 +11,8 @@ use pixel_kitty::native::Pane;
 use crate::terminal::{DEFAULT_CELL, SessionEnv, Terminal, WindowSize};
 
 const INLINE_BYTES_PER_SEC: f32 = 3_000_000.0;
+// The Herdr desktop app takes frames only inline, but through a local relay that accepted 85 MB/s when measured
+const HERDR_DESKTOP_INLINE_BYTES_PER_SEC: f32 = 30_000_000.0;
 
 pub(crate) trait Presenter: Send {
     fn name(&self) -> &'static str;
@@ -91,6 +93,7 @@ pub(crate) struct KittyPresenter {
     kitty: Kitty,
     raster: pixel_raster::Raster,
     local_terminal: bool,
+    inline_bytes_per_sec: f32,
 }
 
 impl KittyPresenter {
@@ -100,7 +103,15 @@ impl KittyPresenter {
         let local_terminal = env
             .var("PIXEL_TERMINAL_FEATURES")
             .is_some_and(|features| features.split(',').any(|feature| feature.trim() == "local-terminal"));
-        let mut presenter = Self { kitty: Kitty::new(term, env)?, raster: pixel_raster::Raster::new(), local_terminal };
+        let in_herdr_desktop = env.var("HC_TERMINAL_ID").is_some()
+            && ["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"].iter().all(|key| env.var(key).is_none_or(|value| value.is_empty()));
+        let inline_bytes_per_sec = if in_herdr_desktop { HERDR_DESKTOP_INLINE_BYTES_PER_SEC } else { INLINE_BYTES_PER_SEC };
+        let mut presenter = Self {
+            kitty: Kitty::new(term, env)?,
+            raster: pixel_raster::Raster::new(),
+            local_terminal,
+            inline_bytes_per_sec,
+        };
         presenter.relay(term);
         Ok(presenter)
     }
@@ -199,7 +210,7 @@ impl Presenter for KittyPresenter {
     }
 
     fn byte_rate_limit(&self) -> Option<f32> {
-        self.kitty.frames_are_inline().then_some(INLINE_BYTES_PER_SEC)
+        self.kitty.frames_are_inline().then_some(self.inline_bytes_per_sec)
     }
 
     fn image_rate_limit(&self) -> Option<f32> {
