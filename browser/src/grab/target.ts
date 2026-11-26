@@ -67,7 +67,7 @@ async function withCommands(panes: PaneDetails[]): Promise<PaneDetails[]> {
   return panes;
 }
 
-const isAgentPane = (pane: PaneDetails): boolean => codingAgent(pane.command) != null;
+const isAgentPane = (pane: PaneDetails): boolean => pane.agent != null || codingAgent(pane.command) != null;
 
 const canPaste = (terminal: Terminal, target: AgentTarget, screenshot: Screenshot): boolean =>
   target.agent && terminal.pasteKey != null && screenshot != null;
@@ -140,7 +140,7 @@ export class AgentPaneFinder {
     const found = await this.parent;
     if (!found) return null;
     const known = panes.find((pane) => pane.id === found.id);
-    const [parent] = await withCommands([{ ...found, tty, command: known?.command ?? null }]);
+    const [parent] = await withCommands([{ ...found, tty, command: known?.command ?? null, agent: known?.agent }]);
     return parent;
   }
 

@@ -24,6 +24,7 @@ const paneSchema = z.object({ id: z.string(), tab: z.string() });
 const paneDetailsSchema = paneSchema.extend({
   tty: z.string().nullable(),
   command: z.string().nullable(),
+  agent: z.string().nullable().optional(),
 });
 
 const replySchema = z.object({

@@ -10,6 +10,8 @@ export interface Pane {
 export interface PaneDetails extends Pane {
   tty: string | null;
   command: string | null;
+  /** The coding agent running in the pane, for terminals that know it themselves rather than by process name */
+  agent?: string | null;
 }
 
 export interface PaneContext {

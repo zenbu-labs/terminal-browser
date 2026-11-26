@@ -39,11 +39,11 @@ async function ttyOf(terminal) {
   throw new Error(`no tty for ${terminal}`);
 }
 
-// a stand-in coding agent: it tells Herdr it is claude, then writes down everything typed into it
+// a stand-in coding agent: it tells Herdr which agent it is, then writes down everything typed into it
 const FAKE_AGENT = `
 import os, sys
-out = sys.argv[1]
-sys.stdout.write("\\x1b]7501;state=idle:app=claude\\x1b\\\\")
+out, app = sys.argv[1], sys.argv[2]
+sys.stdout.write(f"\\x1b]7501;state=idle:app={app}\\x1b\\\\")
 sys.stdout.flush()
 while True:
     chunk = os.read(0, 4096)
@@ -53,8 +53,13 @@ while True:
         f.write(chunk)
 `;
 
-// "ssh-relay" stands for an agent reached over ssh: only Herdr's status says it is an agent
-for (const program of ["claude", "ssh-relay"]) {
+// ssh-relay stands for an agent reached over ssh, and crush for one the browser has no process name for:
+// for both, only Herdr knows they are agents
+for (const [program, app] of [
+  ["claude", "claude"],
+  ["ssh-relay", "claude"],
+  ["crush", "crush"],
+]) {
   test(`send to agent skips the shell the browser was opened from and reaches the ${program} agent in the tab`, inHerdrApp, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-app-send-"));
     const agentScript = path.join(dir, program);
@@ -69,7 +74,7 @@ for (const program of ["claude", "ssh-relay"]) {
       fs.mkdirSync(path.dirname(booting));
       fs.writeFileSync(booting, "import time\ntime.sleep(600)\n");
       const starting = split(shell.pane, "down", ["python3", booting]);
-      const agent = split(starting.pane, "down", ["python3", agentScript, received]);
+      const agent = split(starting.pane, "down", ["python3", agentScript, received, app]);
       const terminal = detect(process.env);
       const self = { id: own.terminal, tab: own.tab };
       const agentInFront = () => {

@@ -176,7 +176,7 @@ API:
 | --- | --- | --- | --- |
 | `getCurrentPane` | `{ tty, cwd }` | `{ pane }` or `{ pane: null }` | `ls`, `new-tab`, picking where `--split` goes |
 | `split` | `{ from: pane, direction, command: string[], size, tty }` | `{}` | `--split` |
-| `listPanes` | `{ tty }` | `{ panes: [{ id, tab, tty, command }] }` | finding the coding agent's pane |
+| `listPanes` | `{ tty }` | `{ panes: [{ id, tab, tty, command, agent? }] }` | finding the coding agent's pane |
 | `neighbor` | `{ from: pane, direction }` | `{ pane }` or `{ pane: null }` | opening next to an existing browser |
 | `sendText` | `{ pane, text }` | `{}` | sending page content to a coding agent |
 | `pasteKey` | `{ pane }` | `{}` | sending images to a coding agent |
@@ -186,7 +186,7 @@ Extra notes:
 - `direction` is one of `right`, `left`, `down`, `up`. `size` is the fraction of the space the new pane should take (`0.4`) or `null` for your default.
 - `split` should run `command` (an argv array, quote it for the shell yourself) in the new pane, in the caller's `cwd`.
 - `getCurrentPane` receives the caller's `tty`, but the caller may be under a nested pty (a multiplexer, a coding agent wrapper) that no pane owns. When no pane matches the tty, walk the ancestors of `caller.pid` and return the pane whose tty appears first in that chain.
-- `listPanes` entries carry the pane's `tty` and the command line of its foreground process, or `null` when unknown.
+- `listPanes` entries carry the pane's `tty` and the command line of its foreground process, or `null` when unknown. A terminal that knows which coding agent runs in a pane can also set `agent` to its name.
 - `pasteKey` must deliver a literal ctrl+v keypress (byte `0x16`), not a bracketed paste, so a coding agent treats it as a key and reads the clipboard.
 
 The client side, including the exact schema terminal-browser accepts for every result, is [shared/src/terminal-socket.ts](shared/src/terminal-socket.ts). A minimal terminal written in node that answers every method is the `fakeTerminal` in [shared/test/terminal-socket.test.js](shared/test/terminal-socket.test.js), which is a good starting point.
