@@ -17,7 +17,7 @@ impl Kitty {
 
         // Herdr empties an image as soon as its replacement starts arriving, so each frame goes to the other
         // of two images and the shown one is deleted only once the new one is complete
-        let double_buffered = self.in_herdr_desktop() && !self.wrapper.relayed();
+        let double_buffered = self.in_herdr_desktop();
         let shown = self.image_id;
         if double_buffered {
             self.image_id = if shown == SPARE_FRAME_ID { crate::frame_image_id(false) } else { SPARE_FRAME_ID };

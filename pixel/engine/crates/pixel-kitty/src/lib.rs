@@ -136,7 +136,7 @@ impl Kitty {
         };
         let mut kitty = Self::blank(tty.output()?, tty.wrapper(), target);
         kitty.forced_image_rate = forced_image_rate(env);
-        kitty.herdr_desktop = env.var("HC_TERMINAL_ID").is_some() && !present::over_ssh(env);
+        kitty.herdr_desktop = env.var("HC_TERMINAL_ID").is_some() && !present::over_ssh(env) && !kitty.wrapper.relayed();
         kitty.cell = tty.cell();
         kitty.connect_herdr();
         match host {
@@ -682,7 +682,7 @@ impl Kitty {
         self.transport == FrameTransport::Inline
     }
 
-    /// A pane of the Herdr desktop app: Ghostty draws it, but Herdr relays every byte to it locally
+    /// A pane of the Herdr desktop app written to directly (not through tmux): Ghostty draws it, but Herdr relays every byte to it locally
     pub fn in_herdr_desktop(&self) -> bool {
         self.herdr_desktop
     }
