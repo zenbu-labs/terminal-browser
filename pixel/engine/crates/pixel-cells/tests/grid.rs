@@ -51,6 +51,16 @@ fn column(children: Vec<Desc>) -> Desc {
     Desc { style: Style { flex_direction: FlexDirection::Column, ..Style::default() }, children, ..Desc::default() }
 }
 
+fn mouse_move(x: u32, y: u32) -> Event {
+    Event::Mouse(pixel_core::Mouse {
+        kind: pixel_core::MouseKind::Move,
+        button: pixel_core::MouseButton::None,
+        mods: pixel_core::Mods::default(),
+        x,
+        y,
+    })
+}
+
 #[test]
 fn text_lands_one_row_per_line_whatever_the_font_size() {
     let (mut engine, handle) = engine(20, 4, ColorTier::TrueColor);
@@ -257,4 +267,58 @@ fn rows_that_barely_change_are_repainted_rather_than_scrolled() {
     settle(&mut engine);
     let text = String::from_utf8_lossy(&handle.frames()[before..].concat()).into_owned();
     assert!(!text.contains("S\x1b[r"), "only one digit per row changed, so the rows are rewritten in place: {text:?}");
+}
+
+fn clicks_after_refocus(moves_after_focus: &[(u32, u32)]) -> usize {
+    clicks_after_refocus_with(moves_after_focus, false)
+}
+
+fn clicks_after_refocus_with(moves_after_focus: &[(u32, u32)], focus_handled_first: bool) -> usize {
+    let (mut engine, handle) = engine(12, 4, ColorTier::TrueColor);
+    let button = Desc {
+        key: Some("button".into()),
+        clickable: true,
+        style: Style { width: Dimension::Px(120.0), height: Dimension::Px(80.0), ..Style::default() },
+        ..Desc::default()
+    };
+    show(&mut engine, column(vec![button]));
+    handle.send(mouse_move(40, 30));
+    handle.send(Event::Focus(false));
+    handle.send(Event::Focus(true));
+    let mut events = Vec::new();
+    if focus_handled_first {
+        events.extend(engine.pump(Some(Duration::ZERO)).unwrap());
+    }
+    for &(x, y) in moves_after_focus {
+        handle.send(mouse_move(x, y));
+    }
+    events.extend(engine.pump(Some(Duration::ZERO)).unwrap());
+    std::thread::sleep(Duration::from_millis(120));
+    for _ in 0..4 {
+        events.extend(engine.pump(Some(Duration::ZERO)).unwrap());
+    }
+    events.iter().filter(|e| matches!(e, pixel_core::EngineEvent::Click { .. })).count()
+}
+
+#[test]
+fn refocus_without_a_click_replays_the_swallowed_click() {
+    assert_eq!(clicks_after_refocus(&[]), 1);
+}
+
+#[test]
+fn a_wobble_within_the_drift_limit_still_replays_the_click() {
+    assert_eq!(clicks_after_refocus(&[(41, 31)]), 1);
+    assert_eq!(clicks_after_refocus(&[(43, 30)]), 1, "exactly at the limit");
+}
+
+#[test]
+fn refocus_by_hover_does_not_click() {
+    assert_eq!(clicks_after_refocus(&[(50, 30), (60, 32)]), 0);
+    assert_eq!(clicks_after_refocus(&[(44, 30)]), 0, "just past the limit");
+}
+
+#[test]
+fn a_hover_reported_after_focus_was_handled_does_not_click() {
+    assert_eq!(clicks_after_refocus_with(&[(50, 30), (60, 32)], true), 0);
+    assert_eq!(clicks_after_refocus_with(&[], true), 1);
 }
