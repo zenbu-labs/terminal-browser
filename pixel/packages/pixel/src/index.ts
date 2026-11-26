@@ -97,6 +97,7 @@ export type {
   Style,
   FontFace,
   FontFamily,
+  ProgramStatus,
   DeviceInfo,
   EngineInfo,
   EngineKeyEvent,
