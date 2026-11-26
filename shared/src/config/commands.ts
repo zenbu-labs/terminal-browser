@@ -24,6 +24,7 @@ export const COMMANDS = {
     keys: platform(["ctrl+shift+tab", "cmd+alt+left"], ["ctrl+shift+tab", "ctrl+pageup"]),
   },
   "url.edit": { label: "Edit URL", keys: platform(["cmd+l"], ["ctrl+l"]) },
+  "tab.copyLink": { label: "Copy link", keys: shared([]) },
   find: { label: "Find in page", keys: platform(["cmd+shift+f"], ["ctrl+shift+f"]) },
   "page.reload": { label: "Reload page", keys: platform(["cmd+r"], ["ctrl+r"]) },
   "page.back": { label: "Back", keys: platform(["cmd+[", "ctrl+["], ["ctrl+["]) },

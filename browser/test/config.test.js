@@ -325,3 +325,7 @@ test("render settings map to engine values and the startup env", () => {
     TERMINAL_BROWSER_FRAMES: "inline",
   });
 });
+
+test("copy link is palette only by default", () => {
+  for (const os of ["linux", "darwin"]) assert.deepEqual(defaultKeys("tab.copyLink", os), []);
+});
