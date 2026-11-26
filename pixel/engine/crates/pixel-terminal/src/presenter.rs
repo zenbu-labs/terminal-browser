@@ -103,15 +103,9 @@ impl KittyPresenter {
         let local_terminal = env
             .var("PIXEL_TERMINAL_FEATURES")
             .is_some_and(|features| features.split(',').any(|feature| feature.trim() == "local-terminal"));
-        let in_herdr_desktop = env.var("HC_TERMINAL_ID").is_some()
-            && ["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"].iter().all(|key| env.var(key).is_none_or(|value| value.is_empty()));
-        let inline_bytes_per_sec = if in_herdr_desktop { HERDR_DESKTOP_INLINE_BYTES_PER_SEC } else { INLINE_BYTES_PER_SEC };
-        let mut presenter = Self {
-            kitty: Kitty::new(term, env)?,
-            raster: pixel_raster::Raster::new(),
-            local_terminal,
-            inline_bytes_per_sec,
-        };
+        let kitty = Kitty::new(term, env)?;
+        let inline_bytes_per_sec = if kitty.in_herdr_desktop() { HERDR_DESKTOP_INLINE_BYTES_PER_SEC } else { INLINE_BYTES_PER_SEC };
+        let mut presenter = Self { kitty, raster: pixel_raster::Raster::new(), local_terminal, inline_bytes_per_sec };
         presenter.relay(term);
         Ok(presenter)
     }

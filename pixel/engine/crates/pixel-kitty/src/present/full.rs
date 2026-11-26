@@ -5,6 +5,9 @@ use pixel_raster::Canvas;
 use crate::kitty::Placement;
 use pixel_core::surfaces::Rect;
 
+// The second frame image for terminals drawn double buffered, above every other image id range
+const SPARE_FRAME_ID: u32 = 2_000_000;
+
 impl Kitty {
     pub(crate) fn draw_full(&mut self, canvas: &Canvas, pixels: &[u8], prelude: &[u8], out: &mut Vec<u8>) -> io::Result<usize> {
         let shrank = self
@@ -12,10 +15,20 @@ impl Kitty {
             .is_some_and(|(w, h)| canvas.width < w || canvas.height < h);
         self.last_frame_size = Some((canvas.width, canvas.height));
 
+        // Herdr empties an image as soon as its replacement starts arriving, so each frame goes to the other
+        // of two images and the shown one is deleted only once the new one is complete
+        let double_buffered = self.in_herdr_desktop() && !self.wrapper.relayed();
+        let shown = self.image_id;
+        if double_buffered {
+            self.image_id = if shown == SPARE_FRAME_ID { crate::frame_image_id(false) } else { SPARE_FRAME_ID };
+        }
+
         let start = out.len();
         out.extend_from_slice(prelude);
         if shrank {
-            out.extend_from_slice(&crate::kitty::kitty_delete(self.image_id, self.wrapper));
+            if !double_buffered {
+                out.extend_from_slice(&crate::kitty::kitty_delete(self.image_id, self.wrapper));
+            }
             out.extend_from_slice(b"\x1b[2J");
             if let Some(screen) = self.screen {
                 let blank_row = " ".repeat(screen.cols as usize);
@@ -29,7 +42,7 @@ impl Kitty {
             let (cols, rows) = self.grid_for(canvas);
             Placement::Cells { cols, rows }
         } else {
-            if self.identity.deletes_before_replace() {
+            if self.deletes_before_replace() {
                 out.extend_from_slice(&crate::kitty::kitty_delete_placement(self.image_id));
             }
             out.extend_from_slice(b"\x1b[H");
@@ -41,6 +54,9 @@ impl Kitty {
                 out.extend_from_slice(&crate::kitty::kitty_transmit_named(transmit, &name, medium, self.wrapper));
             }
             None => out.extend_from_slice(&crate::kitty::kitty_transmit_placed(transmit, pixels, self.wrapper)),
+        }
+        if double_buffered {
+            out.extend_from_slice(&crate::kitty::kitty_delete_one(shown));
         }
         if let Placement::Cells { cols, rows } = placement
             && self.placeholders != Some((cols, rows))

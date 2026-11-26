@@ -109,6 +109,7 @@ pub struct Kitty {
     payload_bytes: usize,
     image_rate_override: Option<f32>,
     forced_image_rate: Option<ForcedImageRate>,
+    herdr_desktop: bool,
 }
 
 fn ask<T>(
@@ -135,6 +136,7 @@ impl Kitty {
         };
         let mut kitty = Self::blank(tty.output()?, tty.wrapper(), target);
         kitty.forced_image_rate = forced_image_rate(env);
+        kitty.herdr_desktop = env.var("HC_TERMINAL_ID").is_some() && !present::over_ssh(env);
         kitty.cell = tty.cell();
         kitty.connect_herdr();
         match host {
@@ -208,6 +210,7 @@ impl Kitty {
             payload_bytes: 0,
             image_rate_override: None,
             forced_image_rate: None,
+            herdr_desktop: false,
         }
     }
 
@@ -677,6 +680,16 @@ impl Kitty {
 
     pub fn frames_are_inline(&self) -> bool {
         self.transport == FrameTransport::Inline
+    }
+
+    /// A pane of the Herdr desktop app: Ghostty draws it, but Herdr relays every byte to it locally
+    pub fn in_herdr_desktop(&self) -> bool {
+        self.herdr_desktop
+    }
+
+    // Herdr shows each step of a synchronized update, so a delete before the new image arrives shows as a gap
+    fn deletes_before_replace(&self) -> bool {
+        self.identity.deletes_before_replace() && !self.herdr_desktop
     }
 }
 
