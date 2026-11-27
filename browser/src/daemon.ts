@@ -72,6 +72,14 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
   };
   process.on("SIGINT", () => stopEverything(130));
   process.on("SIGTERM", () => stopEverything(143));
+  process.on("uncaughtException", (error) => {
+    process.stderr.write(`terminal-browser daemon uncaught exception: ${error}\n`);
+    stopEverything(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    process.stderr.write(`terminal-browser daemon unhandled rejection: ${reason}\n`);
+    stopEverything(1);
+  });
 
   const server = net.createServer((connection) => {
     let key: string | null = null;
@@ -82,9 +90,14 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
       } catch {}
     };
 
+    const MAX_BUFFER = 1024 * 1024;
     let buffer = "";
     connection.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
+      if (buffer.length > MAX_BUFFER) {
+        connection.end();
+        return;
+      }
       let newline = buffer.indexOf("\n");
       while (newline !== -1) {
         const line = buffer.slice(0, newline);
@@ -141,7 +154,7 @@ export async function runDaemon(cdpPort: number | null): Promise<void> {
         } else if (message.cmd === "shutdown") {
           reply({ ok: true, sessions: sessions.size });
           connection.end();
-          setTimeout(() => app.exit(0), 50);
+          stopEverything(0);
         }
       }
     });
