@@ -18,8 +18,10 @@ The url can be a normal url, a localhost port, or a path to an html file.
 Options:
   --split <direction>   Open in a new pane: right, left, down, up
   --size <fraction>     How much of the space the split takes (0.2 to 0.95)
-  --ssh <user@host>     Perform all network requests through a remote server, then
-                        proxy the result back to the local terminal-browser instance
+  --ssh <target>        Perform all network requests through a remote server, then
+                        proxy the result back to the local terminal-browser instance.
+                        The target is host, user@host, user@host:port, a shell alias
+                        for ssh, or a quoted ssh command line like "-i key -J jump user@host"
   --allow-clipboard-read
                         Lets websites read from clipboard.
   --transparent         [placeholder copy: Let the terminal show through pages that do not paint
@@ -32,6 +34,7 @@ Examples:
   terminal-browser open ./report.html --split right
   terminal-browser open github.com/zenbu-labs --split down --size 0.4
   terminal-browser open --ssh dev@build-box localhost:8080
+  terminal-browser open --ssh "-p 2222 -J bastion dev@build-box" localhost:8080
 `,
   },
   ls: {
