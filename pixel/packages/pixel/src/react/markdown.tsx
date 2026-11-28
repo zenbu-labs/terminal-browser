@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 
-import { Box, Image, Text, type NodeHandle } from "./components";
+import { Box, Image, Path, Text, type NodeHandle } from "./components";
 import {
   HIGHLIGHT_CAPTURES,
   highlight,
@@ -227,11 +227,12 @@ const Block = memo(
     return (
       <Box style={{ margin: { left: indent } }}>
         <Box style={{ minWidth: rem * 1.4, flexShrink: 0 }}>
-          {block.itemStart && (
-            <Text style={{ color: block.task != null ? theme.link : theme.muted }}>
-              {marker(block)}
-            </Text>
-          )}
+          {block.itemStart &&
+            (block.task != null ? (
+              <TaskBox done={block.task} theme={theme} rem={rem} />
+            ) : (
+              <Text style={{ color: theme.muted }}>{marker(block)}</Text>
+            ))}
         </Box>
         <Box style={{ flexDirection: "column", flexShrink: 1 }}>{body}</Box>
       </Box>
@@ -249,8 +250,37 @@ const Block = memo(
     blockEqual(a.block, b.block)
 );
 
+// A task item's box, drawn rather than a font glyph so it sits on the line at the text's size. A blank
+// character beside it gives the row the first line's height, and the box centers on it.
+function TaskBox({ done, theme, rem }: { done: boolean; theme: MarkdownTheme; rem: number }) {
+  const side = Math.round(rem * 0.8);
+  const line = Math.max(1, Math.round(rem * 0.08));
+  return (
+    <Box style={{ alignItems: "center" }}>
+      <Text style={{ color: theme.muted, selectable: false }}>{"\u00a0"}</Text>
+      <Box
+        style={{
+          width: side,
+          height: side,
+          border: { width: line, color: theme.muted },
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {done && (
+          <Path
+            d="M 5.5 12.5 L 10 17 L 18.5 7.5"
+            viewBox={24}
+            stroke={{ width: 3.2, color: theme.fg, cap: "round", join: "round" }}
+            style={{ width: side - line * 2, height: side - line * 2, flexShrink: 0 }}
+          />
+        )}
+      </Box>
+    </Box>
+  );
+}
+
 function marker(block: MarkdownBlock): string {
-  if (block.task != null) return block.task ? "☑" : "□";
   if (block.ordinal != null) return `${block.ordinal}.`;
   return "•";
 }
