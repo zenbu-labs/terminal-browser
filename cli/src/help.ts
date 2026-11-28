@@ -21,7 +21,9 @@ Options:
   --ssh <target>        Perform all network requests through a remote server, then
                         proxy the result back to the local terminal-browser instance.
                         The target is host, user@host, user@host:port, a shell alias
-                        for ssh, or a quoted ssh command line like "-i key -J jump user@host"
+                        for ssh, or a quoted ssh command line like "-i key -J jump user@host".
+                        Values in a quoted command line cannot contain spaces; put those
+                        in ~/.ssh/config. Aliases must be defined in your shell's rc file.
   --allow-clipboard-read
                         Lets websites read from clipboard.
   --transparent         [placeholder copy: Let the terminal show through pages that do not paint
